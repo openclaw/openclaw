@@ -35,8 +35,8 @@ async function persistSkillSnapshot(params: {
   assertCurrent?: SessionSourceAssertion;
 }): Promise<SessionEntry | undefined> {
   params.assertCurrent?.();
+  // Refreshing cached skills is not conversation activity; admission owns recency.
   const updates = {
-    updatedAt: Date.now(),
     ...(params.isFirstTurnInSession ? { systemSent: true } : {}),
     skillsSnapshot: params.skillsSnapshot,
   };
@@ -56,7 +56,7 @@ async function persistSkillSnapshot(params: {
       sessionKey: params.sessionKey,
     },
     { kind: "fields", patch: updates },
-    sessionEntryCommitGuardOptions(params.assertCurrent),
+    { ...sessionEntryCommitGuardOptions(params.assertCurrent), preserveActivity: true },
   );
   params.assertCurrent?.();
   publishReplySessionEntry(params, persistedEntry ?? undefined);
@@ -145,10 +145,7 @@ export async function ensureSkillSnapshot(params: {
       const result = await resolveReusableWorkspaceSkillSnapshot({
         assertCurrent,
         workspaceDir,
-        ...resolveSessionSkillExecutionWorkspace(
-          nextEntry?.worktree?.canonicalWorkspaceDir,
-          params.executionWorkspaceDir,
-        ),
+        ...resolveSessionSkillExecutionWorkspace(nextEntry, params.executionWorkspaceDir),
         config: cfg,
         agentId,
         skillFilter,

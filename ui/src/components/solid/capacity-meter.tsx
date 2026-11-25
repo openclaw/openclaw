@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Repeat, Show } from "solid-js";
 import "../../styles/capacity-meter.css";
 
 type CapacityMeterProps = {
@@ -22,7 +22,7 @@ export function CapacityMeter(props: CapacityMeterProps) {
       when={pips()}
       fallback={
         <span
-          class={`session-context-meter session-context-meter--${props.tone}`}
+          class={["session-context-meter", `session-context-meter--${props.tone}`]}
           role="img"
           aria-label={props.label}
         >
@@ -31,16 +31,11 @@ export function CapacityMeter(props: CapacityMeterProps) {
       }
     >
       <span
-        class={`capacity-meter-pips session-context-meter--${props.tone}`}
+        class={["capacity-meter-pips", `session-context-meter--${props.tone}`]}
         role="img"
         aria-label={props.label}
       >
-        <For
-          each={Array.from(
-            { length: props.mode === "discrete" ? props.total : 0 },
-            (_, index) => index,
-          )}
-        >
+        <Repeat count={props.mode === "discrete" ? props.total : 0}>
           {(index) => (
             <span
               class={[
@@ -52,7 +47,7 @@ export function CapacityMeter(props: CapacityMeterProps) {
               ]}
             />
           )}
-        </For>
+        </Repeat>
       </span>
     </Show>
   );

@@ -8,16 +8,16 @@ import {
   type WatchEntry,
   type WatchScope,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  classifyMemoryMultimodalPath,
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
-  type MemoryWorkspaceWatchRequest,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryWatchFile } from "./watch-settle.js";
 
 type Settings = MemoryWorkspaceWatchRequest["settings"];
-type Target = { path: string; kind: WatchScope["kind"]; core: boolean };
+type Target = { path: string; kind: WatchScope["kind"]; core: boolean; depth?: number };
 type Selection = {
   scope: WatchScope;
   resolved: string;
@@ -25,7 +25,8 @@ type Selection = {
   core: boolean;
   alias: boolean;
 };
-export type MemoryObservation = { root: ObservationRoot; selections: Selection[] };
+type MemoryWatchRoot = { root: ObservationRoot; identity: string };
+export type MemoryObservation = MemoryWatchRoot & { selections: Selection[] };
 const IGNORED = new Set([
   ".git",
   "node_modules",
@@ -35,6 +36,18 @@ const IGNORED = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+// Without a globstar or syntax that can span "/", a pattern cannot match below its
+// segment count, so polling deeper only walks files the index never reads.
+function patternDepth(pattern: string | undefined): number | undefined {
+  if (!pattern || /[{[(]/.test(pattern)) {
+    return undefined;
+  }
+  const segments = pattern.split("/");
+  return segments.some((segment) => segment === "**" || segment === "." || segment === "..")
+    ? undefined
+    : Math.min(segments.length, 128);
+}
 
 // Lists only the configured path's prefixes, never a second recursive watcher.
 // The first symbolic entry must be observed instead of a scope through that link.
@@ -60,7 +73,7 @@ async function firstLink(
 }
 
 export class MemoryWatchPolicy {
-  private readonly roots = new Map<string, ObservationRoot>();
+  private readonly roots = new Map<string, MemoryWatchRoot>();
   private readonly targets: Target[];
   private readonly extras: ReturnType<typeof normalizeExtraMemoryPathEntries>;
 
@@ -75,27 +88,38 @@ export class MemoryWatchPolicy {
       { path: path.resolve(workspace, "memory"), kind: "tree", core: true },
       // A tree scope also selects an extra path that is a regular file. Missing
       // configured roots stay observed and do not require a Gateway restart.
-      ...this.extras.map((entry) => ({ path: entry.path, kind: "tree" as const, core: false })),
+      ...this.extras.map((entry) => ({
+        path: entry.path,
+        kind: "tree" as const,
+        core: false,
+        depth: patternDepth(entry.pattern),
+      })),
     ];
   }
 
-  private async admit(boundary: string, signal: AbortSignal): Promise<ObservationRoot> {
+  private async admit(boundary: string, signal: AbortSignal): Promise<MemoryWatchRoot> {
     const cached = this.roots.get(boundary);
     if (cached) {
       return cached;
     }
-    const admitted = await admitObservationRoot(boundary, "allow");
+    const root = await admitObservationRoot(boundary, "allow");
+    const { exactIdentity } = await root.stat(".");
     signal.throwIfAborted();
+    if (!exactIdentity) {
+      throw new Error("Memory observation root has no exact filesystem identity");
+    }
+    // Capture once through the pinned Root; equal paths can name different directories.
+    const admitted = { root, identity: `${exactIdentity.dev}:${exactIdentity.ino}` };
     this.roots.set(boundary, admitted);
     return admitted;
   }
 
   async observations(signal: AbortSignal): Promise<MemoryObservation[]> {
     const groups = new Map<ObservationRoot, MemoryObservation>();
-    const add = (authority: ObservationRoot, selection: Selection) => {
-      const group = groups.get(authority) ?? { root: authority, selections: [] };
+    const add = (admitted: MemoryWatchRoot, selection: Selection) => {
+      const group = groups.get(admitted.root) ?? { ...admitted, selections: [] };
       group.selections.push(selection);
-      groups.set(authority, group);
+      groups.set(admitted.root, group);
     };
     for (const target of this.targets) {
       signal.throwIfAborted();
@@ -108,15 +132,16 @@ export class MemoryWatchPolicy {
         if (links >= 40) {
           throw new Error("Memory watch target has too many symbolic links");
         }
-        const authority = await this.admit(boundary, signal);
+        const admitted = await this.admit(boundary, signal);
+        const authority = admitted.root;
         signal.throwIfAborted();
         const relative = path.relative(authority.rootDir, absolute) || ".";
         const link = await firstLink(authority, relative, signal);
         signal.throwIfAborted();
-        add(authority, {
+        add(admitted, {
           scope: link
             ? { path: link, kind: "entry" }
-            : { path: relative, kind: target.kind, depth: 128 },
+            : { path: relative, kind: target.kind, depth: target.depth ?? 128 },
           resolved: path.resolve(authority.rootDir, link ?? relative),
           lexical: target.path,
           core: target.core,
@@ -141,6 +166,16 @@ export class MemoryWatchPolicy {
     return [
       ...new Map(group.selections.map(({ scope }) => [JSON.stringify(scope), scope])).values(),
     ];
+  }
+
+  selectionKeys(group: MemoryObservation): string[] {
+    // Exclusion depends on selections and enabled file kinds, not indexing limits or globs.
+    const modalities = this.settings.multimodal.enabled ? this.settings.multimodal.modalities : [];
+    return group.selections.flatMap(({ scope, resolved, lexical, alias }) =>
+      ["text", ...modalities].map((modality) =>
+        JSON.stringify([scope, resolved, lexical, alias, modality]),
+      ),
+    );
   }
 
   private ignored(relative: string, file: string, kind: WatchEntry["kind"]): boolean {
@@ -193,6 +228,10 @@ export class MemoryWatchPolicy {
     const absolute = path.resolve(group.root.rootDir, relative);
     for (const selection of group.selections) {
       const selected = selection.resolved;
+      if (structural && isPathInside(absolute, selected) && absolute !== selected) {
+        // A replaced prefix can change discovery of missing paths or configured aliases.
+        return { root: group.root, relative, sample: false };
+      }
       if (
         absolute !== selected &&
         (selection.scope.kind !== "tree" || !isPathInside(selected, absolute))

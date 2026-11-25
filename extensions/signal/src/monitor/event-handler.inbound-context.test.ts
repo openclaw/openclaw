@@ -17,8 +17,8 @@ import {
 import type { TestDispatchResult } from "./event-handler.test-harness.js";
 import type {
   SignalDataMessage,
-  SignalEnvelope,
   SignalEventHandlerDeps,
+  SignalReceivePayload,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -275,8 +275,8 @@ function nextTimerTick(): Promise<void> {
 type SignalHandler = ReturnType<typeof createSignalEventHandler>;
 type SignalMessagesConfig = NonNullable<OpenClawConfig["messages"]>;
 type SignalChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
-type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
-  dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
+type DirectMessageOverrides = NonNullable<SignalReceivePayload["envelope"]> & {
+  dataMessage?: SignalDataMessage;
 };
 
 type TestMessagesConfig = Partial<SignalMessagesConfig>;
@@ -376,7 +376,7 @@ function receiveDirectMessage(
 function receiveMessage(
   handler: SignalHandler,
   dataMessage: SignalDataMessage,
-  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return handler(createSignalReceiveEvent({ ...envelope, dataMessage }));
 }
@@ -385,7 +385,7 @@ function receiveGroupMessage(
   handler: SignalHandler,
   message: string,
   dataMessage: Partial<SignalDataMessage> = {},
-  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return receiveMessage(
     handler,
@@ -804,7 +804,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     try {
       await receiveMessage(handler, { message: "hi" });
 
-      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+      const rpcOpts = {
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -812,19 +812,18 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
         account: "+15550009999",
         accountId: "default",
-      });
-      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        baseUrl: "http://localhost",
-        account: "+15550009999",
-        accountId: "default",
-      });
-
+      };
+      expect(sendReadReceiptMock).toHaveBeenCalledWith(
+        "signal:+15550001111",
+        1700000000000,
+        rpcOpts,
+      );
+      // The finished reply turn must clear the indicator it started, without keepalive repeats.
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      expect(sendTypingMock.mock.calls).toEqual([
+        ["+15550001111", rpcOpts],
+        ["+15550001111", { ...rpcOpts, stop: true }],
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -956,48 +955,35 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist",
+  it.each(["allowlist", "allowlist_quote"] as const)(
+    "renders quote-only native mentions subject to %s visibility",
+    async (contextVisibility) => {
+      const handler = createTestHandler({
+        cfg: createGroupAllowlistConfig({
+          signal: { groupAllowFrom: ["+15550001111"], contextVisibility },
+        }),
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+      });
+      await receiveGroupMessage(handler, "", {
+        quote: {
+          text: " \uFFFC ",
+          author: "+15550002222",
+          mentions: [{ uuid: "c3456789-01bc-4def-9012-3456789abcde", start: 1, length: 1 }],
         },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "blocked quote", author: "+15550002222" },
-    });
-
-    expect(capture.ctx).toBeUndefined();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps quote-only group context in allowlist_quote mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist_quote",
-        },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "quoted context", author: "+15550002222" },
-    });
-
-    const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("");
-    expect(context.ReplyToBody).toBe("quoted context");
-    expect(context.ReplyToSender).toBe("+15550002222");
-    expect(context.ReplyToIsQuote).toBe(true);
-  });
+      });
+      if (contextVisibility === "allowlist") {
+        expect(capture.ctx).toBeUndefined();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } else {
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe("");
+        expect(context.ReplyToBody).toBe("@c3456789-01bc-4def-9012-3456789abcde");
+        expect(context.ReplyToSender).toBe("+15550002222");
+        expect(context.ReplyToIsQuote).toBe(true);
+      }
+    },
+  );
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
@@ -1023,12 +1009,14 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {
+      const error = vi.fn();
       const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
       const handler = createTestHandler({
         cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
+        runtime: { log: vi.fn(), error, exit: vi.fn() },
         ignoreAttachments: false,
         fetchAttachment: async () => {
-          throw new Error("expired attachment");
+          throw new Error("expired attachment /private/signal/private-attachment-name.jpg");
         },
       });
 
@@ -1046,6 +1034,8 @@ describe("signal createSignalEventHandler inbound context", () => {
       expect(context.BodyForAgent).not.toContain("<media:image>");
       expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
       expect(context.media?.[0]?.path).toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("attachment fetch failed"));
+      expect(JSON.stringify(error.mock.calls)).not.toContain("private-attachment-name.jpg");
     } finally {
       vi.useRealTimers();
     }
@@ -1103,23 +1093,58 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it.each([
-    ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
-    ["literal escape", "line one\\nline two", "line one\\nline two"],
-  ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {
-    shouldLogVerboseMock.mockReturnValue(true);
-    try {
-      const handler = createTestHandler({ cfg: createDirectConfig() });
+    ["invalid JSON", "private malformed receive payload", "failed to parse event: invalid JSON"],
+    [
+      "provider exception",
+      JSON.stringify({ exception: { message: "private provider exception payload" } }),
+      "receive exception",
+    ],
+  ])(
+    "keeps %s diagnostics content-free and processes the next message",
+    async (_label, data, category) => {
+      const error = vi.fn();
+      const handler = createTestHandler({
+        cfg: createDirectConfig(),
+        runtime: { log: vi.fn(), error, exit: vi.fn() },
+      });
 
-      await receiveMessage(handler, { message });
+      await handler({ event: "receive", data });
 
-      // body is formatInboundEnvelope(...) with an envelope prefix, so assert
-      // the escaped tail is present and the logged line stays single-line.
-      expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
-      const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
-      expect(logged).not.toMatch(/[\r\n]/);
-    } finally {
-      shouldLogVerboseMock.mockReturnValue(false);
-    }
-  });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(category);
+      expect(JSON.stringify(error.mock.calls)).not.toContain("private");
+
+      await receiveMessage(handler, { message: "next message" });
+
+      expect(requireCapturedContext().BodyForAgent).toBe("next message");
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ["CRLF", "private line one\r\nprivate line two", "private line one\nprivate line two"],
+    [
+      "literal escape",
+      "private line one\\nprivate line two",
+      "private line one\\nprivate line two",
+    ],
+  ])(
+    "keeps %s inbound content out of verbose logs without changing delivery",
+    async (_label, message, deliveredText) => {
+      shouldLogVerboseMock.mockReturnValue(true);
+      try {
+        const handler = createTestHandler({ cfg: createDirectConfig() });
+
+        await receiveMessage(handler, { message });
+
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe(deliveredText);
+        expect(context.Body).toContain(deliveredText);
+        expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
+      } finally {
+        shouldLogVerboseMock.mockReturnValue(false);
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

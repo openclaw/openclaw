@@ -1,15 +1,9 @@
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
-  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import {
-  resolveNormalizedXaiToolModel,
-  resolvePositiveIntegerToolConfig,
-} from "./tool-config-shared.js";
 import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -25,23 +19,12 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config,
-    defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
-  });
-}
-
-export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(asNonArrayRecord(config).baseUrl);
-}
-
-export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return asNonArrayRecord(config).inlineCitations === true;
-}
-
-export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
-  return resolvePositiveIntegerToolConfig(config, "maxTurns");
+// OpenClaw's to_date names the last included day; xAI applies to_date as an exclusive bound
+// (https://docs.x.ai/developers/tools/x-search), so send the following UTC day.
+function toXaiExclusiveToDate(toDate: string): string {
+  const next = new Date(`${toDate}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
 }
 
 function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
@@ -50,7 +33,7 @@ function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
     ...(options.allowedXHandles?.length ? { allowed_x_handles: options.allowedXHandles } : {}),
     ...(options.excludedXHandles?.length ? { excluded_x_handles: options.excludedXHandles } : {}),
     ...(options.fromDate ? { from_date: options.fromDate } : {}),
-    ...(options.toDate ? { to_date: options.toDate } : {}),
+    ...(options.toDate ? { to_date: toXaiExclusiveToDate(options.toDate) } : {}),
     ...(options.enableImageUnderstanding ? { enable_image_understanding: true } : {}),
     ...(options.enableVideoUnderstanding ? { enable_video_understanding: true } : {}),
   };

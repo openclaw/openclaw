@@ -62,6 +62,8 @@ JavaScript-only host export; its declarations are excluded from the package.
 
     Uses core `tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
 
+    `buildSystemPromptHintAsync(config, agentId?, options?)` prepares the TTS prompt hint through the state owner and returns `Promise<string | undefined>`. It is optional on older host interfaces; require an upgrade when absent. See the [async prompt preparation recipe](/plugins/sdk-migration/async-transcript-and-tts#tts-prompts).
+
   </Accordion>
   <Accordion title="api.runtime.mediaUnderstanding">
     Image, audio, and video analysis.
@@ -193,6 +195,13 @@ JavaScript-only host export; its declarations are excluded from the package.
     context's `assertCurrent` before each external side effect, after awaited
     preparation. The callback belongs to the caller and expires when the search
     finishes; providers must not replace it or treat its absence as permission.
+
+    Host callers can also pass `modelSelection: { provider, model, authProfileId? }`.
+    This is selection data, not an authorization grant. Model-backed search providers
+    preserve a matching provider's model/profile through their native transport;
+    unrelated search providers keep their own configured selection. An explicit
+    matching credential prevents automatic fallback to another search provider.
+    The agent tool carries this context separately from model-authored arguments.
 
   </Accordion>
   <Accordion title="api.runtime.media">

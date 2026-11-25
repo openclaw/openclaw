@@ -1,40 +1,37 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  Match,
-  onCleanup,
-  Show,
-  Switch,
-  untrack,
-} from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
+// Preserve stylesheet evaluation order across the folded view imports.
+import "../../styles/tabs.css";
+import "../../styles/hub-tabs.css";
+import "../../styles/settings.css";
+import "./run-inspector.css";
+import "../../components/theme-brand-icon.css";
+import "../../styles/identity-avatar.css";
+import "../../styles/agent-row-chip.css";
+import { createMemo, createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  PRESENCE_ACTIVE_WINDOW_MS,
-  presenceViewerLastActivity,
-  projectPresencePayload,
-} from "../../lib/presence-users.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
+import { projectPresencePayload } from "../../lib/presence-users.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import { ActivityPageController } from "./activity-page-controller.ts";
+import type { ActivityPageState } from "./activity-page-state.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
-import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-controller.ts";
+import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-owner.ts";
 import { renderSessionActivityView as SessionActivityView } from "./session-activity-view.tsx";
-import { renderActivity as LiveActivityView } from "./view.tsx";
+import "../../styles/activity.css";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
   const next = new Set(ids);
@@ -46,15 +43,10 @@ function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
   return next;
 }
 
-export function ActivityPageView(props: {
-  controller: ActivityPageController;
-  revision: () => number;
-  host?: HTMLElement;
-}) {
-  const state = () => {
-    props.revision();
-    return props.controller;
-  };
+export function ActivityPageView(pageProps: { page: ActivityPageState }) {
+  const state = () => pageProps.page.read();
+  const pageRevision = () => pageProps.page.revision() + pageProps.page.agents.revision();
+  const [expandedAutomationDays, setExpandedAutomationDays] = createSignal(new Set<string>());
   const route = createMemo(() => state().routeData ?? state().presentedRoute?.data);
   const location = createMemo(() => state().routeLocation ?? state().presentedRoute?.location);
   const sessionRoute = createMemo(() => {
@@ -68,130 +60,49 @@ export function ActivityPageView(props: {
   const pending = () => !state().routeData || !state().routeLocation;
   const presence = () => projectPresencePayload(state().presencePayload).users;
   const sessionHost = () => ({
-    agentsList: state().context.agents.state.agentsList,
+    agentsList: pageProps.page.agents.read().agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
-  const update = (
-    patch: Partial<
-      Pick<
-        ActivityPageController,
-        | "filterText"
-        | "toolFilter"
-        | "statusFilters"
-        | "autoFollow"
-        | "expandedIds"
-        | "expandedAutomationDays"
-      >
-    >,
-  ) => {
-    Object.assign(props.controller, patch);
-    props.controller.requestUpdate();
-  };
-  let frame: number | undefined;
-  let previousEntries = untrack(() => props.controller.entries);
-  let previousAutoFollow = untrack(() => props.controller.autoFollow);
-  const follow = createMemo(() => ({ entries: state().entries, enabled: state().autoFollow }), {
-    equals: (previous, next) =>
-      previous.entries === next.entries && previous.enabled === next.enabled,
-  });
-  createEffect(follow, ({ entries, enabled }) => {
-    const force = enabled && !previousAutoFollow;
-    const appended = entries !== previousEntries;
-    previousEntries = entries;
-    previousAutoFollow = enabled;
-    if (frame !== undefined) {
-      cancelAnimationFrame(frame);
-    }
-    if (!props.host || (!force && (!enabled || !appended || !props.controller.atBottom))) {
-      return;
-    }
-    frame = requestAnimationFrame(() => {
-      frame = undefined;
-      const container = props.host?.querySelector<HTMLElement>(".activity-stream");
-      if (!container) {
-        return;
-      }
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (
-        !force &&
-        (!props.controller.autoFollow || (!props.controller.atBottom && distance >= 120))
-      ) {
-        return;
-      }
-      container.scrollTop = container.scrollHeight;
-      props.controller.atBottom = true;
-    });
-  });
-  const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const visibilityChanged = () => {
-    setVisible(document.visibilityState !== "hidden");
-    if (document.visibilityState !== "hidden") {
-      props.controller.requestUpdate();
-    }
-  };
-  document.addEventListener("visibilitychange", visibilityChanged);
-  const expiry = createMemo(() => {
-    props.revision();
-    if (!visible()) {
-      return undefined;
-    }
-    const now = Date.now();
-    const deadlines = presence().flatMap((viewer) => {
-      const activity = presenceViewerLastActivity(viewer);
-      const deadline = activity === undefined ? undefined : activity + PRESENCE_ACTIVE_WINDOW_MS;
-      return deadline !== undefined && deadline > now ? [deadline] : [];
-    });
-    return deadlines.length ? Math.min(...deadlines) : undefined;
-  });
-  createEffect(expiry, (deadline) => {
-    if (deadline === undefined) {
-      return undefined;
-    }
-    const timer = setTimeout(
-      () => props.controller.requestUpdate(),
-      Math.max(0, deadline - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  });
-  onCleanup(() => {
-    document.removeEventListener("visibilitychange", visibilityChanged);
-    if (frame !== undefined) {
-      cancelAnimationFrame(frame);
-    }
+  const [presentationTime, setPresentationTime] = createSignal(Date.now());
+  const activityExpiry = createPresenceActivityLifecycle(presence, () =>
+    setPresentationTime(Date.now()),
+  );
+  onSettled(() => {
+    const stop = pageProps.page.subscribe(() => activityExpiry.sync());
+    activityExpiry.connect();
+    return () => {
+      stop();
+      activityExpiry.disconnect();
+    };
   });
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true, activityPage: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("activity")}</div>
-            <Show when={route()?.mode !== "live"}>
-              <div class="page-sub">{t("subtitles.activity")}</div>
-            </Show>
-          </div>
-        </section>
+      <ShellLayoutBoundary traits={{ activityPage: true }}>
+        <HubPageHeader
+          active="activity"
+          wide
+          docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
+        />
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "activity-mode",
-                active: route()?.mode ?? "sessions",
-                tabs: [
-                  { value: "sessions", label: t("activityFeed.sessionsMode") },
-                  { value: "live", label: t("activity.runInspector.liveMode") },
-                ],
-                ariaLabel: t("activity.runInspector.activityView"),
-                panelId: "activity-mode-panel",
-                className: "activity-mode-tabs",
-                variant: "sub",
-                onSelect: (selected) =>
-                  state().context.navigate("activity", {
-                    search: selected === "live" ? "?view=live" : "",
-                  }),
-              })
-            }
+          <HubTabs
+            {...{
+              id: "activity-mode",
+              active: route()?.mode ?? "sessions",
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              class: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) =>
+                state().context.navigate("activity", {
+                  search: selected === "live" ? "?view=live" : "",
+                }),
+            }}
           />
         </Show>
         <div
@@ -204,8 +115,7 @@ export function ActivityPageView(props: {
           <Switch>
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
-                context={state().context}
-                expandedAutomationDays={state().expandedAutomationDays}
+                expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {
                     personId: null,
@@ -218,12 +128,13 @@ export function ActivityPageView(props: {
                     null,
                 }}
                 presenceViewers={presence()}
-                presentationRevision={props.revision()}
+                presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}
-                loading={pending() || state().sessionActivity.loading}
+                read={state().sessionActivity.read}
+                loading={pending()}
                 retrying={state().sessionActivity.retrying}
                 error={state().sessionActivity.error}
-                onRetry={() => state().syncSessionActivity("retry")}
+                onRetry={() => pageProps.page.syncSessionActivity("retry")}
                 onSummaryRetry={
                   canCallGatewayMethod(
                     state().context.gateway.snapshot,
@@ -235,13 +146,13 @@ export function ActivityPageView(props: {
                     : undefined
                 }
                 onAutomationDayToggle={(day) =>
-                  update({ expandedAutomationDays: toggle(state().expandedAutomationDays, day) })
+                  setExpandedAutomationDays((days) => toggle(days, day))
                 }
-                onFiltersChange={(filters) =>
+                onFiltersChange={(nextFilters) =>
                   state().context.navigate(
                     "activity",
                     state().sessionActivity.locationForFilters(
-                      filters,
+                      nextFilters,
                       location()!,
                       state().context.basePath,
                       presence(),
@@ -261,14 +172,16 @@ export function ActivityPageView(props: {
                 </a>
                 <RunInspector
                   basePath={state().context.basePath}
+                  connected={state().context.gateway.snapshot.phase === "connected"}
                   state={state().runInspector}
+                  request={state().inspectorRead}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}
-                  onLoadMoreExecutions={() => state().loadMoreInspectorPage("executions")}
-                  onLoadMoreDecisions={() => state().loadMoreInspectorPage("decisions")}
-                  onRestart={() => state().restartRunInspector()}
+                  onLoadMoreExecutions={() => pageProps.page.loadMoreInspectorPage("executions")}
+                  onLoadMoreDecisions={() => pageProps.page.loadMoreInspectorPage("decisions")}
+                  onRestart={() => pageProps.page.restartRunInspector()}
                   onRetry={() =>
-                    state().syncRunInspector(
+                    pageProps.page.syncRunInspector(
                       state().context.gateway,
                       state().context.gateway.snapshot,
                       true,
@@ -287,53 +200,11 @@ export function ActivityPageView(props: {
                   navigate={state().context.navigate}
                   connected={state().context.gateway.snapshot.phase === "connected"}
                   result={state().sessionActivity.result}
-                  loading={pending() || state().sessionActivity.loading}
+                  read={state().sessionActivity.read}
+                  loading={pending() || state().sessionActivity.incomplete}
                   incomplete={state().sessionActivity.incomplete}
                   error={state().sessionActivity.error}
-                  onRetry={() => state().syncSessionActivity("retry")}
-                />
-                <Show when={state().liveActivity?.snapshot.error}>
-                  <div role="alert">
-                    <SettingsStatus
-                      kind="danger"
-                      label={state().liveActivity?.snapshot.error ?? ""}
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => state().liveActivity?.retry()}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                </Show>
-                <LiveActivityView
-                  basePath={state().context.basePath}
-                  entries={state().entries}
-                  filterText={state().filterText}
-                  statusFilters={state().statusFilters}
-                  toolFilter={state().toolFilter}
-                  expandedIds={state().expandedIds}
-                  autoFollow={state().autoFollow}
-                  onFilterTextChange={(next) => update({ filterText: next })}
-                  onToolFilterChange={(next) => update({ toolFilter: next })}
-                  onStatusToggle={(status, enabled) =>
-                    update({ statusFilters: { ...state().statusFilters, [status]: enabled } })
-                  }
-                  onToggleAutoFollow={(next) => update({ autoFollow: next })}
-                  onClear={() => state().liveActivity?.clear()}
-                  onExpandAll={() =>
-                    update({ expandedIds: new Set(state().entries.map((entry) => entry.id)) })
-                  }
-                  onCollapseAll={() => update({ expandedIds: new Set() })}
-                  onEntryToggle={(id, open) =>
-                    update({ expandedIds: toggle(state().expandedIds, id, open) })
-                  }
-                  onScroll={(event) => {
-                    const container = event.currentTarget;
-                    props.controller.atBottom =
-                      container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-                  }}
+                  onRetry={() => pageProps.page.syncSessionActivity("retry")}
                 />
               </div>
             </Match>

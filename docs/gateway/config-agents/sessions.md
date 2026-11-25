@@ -69,7 +69,7 @@ of tool and session policy.
       discord: { mode: "idle", idleMinutes: 30 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "agents/{agentId}/sessions/sessions.json",
     maintenance: {
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
@@ -80,7 +80,7 @@ of tool and session policy.
       maxDiskBytes: "500mb", // physical disk budget; default "10gb"
       highWaterBytes: "400mb", // optional cleanup target
       coldStorage: {
-        enabled: false, // opt in to compressed inactive transcripts
+        enabled: true, // default; false disables future extraction
         afterDays: 30,
       },
     },
@@ -122,19 +122,20 @@ of tool and session policy.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.
+- **`store`**: session-store selector. Relative paths resolve against the active state directory (`OPENCLAW_STATE_DIR`, or the selected profile's state directory), independent of the Gateway's working directory. `{agentId}` expands to the owning agent id. Absolute paths and `~` paths keep their explicit locations. If an older version created a second store from a relative path, stop the Gateway and run `openclaw doctor --fix` to merge its sessions with backups before restarting.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
-  - `mode`: `enforce` applies age, count, and disk-budget cleanup and is the default; `warn` reports those policies without applying them. The separate opt-in `coldStorage.enabled` switch controls cold transcript extraction independently.
+  - `mode`: `enforce` applies age, count, and disk-budget cleanup and is the default; `warn` reports those policies without applying them. The separate `coldStorage.enabled` switch controls cold transcript extraction independently.
   - `pruneAfter`: age cutoff for stale entries (default `30d`). Eligible durable sessions archive in place with their identity and history intact; this does not compress or extract their transcript rows. Disposable automation rows are removed.
-  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables only this dashboard trigger. Eligible sessions can still be archived by `pruneAfter` or `maxEntries`.
-  - `maxEntries`: maximum number of unarchived SQLite session entries (default `5000`). Archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions, while synthetic runtime sessions remain disposable and may be removed. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers remain protected; if protection prevents reaching the cap, the unarchived store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows.
+  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables only this dashboard trigger. Eligible sessions can still be archived by `pruneAfter` or `maxEntries`. A conversation that created an enabled automation is kept by all three, because archiving it would pause the automation; disabling or removing the automation makes the conversation eligible again. After the Gateway starts, automatic archiving waits until its automations have loaded; if they fail to load, archiving stays paused until a later start succeeds. Archiving or deleting it yourself still asks for confirmation and pauses its automations.
+  - `maxEntries`: maximum number of unarchived SQLite session entries (default `5000`). Archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions, while synthetic runtime sessions remain disposable and may be removed. Pinned sessions, conversations that created an enabled automation, active or admitted work, model-locked sessions, and durable external conversation pointers remain protected; if protection prevents reaching the cap, the unarchived store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows.
   - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
   - Short-lived gateway model-run check sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run check rows when session-entry maintenance/cap pressure is reached. Only strict explicit check keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
   - `maxDiskBytes`: per-agent physical disk budget (default `10gb`), counting the SQLite main file, its `-wal` file, and counted files in the agent sessions directory. In `warn` mode it logs warnings. In `enforce` mode it first reclaims checkpointable database space, then removes old reset/delete artifacts, unreferenced historical generations, and finally the oldest sessions explicitly marked as archived by the active-session cap. Manual, legacy, age-retention, stale-dashboard, and recovery archives remain protected. Protected history and database pages that cannot yet be reclaimed can keep usage above the cleanup target; this is not a guaranteed physical ceiling. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with `maxDiskBytes`, not with a zero high-water mark.
-  - `coldStorage.enabled`: opt-in background extraction of inactive transcripts to compressed JSONL files (default `false`). Current and historical windows can qualify; active runs, admitted work, and recovery-owned sessions stay protected. This is independent of dashboard archiving and reset/deletion archive retention. See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage).
+  - `coldStorage.enabled`: background extraction of inactive transcripts to compressed JSONL files (default `true`); set `false` to opt out. Current and historical windows can qualify; active runs, admitted work, and recovery-owned sessions stay protected. This is independent of dashboard archiving and reset/deletion archive retention. See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage).
   - `coldStorage.afterDays`: positive integer number of inactive days before a transcript becomes eligible (default `30`). Recent session activity protects the current window; historical windows use their own activity timestamps. Active work, recovery, and explicit history references still protect the transcripts they need. A worker applies the current policy without requiring new chat activity. Changing these settings takes effect without a Gateway restart; disabling extraction leaves already archived history readable.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings
@@ -166,12 +167,13 @@ counts for newly archived transcripts and embedded archives moved back to
 files. Expand **Details by agent** to compare agents, or select **Refresh** to
 read current usage. Administrator access is required.
 
-Turn on **Archive older transcripts** and set **Archive after (days)** to a
-positive whole number. Changes save through the normal Settings flow and apply
+**Archive older transcripts** is on by default after 30 inactive days. Turn it
+off to stop future extraction, or set **Archive after (days)** to another positive
+whole number. Changes save through the normal Settings flow and apply
 without a Gateway restart. Once the policy is saved and applied, **Run now**
-starts or joins a background batch and returns promptly. The panel follows its
-status until completion or failure; leaving the page does not stop the worker.
-The worker also runs automatically without new chat activity. Inactive current
+starts or joins a maintenance batch and returns promptly. The panel follows its
+status until completion or failure; leaving the page does not stop maintenance.
+Maintenance also runs automatically without new messages. Inactive current
 and historical transcripts can become cold; opening or resuming one restores
 its history before use.
 
@@ -180,5 +182,4 @@ capture their verified contents with the database; direct database replication
 must also retain the referenced files. See
 [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for eligibility and recovery, and
-[cold transcript backups](/install/backups#cold-transcript-backups) before enabling
-the feature.
+[cold transcript backups](/install/backups#cold-transcript-backups) when planning backups.

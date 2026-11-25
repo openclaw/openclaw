@@ -52,7 +52,7 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
           }
           const suffix = entries === baseProfiles ? "" : "Provider";
           return (
-            <li class={global && agent ? "agent-profile-tree__branch" : ""}>
+            <li class={{ "agent-profile-tree__branch": Boolean(global && agent) }}>
               {renderEntry(root, t(`agentTools.profile${global ? "Global" : "Agent"}${suffix}`))}
               {global && agent && (
                 <ul role="list">

@@ -1,4 +1,4 @@
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createSystemPromptCacheBoundaryStripper } from "@openclaw/ai/internal/shared";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -19,10 +19,12 @@ import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import type {
-  PluginMetadataRegistryView,
-  PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.types.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+  type ProviderAuthScopeLookup,
+} from "./provider-auth-scope.js";
 import { hasConfiguredModelProvider } from "./provider-config-owner.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
@@ -50,14 +52,11 @@ import {
   type PreparedSyntheticAuthFacts,
 } from "./provider-synthetic-auth.js";
 import {
-  resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProviderRef,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
-import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
-  ProviderAugmentModelCatalogContext,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
@@ -125,7 +124,8 @@ function toolSchemaHook<K extends "normalizeToolSchemas" | "inspectToolSchemas">
         : ensureProviderRuntimePluginHandle(params).plugin;
     // SAFETY: Hook derives both argument and result from the selected tool-schema method.
     const hook = plugin?.[name] as ((context: Parameters<Hook>[0]) => ReturnType<Hook>) | undefined;
-    return hook?.call(plugin, params.context) ?? undefined;
+    // Avoid invoking the managed function's own call wrapper.
+    return hook ? (Reflect.apply(hook, plugin, [params.context]) ?? undefined) : undefined;
   };
 }
 
@@ -149,44 +149,8 @@ function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: rea
 export {
   resolveProviderAuthProfileId,
   resolveProviderFollowupFallbackRoute,
-  resolveProviderRuntimePlugin,
   wrapProviderSimpleCompletionStreamFn,
 };
-
-function resolveProviderPluginsForCatalogHooks(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): ProviderPlugin[] {
-  const workspaceDir =
-    params.workspaceDir ??
-    params.metadataSnapshot?.workspaceDir ??
-    getActivePluginRegistryWorkspaceDirFromState();
-  const env = params.env ?? process.env;
-  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
-    config: params.config,
-    workspaceDir,
-    env,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
-    return [];
-  }
-  const providers = resolveProviderPluginsForHooks({
-    ...params,
-    workspaceDir,
-    env,
-    onlyPluginIds,
-    providerRefs: params.providerIds,
-    pluginMetadataSnapshot: params.metadataSnapshot,
-  });
-  const providerIds = params.providerIds;
-  return providerIds
-    ? providers.filter((provider) => matchesAnyProviderPluginRef(provider, providerIds))
-    : providers;
-}
 
 export const runProviderDynamicModel = normalizedRuntimeHook("resolveDynamicModel");
 
@@ -250,10 +214,7 @@ export function transformProviderSystemPrompt(
   },
 ): string {
   const plugin = ensureProviderRuntimePluginHandle(params).plugin;
-  const textTransforms = mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
-    plugin?.textTransforms,
-  );
+  const textTransforms = mergePluginTextTransforms(plugin?.textTransforms);
   const transformed =
     plugin?.transformSystemPrompt?.(params.context) ?? params.context.systemPrompt;
   return applyPluginTextReplacements(transformed, textTransforms?.input);
@@ -265,7 +226,6 @@ export function resolveProviderTextTransforms(
   },
 ): PluginTextTransforms | undefined {
   return mergePluginTextTransforms(
-    resolveRuntimeTextTransforms(),
     ensureProviderRuntimePluginHandle(params).plugin?.textTransforms,
   );
 }
@@ -303,20 +263,23 @@ function completeProviderRuntimeContext<
 export function normalizeProviderResolvedModelWithPlugin(
   params: ProviderRuntimeLookup & {
     pluginMetadataSnapshot?: PluginMetadataRegistryView;
+    runtimeHandle?: ProviderRuntimePluginHandle;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
   const context = completeProviderRuntimeContext(params);
   return (
-    resolveProviderRuntimePlugin({
+    ensureProviderRuntimePluginHandle({
       ...params,
       modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(context) ?? undefined
+    }).plugin?.normalizeResolvedModel?.(context) ?? undefined
   );
 }
 
 export function applyProviderResolvedTransportWithPlugin(
   params: ProviderRuntimeLookup & {
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
@@ -327,6 +290,8 @@ export function applyProviderResolvedTransportWithPlugin(
     config,
     workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
+    resolveFallbackPlugins: params.resolveFallbackPlugins,
     modelId: params.context.modelId,
     context: {
       ...(config !== undefined ? { config } : {}),
@@ -358,6 +323,8 @@ export function applyProviderResolvedTransportWithPlugin(
 export function normalizeProviderTransportWithPlugin(
   params: ProviderRuntimeLookup & {
     modelId?: string | null;
+    runtimeHandle?: ProviderRuntimePluginHandle;
+    resolveFallbackPlugins?: () => readonly ProviderPlugin[];
     context: ProviderNormalizeTransportContext;
   },
 ): { api?: string | null; baseUrl?: string } | undefined {
@@ -374,12 +341,18 @@ export function normalizeProviderTransportWithPlugin(
     return undefined;
   }
 
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeTransport(context);
-    if (normalized && hasTransportChange(normalized)) {
+  // Other plugins may only tidy a transport within its origin; another origin would receive
+  // this provider's credential.
+  const origin = (url?: string) => (url ? URL.parse(url)?.origin : undefined);
+  const requestOrigin = origin(params.context.baseUrl);
+  for (const candidate of params.resolveFallbackPlugins?.() ??
+    resolveProviderPluginsForHooks(params)) {
+    const normalized =
+      candidate === matchedPlugin ? undefined : candidate.normalizeTransport?.(context);
+    const keepsOrigin =
+      !normalized?.baseUrl ||
+      (requestOrigin !== undefined && origin(normalized.baseUrl) === requestOrigin);
+    if (normalized && hasTransportChange(normalized) && keepsOrigin) {
       return normalized;
     }
   }
@@ -438,14 +411,8 @@ export function resolveProviderStreamFn(
   if (!streamFn || plugin?.supportsSystemPromptCacheBoundary) {
     return streamFn ?? undefined;
   }
-  return (model, context, options) =>
-    streamFn(
-      model,
-      context.systemPrompt
-        ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
-        : context,
-      options,
-    );
+  const stripCacheBoundary = createSystemPromptCacheBoundaryStripper();
+  return (model, context, options) => streamFn(model, stripCacheBoundary(context), options);
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(
@@ -478,13 +445,7 @@ export function resolveProviderTransportTurnStateWithPlugin(
   };
 }
 
-export {
-  loginProviderOAuthWithPlugin,
-  prepareProviderRuntimeAuth,
-  refreshProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
-} from "./provider-runtime-auth.js";
+export { prepareProviderRuntimeAuth } from "./provider-runtime-auth.js";
 
 const resolveUsageAuth = asyncRuntimeHook("resolveUsageAuth");
 export const resolveProviderUsageAuthWithPlugin = async (
@@ -570,15 +531,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
-
-export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
-export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
-
 export const resolveProviderCacheTtlEligibility = runtimeHook("isCacheTtlEligible");
-
-export const resolveProviderModernModelRef = runtimeHook("isModernModelRef");
 
 /** Returns provider-owned profile ids retired from generic credential resolution. */
 export function resolveProviderDeprecatedAuthProfileIds(
@@ -672,7 +625,16 @@ function* resolveSyntheticAuthProviders(
   }
 }
 
+export function resolvePluginOwnedProviderAuth(
+  params: ProviderAuthScopeLookup & { profileId?: string; preferredProfile?: string },
+) {
+  return resolvePluginOwnedProviderAuthWith(params, resolveProviderRuntimePlugin);
+}
+
 export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -707,6 +669,9 @@ export async function prepareProviderSyntheticAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -715,6 +680,10 @@ export async function prepareProviderSyntheticAuthWithPlugin(
 }
 
 function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  // Instance-owned credentials cannot become transferable worker bearer facts.
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return [];
+  }
   const providers = [...resolveSyntheticAuthProviders(params)];
   return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
 }
@@ -724,6 +693,9 @@ export async function prepareProviderExternalAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   return captured
     ? (captured.result ?? undefined)
@@ -774,8 +746,6 @@ export async function captureProviderSyntheticAuthFacts(params: {
   return Object.freeze(facts);
 }
 
-export { resolveExternalAuthProfilesWithPlugins } from "./provider-external-auth.js";
-
 export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   params: ProviderRuntimeLookup & {
     context: ProviderDeferSyntheticProfileAuthContext;
@@ -798,19 +768,3 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   }
   return undefined;
 }
-
-export async function augmentModelCatalogWithProviderPlugins(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  context: ProviderAugmentModelCatalogContext;
-}) {
-  const supplemental: ProviderAugmentModelCatalogContext["entries"] = [];
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
-    supplemental.push(...((await plugin.augmentModelCatalog?.(params.context)) ?? []));
-  }
-  return supplemental;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

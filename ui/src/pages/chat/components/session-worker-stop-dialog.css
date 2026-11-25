@@ -1,0 +1,27 @@
+.session-worker-stop-dialog {
+  --openclaw-modal-width: 400px;
+}
+
+.session-worker-stop-dialog .session-worker-stop__submit {
+  display: grid;
+  min-width: 124px;
+}
+
+.session-worker-stop__submit[aria-busy="true"] {
+  opacity: 1;
+  cursor: wait;
+}
+
+.session-worker-stop__button-state {
+  grid-area: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+.session-worker-stop__button-state svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: none;
+}

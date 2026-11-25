@@ -47,7 +47,6 @@ export function createManagedLinuxAudio(params: {
   tempDir: string;
   env: NodeJS.ProcessEnv;
   assertCurrent(): void;
-  runtime?: { detectBinary?: typeof detectBinary; startupTimeoutMs?: number };
 }): { ready: Promise<ManagedLinuxAudio>; stop(): Promise<void> } {
   const { supervisor } = params;
   const env = { ...params.env, ...managedLinuxAudioEnv(params.tempDir) };
@@ -68,7 +67,6 @@ export function createManagedLinuxAudio(params: {
   const serverReady = createDeferredCore();
   const daemonFailed = createDeferredCore();
   const captures = new Set<() => Promise<void>>();
-  const startupTimeoutMs = params.runtime?.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
   let active = true;
   let closing: Promise<void> | undefined;
   let stderr = "";
@@ -109,8 +107,7 @@ export function createManagedLinuxAudio(params: {
   void serverReady.promise.catch(() => {});
   const timer = setTimeout(() => {
     unavailable(new Error("private PulseAudio startup timed out"));
-  }, startupTimeoutMs);
-  timer.unref?.();
+  }, STARTUP_TIMEOUT_MS).unref();
 
   const source: DesktopAudioSource = {
     async start(signal, assertAuthority) {
@@ -161,9 +158,8 @@ export function createManagedLinuxAudio(params: {
       const abort = () => failCapture(new Error("Desktop audio capture aborted"));
       const captureTimer = setTimeout(
         () => failCapture(new Error("Desktop audio capture startup timed out")),
-        startupTimeoutMs,
-      );
-      captureTimer.unref?.();
+        STARTUP_TIMEOUT_MS,
+      ).unref();
       captures.add(stopCapture);
       signal.addEventListener("abort", abort, { once: true });
       stream.once("close", () => void stopCapture().catch(() => {}));
@@ -236,9 +232,8 @@ export function createManagedLinuxAudio(params: {
 
   const launch = Promise.resolve().then(async () => {
     try {
-      const detect = params.runtime?.detectBinary ?? detectBinary;
       for (const binary of ["pulseaudio", "parec"]) {
-        if (!(await detect(binary))) {
+        if (!(await detectBinary(binary))) {
           throw new Error(`${binary} is not installed`);
         }
         assertActive();

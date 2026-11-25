@@ -7,6 +7,7 @@ import {
 } from "./harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import {
   hasResolvedThinkingCatalogEntry,
   resolveCandidateThinkingLevel,
@@ -38,11 +39,9 @@ describe("hasResolvedThinkingCatalogEntry", () => {
 
   it.each([
     { nativeRuntime: undefined, agentRuntime: undefined, resolved: true },
-    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true },
     { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true },
     { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true },
     { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false },
-    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true },
   ])(
     "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
     ({ nativeRuntime, agentRuntime, resolved }) => {
@@ -146,19 +145,72 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("codex");
   });
 
-  it("resolves residual auto to OpenClaw when no plugin harness is registered", () => {
-    expect(
-      resolveEffectiveAgentRuntime({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
+  it.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    sessionEntry?: Parameters<typeof resolveEffectiveAgentRuntime>[0]["sessionEntry"];
+    expected: string;
+  }>([
+    { name: "implicit policy", cfg: {}, expected: "openclaw" },
+    {
+      name: "explicit model policy",
+      cfg: {
+        agents: {
+          defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+        },
+      },
+      expected: "codex",
+    },
+    {
+      name: "explicit provider policy",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex" },
+              models: [],
             },
           },
         },
+      },
+      expected: "codex",
+    },
+    {
+      name: "explicit session override",
+      cfg: {},
+      sessionEntry: { agentRuntimeOverride: "codex" },
+      expected: "codex",
+    },
+    {
+      name: "pinned session runtime",
+      cfg: {},
+      sessionEntry: {
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+      },
+      expected: "codex",
+    },
+  ])(
+    "applies OpenClaw placement only to implicit selection ($name)",
+    ({ cfg, sessionEntry, expected }) => {
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          sessionEntry,
+          placementRuntime: "openclaw",
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it("resolves residual auto to OpenClaw when no plugin harness is registered", () => {
+    expect(
+      resolveEffectiveAgentRuntime({
+        cfg: configFor("openai", "http://127.0.0.1:8080/v1"),
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),
@@ -203,16 +255,7 @@ describe("resolveEffectiveAgentRuntime", () => {
 
     expect(
       resolveEffectiveAgentRuntime({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configFor("openai", "http://127.0.0.1:8080/v1"),
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),

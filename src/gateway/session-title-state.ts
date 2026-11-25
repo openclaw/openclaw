@@ -1,5 +1,4 @@
-import type { SessionEntry } from "../config/sessions/types.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 
 type SessionTitleTarget = {
   storePath: string;
@@ -11,13 +10,40 @@ const requestKey = (target: SessionTitleTarget) =>
 
 // One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
-const pending = new Map<string, Promise<boolean>>();
+const pending = new Map<string, { request: Promise<boolean>; started: boolean }>();
 export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
-    return pending.get(requestKey(target));
+    return pending.get(requestKey(target))?.request;
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>) {
-    return getOrCreatePromise(pending, requestKey(target), create, { evictOnSettled: true });
+  isPending(target: SessionTitleTarget) {
+    return pending.get(requestKey(target))?.started === true;
+  },
+  run(
+    target: SessionTitleTarget,
+    create: (markStarted: () => void) => Promise<boolean>,
+    onStateChanged?: () => void,
+  ) {
+    const key = requestKey(target);
+    const existing = pending.get(key);
+    if (existing) {
+      return existing.request;
+    }
+    const request = Promise.resolve().then(() =>
+      create(() => {
+        owner.started = true;
+        onStateChanged?.();
+      }),
+    );
+    const owner = { request, started: false };
+    pending.set(key, owner);
+    const settle = () => {
+      pending.delete(key);
+      if (owner.started) {
+        onStateChanged?.();
+      }
+    };
+    void request.then(settle, settle);
+    return request;
   },
 };
 

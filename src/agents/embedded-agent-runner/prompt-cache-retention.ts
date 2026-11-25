@@ -1,7 +1,7 @@
 /**
  * Resolves provider/model prompt-cache retention behavior.
  */
-import { resolveOpenAIPromptCacheKeySupport } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, resolveOpenAIPromptCacheKeySupport } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import type { OpenAICompletionsCompat } from "../../llm/types.js";
@@ -30,6 +30,7 @@ export function isGooglePromptCacheEligible(params: {
     return false;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  // This gates explicit cachedContents creation; Gemini 4 supports implicit caching only.
   return normalizedModelId.startsWith("gemini-2.5") || normalizedModelId.startsWith("gemini-3");
 }
 
@@ -50,9 +51,7 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const openAIEligible =
-    (modelApi === "openai-responses" ||
-      modelApi === "openai-chatgpt-responses" ||
-      modelApi === "openai-completions") &&
+    (isOpenAIResponsesApi(modelApi) || modelApi === "openai-completions") &&
     resolveOpenAIPromptCacheKeySupport({ provider, api: modelApi, baseUrl, compat });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
   // Marker-based caches accept retention without accepting OpenAI cache-key fields.

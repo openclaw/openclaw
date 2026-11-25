@@ -1,164 +1,117 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import assert from "node:assert/strict";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({ fetchWithSsrFGuardMock: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
-});
-
 import { inworldTTS, listInworldVoices } from "./tts.js";
-
-type GuardRequest = {
-  url: string;
-  init?: RequestInit;
-  auditContext?: string;
-  policy?: unknown;
-  timeoutMs?: number;
-};
-
-function queueGuardedResponse(response: Response): { release: ReturnType<typeof vi.fn> } {
+type GuardRequest = Parameters<
+  typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+>[0];
+function queueResponse(body: string | object | Response, status = 200) {
+  const response =
+    body instanceof Response
+      ? body
+      : new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
   const release = vi.fn(async () => {});
   fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
   return { release };
 }
-
-function queueAudioResponse() {
-  return queueGuardedResponse(
-    Response.json({ result: { audioContent: Buffer.from("audio").toString("base64") } }),
-  );
-}
-
+const chunk = (audioContent: string) => ({ result: { audioContent } });
+const audio = (text: string) => chunk(Buffer.from(text).toString("base64"));
+const synthesize = (params: Partial<Parameters<typeof inworldTTS>[0]> = {}) =>
+  inworldTTS({ text: "test", apiKey: "test-key", ...params });
 function lastGuardRequest(): GuardRequest {
-  const calls = fetchWithSsrFGuardMock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("fetchWithSsrFGuard was not called");
-  }
+  const call = fetchWithSsrFGuardMock.mock.lastCall;
+  assert(call, "fetchWithSsrFGuard was not called");
   return call[0] as GuardRequest;
 }
-
-function readRequestBody(request: GuardRequest): string {
-  const body = request.init?.body;
-  if (typeof body !== "string") {
-    throw new Error("expected request body to be a string");
-  }
-  return body;
+function requestBody() {
+  const body = lastGuardRequest().init?.body;
+  assert(typeof body === "string", "expected request body to be a string");
+  return JSON.parse(body);
 }
-
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   vi.restoreAllMocks();
 });
-
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
 });
 
+it.each([
+  ["TTS", 200, chunk("not-base64!"), "returned malformed base64 audio data"],
+  [
+    "TTS",
+    200,
+    { error: { code: 3, message: "Invalid voice ID" } },
+    "stream error (3): Invalid voice ID",
+  ],
+  ["TTS", 200, chunk(""), "returned no audio data"],
+  ["TTS", 400, `${"e".repeat(399)}😀tail`, `API error (400): ${"e".repeat(399)}…`],
+  [
+    "TTS",
+    200,
+    `${"p".repeat(79)}😀tail`,
+    `stream parse error: unexpected non-JSON line: ${"p".repeat(79)}`,
+  ],
+  [
+    "TTS",
+    500,
+    "E".repeat(64 * 1024),
+    "API error (500): (error body exceeded diagnostic limit; truncated)",
+  ],
+  ["voices", 503, "service unavailable", "API error (503): service unavailable"],
+  ["voices", 200, "{not-json", "API returned malformed JSON"],
+] as const)("%s rejects status %i with %j", async (kind, status, body, message) => {
+  const { release } = queueResponse(body, status);
+  const result = kind === "TTS" ? synthesize() : listInworldVoices({ apiKey: "test-key" });
+  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.toMatchObject({ message: `Inworld ${kind} ${message}` });
+  expect(release).toHaveBeenCalledTimes(1);
+});
+
 describe("listInworldVoices", () => {
   it("maps voice metadata and filters entries without an ID", async () => {
-    const { release } = queueGuardedResponse(
-      Response.json({
-        voices: [
-          {
-            voiceId: "Dennis",
-            displayName: "Dennis",
-            description: "Middle-aged man with a smooth, calm and friendly voice",
-            langCode: "EN_US",
-            tags: ["male", "middle-aged", "smooth", "calm", "friendly"],
-            source: "SYSTEM",
-          },
-          {
-            voiceId: "Ashley",
-            displayName: "Ashley",
-            langCode: "EN_US",
-            tags: ["female", "warm", "natural"],
-            source: "SYSTEM",
-          },
-          { voiceId: "", displayName: "Empty" },
-        ],
-      }),
-    );
-
-    const voices = await listInworldVoices({ apiKey: "test-key" });
-
-    expect(voices).toEqual([
-      {
-        id: "Dennis",
-        name: "Dennis",
-        description: "Middle-aged man with a smooth, calm and friendly voice",
-        locale: "EN_US",
-        gender: "male",
-      },
-      {
-        id: "Ashley",
-        name: "Ashley",
-        description: undefined,
-        locale: "EN_US",
-        gender: "female",
-      },
+    const common = { langCode: "EN_US", description: "Calm voice" };
+    const { release } = queueResponse({
+      voices: [
+        { ...common, voiceId: "Dennis", displayName: "Dennis", tags: ["smooth", "male"] },
+        { voiceId: "Ashley", displayName: "Ashley", langCode: "EN_US", tags: ["female"] },
+        { voiceId: "", displayName: "Empty" },
+      ],
+    });
+    expect(await listInworldVoices({ apiKey: "test-key" })).toEqual([
+      { id: "Dennis", name: "Dennis", locale: "EN_US", description: "Calm voice", gender: "male" },
+      { id: "Ashley", name: "Ashley", locale: "EN_US", description: undefined, gender: "female" },
     ]);
     const request = lastGuardRequest();
-    expect(request.url).toBe("https://api.inworld.ai/voices/v1/voices");
-    expect(request.auditContext).toBe("inworld-voices");
+    expect(request).toMatchObject({
+      url: "https://api.inworld.ai/voices/v1/voices",
+      auditContext: "inworld-voices",
+      timeoutMs: 30_000,
+    });
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    expect(request.timeoutMs).toBe(30_000);
-    const headers = new Headers(request.init?.headers);
-    expect(headers.get("authorization")).toBe("Basic test-key");
+    expect(new Headers(request.init?.headers).get("authorization")).toBe("Basic test-key");
     expect(release).toHaveBeenCalledTimes(1);
   });
-
-  it("throws on API errors with response body", async () => {
-    queueGuardedResponse(new Response("service unavailable", { status: 503 }));
-
-    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow(
-      "Inworld voices API error (503): service unavailable",
-    );
-  });
-
   it("returns empty array when no voices present", async () => {
-    queueGuardedResponse(Response.json({}));
-
-    const voices = await listInworldVoices({ apiKey: "test-key" });
-    expect(voices).toStrictEqual([]);
-  });
-
-  it("passes language filter as query parameter", async () => {
-    queueGuardedResponse(Response.json({ voices: [] }));
-
-    await listInworldVoices({ apiKey: "test-key", language: "EN_US" });
-
-    expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
+    queueResponse({});
+    expect(await listInworldVoices({ apiKey: "test-key" })).toStrictEqual([]);
   });
 });
 
 describe("inworldTTS", () => {
   it("concatenates an under-cap 1 MiB payload and skips blank stream lines", async () => {
     const payload = "x".repeat(1024 * 1024);
-    const chunk1 = Buffer.from(payload).toString("base64");
-    const chunk2 = Buffer.from("audio-chunk-2").toString("base64");
-    const body = [
-      "",
-      JSON.stringify({ result: { audioContent: chunk1 } }),
-      "",
-      JSON.stringify({ result: { audioContent: chunk2 } }),
-      "",
-    ].join("\n");
-
-    const { release } = queueGuardedResponse(new Response(body, { status: 200 }));
-
-    const buffer = await inworldTTS({
-      text: "Hello world",
-      apiKey: "test-key",
-    });
-
+    const line = (text: string) => JSON.stringify(audio(text));
+    const { release } = queueResponse(
+      ["", line(payload), "", line("audio-chunk-2"), ""].join("\n"),
+    );
+    const buffer = await synthesize({ text: "Hello world" });
     expect(buffer.equals(Buffer.from(`${payload}audio-chunk-2`))).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
     const request = lastGuardRequest();
@@ -166,85 +119,35 @@ describe("inworldTTS", () => {
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
     expect(new Headers(request.init?.headers).get("authorization")).toBe("Basic test-key");
   });
-
-  it("rejects malformed base64 audio chunks", async () => {
-    const body = JSON.stringify({ result: { audioContent: "not-base64!" } });
-    queueGuardedResponse(new Response(body, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "fixture-api-key" })).rejects.toThrow(
-      "Inworld TTS returned malformed base64 audio data",
-    );
-  });
-
-  it("keeps truncated HTTP error bodies UTF-16 safe", async () => {
-    const { release } = queueGuardedResponse(
-      new Response(`${"e".repeat(399)}😀tail`, { status: 400 }),
-    );
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
-      message: `Inworld TTS API error (400): ${"e".repeat(399)}…`,
-    });
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws on in-stream errors", async () => {
-    const body = JSON.stringify({
-      error: { code: 3, message: "Invalid voice ID" },
-    });
-    queueGuardedResponse(new Response(body, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      "Inworld TTS stream error (3): Invalid voice ID",
-    );
-  });
-
-  it("throws on empty audio response", async () => {
-    const body = JSON.stringify({ result: { audioContent: "" } });
-    queueGuardedResponse(new Response(body, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      "Inworld TTS returned no audio data",
-    );
-  });
-
-  it("throws descriptive error on non-JSON line in stream", async () => {
-    queueGuardedResponse(new Response(`${"p".repeat(79)}😀tail`, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
-      message: `Inworld TTS stream parse error: unexpected non-JSON line: ${"p".repeat(79)}`,
-    });
-  });
-
-  it("includes temperature and sampleRateHertz when provided", async () => {
-    queueAudioResponse();
-
-    await inworldTTS({
-      text: "Hello",
-      apiKey: "test-key",
-      voiceId: "Ashley",
-      modelId: "inworld-tts-1.5-mini",
-      audioEncoding: "PCM",
+  it("serializes optional audio and voice settings", async () => {
+    queueResponse(audio("audio"));
+    const voice = { voiceId: "Ashley", modelId: "inworld-tts-1.5-mini", temperature: 0.8 };
+    const audioConfig = {
+      audioEncoding: "PCM" as const,
       sampleRateHertz: 22_050,
-      temperature: 0.8,
-    });
-
-    const callBody = JSON.parse(readRequestBody(lastGuardRequest()));
-    expect(callBody.voiceId).toBe("Ashley");
-    expect(callBody.modelId).toBe("inworld-tts-1.5-mini");
-    expect(callBody.audioConfig.audioEncoding).toBe("PCM");
-    expect(callBody.audioConfig.sampleRateHertz).toBe(22_050);
-    expect(callBody.temperature).toBe(0.8);
+      speakingRate: 1.3,
+    };
+    await synthesize({ ...voice, ...audioConfig });
+    expect(requestBody()).toEqual({ text: "test", ...voice, audioConfig });
   });
-
-  it("uses custom base URL", async () => {
-    queueAudioResponse();
-
-    await inworldTTS({
-      text: "Hello",
-      apiKey: "test-key",
-      baseUrl: "https://custom.inworld.example.com/",
+  it.each([
+    ["inworld-tts-2", "CREATIVE"],
+    ["inworld-tts-2-flash", undefined],
+    ["inworld-tts-1.5-max", undefined],
+  ] as const)("limits deliveryMode to TTS-2 (%s)", async (modelId, deliveryMode) => {
+    queueResponse(audio("audio"));
+    await synthesize({ modelId, deliveryMode: "CREATIVE" });
+    expect(requestBody()).toEqual({
+      text: "test",
+      voiceId: "Sarah",
+      modelId,
+      audioConfig: { audioEncoding: "MP3" },
+      ...(deliveryMode ? { deliveryMode } : {}),
     });
-
+  });
+  it("uses custom base URL", async () => {
+    queueResponse(audio("audio"));
+    await synthesize({ baseUrl: "https://custom.inworld.example.com/" });
     expect(lastGuardRequest().url).toBe("https://custom.inworld.example.com/tts/v1/voice:stream");
     expect(lastGuardRequest().policy).toEqual({
       hostnameAllowlist: ["custom.inworld.example.com"],
@@ -254,18 +157,14 @@ describe("inworldTTS", () => {
 
 describe("Inworld response read bounding", () => {
   const MiB = 1024 * 1024;
-
   // An unbounded reader would never finish; the cap must cancel the stream.
-  function infiniteByteStream(chunkBytes: number): {
-    stream: ReadableStream<Uint8Array>;
-    state: { enqueued: number; cancelled: boolean };
-  } {
+  function infiniteByteStream(chunkBytes: number) {
     const state = { enqueued: 0, cancelled: false };
-    const chunk = new Uint8Array(chunkBytes).fill(0x61); // "a"
+    const bytes = new Uint8Array(chunkBytes).fill(0x61);
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         state.enqueued += 1;
-        controller.enqueue(chunk);
+        controller.enqueue(bytes);
       },
       cancel() {
         state.cancelled = true;
@@ -273,55 +172,22 @@ describe("Inworld response read bounding", () => {
     });
     return { stream, state };
   }
-
-  it("fail-closed: rejects and cancels an oversized TTS audio stream instead of buffering it (32 MiB cap)", async () => {
+  it.each([
+    [32, synthesize, 8, "TTS audio stream"],
+    [16, () => listInworldVoices({ apiKey: "test-key" }), 4, "voices response"],
+  ] as const)("enforces %i MiB stream limit and cancels", async (limit, read, maxChunks, kind) => {
     const { stream, state } = infiniteByteStream(8 * MiB);
-    queueGuardedResponse(new Response(stream, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      /Inworld TTS audio stream too large: \d+ bytes \(limit: 33554432 bytes\)/,
+    queueResponse(new Response(stream, { status: 200 }));
+    await expect(read()).rejects.toThrow(
+      new RegExp(`Inworld ${kind} too large: \\d+ bytes \\(limit: ${limit * MiB} bytes\\)`),
     );
-    expect(state.enqueued).toBeLessThanOrEqual(8);
+    expect(state.enqueued).toBeLessThanOrEqual(maxChunks);
     expect(state.cancelled).toBe(true);
   });
-
   it("fail-closed: rejects decoded audio that exceeds the shared audio cap", async () => {
-    const decodedPayload = Buffer.alloc(16 * MiB + 1, 0x61);
-    const body = JSON.stringify({
-      result: { audioContent: decodedPayload.toString("base64") },
-    });
-    queueGuardedResponse(new Response(body, { status: 200 }));
-
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
+    queueResponse(chunk(Buffer.alloc(16 * MiB + 1, 0x61).toString("base64")));
+    await expect(synthesize()).rejects.toThrow(
       /Inworld TTS decoded audio too large: 16777217 bytes \(limit: 16777216 bytes\)/,
-    );
-  });
-
-  it("fail-closed: truncates an oversized HTTP error body to a bounded marker", async () => {
-    queueGuardedResponse(new Response("E".repeat(64 * 1024), { status: 500 }));
-
-    const result = inworldTTS({ text: "test", apiKey: "test-key" });
-    await expect(result).rejects.toBeInstanceOf(Error);
-    await expect(result).rejects.toMatchObject({
-      message: "Inworld TTS API error (500): (error body exceeded diagnostic limit; truncated)",
-    });
-  });
-
-  it("fail-closed: rejects and cancels an oversized voices JSON stream (16 MiB cap)", async () => {
-    const { stream, state } = infiniteByteStream(8 * MiB);
-    queueGuardedResponse(new Response(stream, { status: 200 }));
-
-    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow(
-      /Inworld voices response too large: \d+ bytes \(limit: 16777216 bytes\)/,
-    );
-    expect(state.enqueued).toBeLessThanOrEqual(4);
-    expect(state.cancelled).toBe(true);
-  });
-
-  it("regression: malformed voices JSON under the cap throws descriptive error", async () => {
-    queueGuardedResponse(new Response("{not-json", { status: 200 }));
-    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow(
-      "Inworld voices API returned malformed JSON",
     );
   });
 });

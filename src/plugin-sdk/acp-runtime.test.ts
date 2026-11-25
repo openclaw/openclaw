@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createIdleReplyDispatcher } from "../plugins/reply-dispatch.test-support.js";
 
 const { bypassMock, dispatchMock } = vi.hoisted(() => ({
   bypassMock: vi.fn(),
@@ -45,15 +46,7 @@ const event = {
 
 const ctx = {
   cfg: {},
-  dispatcher: {
-    sendToolResult: () => false,
-    sendBlockReply: () => false,
-    sendFinalReply: () => false,
-    waitForIdle: async () => {},
-    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    markComplete: () => {},
-  },
+  dispatcher: createIdleReplyDispatcher(),
   abortSignal: undefined,
   onReplyStart: undefined,
   recordProcessed: vi.fn(),

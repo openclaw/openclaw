@@ -9,36 +9,41 @@ import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
 const state = setupRunEntryTestState();
+const sessionIdentity = { agentId: "main", sessionId: "session-1", sessionKey: "agent:main:chat" };
+
+function installPlacement<TResolve extends () => Promise<string | undefined>>(
+  resolveRuntimeOverride: TResolve,
+  worker = false,
+) {
+  const provider = {
+    assertCompactionSuccessorAllowed: () => {},
+    resolveRuntimeOverride,
+    ...(worker ? { usesWorkerInference: async () => true } : {}),
+    executeLocalTurn: async <T>(_claim: unknown, run: () => Promise<T>) => run(),
+    executeTurn: vi.fn(),
+  };
+  onTestFinished(installSessionPlacementAdmissionProvider(provider));
+  return provider;
+}
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("runEmbeddedAgentEntry worker placement", () => {
-  it.each(["provider replacement", "cancellation", "lifecycle rotation"] as const)(
+  it.each(["cancellation", "lifecycle rotation"] as const)(
     "rejects %s while preparing the placement runtime",
     async (change) => {
       const started = createDeferred();
       const runtime = createDeferred<string | undefined>();
-      const provider = {
-        assertCompactionSuccessorAllowed: () => {},
-        resolveRuntimeOverride: async () => {
-          started.resolve();
-          return runtime.promise;
-        },
-        executeLocalTurn: async <T>(_claim: unknown, run: () => Promise<T>) => run(),
-        executeTurn: vi.fn(),
-      };
-      onTestFinished(installSessionPlacementAdmissionProvider(provider));
+      installPlacement(async () => {
+        started.resolve();
+        return runtime.promise;
+      });
       const abort = new AbortController();
       const runCandidate = vi.fn(async () => makeResult({ provider: "primary", model: "model" }));
       const entry = runEmbeddedAgentEntry({
         selection: { cfg: {}, provider: "primary", model: "model" },
-        identity: {
-          runId: "run-placement-preparation",
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:chat",
-        },
+        identity: { ...sessionIdentity, runId: "run-placement-preparation" },
         harness: createDirectHarness(),
         behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
         sessionOverride: { kind: "preserve" },
@@ -52,9 +57,7 @@ describe("runEmbeddedAgentEntry worker placement", () => {
           entry,
           "entry bypassed placement selection",
         );
-        if (change === "provider replacement") {
-          onTestFinished(installSessionPlacementAdmissionProvider({ ...provider }));
-        } else if (change === "cancellation") {
+        if (change === "cancellation") {
           abort.abort(new Error("runtime preparation cancelled"));
         } else {
           rotateAgentEventLifecycleGeneration();
@@ -74,34 +77,18 @@ describe("runEmbeddedAgentEntry worker placement", () => {
     "keeps worker fallback preparation and execution on its placement runtime (%s selection)",
     async (selection) => {
       const requestedRuntime = selection === "session" ? "codex" : undefined;
+      const models = { "primary-provider/primary-model": { agentRuntime: { id: "codex" } } };
       const cfg: OpenClawConfig =
-        selection === "configured"
-          ? {
-              agents: {
-                defaults: {
-                  models: { "primary-provider/primary-model": { agentRuntime: { id: "codex" } } },
-                },
-              },
-            }
-          : {};
+        selection === "configured" ? { agents: { defaults: { models } } } : {};
       setRuntimeConfigSnapshot(cfg);
-      const placement = {
-        assertCompactionSuccessorAllowed: () => {},
-        resolveRuntimeOverride: vi.fn(async () => "openclaw"),
-        usesWorkerInference: async () => true,
-        executeLocalTurn: async <T>(_claim: unknown, run: () => Promise<T>) => run(),
-        executeTurn: vi.fn(),
-      };
-      onTestFinished(installSessionPlacementAdmissionProvider(placement));
+      const placement = installPlacement(
+        vi.fn(async () => "openclaw"),
+        true,
+      );
       const entry = runEmbeddedAgentEntry({
         selection: { cfg, provider: "primary-provider", model: "primary-model" },
-        identity: {
-          runId: "run-worker-fallback",
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:chat",
-        },
-        harness: { ...createDirectHarness(), resolveRuntimeOverride: () => requestedRuntime },
+        identity: { ...sessionIdentity, runId: "run-worker-fallback" },
+        harness: createDirectHarness("/tmp/workspace", requestedRuntime),
         behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
         sessionOverride: { kind: "preserve" },
         runCandidate: async (provider, model, options) => {

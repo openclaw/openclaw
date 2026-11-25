@@ -6,7 +6,9 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { captureSessionMcpRuntimeRetirement } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
+import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
@@ -47,8 +49,7 @@ import {
 import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import {
   resolveProtectedSessionVisibilityError,
-  resolveSessionWorkerPlacementPatchError,
-  prepareSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchValidation,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -254,19 +255,6 @@ async function prepareSessionPatchArchiveFromSource(
     if (protectedError) {
       return err(protectedError);
     }
-    const placementError = resolveSessionWorkerPlacementPatchError({
-      agentId: selected.agentId,
-      cfg,
-      context: params.context,
-      entry,
-      key: target.key,
-      patch: target.fullPatch,
-      sessionKey: canonicalKey,
-      validateModelRuntime: false,
-    });
-    if (placementError) {
-      return err(errorShape(ErrorCodes.INVALID_REQUEST, placementError));
-    }
     return ok(entry);
   };
   const resolved = resolveCurrent();
@@ -275,17 +263,6 @@ async function prepareSessionPatchArchiveFromSource(
   }
   const entry = resolved.value;
   const planningEntry = selected.store[canonicalKey];
-  const assertCurrent = () => {
-    params.personalModelSelection?.assertCurrent();
-    const authorizationError = params.commitGuard();
-    if (authorizationError) {
-      throw new SessionMutationAuthorizationChangedError(authorizationError);
-    }
-    const current = resolveCurrent();
-    if (!current.ok) {
-      throw new SessionMutationAuthorizationChangedError(current.error);
-    }
-  };
   const candidateKeys = new Set(selected.storeKeys);
   const preview = await projectSessionsPatchEntry({
     cfg,
@@ -304,7 +281,7 @@ async function prepareSessionPatchArchiveFromSource(
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
+  const placementValidation = await prepareSessionWorkerPlacementPatchValidation({
     agentId: selected.agentId,
     cfg,
     context: params.context,
@@ -314,24 +291,40 @@ async function prepareSessionPatchArchiveFromSource(
     sessionKey: canonicalKey,
     validateModelRuntime: true,
   });
-  if (previewPlacementError) {
-    return err(errorShape(ErrorCodes.INVALID_REQUEST, previewPlacementError));
-  }
+  const assertCurrent = () => {
+    params.personalModelSelection?.assertCurrent();
+    const authorizationError = params.commitGuard();
+    if (authorizationError) {
+      throw new SessionMutationAuthorizationChangedError(authorizationError);
+    }
+    const placementError = placementValidation.validate();
+    if (placementError) {
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(ErrorCodes.INVALID_REQUEST, placementError),
+      );
+    }
+    const current = resolveCurrent();
+    if (!current.ok) {
+      throw new SessionMutationAuthorizationChangedError(current.error);
+    }
+  };
+  const sessionKeys = Array.from(
+    new Set([
+      target.key,
+      target.canonicalKey,
+      ...target.initialTarget.storeKeys,
+      canonicalKey,
+      ...selected.storeKeys,
+    ]),
+  );
+  let transferred = false;
   try {
     const drain = await prepareSessionLifecycleDrain({
       action: "archive",
       authorize: assertCurrent,
       context: params.context,
       storePath: target.storePath,
-      sessionKeys: Array.from(
-        new Set([
-          target.key,
-          target.canonicalKey,
-          ...target.initialTarget.storeKeys,
-          canonicalKey,
-          ...selected.storeKeys,
-        ]),
-      ),
+      sessionKeys,
       sessionId: entry?.sessionId,
       session: {
         ok: true,
@@ -350,9 +343,38 @@ async function prepareSessionPatchArchiveFromSource(
         Boolean(identity),
       ),
     });
+    try {
+      // An archived chat is hidden, so nothing would manage what it still runs.
+      await stopSessionExecProcesses(
+        entry?.sessionId ? [...sessionKeys, entry.sessionId] : sessionKeys,
+        assertCurrent,
+      );
+      if (entry?.sessionId) {
+        assertCurrent();
+        await captureSessionMcpRuntimeRetirement({ sessionId: entry.sessionId })?.retire(
+          assertCurrent,
+        );
+      }
+    } catch (error) {
+      drain.release();
+      sessionLog.warn(
+        `sessions.patch: archive could not stop processes for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
+      );
+      return err(archiveUnavailableError(target.key, "stopping"));
+    }
+    transferred = true;
     return ok({
       canonicalKey,
-      drain,
+      drain: {
+        ...drain,
+        release: () => {
+          try {
+            drain.release();
+          } finally {
+            placementValidation.release();
+          }
+        },
+      },
       ...(planningEntry ? { entry: planningEntry } : {}),
     });
   } catch (error) {
@@ -381,6 +403,10 @@ async function prepareSessionPatchArchiveFromSource(
       `sessions.patch: archive drain failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
     );
     return err(archiveUnavailableError(target.key, "stopping"));
+  } finally {
+    if (!transferred) {
+      placementValidation.release();
+    }
   }
 }
 

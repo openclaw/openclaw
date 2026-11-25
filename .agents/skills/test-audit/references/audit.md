@@ -57,6 +57,10 @@ contract. Audit existing matches:
 - Removed source greps/plan assertions: exercise owning executable/dry-run.
 - Run targeted format, `git diff --check`; classify changed gate with
   `node scripts/check-changed.mjs --dry-run -- <changed-paths>` before running it.
+- Before landing removal batches, run CI's `pnpm deadcode:dependencies`,
+  `pnpm deadcode:unused-files`, and `pnpm deadcode:exports` (all phases): removed
+  tests orphan support files/exports that ordinary PR CI misses and main's
+  `check-dependencies` catches.
 - Inspect `git diff --numstat`; get final autoreview.
 - Report causes, removed categories/seams, retained false positives, proof/cost,
   production versus test/support LOC, PR state, follow-ups.

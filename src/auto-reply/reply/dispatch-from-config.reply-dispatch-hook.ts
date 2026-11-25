@@ -5,6 +5,7 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { runWithReplyNativeSubagents } from "./dispatch-native-subagent.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
@@ -77,6 +78,7 @@ export function runReplyDispatchHook(
                 assertCurrent: state.turnAdoption?.assertCurrent,
               },
             ),
+            (invoke) => runWithReplyNativeSubagents(state, invoke),
           );
         },
         state.trackDispatchLifecycleWork,

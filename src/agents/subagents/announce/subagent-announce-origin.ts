@@ -6,13 +6,16 @@ import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registr
 import type { ChannelId } from "../../../channels/plugins/types.public.js";
 import { deliveryContextFromConversation } from "../../../channels/route-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
 import {
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
 } from "../../../infra/outbound/channel-target-prefix.js";
+import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
 import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue.records.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
@@ -29,11 +32,7 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
-import {
-  resolveBoundDeliveryDestination,
-  getGlobalHookRunner,
-  resolveConversationIdFromTargets,
-} from "./subagent-announce-delivery.runtime.js";
+
 export type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
 function normalizeAnnounceRouteTarget(
@@ -44,7 +43,7 @@ function normalizeAnnounceRouteTarget(
   if (!rawTo) {
     return undefined;
   }
-  const channel = context?.channel ?? fallbackChannel;
+  const channel = context.channel ?? fallbackChannel;
   const messaging = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
@@ -84,7 +83,7 @@ function shouldStripThreadFromAnnounceFallback(
   }
   const requesterTarget = normalizeAnnounceRouteTarget(
     normalizedRequester,
-    normalizedEntry?.channel,
+    normalizedEntry.channel,
   );
   const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry, normalizedRequester.channel);
   if (requesterTarget && entryTarget) {
@@ -133,7 +132,7 @@ function resolveBoundConversationOrigin(params: {
   const conversation = params.bindingConversation;
   const conversationId = conversation.conversationId?.trim() ?? "";
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
-  const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
+  const requesterConversationId = params.requesterConversation?.conversationId.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
   const boundTarget = deliveryContextFromConversation(conversation);
   const inferredThreadId =
@@ -169,7 +168,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const conversationId =
     stringifyRouteThreadId(requesterOrigin?.threadId) ||
-    resolveConversationIdFromTargets({ targets: [to] }) ||
+    resolveConversationIdFromTargets([to]) ||
     "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
@@ -300,15 +299,14 @@ export function resolveGeneratedMediaSessionDeliveryRoute(params: {
   const inferredRouteChatType = inferDeliveryTargetChatType({ channel, to });
   const derivedChatType = deriveSessionChatTypeFromKey(params.sessionKey);
   const chatType =
-    inferredRouteChatType ??
-    (!derivedChatType || derivedChatType === "unknown" ? "direct" : derivedChatType);
+    inferredRouteChatType ?? (derivedChatType === "unknown" ? "direct" : derivedChatType);
   if (channel && isGatewayMessageChannel(channel) && to) {
     return {
       route: {
         channel,
         to,
-        ...(deliveryContext?.accountId ? { accountId: deliveryContext.accountId } : {}),
-        ...(deliveryContext?.threadId != null
+        ...(deliveryContext.accountId ? { accountId: deliveryContext.accountId } : {}),
+        ...(deliveryContext.threadId != null
           ? { threadId: stringifyRouteThreadId(deliveryContext.threadId) }
           : {}),
         chatType,

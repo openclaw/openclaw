@@ -1,6 +1,9 @@
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerWorkerCapacityEnglish } from "../../i18n/locales/en-worker-capacity.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { CapacityMeter } from "./capacity-meter.tsx";
 import { Icon } from "./icon.tsx";
+
+registerEnglishCatalog(registerWorkerCapacityEnglish);
 
 /** Presentation only: the caller owns connectivity and placement eligibility. */
 export function workerCapacityPresentation(params: {

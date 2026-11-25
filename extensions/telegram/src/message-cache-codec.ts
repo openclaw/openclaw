@@ -1,20 +1,20 @@
 import type { Message } from "grammy/types";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   type TelegramMediaKind,
 } from "./bot/body-helpers.js";
 import {
   buildSenderName,
-  extractTelegramLocation,
   getTelegramTextParts,
   normalizeForwardedContext,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   isTelegramMessageCacheSourceMessage,
   parseTelegramResolvedMedia,
@@ -64,7 +64,9 @@ export function isGroupMessage(msg: Message): boolean {
 
 export function resolveReplyMessage(msg: Message) {
   if (msg.reply_to_message) {
-    return msg.reply_to_message;
+    // Telegram links each plain forum-topic message to the topic's service
+    // message. That link is not a reply and carries nothing to quote.
+    return isTelegramForumServiceMessage(msg.reply_to_message) ? undefined : msg.reply_to_message;
   }
   const externalReply = msg.external_reply;
   return externalReply?.chat && externalReply.chat.id === msg.chat?.id ? externalReply : undefined;
@@ -105,8 +107,8 @@ export function normalizeMessageNode(
   if (text.trim()) {
     body = preserveWhitespace ? text : text.trim();
   } else {
-    const location = extractTelegramLocation(msg);
-    body = location ? formatLocationText(location) : resolveTelegramRichMessageBody(msg);
+    const nonText = resolveTelegramNonTextBody(msg);
+    body = nonText ? nonText.text : resolveTelegramRichMessagePlaceholder(msg);
   }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =

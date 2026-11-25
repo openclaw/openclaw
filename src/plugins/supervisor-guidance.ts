@@ -17,9 +17,9 @@ export type SupervisorGuidanceV1 = {
   actions: Partial<Record<SupervisorAction, string>>;
 };
 
-export type SupervisorDisplayGuidance = {
+export type SupervisorDisplayGuidance<Action extends SupervisorAction = SupervisorAction> = {
   version: 1;
-  action: SupervisorAction;
+  action: Action;
   name: string;
   runFrom?: string;
   command: string;

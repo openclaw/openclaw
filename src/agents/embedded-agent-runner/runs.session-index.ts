@@ -1,20 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export function clearActiveRunSessionIndex(
-  index: Map<string, string>,
-  sessionId: string,
-  key?: string,
-): void {
-  // File aliases always use the sweep: cleanup may not retain the registration's file token.
-  const candidates = key ? [[key, index.get(key)] as const] : index;
-  for (const [entryKey, activeSessionId] of candidates) {
-    if (activeSessionId === sessionId) {
-      index.delete(entryKey);
-    }
-  }
-}
-
 export function normalizeSessionFileRegistryKey(
   sessionFile: string | undefined,
 ): string | undefined {

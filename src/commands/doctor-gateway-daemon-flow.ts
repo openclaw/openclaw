@@ -26,7 +26,6 @@ import {
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -38,7 +37,6 @@ import {
   readGatewayRestartHandoffSync,
 } from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
-import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
@@ -47,7 +45,7 @@ import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
-  formatServiceRepairDeferredNote,
+  resolveServiceRepairDeferredNote,
   isServiceRepairDeferred,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
@@ -56,7 +54,11 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
-import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import {
+  formatGatewayClosedDiagnostic,
+  formatHealthCheckFailure,
+  formatHealthDiagnosticNote,
+} from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
@@ -66,21 +68,13 @@ type LaunchAgentBootstrapDoctorOutcome =
   | { status: "system-launchdaemon-blocked"; detail: string }
   | { status: "gui-session-unavailable"; detail: string };
 
-function noteGatewayRuntime(
+async function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
-): void {
+): Promise<void> {
   const summary = formatRuntimeStatus(serviceRuntime);
-  const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
+  const hints = await buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
-  const sqliteLibrary = ensureSqliteLibrarySelected();
-  if (sqliteLibrary.source !== "runtime") {
-    lines.push(
-      `SQLite (doctor process): ${sqliteLibrary.path} (${sqliteLibrary.version}, extension loading enabled)`,
-    );
-  } else if (sqliteLibrary.ignoredOverride) {
-    lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
-  }
   if (lines.length > 0) {
     note(lines.join("\n"), "Gateway");
   }
@@ -104,10 +98,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairDeferred) {
     note(
-      formatServiceRepairDeferredNote(
-        undefined,
-        await resolveExternalSupervisorGuidance("repair", { env: params.env }),
-      ),
+      await resolveServiceRepairDeferredNote({ env: params.env }),
       `${params.title} LaunchAgent`,
     );
     return { status: "not-loaded" };
@@ -271,13 +262,7 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    note(
-      formatServiceRepairDeferredNote(
-        undefined,
-        await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
-      ),
-      "Gateway",
-    );
+    note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
     return;
   }
 
@@ -340,7 +325,7 @@ export async function maybeRepairGatewayDaemon(params: {
     await maybeRepairLaunchAgentBootstrap({
       env: {
         ...process.env,
-        OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
+        OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE),
       },
       title: "Node",
       runtime: params.runtime,
@@ -373,7 +358,7 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (isLocalDarwinGateway && serviceRuntime?.systemLaunchDaemon) {
-    noteGatewayRuntime(serviceRuntime, process.env);
+    await noteGatewayRuntime(serviceRuntime, process.env);
     return;
   }
 
@@ -392,7 +377,7 @@ export async function maybeRepairGatewayDaemon(params: {
         serviceRuntime?.cachedLabel ||
         serviceRuntime?.systemLaunchDaemon)
     ) {
-      noteGatewayRuntime(serviceRuntime, process.env);
+      await noteGatewayRuntime(serviceRuntime, process.env);
       return;
     }
     note("Gateway service not installed.", "Gateway");
@@ -404,13 +389,7 @@ export async function maybeRepairGatewayDaemon(params: {
       }
     }
     if (serviceRepairDeferred) {
-      note(
-        formatServiceRepairDeferredNote(
-          undefined,
-          await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
-        ),
-        "Gateway",
-      );
+      note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
       return;
     }
     const install = await confirmDoctorServiceRepair(
@@ -478,20 +457,14 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, serviceEnv);
+  await noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
       return;
     }
     if (serviceRepairDeferred) {
-      note(
-        formatServiceRepairDeferredNote(
-          undefined,
-          await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
-        ),
-        "Gateway",
-      );
+      note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
       return;
     }
     const start = await confirmDoctorServiceRepair(
@@ -537,13 +510,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (serviceRepairDeferred) {
-    note(
-      formatServiceRepairDeferredNote(
-        undefined,
-        await resolveExternalSupervisorGuidance("repair", { config: params.cfg }),
-      ),
-      "Gateway",
-    );
+    note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
     return;
   }
 
@@ -594,7 +561,7 @@ export async function maybeRepairGatewayDaemon(params: {
       const closedDiagnostic = formatGatewayClosedDiagnostic(err);
       if (closedDiagnostic) {
         note(closedDiagnostic, "Gateway");
-        note(params.gatewayDetailsMessage, "Gateway connection");
+        note(formatHealthDiagnosticNote(params.gatewayDetailsMessage), "Gateway connection");
       } else {
         params.runtime.error(formatHealthCheckFailure(err));
       }

@@ -35,12 +35,12 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 
 Useful tuning fields:
 
-| Key                                | Type     | Meaning                                                                                                                                                         |
-| ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.recentUserTurns`           | `number` | Prior user turns to include when `queryMode` is `recent` (range 0-4; default 2)                                                                                 |
-| `config.recentAssistantTurns`      | `number` | Prior assistant turns to include when `queryMode` is `recent` (range 0-3; default 1)                                                                            |
-| `config.recentUserChars`           | `number` | Max chars per recent user turn (range 40-1000; default 220)                                                                                                     |
-| `config.recentAssistantChars`      | `number` | Max chars per recent assistant turn (range 40-1000; default 180)                                                                                                |
-| `config.cacheTtlMs`                | `number` | Cache reuse for repeated identical queries (range 1000-120000 ms; default 15000)                                                                                |
-| `config.circuitBreakerMaxTimeouts` | `number` | Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires (range 1-20; default 3). |
-| `config.circuitBreakerCooldownMs`  | `number` | How long to skip recall after repeated failures pause it, in ms (range 5000-600000; default 60000).                                                             |
+| Key                                | Type     | Meaning                                                                                                                                                                      |
+| ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.recentUserTurns`           | `number` | Prior user turns to include when `queryMode` is `recent` (range 0-4; default 2)                                                                                              |
+| `config.recentAssistantTurns`      | `number` | Prior assistant turns to include when `queryMode` is `recent` (range 0-3; default 1)                                                                                         |
+| `config.recentUserChars`           | `number` | Max chars per recent user turn (range 40-1000; default 220)                                                                                                                  |
+| `config.recentAssistantChars`      | `number` | Max chars per recent assistant turn (range 40-1000; default 180)                                                                                                             |
+| `config.cacheTtlMs`                | `number` | Cache reuse for repeated identical queries (range 1000-120000 ms; default 15000)                                                                                             |
+| `config.circuitBreakerMaxTimeouts` | `number` | Skip recall after this many consecutive timeouts for the same agent/model, regardless of the time between them. A completed recall clears the count (range 1-20; default 3). |
+| `config.circuitBreakerCooldownMs`  | `number` | How long to skip recall after repeated timeouts, in ms. Afterward, recall may run again; another timeout immediately renews the pause (range 5000-600000; default 60000).    |

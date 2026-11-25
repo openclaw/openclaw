@@ -1,7 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   isLocalOllamaBaseUrl,
@@ -12,6 +11,11 @@ import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
 const loadOllamaUsage = createLazyRuntimeModule(() => import("./usage.js"));
+// Usage descriptors must not load credential resolution until the auth hook is called.
+const resolveConfiguredSecretInputString = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("openclaw/plugin-sdk/secret-input-runtime")),
+  (runtime) => runtime.resolveConfiguredSecretInputString,
+);
 
 export function createOllamaUsageHooks(): Pick<
   ProviderPlugin,

@@ -1,4 +1,3 @@
-import type { HeartbeatOutcomeRow } from "../../infra/heartbeat-outcome-store.kernel.js";
 import {
   mutateSessionActorMemoryOutbox,
   readSessionActorMemoryOutbox,
@@ -32,42 +31,6 @@ export function mutateSessionActorMemorySideEffects(
 ) {
   const key = context.state.hot.target.sessionKey;
   switch (command.type) {
-    case "session.heartbeat.persist": {
-      if (command.input.session_key !== key) {
-        throw new Error("Heartbeat outcome does not target this session actor");
-      }
-      if (context.state.hot.entry) {
-        const row: HeartbeatOutcomeRow = {
-          ...command.input,
-          next_check: command.input.next_check ?? null,
-          priority: command.input.priority ?? null,
-          response_reason: command.input.response_reason ?? null,
-          task_names_json: command.input.task_names_json ?? null,
-          wake_reason: command.input.wake_reason ?? null,
-          wake_source: command.input.wake_source ?? null,
-          context_run_id: null,
-          context_claimed_at: null,
-        };
-        context.state.heartbeatOutcome = row;
-      }
-      return undefined;
-    }
-    case "session.heartbeat.claim": {
-      if (command.input.sessionKey !== key) {
-        throw new Error("Heartbeat outcome does not target this session actor");
-      }
-      const row = context.state.heartbeatOutcome;
-      if (!row || (row.context_run_id !== null && row.context_run_id !== command.input.runId)) {
-        return undefined;
-      }
-      const claimed = {
-        ...row,
-        context_run_id: command.input.runId,
-        context_claimed_at: row.context_claimed_at ?? Date.now(),
-      };
-      context.state.heartbeatOutcome = claimed;
-      return claimed;
-    }
     case "session.messageToolOutcome.record": {
       if (command.input.session_key !== key || command.input.agent_id !== context.agentId) {
         throw new Error("Message-tool outcome does not target this session actor");

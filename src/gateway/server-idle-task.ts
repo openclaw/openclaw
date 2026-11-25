@@ -7,6 +7,7 @@ import {
 } from "../process/gateway-work-admission.js";
 
 export type GatewayIdleTaskHandle = {
+  name?: string;
   stop: () => void | Promise<void>;
 };
 
@@ -16,7 +17,7 @@ export function scheduleGatewayIdleTask(params: {
   scheduler: GatewayScheduler;
   delayMs: number;
   retryDelayMs: number;
-  repeatDelayMs?: number;
+  repeatDelayMs?: number | (() => number);
   isClosing: () => boolean;
   isBusy: () => boolean;
   waitForReady?: () => Promise<void>;
@@ -62,7 +63,11 @@ export function scheduleGatewayIdleTask(params: {
           )
           .then(() => {
             if (params.repeatDelayMs !== undefined) {
-              schedule(params.repeatDelayMs);
+              schedule(
+                typeof params.repeatDelayMs === "function"
+                  ? params.repeatDelayMs()
+                  : params.repeatDelayMs,
+              );
             }
           })
           .catch((error: unknown) => {
@@ -81,6 +86,7 @@ export function scheduleGatewayIdleTask(params: {
   };
   schedule(params.delayMs);
   return {
+    name: params.id,
     stop: scheduler.stop,
   };
 }

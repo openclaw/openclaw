@@ -1,4 +1,3 @@
-// Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
@@ -7,9 +6,8 @@ import { detectPackageManager } from "./detect-package-manager.js";
 import { isMissingPathError } from "./errno.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
-import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
+import { canAccess } from "./path-existence.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
@@ -18,14 +16,16 @@ import {
 } from "./update-channels.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
-  readGitReceiptFetchTarget,
-  readGitBranchFetchTarget,
+  readGitUpdateFetchTarget,
+  resolveGitUpdateTrackingRef,
   resolveGitRepositoryMetadata,
+  type GitUpdateSourceHint,
 } from "./update-git-metadata.js";
 import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import { describeUnavailableMacosSystemGit } from "./update-macos-git.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
@@ -168,7 +168,9 @@ export async function resolveExtendedStablePackage(params: {
   timeoutMs?: number;
   packageName?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }): Promise<ExtendedStableResolutionResult> {
+  params.signal?.throwIfAborted();
   if (params.installKind === "git") {
     return { status: "failed", reason: "unsupported_git_channel" };
   }
@@ -178,8 +180,10 @@ export async function resolveExtendedStablePackage(params: {
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
+    signal: params.signal,
     ...registryTarget,
   });
+  params.signal?.throwIfAborted();
   if (!selector.version) {
     return {
       status: "failed",
@@ -190,8 +194,10 @@ export async function resolveExtendedStablePackage(params: {
   const exact = await fetchNpmPackageTargetStatus({
     target: selector.version,
     timeoutMs,
+    signal: params.signal,
     ...registryTarget,
   });
+  params.signal?.throwIfAborted();
   if (exact.version !== selector.version) {
     return { status: "failed", reason: "exact_package_mismatch" };
   }
@@ -217,15 +223,6 @@ export function formatGitInstallLabel(update: UpdateCheckResult): string | null 
     shortSha ? `@ ${shortSha}` : null,
   ].filter(Boolean);
   return parts.join(" · ");
-}
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Classify installation ownership without reading Git history or dependency state. */
@@ -267,12 +264,15 @@ async function resolveUpdateInstallOwnership(
       () => true,
       (error: unknown) => !isMissingPathError(error),
     ));
-  const result = probeGit
-    ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
-        ...options,
-        timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-      })
-    : null;
+  const gitOptions = {
+    ...options,
+    cwd: root,
+    timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+  };
+  const result =
+    probeGit && !(await describeUnavailableMacosSystemGit(runCommandWithTimeout, gitOptions))
+      ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], gitOptions)
+      : null;
   options.signal?.throwIfAborted();
   if (result?.termination === "timeout") {
     // An expired probe does not establish that this root is a package installation.
@@ -291,14 +291,12 @@ async function resolveUpdateInstallOwnership(
 export async function resolveUpdateInstallIdentity(params: {
   root: string | null;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
   const identity = await resolveUpdateInstallOwnership(root, options);
   const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
-  options.signal?.throwIfAborted();
   return { ...identity, git };
 }
 
@@ -311,6 +309,7 @@ async function runUpdateGitCommand(root: string, args: string[], options: GitUpd
   const { onGitProbeTimeout, ...commandOptions } = options;
   const result = await executeGitCommand(root, args, {
     ...commandOptions,
+    operation: "update.inspect",
     killProcessTree: true,
   }).catch(() => null);
   if (result?.termination === "timeout" && args[0] !== "fetch") {
@@ -347,7 +346,7 @@ async function checkGitUpdateStatus(params: {
   onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
   fetch?: boolean;
   useDetachedDevUpstream?: boolean;
-  upstreamFallback?: { currentSha: string; upstreamRef: string };
+  gitSourceHint?: GitUpdateSourceHint | null;
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? (params.fetch ? UPDATE_NETWORK_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
@@ -359,7 +358,7 @@ async function checkGitUpdateStatus(params: {
     });
   const readGit = async (...args: string[]) => {
     const result = await runGit(...args);
-    return result?.code === 0 ? result.stdout.trim() || null : null;
+    return result?.code === 0 ? result.stdout.trim() : null;
   };
 
   const base: GitUpdateStatus = {
@@ -385,34 +384,28 @@ async function checkGitUpdateStatus(params: {
     return { ...base, error };
   }
   const trackingBranch =
-    branch === "HEAD" ? (params.useDetachedDevUpstream ? DEV_BRANCH : null) : branch;
-  let tracking = trackingBranch ? await readGitBranchFetchTarget(readGit, trackingBranch) : null;
+    branch === "HEAD"
+      ? params.useDetachedDevUpstream || params.gitSourceHint?.upstreamRef
+        ? DEV_BRANCH
+        : null
+      : branch;
+  const fetchTarget = trackingBranch
+    ? await readGitUpdateFetchTarget(
+        readGit,
+        trackingBranch,
+        branch === "HEAD" && Boolean(params.useDetachedDevUpstream),
+        {
+          root,
+          sha,
+          receipt: params.gitSourceHint ?? null,
+          fetchRemote: Boolean(params.fetch),
+        },
+      )
+    : null;
 
   const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
 
-  const receiptUpstream =
-    !tracking &&
-    branch === "HEAD" &&
-    sha &&
-    params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
-      ? params.upstreamFallback.upstreamRef.trim() || null
-      : null;
-  const receiptTarget = receiptUpstream
-    ? await readGitReceiptFetchTarget(readGit, receiptUpstream, Boolean(params.fetch))
-    : null;
-  // A matching receipt owns the intended upstream even when it cannot resolve.
-  // Only an install with neither configured tracking nor receipt intent uses Dev's default.
-  if (
-    !tracking &&
-    !receiptUpstream &&
-    branch === "HEAD" &&
-    trackingBranch &&
-    (await readGit("remote", "get-url", "--", "origin"))
-  ) {
-    tracking = { remote: "origin", mergeRef: `refs/heads/${trackingBranch}` };
-  }
-  const fetchTarget = tracking ?? receiptTarget;
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
   let fetchOk: boolean | null = null;
   let fetchedCommit: string | null = null;
@@ -443,29 +436,17 @@ async function checkGitUpdateStatus(params: {
       fetchOk = fetched?.code === 0 && fetchedCommit !== null;
     }
   }
-  // Command-local defaults let Git resolve a fresh SHA-only Dev checkout's own
-  // mapping after fetch, without creating a branch or changing its configuration.
   const trackingRevision =
-    tracking && trackingBranch
-      ? await readGit(
-          "-c",
-          `branch.${trackingBranch}.remote=${tracking.remote}`,
-          "-c",
-          `branch.${trackingBranch}.merge=${tracking.mergeRef}`,
-          "rev-parse",
-          "--symbolic-full-name",
-          `${trackingBranch}@{upstream}`,
-        )
+    fetchTarget && trackingBranch
+      ? await resolveGitUpdateTrackingRef(readGit, trackingBranch, fetchTarget)
       : null;
-  const upstream = trackingRevision
-    ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
-    : receiptUpstream;
-  const upstreamSource = trackingRevision
-    ? ("tracking" as const)
-    : receiptUpstream
-      ? ("receipt" as const)
-      : undefined;
-  const upstreamRevision = `${trackingRevision ?? receiptTarget?.revision ?? upstream}^{commit}`;
+  const upstream =
+    fetchTarget?.upstreamSource === "receipt"
+      ? params.gitSourceHint?.upstreamRef?.trim() || null
+      : trackingRevision
+        ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
+        : null;
+  const upstreamRevision = `${trackingRevision}^{commit}`;
   let upstreamCommit =
     (!params.fetch || fetchOk === true) && upstream && sha
       ? await readGit("rev-parse", "--verify", upstreamRevision)
@@ -509,7 +490,7 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
-    ...(upstreamSource ? { upstreamSource } : {}),
+    ...(fetchTarget ? { upstreamSource: fetchTarget.upstreamSource } : {}),
     upstreamSha: upstreamCommit,
     ...(await resolveGitRepositoryMetadata(readGit, fetchTarget)),
     commitAtMs,
@@ -542,7 +523,7 @@ async function checkDepsStatus(params: {
       ? "pnpm-lock.yaml"
       : manager === "npm"
         ? "package-lock.json"
-        : (await exists(path.join(root, "bun.lock")))
+        : (await canAccess(path.join(root, "bun.lock")))
           ? "bun.lock"
           : "bun.lockb";
   const lockfilePath = path.join(root, lockfile);
@@ -551,8 +532,8 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const lockExists = await exists(lockfilePath);
-  const markerExists = await exists(markerPath);
+  const lockExists = await canAccess(lockfilePath);
+  const markerExists = await canAccess(markerPath);
   return {
     manager,
     lockfilePath,
@@ -592,6 +573,7 @@ export async function resolveNpmChannelTag(
     const resolved = await resolveExtendedStablePackage({
       installKind: "package",
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
     });
     return resolved.status === "resolved"
       ? { tag: resolved.selector, version: resolved.version }
@@ -613,18 +595,6 @@ export async function resolveNpmChannelTag(
   return selectNpmChannelVersion(channelStatus, latestStatus);
 }
 
-export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  if (a && b) {
-    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
-    if (openClawReleaseCmp != null) {
-      return openClawReleaseCmp;
-    }
-  }
-  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
-  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
-  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
-}
-
 export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;
@@ -632,17 +602,18 @@ export async function checkUpdateStatus(params: {
   onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
   fetchGit?: boolean;
   useDetachedDevUpstream?: boolean;
-  gitUpstreamFallback?: { currentSha: string; upstreamRef: string };
+  gitSourceHint?: GitUpdateSourceHint | null;
   includeRegistry?: boolean;
-  registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   params.signal?.throwIfAborted();
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
-    params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
-    const result = await resolveNpmChannelTag({ channel: channel ?? "stable", timeoutMs });
+    const result = await resolveNpmChannelTag({
+      channel: channel ?? "stable",
+      timeoutMs,
+      signal: params.signal,
+    });
     return {
       latestVersion: result.version,
       ...(channel ? { tag: result.tag } : {}),
@@ -652,7 +623,7 @@ export async function checkUpdateStatus(params: {
   };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
-    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind: "unknown" });
     const registry = params.includeRegistry ? await fetchRegistry(registryChannel) : undefined;
     params.signal?.throwIfAborted();
     return {
@@ -717,7 +688,7 @@ export async function checkUpdateStatus(params: {
     if (params.signal?.aborted) {
       return undefined;
     }
-    const registryChannel = resolveRegistryChannel({ installKind, git });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind, git });
     return params.includeRegistry
       ? registryChannel === "extended-stable" && isGit
         ? {
@@ -739,7 +710,7 @@ export async function checkUpdateStatus(params: {
           onGitProbeTimeout: params.onGitProbeTimeout,
           fetch: Boolean(params.fetchGit),
           useDetachedDevUpstream: params.useDetachedDevUpstream,
-          upstreamFallback: params.gitUpstreamFallback,
+          gitSourceHint: params.gitSourceHint,
         })
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),

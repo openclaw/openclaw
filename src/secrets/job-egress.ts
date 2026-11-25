@@ -4,10 +4,7 @@ import path from "node:path";
 import type { SecretRef } from "../config/types.secrets.js";
 import { startSecretEgressProxyWorker } from "./egress-proxy/proxy-worker.js";
 import { sealSecretSentinel } from "./sentinel.js";
-import {
-  assertSecretStoreEnvName,
-  assertSecretStoreValue,
-} from "./store/secret-store-validation.js";
+import { assertSecretStoreValue } from "./store/secret-store-validation.js";
 import { readSelectedSecretStoreEntries } from "./store/secret-store.js";
 
 export type JobSecretEgress = {
@@ -23,6 +20,12 @@ export type JobSecretEgress = {
 
 type JobSecret = { envName: string; name: string; value: string; allowedHosts: readonly string[] };
 
+function assertJobEnvName(name: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+    throw new Error("Setup egress environment names must be valid POSIX names");
+  }
+}
+
 /** One owner for standalone jobs' proxy, grants, cancellation, and CA cleanup. */
 export async function withJobSecretEgress<T>(
   params: { secrets: readonly JobSecret[]; signal?: AbortSignal; allowedHosts?: readonly string[] },
@@ -31,7 +34,7 @@ export async function withJobSecretEgress<T>(
   params.signal?.throwIfAborted();
   const remoteEnv: Record<string, string> = {};
   const bindings = params.secrets.map((secret) => {
-    assertSecretStoreEnvName(secret.envName);
+    assertJobEnvName(secret.envName);
     assertSecretStoreValue(secret.value, "secret", secret.name);
     const sentinel = sealSecretSentinel(secret.value, { label: `job-egress:${secret.name}` });
     remoteEnv[secret.envName] = sentinel;
@@ -76,7 +79,7 @@ export async function withSetupSecretEgress<T>(
 ): Promise<T> {
   params.signal.throwIfAborted();
   const selection = Object.entries(params.secrets).map(([envName, ref]) => {
-    assertSecretStoreEnvName(envName);
+    assertJobEnvName(envName);
     if (ref.source !== "store") {
       throw new Error("Setup egress requires shared-store SecretRefs");
     }
@@ -92,6 +95,11 @@ export async function withSetupSecretEgress<T>(
     if (!entry) {
       throw new Error(
         `Setup egress secret "${name}" was not found as a protected shared-store entry`,
+      );
+    }
+    if (!entry.allowedHosts.length) {
+      throw new Error(
+        `Setup secret "${name}" has no destination bindings; run openclaw secrets store set ${name} --allow-host <host> before retrying`,
       );
     }
     return { envName, name: entry.name, value: entry.value, allowedHosts: entry.allowedHosts };

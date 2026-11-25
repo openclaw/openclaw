@@ -67,6 +67,7 @@ export class OpenClawAppBridge extends AppBridge {
 export function bindMcpAppResourceHandlers(owner: {
   bridge: OpenClawAppBridge;
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  releaseResourceSubscription: (uri: string) => Promise<unknown>;
   sessionKey: string;
   viewId: string;
   agentId?: string;
@@ -82,7 +83,7 @@ export function bindMcpAppResourceHandlers(owner: {
   subscribeEvents: (
     listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
   ) => (() => void) | undefined;
-}): () => void {
+}): { start(): void; reconnect(): Promise<void> } {
   const { bridge, request, sessionKey, viewId, iframe } = owner;
   bridge.oncalltool = async (params) =>
     requireMcpResult(
@@ -127,7 +128,7 @@ export function bindMcpAppResourceHandlers(owner: {
       );
       if (typeof params.uri === "string") {
         if (owner.isDisposed()) {
-          await request("mcp.app.unsubscribeResource", { uri: params.uri });
+          await owner.releaseResourceSubscription(params.uri);
         } else {
           resourceSubscriptions.add(params.uri);
         }
@@ -145,7 +146,7 @@ export function bindMcpAppResourceHandlers(owner: {
     });
     owner.addCleanup(() => {
       for (const uri of resourceSubscriptions) {
-        void request("mcp.app.unsubscribeResource", { uri }).catch(() => undefined);
+        void owner.releaseResourceSubscription(uri).catch(() => undefined);
       }
       resourceSubscriptions.clear();
     });
@@ -188,47 +189,54 @@ export function bindMcpAppResourceHandlers(owner: {
   }
 
   // The view starts notifications only after the App initialization handshake.
-  return () => {
-    const stopEvents = owner.subscribeEvents((event) => {
-      if (owner.isDisposed()) {
-        return;
+  return {
+    async reconnect() {
+      for (const uri of resourceSubscriptions) {
+        await request("mcp.app.subscribeResource", { uri });
       }
-      const value = asOptionalRecord(event.payload);
-      const input =
-        event.event === "question.requested" && value?.status === "pending"
-          ? value
-          : event.event === "plugin.approval.requested"
-            ? asOptionalRecord(value?.request)
-            : undefined;
-      if (
-        input?.sessionKey === sessionKey &&
-        (!owner.agentId || !input.agentId || input.agentId === owner.agentId)
-      ) {
-        owner.onConversationInputRequested();
+    },
+    start() {
+      const stopEvents = owner.subscribeEvents((event) => {
+        if (owner.isDisposed()) {
+          return;
+        }
+        const value = asOptionalRecord(event.payload);
+        const input =
+          event.event === "question.requested" && value?.status === "pending"
+            ? value
+            : event.event === "plugin.approval.requested"
+              ? asOptionalRecord(value?.request)
+              : undefined;
+        if (
+          input?.sessionKey === sessionKey &&
+          (!owner.agentId || !input.agentId || input.agentId === owner.agentId)
+        ) {
+          owner.onConversationInputRequested();
+        }
+        if (value?.viewId !== viewId) {
+          return;
+        }
+        if (event.event === "mcp.app.hostContextChanged") {
+          owner.onModelContextChanged(
+            value.modelContext === null && typeof value.updateId === "string"
+              ? value.updateId
+              : undefined,
+          );
+        }
+        if (
+          event.event === "mcp.app.resourceUpdated" &&
+          typeof value.uri === "string" &&
+          resourceSubscriptions.has(value.uri)
+        ) {
+          void bridge.notification({
+            method: "notifications/resources/updated",
+            params: { uri: value.uri },
+          });
+        }
+      });
+      if (stopEvents) {
+        owner.addCleanup(stopEvents);
       }
-      if (value?.viewId !== viewId) {
-        return;
-      }
-      if (event.event === "mcp.app.hostContextChanged") {
-        owner.onModelContextChanged(
-          value.modelContext === null && typeof value.updateId === "string"
-            ? value.updateId
-            : undefined,
-        );
-      }
-      if (
-        event.event === "mcp.app.resourceUpdated" &&
-        typeof value.uri === "string" &&
-        resourceSubscriptions.has(value.uri)
-      ) {
-        void bridge.notification({
-          method: "notifications/resources/updated",
-          params: { uri: value.uri },
-        });
-      }
-    });
-    if (stopEvents) {
-      owner.addCleanup(stopEvents);
-    }
+    },
   };
 }

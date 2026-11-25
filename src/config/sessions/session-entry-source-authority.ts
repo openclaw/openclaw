@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -62,11 +66,11 @@ export function captureSessionEntrySourceAssertion(params: {
   readSource?: CapturedSessionEntryReadSource;
   expected: Partial<SessionEntry> | undefined;
   fields: readonly (keyof SessionEntry)[];
+  /** Borrow the selecting reader's publication lifetime instead of selecting the same row again. */
+  preparedEntry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
   assertCurrent: () => void;
   assertHostCurrent?: () => void;
-  prepareConversations?: (
-    read: (conversationRefs: readonly string[]) => Promise<ReadonlyMap<string, string | null>>,
-  ) => Promise<{
+  prepareConversations?: () => Promise<{
     alternatives: readonly (readonly SessionSourceConversationPredicate[])[];
     assertCurrent: () => void;
     acceptMatches: (alternatives: readonly number[]) => number[];
@@ -147,78 +151,80 @@ export function captureSessionEntrySourceAssertion(params: {
         databaseIdentity: identity.key.slice("file:".length),
         databaseBirthtime: identity.birthtime,
       };
-      const assertCaptured = () => {
-        params.assertHostCurrent?.();
-        if (
-          typeof source.databaseIdentity !== "string" ||
-          source.path !== physicalPath ||
-          ![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)
-        ) {
-          params.refuse();
-        }
-        assertExistingDatabaseIdentity(
-          source.path,
-          `file:${source.databaseIdentity}`,
-          source.databaseBirthtime,
-        );
-      };
-      assertCaptured();
+      params.assertHostCurrent?.();
+      if (
+        typeof source.databaseIdentity !== "string" ||
+        source.path !== physicalPath ||
+        ![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)
+      ) {
+        params.refuse();
+      }
+      assertExistingDatabaseIdentity(
+        source.path,
+        `file:${source.databaseIdentity}`,
+        source.databaseBirthtime,
+      );
       const database = { agentId: source.agentId, path: source.path, env };
       const retained = retainSessionHistoryWorkerDatabase(database);
       // Join receipt publication before dispatch so a newer write cannot certify an older read.
-      const predicate = retainPreparedSessionEntryPredicate({
-        databaseIdentity: identity.key,
-        sessionKey: scope.sessionKey,
-        entry: undefined,
-        matches: (_before, current) =>
-          (current === undefined) === (expected === undefined) &&
-          fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
-      });
+      const predicate =
+        params.preparedEntry ??
+        retainPreparedSessionEntryPredicate({
+          databaseIdentity: identity.key,
+          sessionKey: scope.sessionKey,
+          entry: undefined,
+          matches: (_before, current) =>
+            (current === undefined) === (expected === undefined) &&
+            fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
+        });
       const revision = predicate.captureRevision();
+      const sharedAdmission = canShareSqliteDatabaseAdmissions();
+      let admission: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
       let active = true;
       let conversations:
         | Awaited<ReturnType<NonNullable<typeof params.prepareConversations>>>
         | undefined;
       const assertCurrent = () => {
-        assertCaptured();
+        params.assertHostCurrent?.();
         retained.owner.assertCurrent();
         conversations?.assertCurrent();
-        if (!active || !predicate.isCurrent()) {
+        if (!active || (sharedAdmission && !admission?.isCurrent()) || !predicate.isCurrent()) {
           params.refuse();
+        }
+        // Unhosted workers retain the same physical-source checks as native reads.
+        if (!sharedAdmission) {
+          if (![locator, ...candidates].every(isSessionStoreReadCandidateCurrent)) {
+            params.refuse();
+          }
+          assertExistingDatabaseIdentity(
+            source.path,
+            `file:${source.databaseIdentity}`,
+            source.databaseBirthtime,
+          );
         }
       };
       try {
-        const result = await retained.owner.readExactEntries({
-          sessionKeys: [scope.sessionKey],
-          projection: "full",
-          includeAuthorization: true,
-          env,
-        });
-        const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
-        if (
-          result.databaseIdentity?.identity !== source.databaseIdentity ||
-          result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
-          !predicate.acknowledge(entry, revision)
-        ) {
-          params.refuse();
+        if (sharedAdmission) {
+          admission = retainSqliteDatabaseAdmissionForPath(source.path);
         }
-        assertCurrent();
-        conversations = await params.prepareConversations?.(async (conversationRefs) => {
-          if (conversationRefs.length === 0) {
-            return new Map();
-          }
-          const rows = await retained.owner.readConversations({
-            query: { conversationRefs, currentBindingOnly: true },
+        if (!params.preparedEntry) {
+          const result = await retained.owner.readExactEntries({
+            sessionKeys: [scope.sessionKey],
+            projection: "full",
+            includeAuthorization: true,
             env,
           });
-          assertCurrent();
-          return new Map(
-            rows.map((row) => [
-              row.conversationRef,
-              row.sessionKey && row.sessionId ? row.sessionKey : null,
-            ]),
-          );
-        });
+          const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
+          if (
+            result.databaseIdentity?.identity !== source.databaseIdentity ||
+            result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
+            !predicate.acknowledge(entry, revision)
+          ) {
+            params.refuse();
+          }
+        }
+        assertCurrent();
+        conversations = await params.prepareConversations?.();
         assertCurrent();
         return {
           assertCurrent,
@@ -237,13 +243,19 @@ export function captureSessionEntrySourceAssertion(params: {
           ],
           release: () => {
             active = false;
-            predicate.release();
+            admission?.release();
+            if (!params.preparedEntry) {
+              predicate.release();
+            }
             retained.release();
           },
         };
       } catch (error) {
         active = false;
-        predicate.release();
+        admission?.release();
+        if (!params.preparedEntry) {
+          predicate.release();
+        }
         await releaseSessionSourceAuthorities([retained], [error]);
         throw error;
       }

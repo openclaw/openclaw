@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import OSLog
 import SwiftUI
 
 @MainActor
@@ -9,8 +8,6 @@ final class TalkOverlayController {
     static let overlaySize: CGFloat = 440
     static let orbSize: CGFloat = 96
     static let orbPadding: CGFloat = 12
-
-    private let logger = Logger(subsystem: "ai.openclaw", category: "talk.overlay")
 
     struct Model {
         var isVisible: Bool = false
@@ -103,13 +100,11 @@ final class TalkOverlayController {
 
     func updatePhase(_ phase: TalkModePhase) {
         guard self.model.phase != phase else { return }
-        self.logger.info("talk overlay phase=\(phase.rawValue, privacy: .public)")
         self.model.phase = phase
     }
 
     func updatePaused(_ paused: Bool) {
         guard self.model.isPaused != paused else { return }
-        self.logger.info("talk overlay paused=\(paused)")
         self.model.isPaused = paused
     }
 

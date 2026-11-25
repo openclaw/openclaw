@@ -1,10 +1,12 @@
 import { expect, it } from "vitest";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
   pastePng,
+  waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -71,15 +73,7 @@ suite.define(() => {
         });
         await installMockGateway(page, {
           methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "writer", name: "Writer" },
-              ],
-            },
+            "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
             "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
           },
         });
@@ -161,7 +155,7 @@ suite.define(() => {
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
         await navigate("chat");
-        await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+        await waitForCommittedChatRoute(page);
         await expectActiveObjectUrls(1);
 
         await navigate("new-session");

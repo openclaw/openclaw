@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { formatPluginLine } from "../cli/plugins-list-format.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -19,50 +20,22 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-const hostVersion = "2026.10.2";
+const hostVersion = "2026.11.5";
 
 it.each([
-  {
-    name: "below-floor official runtime",
-    packageName: "@openclaw/codex",
-    version: "2026.9.6",
-    incompatible: true,
-  },
-  {
-    name: "official runtime at the compatibility floor",
-    packageName: "@openclaw/codex",
-    version: "2026.9.7",
-    incompatible: false,
-  },
-  {
-    name: "compatible official runtime older than the host",
-    packageName: "@openclaw/codex",
-    version: "2026.10.1",
-    incompatible: false,
-  },
-  {
-    name: "matching official runtime",
-    packageName: "@openclaw/codex",
-    version: hostVersion,
-    incompatible: false,
-  },
-  {
-    name: "newer official runtime",
-    packageName: "@openclaw/codex",
-    version: "2099.1.1",
-    incompatible: false,
-  },
-  {
-    name: "independent runtime",
-    packageName: "@example/codex",
-    version: "2026.9.5",
-    incompatible: false,
-  },
-])(
-  "admits $name according to its release owner",
-  async ({ packageName, version, incompatible }) => {
+  ["below-floor official runtime", "@openclaw/codex", "2026.10.10", true],
+  ["matching below-floor official runtime", "@openclaw/codex", "2026.11.1", false, "2026.11.1"],
+  ["older below-floor official runtime", "@openclaw/codex", "2026.10.10", true, "2026.11.1"],
+  ["official runtime at the compatibility floor", "@openclaw/codex", "2026.11.5-beta.1", false],
+  ["compatible official runtime older than the host", "@openclaw/codex", "2026.11.5-beta.2", false],
+  ["matching official runtime", "@openclaw/codex", hostVersion, false],
+  ["newer official runtime", "@openclaw/codex", "2099.1.1", false],
+  ["independent runtime", "@example/codex", "2026.9.5", false],
+] as const)(
+  "admits %s according to its release owner",
+  async (_name, packageName, version, incompatible, testHostVersion: string = hostVersion) => {
     useNoBundledPlugins();
-    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", hostVersion);
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", testHostVersion);
     const plugin = writePlugin({
       id: "codex",
       filename: "index.cjs",
@@ -70,12 +43,11 @@ it.each([
     });
     fs.writeFileSync(
       path.join(plugin.dir, "runtime.mjs"),
-      `${incompatible ? 'import "openclaw/plugin-sdk/agent-harness-task-runtime";' : ""}
+      `${incompatible ? 'import { HEARTBEAT_RESPONSE_TOOL_NAME } from "openclaw/plugin-sdk/agent-harness-runtime";' : ""}
 export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     );
     writePluginMetadata({
-      dir: plugin.dir,
-      id: plugin.id,
+      ...plugin,
       packageJson: {
         name: packageName,
         version,
@@ -84,13 +56,11 @@ export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     });
     const manifestFile = path.join(plugin.dir, "openclaw.plugin.json");
     const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-    fs.writeFileSync(
-      manifestFile,
-      JSON.stringify({ ...manifest, contracts: { tools: ["runtime_probe"] } }),
-    );
-    const config = {
-      plugins: { allow: [plugin.id], load: { paths: [plugin.dir] }, slots: { memory: "none" } },
-    };
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      ...manifest,
+      contracts: { tools: ["runtime_probe"] },
+    });
+    const config = pluginFixtureConfig({ id: plugin.id, file: plugin.dir });
     const registry = loadOpenClawPlugins({
       config,
       manifestRegistry: loadPluginManifestRegistryCore({ config, installRecords: {} }),
@@ -104,8 +74,8 @@ export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
       expect(registry.tools).toHaveLength(0);
       expect(record?.activated).toBe(false);
       expect(record?.error).toContain(version);
-      expect(record?.error).toContain(hostVersion);
-      expect(record?.error).toContain("minimum compatible plugin version is 2026.9.7");
+      expect(record?.error).toContain(testHostVersion);
+      expect(record?.error).toContain("minimum compatible plugin version is 2026.11.5-beta.1");
       expect(record?.error).toContain("openclaw update repair");
       expect(formatPluginLine(record!)).toContain("openclaw plugins update codex");
       expect(registry.diagnostics).toContainEqual(

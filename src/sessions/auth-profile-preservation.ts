@@ -16,6 +16,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
 
+// Released synchronous SDK callers retain this fallback through 2026-12-31.
 function resolvePinnedAuthProfileProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -34,7 +35,8 @@ type SessionAuthProfilePreservationParams = {
   cfg: OpenClawConfig;
   agentDir: string;
   entry: SessionEntry;
-  currentProvider: string;
+  /** Undefined when the session had no model before this selection. */
+  currentProvider?: string;
   provider: string;
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Presence records completed preparation, including authoritative credential absence. */
@@ -99,7 +101,10 @@ export function shouldPreserveUnavailableSessionAuthProfileOverride(
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
 export function applyModelOverrideWithAuthProfileCompatibility(
   params: Omit<SessionAuthProfilePreservationParams, "provider"> &
-    Omit<Parameters<typeof applyModelOverrideToSessionEntry>[0], "preserveAuthProfileOverride">,
+    Omit<
+      Parameters<typeof applyModelOverrideToSessionEntry>[0],
+      "preserveAuthProfileOverride" | "selection"
+    > & { selection: { provider: string; model: string; isDefault?: boolean } },
 ): { updated: boolean } {
   return applyModelOverrideToSessionEntry({
     entry: params.entry,

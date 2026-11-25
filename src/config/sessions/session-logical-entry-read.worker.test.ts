@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { resolveHeartbeatSession } from "../../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -55,7 +54,7 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
 }
 
 function holdExecution(
-  stage: "while-queued" | "before-open" | "reply",
+  stage: "before-open" | "reply",
   shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
   once = stage === "reply",
 ) {
@@ -72,14 +71,11 @@ function holdExecution(
       await gate.release.promise;
     }
   };
-  const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+  const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
   const intercept = vi
-    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const execution = capture(...args);
-      if (stage === "while-queued") {
-        gate.entered.resolve();
-      }
+    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const execution = await capture(...args);
       const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
       if (stage === "before-open") {
         overrides.prepare = async (source) => {
@@ -101,7 +97,13 @@ function holdExecution(
             options,
           );
       }
-      return { ...execution, ...overrides };
+      return {
+        ...execution,
+        ...overrides,
+        get fileIdentity() {
+          return execution.fileIdentity;
+        },
+      };
     });
   return gate;
 }
@@ -123,63 +125,47 @@ async function readFirstSession(
   }
 }
 
-it("shares cold database admission with an immediate heartbeat", async () => {
-  const agentId = "heartbeat-admission";
+it("shares cold database admission across logical session reads", async () => {
+  const agentId = "session-admission";
   const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
     agentId,
     sessionKey: `agent:${agentId}:hook`,
   });
   const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
   const first = readSessionEntryInWorker(scope);
-  let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
+  let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
   try {
     await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    heartbeat = Promise.resolve(
-      resolveHeartbeatSession(
-        { session: { store: scope.storePath } },
-        agentId,
-        undefined,
-        undefined,
-        state.env,
-      ),
-    );
-    void heartbeat.catch(() => {});
+    second = readSessionEntryInWorker({ ...scope, sessionKey: `agent:${agentId}:main` });
+    void second.catch(() => {});
     gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
-    await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
+    await expect(second).resolves.toBeUndefined();
   } finally {
     gate.release.resolve();
-    await Promise.allSettled([first, heartbeat]);
+    await Promise.allSettled([first, second]);
     gate.restore();
   }
 });
 
-it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
+it("preserves legacy entry metadata and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
-    const agentId = `heartbeat-${reader}`;
+    const agentId = `session-${reader}`;
     const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
       agentId,
       sessionKey: `agent:${agentId}:main`,
     });
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
-    const cfg = { session: { store: scope.storePath } };
-    const expected = {
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      suppressOriginatingContext: false,
-    };
     expect(fs.existsSync(databasePath)).toBe(false);
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
-      await expect(
-        resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-      ).resolves.toEqual({ ...expected, entry: undefined });
+      await expect(readSessionEntryInWorker(scope)).resolves.toBeUndefined();
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     const entry = {
-      sessionId: `heartbeat-${reader}-session`,
+      sessionId: `session-${reader}-session`,
       updatedAt: 123,
       lastChannel: "telegram",
       lastTo: "group:operations",
@@ -189,9 +175,7 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     replaceSessionEntrySync(scope, entry);
     const native = loadSessionEntry(scope);
     expect(native).toMatchObject(entry);
-    await expect(
-      resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-    ).resolves.toEqual({ ...expected, entry: native });
+    await expect(readSessionEntryInWorker(scope)).resolves.toEqual(native);
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
@@ -360,31 +344,36 @@ it("keeps writable schema-repair admission for a logical read", async () => {
   }
 });
 
-it.each([
+it.for([
   { stage: "while-queued", change: "file", registration: "changed" },
   { stage: "while-queued", change: "file", registration: "unchanged" },
   { stage: "while-queued", change: "caller", registration: "changed" },
 ] as const)(
   "refuses $change replacement $stage ($registration registration)",
-  async ({ stage, change, registration }) => {
+  async ({ stage, change, registration }, { signal }) => {
     const scope = storedScope(state.statePath(stage, change, registration, "sessions.json"));
     replaceSessionEntrySync(scope, { sessionId: "selected-row", updatedAt: 1 });
     const target = toDatabaseOptions(resolveSqliteScope(scope));
     if (change === "file") {
       await closeOpenClawAgentDatabasesAsync();
     }
-    const gate = holdExecution(stage);
     const writerEntered = createDeferredCore();
-    const priorWriter =
-      stage === "while-queued"
-        ? runOpenClawAgentWorkerWrite(target, async () => {
-            writerEntered.resolve();
-            await gate.release.promise;
-          })
-        : undefined;
-    if (priorWriter) {
-      await writerEntered.promise;
-    }
+    const releaseWriter = createDeferredCore();
+    let priorWriter: Promise<void> | undefined;
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
+    const intercept = vi
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
+        intercept.mockRestore();
+        const execution = await capture(...args);
+        // Discovery must finish its cold admission before a writer can hold the read queue.
+        priorWriter = runOpenClawAgentWorkerWrite(target, async () => {
+          writerEntered.resolve();
+          await releaseWriter.promise;
+        });
+        void priorWriter.catch((error: unknown) => writerEntered.reject(error));
+        return execution;
+      });
     let callerCurrent = true;
     const reading = readSessionEntryInWorker(scope, () => {
       if (!callerCurrent) {
@@ -394,13 +383,15 @@ it.each([
       (value) => ({ value, error: undefined }),
       (error: unknown) => ({ value: undefined, error }),
     );
-    void reading.then((result) => {
-      gate.entered.reject(
-        result.error ?? new Error("Logical read completed before its held boundary"),
-      );
-    });
     try {
-      await gate.entered.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          writerEntered.promise,
+          reading,
+          "Logical read completed before its held writer",
+        ),
+        signal,
+      );
       const databasePath = resolveOpenClawAgentSqlitePath(target);
       if (change === "file") {
         fs.renameSync(databasePath, `${databasePath}.original`);
@@ -415,15 +406,15 @@ it.each([
           env: state.env,
         });
       }
-      gate.release.resolve();
+      releaseWriter.resolve();
+      await priorWriter;
       const result = await reading;
       expect(result.value).toBeUndefined();
       expect(result.error).toBeInstanceOf(Error);
     } finally {
-      gate.release.resolve();
-      await reading;
-      await priorWriter;
-      gate.restore();
+      releaseWriter.resolve();
+      intercept.mockRestore();
+      await Promise.allSettled([reading, priorWriter]);
     }
   },
 );

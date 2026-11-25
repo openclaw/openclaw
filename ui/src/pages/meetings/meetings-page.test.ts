@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
@@ -385,7 +386,9 @@ describe("meeting transcript library", () => {
     await waitForSolid(() => expect(page.textContent).toContain("Preparing download"));
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     download.reject(new Error("Export unavailable"));
-    await waitForSolid(() => expect(page.textContent).toContain("Download failed"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Couldn’t download the transcript."),
+    );
     page
       .querySelector(".transcripts-search")!
       .dispatchEvent(new Event("submit", { cancelable: true }));
@@ -589,13 +592,15 @@ describe("meeting transcript library", () => {
     snapshot.phase = "reconnecting";
     notify();
     pending.resolve(meetingPage);
-    await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Reconnect to read meeting transcripts."),
+    );
     expect(page.textContent).not.toContain("Keep the reader quiet");
   });
 
   it.each([
-    ["empty", null, "Your meeting notes, together"],
-    ["failure", new Error("Archive unavailable"), "Could not load transcripts"],
+    ["empty", null, "No meetings yet."],
+    ["failure", new Error("Archive unavailable"), "Couldn’t load transcripts. Try again."],
     [
       "restricted",
       new GatewayRequestError({ code: "FORBIDDEN", message: "Shared archive is restricted" }),

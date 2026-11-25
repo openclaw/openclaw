@@ -5,8 +5,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export type SubagentRunMutation<T> = {
   value: T;
   postimages?: ReadonlyMap<string, SubagentRunRecord | null>;
-  versions?: ReadonlyMap<string, string | null>;
   rekeys?: ReadonlyMap<string, string>;
+  removalReason?: string;
+  terminalRows?: ReadonlyMap<string, SubagentRunRecord>;
   terminalEvents?: readonly {
     input: NonNullable<SubagentRegistryWrite["terminalEvents"]>[number];
     sessionEntryCurrent?: SessionEntryCurrentCheck;

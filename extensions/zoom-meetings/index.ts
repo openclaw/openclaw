@@ -2,7 +2,6 @@ import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
 import { ZOOM_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
-import { ZoomMeetingsInvalidRequestError } from "./src/errors.js";
 import type {
   ZoomMeetingsManualActionReason,
   ZoomMeetingsSpeechBlockedReason,
@@ -33,7 +32,7 @@ export const zoomMeetingsPlugin = MeetingPlatformAdapter.defineBrowserMeetingPlu
         ) ?? 1,
       ),
   },
-  InvalidRequestError: ZoomMeetingsInvalidRequestError,
+  InvalidRequestError: class ZoomMeetingsInvalidRequestError extends Error {},
   toolUrlDescription: "Zoom meeting URL",
   transcriptSource: { id: "zoom", aliases: ["zoom-meetings"], providerName: "Zoom" },
   hooks: {

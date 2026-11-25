@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugin-instance.js";
 import { warnModelAccountConnectDeprecation } from "./model-account-connect-deprecation.js";
 
-it("warns once per plugin and account family, including after a plugin reload", async () => {
+it("warns once per plugin and account method, including after a plugin reload", async () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   const first = new PluginInstance("model-account-compat-first");
   const second = new PluginInstance("model-account-compat-second");
@@ -24,9 +24,9 @@ it("warns once per plugin and account family, including after a plugin reload", 
         warnModelAccountConnectDeprecation(method);
       }
     });
-    expect(warning).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledTimes(methods.length + 1);
     for (const { plugin, method } of [
-      { plugin: "model-account-compat-first", method: "listLinks" },
+      ...methods.map((name) => ({ plugin: "model-account-compat-first", method: name })),
       { plugin: "model-account-compat-second", method: "list" },
     ]) {
       const calls = warning.mock.calls.filter(
@@ -36,7 +36,7 @@ it("warns once per plugin and account family, including after a plugin reload", 
       );
       expect(calls).toHaveLength(1);
       expect(calls[0]?.[0]).toContain(`modelAccountConnectService.${method}Async`);
-      expect(calls[0]?.[0]).toContain("later release after stable deprecation");
+      expect(calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
       expect(calls[0]?.[1]).toMatchObject({
         code: "DEP_SESSION_PERSISTENCE",
         type: "DeprecationWarning",

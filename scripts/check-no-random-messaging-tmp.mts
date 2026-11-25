@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Blocks host-random tmpdir usage in messaging/channel runtime sources.
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {

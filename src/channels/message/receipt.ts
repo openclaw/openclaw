@@ -48,7 +48,7 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
         targets.add(normalized);
       }
     }
-    pending.push(record.receipt, record.raw, record.parts);
+    pending.push(record.receipt, record.raw, record.parts, record.sourceResults);
   }
   return [...targets];
 }
@@ -141,6 +141,21 @@ export function createMessageReceiptFromOutboundResults(params: {
       : {}),
     sentAt: params.sentAt ?? firstNestedReceipt?.sentAt ?? Date.now(),
     raw: params.results,
+    sourceResults: params.results.flatMap((result) =>
+      result.outcome !== "not_sent" && result.receipt?.sourceResults?.length
+        ? result.receipt.sourceResults.map((source) => ({
+            ...(source.channel !== undefined ? { channel: source.channel } : {}),
+            ...(source.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+            messageId: source.messageId ?? "",
+          }))
+        : [
+            {
+              ...(result.channel ? { channel: result.channel } : {}),
+              ...(result.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+              messageId: resolveReceiptSourceId(result) ?? "",
+            },
+          ],
+    ),
   };
 }
 

@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   memorySessionActorOwners.reset();
-  registries.splice(0).forEach(markPluginRegistryRetired);
+  registries.splice(0).forEach((registry) => markPluginRegistryRetired(registry));
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -265,7 +265,14 @@ describe("memory lifecycle production acquisition", () => {
     ).resolves.toMatchObject({ status: "created", editorText: "Question" });
     expect(externalOwner.companion.present).toBe(false);
     expect(externalOwner.mutation.commit).toHaveBeenCalledOnce();
-    expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).not.toBe("session-1");
+    // The cut keeps the transcript identity and retires the pre-cut incarnation
+    // through the lifecycle revision instead.
+    expect(owner.readSession(sessionKey, authority)?.entry).toMatchObject({
+      sessionId: "session-1",
+    });
+    expect(owner.readSession(sessionKey, authority)?.entry?.lifecycleRevision).not.toBe(
+      "revision-1",
+    );
     expect(external.prepareReceipt).not.toHaveBeenCalled();
   });
 });

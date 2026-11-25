@@ -4,7 +4,6 @@ import {
   type AgentHarnessCompactParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -40,6 +39,7 @@ import {
   failedCodexThreadBindingCompactionResult,
   skippedCodexNativeCompactionResult,
 } from "./compact-result.js";
+import type { CodexPluginConfig } from "./config-contracts.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { getCodexInferenceThreadQualification } from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
@@ -69,7 +69,7 @@ import { resumeCodexAppServerThread } from "./thread-resume.js";
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
   nativeCompactionRequest?: "required_preflight" | "after_context_engine";
@@ -159,17 +159,16 @@ export async function maybeCompactCodexAppServerSession(
       const threadId = (await options.bindingStore.readAsync(bindingIdentity))?.threadId;
       return abortedResult(params, threadId, threadId);
     }
+    using _ = { [Symbol.dispose]: resolvedBinding.release };
     const { binding: initialBinding, authority } = resolvedBinding;
-    const assertCurrent = () => {
-      authority.assertCurrent();
-    };
+    const assertCurrent = () => authority.assertCurrent();
     const withCurrent = async (write: () => void) => {
       await nativeExecutionGuard.assertCurrent();
       await authority.withCurrent(write);
     };
     // Native admission uses caller authority; terminal settlement keeps captured
     // lineage after cancellation without reusing the caller's aborted signal.
-    const settlementAuthority = createNativeSessionBindingAuthority(authority.lineage, () => {});
+    const settlementAuthority = authority.withLiveness(() => {});
     const assertSettlementCurrent = settlementAuthority.assertCurrent;
     if (!initialBinding?.threadId) {
       return failedCodexThreadBindingCompactionResult(params, {
@@ -177,14 +176,16 @@ export async function maybeCompactCodexAppServerSession(
         recovery: "missing_thread_binding",
       });
     }
-    if (initialBinding.modelProvider === CODEX_RESPONSES_OAUTH_PROVIDER) {
-      // The pinned manual compact RPC cannot carry the admitted turn generation.
-      // Automatic in-turn summarization carries it and remains authorized.
+    if (
+      initialBinding.modelProvider === CODEX_RESPONSES_OAUTH_PROVIDER ||
+      (params.runtimeAuthPlan ?? params.runtimePlan?.auth)?.selectedAuthMode === "native-command"
+    ) {
+      // Separate compaction cannot preserve these auth boundaries; in-turn compaction stays native.
       return {
         ok: false,
         compacted: false,
         reason:
-          "Manual compaction is unavailable with ChatGPT subscription sharing. Automatic compaction runs during normal turns; continue the conversation or start a new session.",
+          "Manual compaction is unavailable with this native auth mode. Automatic compaction runs during normal turns; continue the conversation or start a new session.",
       };
     }
     if (
@@ -316,7 +317,7 @@ export async function maybeCompactCodexAppServerSession(
             let temporaryClientExited = true;
             let compactionRequestDefinitelyRejected = false;
             let nativeRequestNeedsSettlement = false;
-            const leaseAuthority = createNativeSessionBindingAuthority(authority.lineage, () => {
+            const leaseAuthority = authority.withLiveness(() => {
               if (!nativeRequestNeedsSettlement && !compactionRequestDefinitelyRejected) {
                 assertAdmissionCurrent();
               }
@@ -637,6 +638,9 @@ export async function maybeCompactCodexAppServerSession(
                   config: attempt.config,
                   cwd: attempt.workspaceDir,
                   runId: attempt.runId,
+                  provider: attempt.provider ?? binding.modelProvider,
+                  model: attempt.model ?? binding.model,
+                  tokensAfter,
                   threadId: binding.threadId,
                   turnId: completion.turnId,
                   itemId: completion.itemId,

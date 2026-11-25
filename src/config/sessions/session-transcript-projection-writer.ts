@@ -13,7 +13,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import {
@@ -31,6 +31,7 @@ import {
   publishUnchangedSessionTranscriptReceipts,
 } from "./session-transcript-authority.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
+import { isSessionTranscriptIndexReady } from "./session-transcript-index-readiness.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
@@ -127,12 +128,11 @@ export async function claimPreparedSessionTranscriptProjection(
     return undefined;
   }
 
-  let deleteResult = { hasMore: true, owned: true };
-  while (deleteResult.hasMore && deleteResult.owned) {
+  let deleteResult = { hasMore: true };
+  while (deleteResult.hasMore) {
     const input = {
       maxRowsPerTable: PROJECTION_WRITE_CHUNK_ROWS,
       sessionId: plan.sessionId,
-      claimId,
     };
     deleteResult = publication
       ? await publication.execute({ type: "deleteChunk", input })
@@ -143,9 +143,6 @@ export async function claimPreparedSessionTranscriptProjection(
             deletePreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
         );
     await yieldToGateway();
-  }
-  if (!deleteResult.owned) {
-    return undefined;
   }
   return { claimId, plan };
 }
@@ -167,24 +164,23 @@ export async function appendPreparedProjectionChunk(
   active: ActivePreparedProjection,
   rows: { activeRows: ProjectionRows["activeRows"] } | { ftsChunk: EncodedTranscriptFtsChunk },
   publication?: ProjectionPublisher,
-): Promise<boolean> {
+): Promise<void> {
   const input = {
     ...("activeRows" in rows ? rows : { ftsRows: decodeFtsChunk(rows.ftsChunk) }),
-    claimId: active.claimId,
     sessionId: active.plan.sessionId,
   };
-  const owned = publication
-    ? await publication.execute({ type: "appendChunk", input })
-    : await runProjectionWrite(
-        databaseOptions,
-        "activeRows" in rows
-          ? "sessions.transcript-index.active-chunk"
-          : "sessions.transcript-index.fts-chunk",
-        (database) =>
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
-      );
+  if (publication) {
+    await publication.execute({ type: "appendChunk", input });
+  } else {
+    await runProjectionWrite(
+      databaseOptions,
+      "activeRows" in rows
+        ? "sessions.transcript-index.active-chunk"
+        : "sessions.transcript-index.fts-chunk",
+      (database) => appendPreparedSessionTranscriptProjectionChunkInTransaction(database.db, input),
+    );
+  }
   await yieldToGateway();
-  return owned;
 }
 
 export async function finalizePreparedProjection(
@@ -240,7 +236,7 @@ export async function finalizePreparedProjection(
   );
 }
 
-/** Global readiness is a fact maintained on the projection writer's connection. */
+/** Consume the projection writer's committed readiness before borrowing a native writer. */
 export async function readSessionTranscriptIndexStatus(
   params: OpenClawAgentDatabaseOptions,
   assertCurrent?: () => void,
@@ -263,11 +259,16 @@ export async function readSessionTranscriptIndexStatus(
     path: resolveOpenClawAgentSqlitePath(params),
     assertCurrent,
   };
+  if (isSessionTranscriptIndexReady(options.path)) {
+    return false;
+  }
   const execution = supportsOpenClawAgentDatabaseExecution(options)
-    ? captureOpenClawAgentDatabaseExecution(options)
+    ? await captureOpenClawAgentDatabaseExecutionAsync(options)
     : undefined;
   let client: OpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations> | undefined;
   try {
+    signal?.throwIfAborted();
+    assertCurrent?.();
     if (execution) {
       client = await openOpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations>(
         options,

@@ -7,11 +7,6 @@ import type { createSystemAgentTranscriptStore } from "../../system-agent/transc
 import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
-type SystemAgentChatEngineInput = Pick<
-  SystemAgentChatEngine,
-  "answerWizard" | "cancelWizard" | "handle"
->;
-
 /**
  * Build the welcome-only result for rejoining an existing session. A
  * reconnecting client must re-render the live wizard/question controls the
@@ -73,7 +68,7 @@ export function getSystemAgentChatInputError(params: SystemAgentChatParams): str
 }
 
 export async function runSystemAgentChatInput(params: {
-  engine: SystemAgentChatEngineInput;
+  engine: Pick<SystemAgentChatEngine, "answerWizard" | "cancelWizard" | "handle">;
   input: SystemAgentChatParams;
 }): Promise<SystemAgentChatReply | undefined> {
   if (params.input.wizardAnswer !== undefined) {

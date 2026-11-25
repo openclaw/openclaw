@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { safeStat } from "../infra/path-existence.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -22,14 +23,9 @@ import {
   auditOpenClawPeerDependencyLink,
   resolveOpenClawHostDependency,
 } from "./plugin-peer-link.js";
-import type { PluginVerificationFailureReason } from "./runtime-degraded-state.js";
+import type { PluginVerificationFailure } from "./runtime-degraded-state.js";
 
-export type PluginPayloadSmokeFailure = {
-  pluginId: string;
-  installPath?: string;
-  reason: PluginVerificationFailureReason;
-  detail: string;
-};
+export type PluginPayloadSmokeFailure = PluginVerificationFailure;
 
 export type PluginPayloadSmokeResult = {
   checked: string[];
@@ -418,8 +414,4 @@ function validateBundleInstallRecordPayload(params: {
       : "invalid-bundle-manifest",
     detail: `Bundle manifest validation failed: ${bundleManifest.error}`,
   };
-}
-
-async function safeStat(target: string): Promise<import("node:fs").Stats | null> {
-  return await fs.stat(target).catch(() => null);
 }

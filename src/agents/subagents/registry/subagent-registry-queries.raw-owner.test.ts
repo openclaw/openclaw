@@ -1,168 +1,147 @@
-import { describe, expect, it } from "vitest";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import { expect, it } from "vitest";
+import { createSubagentRunRecord as makeRun } from "../../subagent-test-fixtures.test-helpers.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
-  getSubagentRunByChildSessionKeyFromRuns,
-  buildSubagentRunReadIndexFromRuns,
-  countActiveRunsForSessionFromRuns,
-  listRunsForControllerFromRuns,
+  getSubagentRunByChildSessionKeyFromRuns as findChildRun,
+  buildSubagentRunReadIndexFromRuns as indexRuns,
+  listRunsForControllerFromRuns as listControlledRuns,
 } from "./subagent-registry-queries.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { countActiveSubagentRunsForSession as countActiveRuns } from "./subagent-registry-state.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 
-function makeRun(overrides: SubagentRunRecordOverrides): SubagentRunRecord {
-  return createSubagentRunRecord({
-    childSessionKey: `agent:main:subagent:${overrides.runId}`,
-    requesterSessionKey: "agent:main:main",
-    cleanup: "keep",
-    ...overrides,
-  });
-}
-
-function toRunMap(runs: SubagentRunRecord[]) {
+function toRunMap<T extends { runId: string }>(...runs: T[]) {
   return new Map(runs.map((run) => [run.runId, run]));
 }
 
-describe("recorded child owner lookup", () => {
-  it("preserves distinct owners and unresolved diagnostic rows", () => {
-    const now = Date.now();
-    const owners = ["main", undefined, "research"];
-    const view = buildSubagentRunView({
-      runs: owners.map((childAgentId, index) =>
-        makeRun({
-          runId: childAgentId ?? "legacy",
-          childSessionKey: "global",
-          childAgentId,
-          createdAt: now - index,
-        }),
-      ),
-      recentMinutes: 30,
-      countPendingDescendantRuns: () => 0,
-      now,
-    });
-    expect(view.latest.map((entry) => entry.runId)).toEqual(["main", "legacy", "research"]);
-  });
-
-  it.each([
-    [undefined, undefined],
-    ["research", "research"],
-    ["invalid/owner", undefined],
-  ])("retains legacy raw rows while selecting owner %s", (owner, expected) => {
-    const runs = toRunMap(
-      [undefined, "main", "research"].map((childAgentId, index) =>
-        makeRun({
-          runId: childAgentId ?? "legacy",
-          childSessionKey: "global",
-          childAgentId,
-          generation: index + 1,
-        }),
-      ),
-    );
-    expect(getSubagentRunByChildSessionKeyFromRuns(runs, "global", owner)?.runId).toBe(expected);
-  });
-
-  it("refuses an agent-qualified lookup when the selected owner disagrees", () => {
-    const run = makeRun({ runId: "qualified" });
-    expect(
-      getSubagentRunByChildSessionKeyFromRuns(toRunMap([run]), run.childSessionKey, "research"),
-    ).toBeNull();
-  });
-
-  it.each([
-    ["agent:research:main", undefined, "research", true],
-    ["agent:research:main", "main", "research", true],
-    ["agent:research:main", "main", "main", false],
-    ["global", "research", "research", true],
-    ["global", "research", "main", false],
-    ["global", undefined, "research", false],
-  ] as const)(
-    "scopes controller %s with requester owner %s to agent %s (matches=%s)",
-    (controllerSessionKey, requesterAgentId, controllerAgentId, matches) => {
-      const run = makeRun({ runId: "controlled", controllerSessionKey, requesterAgentId });
-      expect(
-        listRunsForControllerFromRuns(toRunMap([run]), controllerSessionKey, controllerAgentId),
-      ).toEqual(matches ? [run] : []);
-    },
+const rawOwners = (owners: (string | undefined)[], now = Date.now()) =>
+  owners.map((childAgentId, index) =>
+    makeRun({
+      runId: childAgentId ?? "legacy",
+      childSessionKey: "global",
+      childAgentId,
+      createdAt: now - index,
+      generation: index + 1,
+    }),
   );
 
-  it.each([
-    { childSessionKey: "agent:invalid/owner:child", childAgentId: undefined },
-    { childSessionKey: "agent:main:", childAgentId: "main" },
-    { childSessionKey: "agent:main:child", childAgentId: "research" },
-    { childSessionKey: "global", childAgentId: "invalid/owner" },
-  ])("refuses malformed or conflicting recorded ownership: %j", (identity) => {
-    const run = makeRun({ runId: "invalid", ...identity });
-    expect(
-      getSubagentRunByChildSessionKeyFromRuns(toRunMap([run]), run.childSessionKey, "main"),
-    ).toBeNull();
+it("preserves distinct owners and unresolved diagnostic rows", () => {
+  const now = Date.now();
+  const view = buildSubagentRunView({
+    runs: rawOwners(["main", undefined, "research"], now),
+    recentMinutes: 30,
+    countPendingDescendantRuns: () => 0,
+    now,
   });
+  expect(view.latest.map((entry) => entry.runId)).toEqual(["main", "legacy", "research"]);
 });
 
-describe("suspended descendant accounting", () => {
-  it("releases finished ancestors with suspended descendants without settling cleanup", () => {
-    const now = Date.now();
-    const parent = makeRun({ runId: "parent", endedAt: now - 2_000 });
-    const child = makeRun({
-      runId: "suspended-child",
-      requesterSessionKey: parent.childSessionKey,
-      endedAt: now - 1_000,
-      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "permanent_failure" },
-    });
-    const runs = toRunMap([parent, child]);
+it.each([
+  [undefined, undefined],
+  ["research", "research"],
+  ["invalid/owner", undefined],
+])("retains legacy raw rows while selecting owner %s", (owner, expected) => {
+  const runs = toRunMap(...rawOwners([undefined, "main", "research"]));
+  expect(findChildRun(runs, "global", owner)?.runId).toBe(expected);
+});
 
-    expect(countActiveRunsForSessionFromRuns(runs, parent.requesterSessionKey)).toBe(0);
-    for (const projected of [false, true]) {
-      const index = buildSubagentRunReadIndexFromRuns({
-        runs: projected
-          ? new Map([...runs].map(([id, run]) => [id, projectSubagentRunForSessionList(run)]))
-          : runs,
-      });
-      expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
-      expect(
-        index.countPendingDescendantRuns(parent.childSessionKey, {
-          excludeSuspendedDelivery: true,
+it.each([
+  ["agent:research:main", undefined, "research", true],
+  ["agent:research:main", "main", "research", true],
+  ["agent:research:main", "main", "main", false],
+  ["global", "research", "research", true],
+  ["global", "research", "main", false],
+  ["global", undefined, "research", false],
+] as const)(
+  "scopes controller %s with requester owner %s to agent %s (matches=%s)",
+  (controllerSessionKey, requesterAgentId, controllerAgentId, matches) => {
+    const run = makeRun({ runId: "controlled", controllerSessionKey, requesterAgentId });
+    expect(listControlledRuns(toRunMap(run), controllerSessionKey, controllerAgentId)).toEqual(
+      matches ? [run] : [],
+    );
+  },
+);
+
+it.each([
+  ["agent:invalid/owner:child", undefined, "main"],
+  ["agent:main:", "main", "main"],
+  ["agent:main:child", "research", "main"],
+  ["global", "invalid/owner", "main"],
+  ["agent:main:subagent:qualified", undefined, "research"],
+])(
+  "refuses invalid ownership: key %s, recorded %s, selected %s",
+  (childSessionKey, childAgentId, owner) => {
+    const run = makeRun({ runId: "invalid", childSessionKey, childAgentId });
+    expect(findChildRun(toRunMap(run), run.childSessionKey, owner)).toBeNull();
+  },
+);
+it.each(["none", "running", "pending"] as const)(
+  "accounts for %s grandchildren below a delivered child",
+  (status) => {
+    const now = Date.now();
+    const hasGrandchild = status !== "none";
+    const parent = makeRun({
+      runId: "parent",
+      childSessionKey: "agent:main:subagent:parent",
+      endedAt: now - (hasGrandchild ? 3_000 : 2_000),
+    });
+    const child = makeRun({
+      runId: "delivered-child",
+      requesterSessionKey: parent.childSessionKey,
+      childSessionKey: "agent:main:subagent:delivered-child",
+      endedAt: now - (hasGrandchild ? 2_000 : 1_000),
+      delivery: { status: "delivered" },
+    });
+    const entries = [parent, child];
+    if (hasGrandchild) {
+      entries.push(
+        makeRun({
+          runId: "grandchild",
+          requesterSessionKey: child.childSessionKey,
+          childSessionKey: "agent:main:subagent:grandchild",
+          createdAt: now - 1_000,
+          startedAt: now - 1_000,
+          ...(status === "running"
+            ? { delivery: { status: "pending" } }
+            : { endedAt: now, delivery: { status: "pending" } }),
         }),
-      ).toBe(0);
-      expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
+      );
+    }
+    const runs = toRunMap(...entries);
+    expect(countActiveRuns(runs, parent.requesterSessionKey)).toBe(hasGrandchild ? 1 : 0);
+    for (const rows of [entries, entries.map(projectSubagentRunForSessionList)]) {
+      const index = indexRuns({ runs: toRunMap(...rows) });
+      const count = (excludeSettledDelivery = false) =>
+        index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery });
+      const pending = hasGrandchild ? 2 : 1;
+      expect([count(), count(true), count()]).toEqual([pending, pending - 1, pending]);
     }
     expect(runs.get(child.runId)).toBe(child);
     expect(child.cleanupCompletedAt).toBeUndefined();
-    expect(child.delivery?.status).toBe("suspended");
+    expect(child.delivery?.status).toBe("delivered");
+  },
+);
+
+it("does not block completion admission on a delivered descendant's unfinished cleanup", () => {
+  const parent = makeRun({
+    runId: "parent",
+    childSessionKey: "agent:main:subagent:parent",
+    endedAt: Date.now(),
   });
-
-  it.each(["running", "pending"] as const)(
-    "keeps ancestors active for %s grandchildren below a suspended descendant",
-    (status) => {
-      const now = Date.now();
-      const parent = makeRun({ runId: "parent", endedAt: now - 3_000 });
-      const child = makeRun({
-        runId: "suspended-child",
-        requesterSessionKey: parent.childSessionKey,
-        endedAt: now - 2_000,
-        delivery: { status: "suspended", suspendedAt: now },
-      });
-      const grandchild = makeRun({
-        runId: "grandchild",
-        requesterSessionKey: child.childSessionKey,
-        createdAt: now - 1_000,
-        startedAt: now - 1_000,
-        ...(status === "running"
-          ? { delivery: { status: "suspended", suspendedAt: now } }
-          : { endedAt: now, delivery: { status } }),
-      });
-      const runs = toRunMap([parent, child, grandchild]);
-      const index = buildSubagentRunReadIndexFromRuns({ runs });
-
-      expect(countActiveRunsForSessionFromRuns(runs, parent.requesterSessionKey)).toBe(1);
-      expect(
-        index.countPendingDescendantRuns(parent.childSessionKey, {
-          excludeSuspendedDelivery: true,
-        }),
-      ).toBe(1);
-      expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(2);
-    },
-  );
+  const child = makeRun({
+    runId: "delivered-child",
+    requesterSessionKey: parent.childSessionKey,
+    childSessionKey: "agent:main:subagent:delivered-child",
+    endedAt: Date.now() - 1_000,
+    delivery: { status: "delivered" },
+    cleanupHandled: false,
+    cleanupCompletedAt: undefined,
+  });
+  const runs = toRunMap(parent, child);
+  const index = indexRuns({ runs });
+  expect(countActiveRuns(runs, parent.requesterSessionKey)).toBe(0);
+  // Session deletion still waits for cleanup; completion admission does not.
+  expect(index.countPendingDescendantRuns(parent.childSessionKey)).toBe(1);
+  expect(
+    index.countPendingDescendantRuns(parent.childSessionKey, { excludeSettledDelivery: true }),
+  ).toBe(0);
 });

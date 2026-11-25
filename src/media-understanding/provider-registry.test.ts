@@ -1,82 +1,53 @@
-// Provider registry tests cover runtime provider loading, normalization aliases,
-// manifest-only image capability, and config-derived image providers.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
+import { mediaModels } from "./media-config.test-support.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-
+// mock-isolation: Test explicit registry entries without loading installed providers.
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  resolvePluginCapabilityProviders: () => [],
 }));
 
-function createMediaProvider(
-  params: Pick<MediaUnderstandingProvider, "id" | "capabilities"> &
-    Partial<MediaUnderstandingProvider>,
-): MediaUnderstandingProvider {
-  return params;
-}
-
-function requireMediaProvider(
-  registry: Map<string, MediaUnderstandingProvider>,
-  providerId: string,
-): MediaUnderstandingProvider {
-  const provider = getMediaUnderstandingProvider(providerId, registry);
-  if (!provider) {
-    throw new Error(`expected media-understanding provider ${providerId}`);
-  }
-  return provider;
-}
+const cfg: OpenClawConfig = { models: mediaModels("acme", "vision", ["text", "image"]) };
 
 describe("media-understanding provider registry", () => {
-  beforeEach(() => {
-    resolvePluginCapabilityProvidersMock.mockReset();
-    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
-  });
-
   it("preserves partial native overrides for dispatch", () => {
     const overrideImage = vi.fn(async () => ({ text: "override image" }));
+    const registered = { id: "acme", capabilities: ["audio" as const] };
+    expect(
+      buildMediaUnderstandingRegistry(undefined, cfg, [registered]).get("acme")?.capabilities,
+    ).toEqual(["audio"]);
     const registry = buildMediaUnderstandingRegistry(
       {
-        zai: createMediaProvider({
-          id: "zai",
-          capabilities: ["image"],
-          describeImage: overrideImage,
-        }),
+        acme: { id: "acme", capabilities: ["image"], describeImage: overrideImage },
       },
-      undefined,
-      [createMediaProvider({ id: "zai", capabilities: ["image"] })],
+      cfg,
+      [registered],
     );
-
-    const provider = requireMediaProvider(registry, "zai");
-    expect(provider.describeImage).toBe(overrideImage);
-    expect(provider.describeImages).toBeUndefined();
+    expect(getMediaUnderstandingProvider("acme", registry)).toMatchObject({
+      capabilities: ["image"],
+      describeImage: overrideImage,
+    });
+    expect(getMediaUnderstandingProvider("acme", registry)?.describeImages).toBeUndefined();
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
-    const cfg = {
+    const imageConfig: OpenClawConfig = {
       models: {
         providers: {
-          glm: {
-            models: [{ id: "glm-4.6v", input: ["text", "image"] }],
-          },
-          textOnly: {
-            models: [{ id: "text-model", input: ["text"] }],
-          },
+          ...mediaModels("glm", "glm-4.6v", ["text", "image"]).providers,
+          ...mediaModels("textOnly", "text-model", ["text"]).providers,
         },
       },
-    } as never;
-    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const glmProvider = requireMediaProvider(registry, "glm");
-    const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
-
-    expect(glmProvider.id).toBe("glm");
-    expect(glmProvider.capabilities).toEqual(["image"]);
-    expect(glmProvider.describeImage).toBeUndefined();
-    expect(glmProvider.describeImages).toBeUndefined();
-    expect(textOnlyProvider).toBeUndefined();
+    };
+    const registry = buildMediaUnderstandingRegistry(undefined, imageConfig);
+    const provider = getMediaUnderstandingProvider("glm", registry);
+    expect(provider).toMatchObject({ id: "glm", capabilities: ["image"] });
+    expect(provider?.describeImage).toBeUndefined();
+    expect(provider?.describeImages).toBeUndefined();
+    expect(getMediaUnderstandingProvider("textOnly", registry)).toBeUndefined();
   });
 });

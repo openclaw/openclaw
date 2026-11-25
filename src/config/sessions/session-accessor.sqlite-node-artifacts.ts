@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -14,14 +16,22 @@ import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agen
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { copyLegacyAcpMigrationSourcesForRepair } from "./session-accessor.sqlite-acp-provenance.js";
-import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
+import {
+  projectSqliteSessionParticipants,
+  readParticipantRecord,
+} from "./session-accessor.sqlite-participant-projection.js";
 import {
   copySessionInputCompletionsForRepair,
   copySessionPendingInputsForRepair,
 } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { deleteSessionPendingInputs } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  prepareSessionActorParticipantUpdate,
+  readSessionActorParticipants,
+} from "./session-actor-entry-publication.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { participantIdentityNamespace } from "./session-participant-identity.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
@@ -202,10 +212,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet(canonicalProgressCard)
                   .where((eb) =>
                     eb.or([
-                      eb("revision", "<", progressCard.revision),
+                      eb("session_progress_cards.revision", "<", progressCard.revision),
                       eb.and([
-                        eb("revision", "=", progressCard.revision),
-                        eb("updated_at", "<", progressCard.updated_at),
+                        eb("session_progress_cards.revision", "=", progressCard.revision),
+                        eb("session_progress_cards.updated_at", "<", progressCard.updated_at),
                       ]),
                     ]),
                   ),
@@ -242,7 +252,7 @@ export function copySessionNodeArtifactsForRepair(
                     created_by: tab.created_by,
                     revision: tab.revision,
                   })
-                  .where("revision", "<", tab.revision),
+                  .where("board_tabs.revision", "<", tab.revision),
               ),
           );
         }
@@ -261,10 +271,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet({ ...widget, session_key: canonicalKey })
                   .where((eb) =>
                     eb.or([
-                      eb("revision", "<", widget.revision),
+                      eb("board_widgets.revision", "<", widget.revision),
                       eb.and([
-                        eb("revision", "=", widget.revision),
-                        eb("updated_at", "<", widget.updated_at),
+                        eb("board_widgets.revision", "=", widget.revision),
+                        eb("board_widgets.updated_at", "<", widget.updated_at),
                       ]),
                     ]),
                   ),
@@ -280,10 +290,16 @@ export function copySessionNodeArtifactsForRepair(
         const memberIds = postimage
           ? new Set<string>(JSON.parse(postimage.sideTables.memberIdsJson))
           : undefined;
+        const memberAccess: Record<string, string> = JSON.parse(
+          postimage?.sideTables.memberAccessJson ?? "{}",
+        );
         for (const member of executeSqliteQuerySync(
           source.db,
           sourceDb.selectFrom("session_members").selectAll().where("session_key", "in", keys),
         ).rows) {
+          if (!memberIds?.has(member.identity_id) && member.access !== null) {
+            memberAccess[member.identity_id] = member.access;
+          }
           memberIds?.add(member.identity_id);
           if (postimage) {
             postimage.changed = true;
@@ -299,6 +315,7 @@ export function copySessionNodeArtifactsForRepair(
           );
         }
         if (postimage && memberIds) {
+          postimage.sideTables.memberAccessJson = JSON.stringify(memberAccess);
           postimage.sideTables.memberIdsJson = JSON.stringify(
             [...memberIds].toSorted((left, right) =>
               Buffer.compare(Buffer.from(left), Buffer.from(right)),
@@ -371,10 +388,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet(canonicalHeartbeat)
                   .where((eb) =>
                     eb.or([
-                      eb("updated_at", "<", heartbeat.updated_at),
+                      eb("heartbeat_outcomes.updated_at", "<", heartbeat.updated_at),
                       eb.and([
-                        eb("updated_at", "=", heartbeat.updated_at),
-                        eb("occurred_at", "<", heartbeat.occurred_at),
+                        eb("heartbeat_outcomes.updated_at", "=", heartbeat.updated_at),
+                        eb("heartbeat_outcomes.occurred_at", "<", heartbeat.occurred_at),
                       ]),
                     ]),
                   ),
@@ -387,6 +404,8 @@ export function copySessionNodeArtifactsForRepair(
         sourceTables.has("session_participants") &&
         destinationTables.has("session_participants")
       ) {
+        const participants = readSessionActorParticipants(destination, canonicalKey);
+        const publishParticipants = prepareSessionActorParticipantUpdate(destination, canonicalKey);
         let copiedParticipant = false;
         for (const participant of executeSqliteQuerySync(
           source.db,
@@ -396,7 +415,7 @@ export function copySessionNodeArtifactsForRepair(
             continue;
           }
           // Each alias merges against the row written by the previous alias in this transaction.
-          executeSqliteQuerySync(
+          const merged = executeSqliteQuerySync(
             destination.db,
             destinationDb
               .insertInto("session_participants")
@@ -454,18 +473,39 @@ export function copySessionNodeArtifactsForRepair(
                             .else(participant.last_prompted_at)
                             .end(),
                   })),
-              ),
-          );
+              )
+              .returningAll(),
+          ).rows;
+          if (participants) {
+            for (const row of merged) {
+              const index = participants.findIndex(
+                ({ identity }) =>
+                  identity.id === row.actor_id &&
+                  participantIdentityNamespace(identity) === row.identity_namespace,
+              );
+              const record = readParticipantRecord(row);
+              if (index === -1) {
+                participants.push(record);
+              } else {
+                participants[index] = record;
+              }
+            }
+          }
           copiedParticipant = true;
         }
-        if (postimage && copiedParticipant) {
-          // A real transfer merges raw histories; project the final ordered destination once.
-          postimage.entry = projectSqliteSessionParticipants(
-            destination.db,
-            canonicalKey,
-            postimage.entry,
-          );
-          postimage.changed = true;
+        if (copiedParticipant) {
+          // Publish the SQL merge before projection can reuse the actor's staged facts.
+          if (participants) {
+            publishParticipants?.publish(participants);
+          }
+          if (postimage) {
+            postimage.entry = projectSqliteSessionParticipants(
+              destination.db,
+              canonicalKey,
+              postimage.entry,
+            );
+            postimage.changed = true;
+          }
         }
       }
     },
@@ -579,6 +619,13 @@ export function deleteSessionNodeArtifacts(
 function readSessionNodeArtifactTables(
   database: Pick<OpenClawAgentDatabase, "db">,
 ): ReadonlySet<string> {
+  if (isPostgresSqlConnection(database.db)) {
+    const facts = getPostgresPhysicalFacts(database.db);
+    if (!facts) {
+      throw new Error("Session artifacts require admitted PostgreSQL schema facts");
+    }
+    return new Set(facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table));
+  }
   const schema = getAdmittedSqliteSchemaFacts(database.db);
   if (schema) {
     return schema.tables;

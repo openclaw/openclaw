@@ -20,6 +20,9 @@ export type SessionTranscriptExecutionReadInputs = {
   visible: CapturedRead<
     Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-visible-delta" }>
   >;
+  replay: CapturedRead<
+    Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-replay-groups" }>
+  >;
   memory: CapturedRead<SessionMemoryCaptureWorkerInput>;
   anchors: CapturedRead<SessionTranscriptAnchorsWorkerInput>;
   watermark: CapturedRead<SessionTranscriptWatermarkWorkerInput>;

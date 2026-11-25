@@ -7,12 +7,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { runDistArtifactChild, withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { hasUnjoinedWork, signalExitCode } from "./lib/managed-child-process.mts";
 import {
   assertRealOutputRoot,
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
+import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -21,7 +25,8 @@ const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+// Vite drains its active transforms and dependency optimizer before returning.
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 5_000;
 const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
 const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
@@ -32,15 +37,6 @@ type UiBuildEnvironmentSources = {
   readGitCommit?: () => string | null;
   readPackageVersion?: () => string | null;
 };
-
-function readCurrentGitCommit(): string | null {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
-}
 
 function readCurrentPackageVersion(): string | null {
   try {
@@ -72,7 +68,7 @@ export function resolveUiBuildEnvironment(
     commitLabel: "Control UI build commit",
     env,
     now: sources.now,
-    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+    readGitCommit: sources.readGitCommit ?? (() => readCurrentGitCommit(repoRoot)),
   });
   if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
     return buildEnv;
@@ -384,7 +380,33 @@ function normalizeUiBuildPermissions(directory: string): void {
 async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<UiSpawnResult> {
+  const run = async (call: UiSpawnCall, native = true): Promise<UiSpawnResult> => ({
+    status: await runDistArtifactChild(repoRoot, call.args[0]!, call.args.slice(1), {
+      cwd: call.options.cwd?.toString(),
+      env: call.options.env,
+      signal,
+      native,
+    }),
+    signal: null,
+  });
+  const validation = await run(
+    resolveSpawnCall(
+      process.execPath,
+      [path.join(here, "generate-control-ui-validators.mts"), "--check"],
+      env,
+      { cwd: repoRoot },
+    ),
+    false,
+  );
+  if (validation.signal || validation.status !== 0) {
+    return validation;
+  }
+  // Prepare before cache input capture: presenter source edits must change the
+  // canonical bytes and inventory even when the UI bundle can otherwise be reused.
+  await prepareControlUiSettings(repoRoot, here, signal);
+  signal.throwIfAborted();
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
@@ -410,63 +432,31 @@ async function buildAndPublishUi(
   }
   const staging = fs.mkdtempSync(path.join(dist, `${CONTROL_UI_BUILD_PREFIX}${process.pid}-`));
   const retired = `${staging}.retired`;
+  let joined = true;
   try {
-    const validator = (script: string, ...args: string[]): [UiSpawnCall, string] => [
+    const validator = (script: string, ...args: string[]): UiSpawnCall =>
       resolveSpawnCall(process.execPath, [path.join(here, script), ...args], env, {
         cwd: repoRoot,
-      }),
-      script,
-    ];
+      });
     const cache =
-      env.OPENCLAW_BUILD_CACHE !== "0" &&
-      env.BUILD_ALL_CACHE_ROOT?.trim() &&
-      toolCall.args.length === 2 &&
-      toolCall.args[1] === "build"
+      env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
+    const buildInputs = cache
+      ? await (
+          await import("./lib/control-ui-build-inputs.mts")
+        ).createControlUiBuildInputs(repoRoot, env, toolCall.args.slice(1))
+      : undefined;
     const step = {
       label: "ui:build",
       cache: {
-        inputs: [
-          { path: "ui", excludeDirectories: ["node_modules"] },
-          { path: "packages", excludeDirectories: ["node_modules", "dist", ".artifacts"] },
-          ...fs
-            .readdirSync(path.join(repoRoot, "scripts/lib"))
-            .filter((file) => file.startsWith("control-ui-i18n"))
-            .map((file) => `scripts/lib/${file}`),
-          "scripts/ui.js",
-          "scripts/ui.mts",
-          "scripts/pnpm-runner.mts",
-          "scripts/run-node-package-bin.mts",
-          "scripts/lib/build-artifact-cache.mts",
-          "scripts/lib/output-root-guard.mjs",
-          "scripts/lib/build-identity.mts",
-          "package.json",
-          "pnpm-lock.yaml",
-          "tsconfig.json",
-          "docs/assets/openclaw-hero-dark.png",
-        ],
+        inputs: buildInputs?.paths ?? [],
         outputs: ["."],
         requiredOutputs: ["index.html", "sw.js", ".build-inputs.json"],
         restore: "always" as const,
       },
     };
-    const staticInputs = cache?.listCacheFiles(repoRoot, step.cache.inputs, fs) ?? [];
-    const inputSignature = (inputs: string[]) =>
-      cache!.hashInputFiles(
-        repoRoot,
-        [
-          ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
-        ].toSorted(),
-        fs,
-        ["NODE_ENV", "OPENCLAW_CONTROL_UI_BASE_PATH", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"],
-        env,
-        JSON.stringify({
-          args: toolCall.args.slice(1),
-          platform: process.platform,
-          arch: process.arch,
-        }),
-      );
+    const inputSignature = buildInputs?.inputSignature;
     const cacheState = cache?.resolveBuildStepCacheState(step, {
       rootDir: repoRoot,
       artifactRoot: output,
@@ -478,6 +468,7 @@ async function buildAndPublishUi(
       cache?.restoreBuildStepCacheOutputs(cacheState, {
         rootDir: repoRoot,
         artifactRoot: staging,
+        staging: true,
       });
     if (reuseOutput) {
       const { runnerImport } = await import("vite");
@@ -490,22 +481,38 @@ async function buildAndPublishUi(
       await refreshControlUiBuildOutput(staging, resolveControlUiBuildInfo({ env }));
       console.log("Control UI build: reused content cache; refreshed release identity");
     }
-    const calls: [UiSpawnCall, string][] = [
-      ...(!reuseOutput
-        ? ([
-            [{ ...toolCall, args: [...toolCall.args, "--outDir", staging] }, "Control UI build"],
-          ] satisfies [UiSpawnCall, string][])
-        : []),
-      validator("check-control-ui-precompressed-assets.mts", staging),
-      validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
-    ];
-    for (const [call, label] of calls) {
-      const result = runSpawnCallSync(call, label);
-      if (result.signal || result.status !== 0) {
+    if (!reuseOutput) {
+      const result = await run({
+        ...toolCall,
+        options: {
+          ...toolCall.options,
+          env: {
+            ...toolCall.options.env,
+            OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+          },
+        },
+        args: [...toolCall.args, "--outDir", staging],
+      });
+      if (result.status !== 0) {
         return result;
       }
     }
-    if (cache && cacheState) {
+    for (const call of [
+      validator("check-control-ui-precompressed-assets.mts", staging),
+      // The report measures bundle bytes and never fails; a hit reuses bytes it already
+      // measured, and the identity refresh above changes only release metadata.
+      ...(!reuseOutput
+        ? [validator("check-control-ui-performance.mts", "--report-only", "--dist", staging)]
+        : []),
+    ]) {
+      const result = await run(call);
+      if (result.status !== 0) {
+        return result;
+      }
+    }
+    signal.throwIfAborted();
+    // A cache hit refreshes identity only in staging; its validated seed is immutable.
+    if (cache && cacheState && inputSignature && !reuseOutput) {
       const consumedInputs: string[] = JSON.parse(
         fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
       );
@@ -536,8 +543,13 @@ async function buildAndPublishUi(
     }
     removeUiBuildDirectory(retired);
     return { status: 0, signal: null };
+  } catch (error) {
+    joined = !hasUnjoinedWork(error);
+    throw error;
   } finally {
-    removeUiBuildDirectory(staging);
+    if (joined) {
+      removeUiBuildDirectory(staging);
+    }
   }
 }
 
@@ -603,15 +615,47 @@ export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<
   const env = action === "build" ? resolveUiBuildEnvironment() : process.env;
   const toolCall = resolveSpawnCall(
     process.execPath,
-    [resolveNodePackageBin(tool, requireFromUi), ...args, ...rest],
+    [
+      ...(action === "test" && !process.versions.bun ? resolveVitestNodeArgs(env) : []),
+      resolveNodePackageBin(tool, requireFromUi),
+      ...args,
+      ...rest,
+    ],
     env,
   );
   if (action === "build") {
-    exitForSpawnResult(
-      rest.some((arg) => arg === "--help" || arg === "-h")
-        ? runSpawnCallSync(toolCall, "Control UI build")
-        : await buildAndPublishUi(toolCall, env),
-    );
+    if (rest.some((arg) => arg === "--help" || arg === "-h")) {
+      exitForSpawnResult(runSpawnCallSync(toolCall, "Control UI build"));
+      return;
+    }
+    const cancellation = new AbortController();
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    let interrupted: NodeJS.Signals | undefined;
+    const handlers = signals.map((signal) => {
+      const handler = () => {
+        interrupted ??= signal;
+        cancellation.abort();
+      };
+      process.on(signal, handler);
+      return [signal, handler] as const;
+    });
+    try {
+      const result = await withDistArtifactOwnership(
+        repoRoot,
+        () => buildAndPublishUi(toolCall, env, cancellation.signal),
+        cancellation.signal,
+      );
+      process.exitCode = result.status ?? 1;
+    } catch (error) {
+      if (!interrupted || hasUnjoinedWork(error)) {
+        throw error;
+      }
+      process.exitCode = signalExitCode(interrupted);
+    } finally {
+      for (const [signal, handler] of handlers) {
+        process.off(signal, handler);
+      }
+    }
     return;
   }
 

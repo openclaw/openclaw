@@ -54,6 +54,7 @@ use `url`. If the Gateway is not ready or a browser handoff cannot be issued, th
 `{"ok":false,"error":{"type":"cli_error","message":"..."},"reason":"..."}` and exits non-zero.
 The dashboard-specific `reason` remains beside the shared error envelope. SecretRef-managed shared tokens are never included
 in `url`.
+Failures also print the error and a next-step diagnostic command to stderr; stdout remains one JSON object.
 
 For terminal HTTP failures, an unreadable repair diagnostic leaves the observed HTTP status
 in `reason` (for example, `HTTP 503`).
@@ -73,9 +74,12 @@ Notes:
 - The interactive command prints only the clean base URL; the clipboard/browser launch receives the
   one-time `browserUrl`, never the shared token. SecretRef-managed shared tokens therefore do not leak
   into terminal output, clipboard history, or browser-launch arguments.
-- If clipboard/browser delivery fails for a token-authenticated URL, the command logs a safe manual-auth hint naming `OPENCLAW_GATEWAY_TOKEN`, `gateway.auth.token`, and the URL fragment key `token`, without printing the token value.
-- If the shared token cannot be placed in a URL and clipboard/browser delivery fails, run
-  `openclaw dashboard --json` and open its short-lived `browserUrl` within ten minutes.
+- The command reports the one-time pairing link as copied or opened only after that handoff succeeds.
+- If neither clipboard nor browser delivery succeeds, run `openclaw dashboard --json` on the Gateway
+  host and open its short-lived `browserUrl` within ten minutes, regardless of the shared-auth mode.
+  Treat this URL as a credential: do not paste it or the JSON output into logs or support requests.
+- The clean printed URL and SSH tunnel instructions provide network access, not browser pairing or
+  Gateway authentication. Use the one-time `browserUrl` for the owner pairing handoff.
 
 ## Related
 

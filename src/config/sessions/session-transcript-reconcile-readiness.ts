@@ -1,12 +1,12 @@
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { captureAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
+import { isAgentDatabaseClosing } from "../../state/openclaw-agent-db-resources.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
@@ -40,16 +40,18 @@ export async function readSessionTranscriptProjectionStatus(
   abortSignal?: AbortSignal,
 ): Promise<boolean> {
   if (supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
-    const closing = captureAgentDatabaseCloseFence({
+    const closing = isAgentDatabaseClosing({
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     });
     if (closing) {
-      await racePromiseWithAbortSignal(closing, abortSignal);
-      // A probe in the retiring lifetime must not reopen resources after close.
+      if (abortSignal?.aborted) {
+        throw createAbortError("Operation aborted", { cause: abortSignal.reason });
+      }
+      // Readiness is best effort during retirement; the close caller owns settlement.
       return false;
     }
-    const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(databaseOptions);
     try {
       execution.assertCurrent();
       return await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>

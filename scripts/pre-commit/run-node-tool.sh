@@ -13,6 +13,9 @@ shift
 
 local_tool="$ROOT_DIR/node_modules/.bin/$tool"
 if [[ -x "$local_tool" ]]; then
+  if [[ "$tool" == "oxfmt" && -f "$ROOT_DIR/scripts/run-format.mts" ]]; then
+    exec node "$ROOT_DIR/scripts/run-format.mts" "$@"
+  fi
   exec "$local_tool" "$@"
 fi
 

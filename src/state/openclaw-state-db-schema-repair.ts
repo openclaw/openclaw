@@ -4,12 +4,15 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -22,6 +25,8 @@ import {
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -34,7 +39,61 @@ import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+/** Decode historical BLOB values in typed columns before migration readers consume them. */
+export function normalizeSqliteText(db: DatabaseSync): void {
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name IN (SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND strict = 0) ORDER BY rowid",
+    )
+    // SAFETY: the statement fixes the column names and types of each row.
+    .all() as Array<{ name: string }>;
+  // STRICT typed columns cannot contain historical BLOBs. Modern admission stays catalog-only.
+  if (tables.length === 0) {
+    return;
+  }
+  // Keys and references must settle together, or retain their original storage classes.
+  // SAFETY: PRAGMA foreign_keys returns one row with its integer foreign_keys setting.
+  const { foreign_keys: foreignKeys } = db.prepare("PRAGMA foreign_keys").get() as {
+    foreign_keys: number;
+  };
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    runSqliteImmediateTransactionSync(db, () => {
+      const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+      for (const { name } of tables) {
+        // SAFETY: table_xinfo fixes the names and types of these catalog columns.
+        const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
+          name: string;
+          type: string;
+          hidden: number;
+        }>;
+        for (const column of columns) {
+          // Declared BLOB and typeless columns may hold real bytes.
+          if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
+            continue;
+          }
+          const c = quote(column.name);
+          // An unchanged predecessor may have lazy FTS triggers for newer columns.
+          // Do not compile their UPDATE programs unless this column needs conversion.
+          if (
+            !db.prepare(`SELECT 1 FROM ${quote(name)} WHERE typeof(${c}) = 'blob' LIMIT 1`).get()
+          ) {
+            continue;
+          }
+          // Preserve SQLite's constraint diagnostic, including the conflicting table and key.
+          db.prepare(
+            `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
+          ).run();
+        }
+      }
+    });
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+  }
+}
 
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
 
@@ -67,11 +126,43 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "github_publication_session_lifecycles",
     "github_repository_publication_requests",
   ],
+  "meeting-transcript-start-time": ["meeting_transcript_sessions"],
   "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
+  "task-run-indexes-v24": [],
+  "subagent-operator-recovery-v25": [],
+  "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
+  "local-client-credentials-v29": [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "exec_approvals_config",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
     "delivery_queue_entries",
+  ],
+  "automation-policy-fence-v30": ["cron_jobs"],
+  "local-workspace-manifests-v31": [
+    "local_workspace_projections",
+    "local_workspace_manifest_nodes",
+  ],
+  "local-workspace-cas-v35": [
+    "local_workspace_projections",
+    "local_workspace_tree_packs",
+    "local_workspace_source_path_sets",
+  ],
+  "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
+  "worker-resource-receipts-v37": ["worker_environments"],
+  "repository-disk-authority-v38": [
+    "session_repository_workspaces",
+    "worker_workspace_pending_results",
   ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
@@ -105,7 +196,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
-    OPENCLAW_STATE_SCHEMA_SQL,
+    getOpenClawStatePredecessorSchema(8),
     "worker_session_placements",
     { errorMessage: "Canonical worker placement schema block is missing" },
   );
@@ -148,7 +239,8 @@ export function migrateWorkerPlacementExecutionModeSchema(
           AND sql IS NOT NULL
           AND name NOT IN (
             'idx_worker_session_placements_session_key',
-            'idx_worker_session_placements_reconcile'
+            'idx_worker_session_placements_reconcile',
+            'idx_worker_session_placements_environment'
           )`,
     )
     .all();
@@ -430,6 +522,48 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     ["acp_sessions", ...STATE_CURSOR_TABLES_V22].some((table) => tableExists(db, table))
   ) {
     migrations.push({ kind: "portable-identity-columns-v22", path: pathname });
+  }
+  if (
+    userVersion < MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION &&
+    tableExists(db, "meeting_transcript_sessions")
+  ) {
+    migrations.push({ kind: "meeting-transcript-start-time", path: pathname });
+  }
+  if (userVersion < 24 && tableExists(db, "task_runs")) {
+    migrations.push({ kind: "task-run-indexes-v24", path: pathname });
+  }
+  if (userVersion < 25) {
+    migrations.push({ kind: "subagent-operator-recovery-v25", path: pathname });
+  }
+  if (userVersion < 26 && tableExists(db, "session_state_heads")) {
+    migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28 || needsPublicationDraftMigration(db)) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
+  }
+  if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+    migrations.push({ kind: "local-client-credentials-v29", path: pathname });
+  }
+  if (userVersion < 30) {
+    migrations.push({ kind: "automation-policy-fence-v30", path: pathname });
+  }
+  if (userVersion < 31) {
+    migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
+  }
+  if (userVersion < 35) {
+    migrations.push({ kind: "local-workspace-cas-v35", path: pathname });
+  }
+  if (userVersion < 36) {
+    migrations.push({ kind: "template-names-v36", path: pathname });
+  }
+  if (userVersion < 37) {
+    migrations.push({ kind: "worker-resource-receipts-v37", path: pathname });
+  }
+  if (userVersion < 38) {
+    migrations.push({ kind: "repository-disk-authority-v38", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

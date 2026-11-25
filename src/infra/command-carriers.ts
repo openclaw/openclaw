@@ -4,8 +4,6 @@ import { parseInlineOptionToken } from "./inline-option-token.js";
 
 // Command carriers are executables that can hide the real command behind
 // wrapper-specific options, environment assignments, or shell-style splitting.
-export const COMMAND_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
-
 export const SOURCE_EXECUTABLES = new Set([".", "source"]);
 
 const MAX_ENV_SPLIT_PAYLOAD_DEPTH = 32;
@@ -153,7 +151,7 @@ function resolveEnvSplitPayload(
   payload: string,
   trailingArgv: string[],
   depth: number,
-): string[] | null {
+): { argv: string[]; assignmentKeys: string[] } | null {
   const innerArgv = splitShellArgs(payload);
   if (!innerArgv || innerArgv.length === 0) {
     return null;
@@ -161,7 +159,14 @@ function resolveEnvSplitPayload(
   const carriedArgv = [...innerArgv, ...trailingArgv];
   // env -S can recursively introduce another env wrapper; keep a bounded depth
   // so malicious argv cannot create unbounded parser work.
-  return resolveEnvCarriedArgv(["env", ...carriedArgv], depth + 1) ?? carriedArgv;
+  const innerEnvArgv = ["env", ...carriedArgv];
+  const inner = parseEnvInvocationPrelude(innerEnvArgv, depth + 1);
+  return inner
+    ? {
+        argv: inner.splitArgv ?? innerEnvArgv.slice(inner.commandIndex),
+        assignmentKeys: inner.assignmentKeys,
+      }
+    : { argv: carriedArgv, assignmentKeys: [] };
 }
 
 type ParsedEnvInvocationPrelude = {
@@ -207,15 +212,16 @@ export function parseEnvInvocationPrelude(
         const payloadIndex = splitStringOption.inlineValue === undefined ? index + 1 : index;
         const payload = splitStringOption.inlineValue ?? argv[payloadIndex];
         const trailingIndex = payloadIndex + 1;
-        const splitArgv =
+        const split =
           typeof payload === "string"
             ? resolveEnvSplitPayload(payload, argv.slice(trailingIndex), depth)
             : null;
-        return splitArgv
+        return split
           ? {
-              assignmentKeys,
+              // Keys assigned inside the -S payload are applied by env at runtime.
+              assignmentKeys: [...assignmentKeys, ...split.assignmentKeys],
               commandIndex: trailingIndex,
-              splitArgv,
+              splitArgv: split.argv,
               usesModifiers,
             }
           : null;
@@ -309,23 +315,18 @@ function resolveOptionCarrierArgv(argv: string[]): string[] | null {
   return null;
 }
 
-export function resolveCarrierCommandArgv(
-  argv: string[],
-  depth = 0,
-  options?: { includeExec?: boolean },
-): string[] | null {
+export function resolveCarrierCommandArgv(argv: string[]): string[] | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   switch (executable) {
     case "env":
-      return resolveEnvCarriedArgv(argv, depth);
+      return resolveEnvCarriedArgv(argv);
     case "command":
     case "builtin":
       return resolveCommandBuiltinCarriedArgv(argv);
     case "sudo":
     case "doas":
-      return resolveOptionCarrierArgv(argv);
     case "exec":
-      return options?.includeExec ? resolveOptionCarrierArgv(argv) : null;
+      return resolveOptionCarrierArgv(argv);
     default:
       return null;
   }

@@ -2,31 +2,22 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   ensureSessionEntrySync,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   cleanupManagedOutgoingMediaRecords,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
-import {
-  insertManagedImageRecord,
-  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-  readManagedImageRecord,
-} from "./managed-image-record-store.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
+import { readManagedImageRecord } from "./managed-image-record-store.js";
 import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
 
 const ordering = vi.hoisted(() => ({ afterRead: undefined as (() => Promise<void>) | undefined }));
@@ -46,31 +37,37 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
-let stateDir: string;
-let savedEnv: ReturnType<typeof captureEnv>;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 
-beforeEach(() => {
-  savedEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
-  stateDir = fs.realpathSync(tempDirs.make("managed-branch-retention-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+function message(id: string, parentId: string | null, content: unknown, role = "assistant") {
+  return { type: "message", id, parentId, timestamp, message: { role, content } };
+}
+const control = { type: "custom", customType: "branch-control", data: {} };
+function chain(prefix: string, count: number, fields: Record<string, unknown>) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${prefix}-${index}`,
+    parentId: index === 0 ? "user" : `${prefix}-${index - 1}`,
+    timestamp,
+    ...fields,
+  }));
+}
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "managed-branch-retention" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(async () => {
   ordering.afterRead = undefined;
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  savedEnv.restore();
+  await state.cleanup();
 });
 
 describe("managed attachment branch retention", () => {
   it.each(["after transcript read", "after cleanup", "between hidden-tail pages"] as const)(
     "retains media when the real branch owner restores it %s",
     async (switchAt) => {
+      const { stateDir } = state;
       const sessionId = randomUUID();
       const sessionKey = `agent:main:${sessionId}`;
       const scope = {
@@ -80,84 +77,35 @@ describe("managed attachment branch retention", () => {
         storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
       };
       expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
-      const attachmentId = randomUUID();
-      const mediaRoot = path.join(stateDir, "media");
-      const mediaId = `${attachmentId}.png`;
-      const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
       const body = Buffer.from("synthetic branch-owned media\n");
-      fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-      fs.writeFileSync(originalPath, body);
-      const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
       const messageId = "attached";
-      const branchMessages = Array.from(
-        { length: switchAt === "after transcript read" ? 0 : 128 },
-        (_, index) => ({
-          id: `branch-${index}`,
-          parentId: index === 0 ? "user" : `branch-${index - 1}`,
-          timestamp,
-          ...(switchAt === "between hidden-tail pages"
-            ? { type: "custom", customType: "branch-control", data: {} }
-            : { type: "message", message: { role: "assistant", content: "branch context" } }),
-        }),
+      const { attachmentId, originalPath } = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey,
+        agentId: "main",
+        messageId,
+        createdAt: timestamp,
+        body,
+      });
+      const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const branchMessages = chain(
+        "branch",
+        switchAt === "after transcript read" ? 0 : 128,
+        switchAt === "between hidden-tail pages"
+          ? control
+          : { type: "message", message: { role: "assistant", content: "branch context" } },
       );
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
-        {
-          type: "message",
-          id: "root",
-          parentId: null,
-          timestamp,
-          message: { role: "assistant", content: "root" },
-        },
-        {
-          type: "message",
-          id: "user",
-          parentId: "root",
-          timestamp,
-          message: { role: "user", content: "make an image" },
-        },
+        message("root", null, "root"),
+        message("user", "root", "make an image", "user"),
         ...branchMessages,
-        {
-          type: "message",
-          id: messageId,
-          parentId: branchMessages.at(-1)?.id ?? "user",
-          timestamp,
-          message: { role: "assistant", content: [{ type: "image", url, openUrl: url }] },
-        },
-        ...Array.from(
-          { length: switchAt === "between hidden-tail pages" ? 130 : 0 },
-          (_, index) => ({
-            type: "custom",
-            id: `active-control-${index}`,
-            parentId: index === 0 ? "user" : `active-control-${index - 1}`,
-            timestamp,
-            customType: "branch-control",
-            data: {},
-          }),
-        ),
+        message(messageId, branchMessages.at(-1)?.id ?? "user", [
+          { type: "image", url, openUrl: url },
+        ]),
+        ...chain("active-control", switchAt === "between hidden-tail pages" ? 130 : 0, control),
       ]);
       await readSessionMessageCountAsync(scope);
-      await insertManagedImageRecord(
-        {
-          attachmentId,
-          sessionKey,
-          agentId: "main",
-          messageId,
-          createdAt: timestamp,
-          alt: "Synthetic branch attachment",
-          original: {
-            mediaRoot,
-            mediaId,
-            mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-            contentType: "image/png",
-            width: 1,
-            height: 1,
-            sizeBytes: body.length,
-            filename: "fixture.png",
-          },
-        },
-        stateDir,
-      );
       const download = () =>
         resolveManagedOutgoingMediaArtifactDownload({
           sessionKey,
@@ -188,19 +136,9 @@ describe("managed attachment branch retention", () => {
       if (switchAt !== "after cleanup") {
         ordering.afterRead = restoreBranch;
       }
-      const cleanup = cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
-      if (switchAt === "between hidden-tail pages") {
-        await expect(cleanup).rejects.toMatchObject({
-          name: "SessionTranscriptProjectionUnavailableError",
-          reason: "window-changed",
-        });
-      } else {
-        expect(await cleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 1,
-        });
-      }
+      // Indexed membership finishes before the branch switch even when unrelated controls
+      // would have forced the old full scan to fetch another page.
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
       expect(switched).toBe(switchAt !== "after cleanup");
       expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
       expect(fs.readFileSync(originalPath)).toEqual(body);

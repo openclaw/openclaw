@@ -20,9 +20,13 @@ function parseSshConfigOutput(output: string): SshResolvedConfig {
     if (!line) {
       continue;
     }
-    const [key, ...rest] = line.split(/\s+/);
-    const value = rest.join(" ").trim();
-    if (!key || !value) {
+    const separator = line.search(/\s/);
+    if (separator < 0) {
+      continue;
+    }
+    const key = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+    if (!value) {
       continue;
     }
     switch (key) {
@@ -49,7 +53,12 @@ function parseSshConfigOutput(output: string): SshResolvedConfig {
 
 export async function resolveSshConfig(
   target: SshParsedTarget,
-  opts: { identity?: string; timeoutMs?: number; explicitPort?: boolean } = {},
+  opts: {
+    identity?: string;
+    timeoutMs?: number;
+    explicitPort?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<SshResolvedConfig | null> {
   const sshPath = resolveSshClient();
   if (!sshPath) {
@@ -72,6 +81,7 @@ export async function resolveSshConfig(
       outputCapture: "head",
       terminateOnOutputLimit: true,
       timeoutMs: Math.max(200, opts.timeoutMs ?? 800),
+      signal: opts.signal,
     });
     if (result.code !== 0 || result.termination !== "exit" || !result.stdout.trim()) {
       return null;

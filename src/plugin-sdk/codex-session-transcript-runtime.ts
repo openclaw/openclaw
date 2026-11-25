@@ -58,6 +58,7 @@ import type {
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
 export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 export { SessionTranscriptReadFenceError };
+export { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 
 export {
   createSessionTranscriptContextReader as createCodexSessionContextReader,
@@ -122,23 +123,33 @@ function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method
   }
 }
 
-/** @deprecated Synchronous SDK compatibility until the next major; bundled readers retain worker validation. */
+/** @deprecated Use createCodexSessionContextReader with the captured admission. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function validateCodexSessionTranscriptReadAdmission(
   ...args: Parameters<typeof validateSessionTranscriptContextAdmission>
 ): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptReadAdmission",
+    replacement: "createCodexSessionContextReader with the captured admission",
+  });
   assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptReadAdmission");
   validateSessionTranscriptContextAdmission(...args);
 }
 
-/** @deprecated Synchronous SDK compatibility until the next major; bundled readers retain worker validation. */
+/** @deprecated Use createCodexSessionContextReader with a prepared current source. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function validateCodexSessionTranscriptContextVersion(
   ...args: Parameters<typeof validateSessionTranscriptContextVersion>
 ): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptContextVersion",
+    replacement: "createCodexSessionContextReader with a prepared current source",
+  });
   assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptContextVersion");
   validateSessionTranscriptContextVersion(...args);
 }
 
-/** @deprecated Use createCodexSessionContextReader; synchronous compatibility is removed in the next SDK major. */
+/** @deprecated Use createCodexSessionContextReader. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readCodexSessionContext<T>(
   target: SessionTranscriptRuntimeTarget,
   read: (
@@ -212,7 +223,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
   }>;
 };
 
-/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Removed at the next Plugin SDK major. */
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
@@ -286,6 +297,7 @@ async function withMirrorWrite<T>(
       },
     }),
     mode,
+    "withCodexSessionTranscriptMirrorWriteLock",
   );
 }
 

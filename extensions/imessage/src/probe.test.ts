@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
-import { imessageRpcSupportsMethod } from "./probe.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -57,24 +57,14 @@ describe("iMessage private API status cache", () => {
     rpcMethods: ["chats.list"],
   };
 
-  it("drops expiring private API status when the current clock is not a valid date timestamp", () => {
-    setCachedIMessagePrivateApiStatus(
-      "imsg-invalid-private-clock",
-      availableStatus,
-      1_700_000_030_000,
-    );
-    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-
-    expect(getCachedIMessagePrivateApiStatus("imsg-invalid-private-clock")).toBeUndefined();
-  });
-
-  it("does not cache private API status with an invalid expiry timestamp", () => {
-    setCachedIMessagePrivateApiStatus(
-      "imsg-overflow-private-clock",
-      availableStatus,
-      Number.POSITIVE_INFINITY,
-    );
-
-    expect(getCachedIMessagePrivateApiStatus("imsg-overflow-private-clock")).toBeUndefined();
+  it("expires temporary verdicts at the deadline while retaining permanent verdicts", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    setCachedIMessagePrivateApiStatus("imsg-temporary", availableStatus, 1_700_000_030_000);
+    setCachedIMessagePrivateApiStatus("imsg-permanent", availableStatus);
+    now.mockReturnValue(1_700_000_029_999);
+    expect(getCachedIMessagePrivateApiStatus("imsg-temporary")).toEqual(availableStatus);
+    now.mockReturnValue(1_700_000_030_000);
+    expect(getCachedIMessagePrivateApiStatus("imsg-temporary")).toBeUndefined();
+    expect(getCachedIMessagePrivateApiStatus("imsg-permanent")).toEqual(availableStatus);
   });
 });

@@ -43,9 +43,11 @@ export function isQaPosixProcessGroupAlive(
 ) {
   try {
     process.kill(-processGroupId, 0);
-    // Inconclusive snapshots stay alive until the next shutdown check.
+    // Reaping can remove the last zombie between kill(0) and /proc. Resolve an
+    // inconclusive snapshot with a fresh existence probe, never the stale one.
     return (
-      process.platform !== "linux" || (inspectLinuxProcessGroupFn(processGroupId)?.alive ?? true)
+      process.platform !== "linux" ||
+      (inspectLinuxProcessGroupFn(processGroupId)?.alive ?? process.kill(-processGroupId, 0))
     );
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";

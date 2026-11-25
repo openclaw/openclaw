@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "./host/openclaw-runtime-kysely.js";
+import type { EngineConnection } from "./host/openclaw-runtime-sqlite.js";
 import { createSqliteSchemaEnsurer } from "./host/openclaw-runtime-sqlite.js";
 
 export type MemoryEntryOrigin = {
@@ -36,7 +36,7 @@ export const ensureMemoryEntryOriginsSchema = createSqliteSchemaEnsurer(
     origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (entry_key, agent_id, session_id)
-  ) STRICT`,
+  ) STRICT, WITHOUT ROWID`,
   { tables: ["memory_entry_origins"] },
 );
 
@@ -52,7 +52,7 @@ function readOrigin(row: MemoryEntryOriginRow): MemoryEntryOrigin {
 }
 
 export function readMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { agentId: string; sessionIds?: readonly string[]; entryKeys?: readonly string[] },
 ): MemoryEntryOrigin[] {
   const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
@@ -74,7 +74,7 @@ export function readMemoryEntryOriginsInDatabase(
 
 /** The caller owns schema admission and the synchronous transaction. */
 export function recordMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { agentId: string; origins: readonly MemoryEntryOrigin[]; entryKey?: string },
 ): MemoryEntryOrigin[] {
   const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);

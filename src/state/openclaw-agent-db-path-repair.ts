@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
@@ -14,20 +16,18 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
 
-/** The caller retains shared-state write admission through this synchronous repair. */
+/**
+ * The caller retains shared-state write admission through this synchronous repair.
+ * Update Doctor only counts: rollback compares the updater's captured exact-path inventory.
+ */
 export function repairOpenClawAgentDatabasePaths(
   database: Pick<OpenClawStateDatabase, "db" | "path">,
+  updateDoctor = false,
 ): { repaired: number; warnings: string[] } {
   const { db, path: pathname } = database;
-  assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-  const active = readActiveUpdateRun(db);
-  if (active) {
-    return {
-      repaired: 0,
-      warnings: [
-        `Skipped agent database path repair while update ${active.runId} is in progress. Run openclaw doctor --fix after the update finishes.`,
-      ],
-    };
+  const postgres = isPostgresSqlConnection(db);
+  if (!postgres && !updateDoctor) {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
   }
 
   const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
@@ -40,8 +40,6 @@ export function repairOpenClawAgentDatabasePaths(
       .orderBy("path"),
   ).rows;
   const agents = new Map<string, { stored: string; aliases: AgentDatabases[] }>();
-  const warnings: string[] = [];
-  let repaired = 0;
   for (const row of rows) {
     const stored = resolveOpenClawAgentDatabaseStoredPath(
       pathname,
@@ -52,13 +50,42 @@ export function repairOpenClawAgentDatabasePaths(
     group.aliases.push(row);
     agents.set(key, group);
   }
-
-  for (const { stored, aliases } of agents.values()) {
+  const repairs = [...agents.values()].flatMap(({ stored, aliases }) => {
     const newest = aliases[0]!;
     const registeredPath = resolveOpenClawRegisteredAgentDatabasePath(pathname, newest.path);
     const name = path.basename(registeredPath).replace(/\.\d+(?=\.sqlite$)/, "");
     const sentinel =
       name === "(multiple).sqlite" || name === `(multiple).${newest.agent_id}.sqlite`;
+    const windowsAlias =
+      process.platform === "win32" &&
+      !path.isAbsolute(stored) &&
+      aliases.some((row) => row.path.startsWith("\\\\?\\"));
+    return sentinel || windowsAlias ? [{ stored, aliases, newest, registeredPath, sentinel }] : [];
+  });
+  const pending = repairs.reduce(
+    (count, { sentinel, aliases }) => count + (sentinel ? aliases.length : 1),
+    0,
+  );
+  if (pending === 0) {
+    return { repaired: 0, warnings: [] };
+  }
+  const active = updateDoctor ? undefined : readActiveUpdateRun(db);
+  const deferred = updateDoctor
+    ? "during update Doctor. Run openclaw doctor --fix to repair agent database paths."
+    : active &&
+      `while update ${active.runId} is in progress. Run openclaw doctor --fix after the update finishes.`;
+  if (deferred) {
+    return {
+      repaired: 0,
+      warnings: [`Skipped agent database path repair for ${pending} registration(s) ${deferred}`],
+    };
+  }
+  if (postgres) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+
+  const warnings: string[] = [];
+  for (const { stored, aliases, newest, registeredPath, sentinel } of repairs) {
     if (sentinel) {
       try {
         const files = resolveSqliteDatabaseFilePaths(registeredPath);
@@ -93,13 +120,6 @@ export function repairOpenClawAgentDatabasePaths(
         );
       }
     } else {
-      if (
-        process.platform !== "win32" ||
-        path.isAbsolute(stored) ||
-        !aliases.some((row) => row.path.startsWith("\\\\?\\"))
-      ) {
-        continue;
-      }
       const canonical = { ...newest, path: stored };
       executeSqliteQuerySync(
         db,
@@ -119,7 +139,6 @@ export function repairOpenClawAgentDatabasePaths(
         .where("agent_id", "=", newest.agent_id)
         .where("path", "in", obsolete),
     );
-    repaired += sentinel ? aliases.length : 1;
   }
-  return { repaired, warnings };
+  return { repaired: pending, warnings };
 }

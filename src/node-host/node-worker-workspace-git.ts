@@ -2,6 +2,13 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+} from "../gateway/worker-environments/workspace-result-inventory.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { openCommandStdinFile } from "../process/command-stdin-file.js";
 import { runExec } from "../process/exec.js";
 import {
   runWorkspaceCommand,
@@ -34,19 +41,17 @@ export async function initializeNodeWorkerGitWorkspace(params: {
     await git(["config", "--local", "core.longpaths", "true"]);
   }
   if (params.packPath) {
-    const pack = await fsp.open(params.packPath, "r");
-    try {
+    {
+      await using pack = await openCommandStdinFile(params.packPath);
       await runExec("git", [...gitPrefix, "-C", params.workspaceDir, "index-pack", "--stdin"], {
         cwd: params.workspaceDir,
         baseEnv: workspaceCommandEnv(params.manifestHome),
-        stdinFileDescriptor: pack.fd,
+        stdinFile: pack.stdinFile,
         signal: params.signal,
         timeoutMs: TRANSFER_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         logOutput: false,
       });
-    } finally {
-      await pack.close();
     }
     await fsp.rm(params.packPath, { force: true });
   }
@@ -88,4 +93,76 @@ export async function initializeNodeWorkerGitWorkspace(params: {
       input: `${checkoutPaths.join("\0")}\0`,
     });
   }
+}
+
+/** Capture immutable worker commits and stream their versioned upload trailer. */
+export async function prepareNodeWorkerGitResult(params: {
+  resultVersion?: 2;
+  workspaceDir: string;
+  manifestHome: string;
+  baseCommit: string | null;
+  packPath: string;
+  signal?: AbortSignal;
+}) {
+  if (params.resultVersion !== 2) {
+    return undefined;
+  }
+  let history: WorkerWorkspaceGitHistory | undefined;
+  try {
+    history = params.baseCommit
+      ? WorkerWorkspaceGitHistorySchema.parse(
+          JSON.parse(
+            await runWorkspaceCommand({
+              workspaceDir: params.workspaceDir,
+              homeDir: params.manifestHome,
+              argv: [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeProcessEntrypointUrl("nodeWorkspaceGitHistory"),
+                ),
+                params.workspaceDir,
+                params.baseCommit,
+                params.packPath,
+              ],
+              signal: params.signal,
+            }),
+          ),
+        )
+      : undefined;
+  } catch {
+    params.signal?.throwIfAborted();
+    if (params.baseCommit) {
+      history = {
+        baseCommit: params.baseCommit,
+        headCommit: params.baseCommit,
+        descendsFromBase: false,
+        unavailableReason: "worker Git history is unavailable",
+      };
+    }
+  }
+  const packBytes =
+    history?.descendsFromBase &&
+    !history.unavailableReason &&
+    history.headCommit !== history.baseCommit
+      ? (await fsp.stat(params.packPath)).size
+      : 0;
+  const metadata = Buffer.from(JSON.stringify(history ?? null));
+  return {
+    byteLength: 4 + metadata.byteLength + 8 + packBytes,
+    async write(write: (bytes: Buffer) => Promise<void>, signal?: AbortSignal) {
+      const header = Buffer.allocUnsafe(4);
+      header.writeUInt32BE(metadata.byteLength);
+      await write(header);
+      await write(metadata);
+      const size = Buffer.allocUnsafe(8);
+      size.writeBigUInt64BE(BigInt(packBytes));
+      await write(size);
+      if (packBytes) {
+        await using handle = await fsp.open(params.packPath, "r");
+        for await (const value of handle.createReadStream({ autoClose: false, signal })) {
+          await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
+        }
+      }
+    },
+  };
 }

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { throwCollectedErrors, throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -47,41 +47,24 @@ export function createPluginToolInspection(
   return {
     registry: acquisition.registry,
     release: () => {
-      if (release) {
-        return release;
-      }
-      const completion = createDeferredCore();
-      release = completion.promise;
-      void Promise.allSettled([
-        (async () => await acquisition.release())(),
-        (async () => {
-          if (supplementalCache) {
-            const { failures } = await retirePluginCache(supplementalCache);
-            if (failures.length === 1) {
-              throw failures[0]!.error;
-            }
-            if (failures.length > 0) {
-              throw new AggregateError(
-                failures.map((failure) => failure.error),
-                "Supplemental plugin inspection cleanup failed",
-              );
-            }
-          }
-        })(),
-      ])
+      return (release ??= Promise.resolve()
+        .then(() =>
+          Promise.allSettled([
+            (async () => await acquisition.release())(),
+            (async () => {
+              if (supplementalCache) {
+                const { failures } = await retirePluginCache(supplementalCache);
+                throwCollectedErrors(
+                  failures.map((failure) => failure.error),
+                  "Supplemental plugin inspection cleanup failed",
+                );
+              }
+            })(),
+          ]),
+        )
         .then((cleanup) => {
-          const failures = cleanup.flatMap((outcome) =>
-            outcome.status === "rejected" ? [outcome.reason] : [],
-          );
-          if (failures.length === 1) {
-            throw failures[0];
-          }
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "Plugin tool inspection cleanup failed");
-          }
-        })
-        .then(completion.resolve, completion.reject);
-      return release;
+          throwIfSettledRejected(cleanup, "Plugin tool inspection cleanup failed");
+        }));
     },
   };
 }

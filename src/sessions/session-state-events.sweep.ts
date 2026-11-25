@@ -2,6 +2,7 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { prepareSystemEventStorePath } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -25,12 +26,7 @@ export async function sweepSessionStateWatchNotices(
       { context },
     );
     context.admission.assertCurrent();
-    const watchers = new Map<string, SessionStateSweepAddress[]>();
-    for (const cursor of result?.type === "sessionState.pendingNotices" ? result.cursors : []) {
-      const cursors = watchers.get(cursor.watcherSessionKey) ?? [];
-      cursors.push(cursor);
-      watchers.set(cursor.watcherSessionKey, cursors);
-    }
+    const watchers = groupRecords(result?.cursors ?? [], (cursor) => cursor.watcherSessionKey);
     const cursors: SessionStateSweepAddress[] = [];
     for (const [sessionKey, addresses] of watchers) {
       const storePath = await prepareSystemEventStorePath(sessionKey);

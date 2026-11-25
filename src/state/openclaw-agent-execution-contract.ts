@@ -26,6 +26,8 @@ export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations
 export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
 
 export type OpenClawAgentDatabaseExecution = OpenClawAgentDatabaseAdmissionExecution & {
+  /** Observe the next terminal native/admission loss after accepted work settles; excludes idle retirement. */
+  onTerminal(listener: (reason: Error) => void): () => void;
   /** The accepted native receipt; reading this never adopts the current pathname. */
   readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   /** Accept the admitted native handle used by a synchronous SDK operation. */
@@ -59,11 +61,17 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   readonly creationIdentity?: DatabasePathIdentity;
+  readonly fileIdentity?: AgentDatabaseExecutionFileIdentity;
+  getPendingPreparation(): Promise<void> | undefined;
+  /** Hold logical custody during asynchronous capture without admitting database work. */
+  retain(): () => Promise<void>;
+  getOpeningIdentity(): Readonly<DatabasePathIdentity> | undefined;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     expectedCreationIdentity?: DatabasePathIdentity,
     requestedPath?: string,
+    observedIdentity?: DatabasePathIdentity,
   ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
   retireForCleanup(): Promise<void>;
@@ -71,16 +79,19 @@ export type AgentDatabaseFileExecutionOwner = {
 };
 
 export type AgentDatabaseNativeGeneration = {
-  failure(): "open-refused" | "native" | undefined;
+  /** Established worker loss permits later native replacement; fatal opening failure does not. */
+  failure(): "open-refused" | "native" | "lost" | undefined;
   isPrepared(): boolean;
-  captureClaim(): AgentDatabaseGenerationClaim;
+  /** Settle a canceled caller's initial open before a successor can replace its generation. */
+  getPendingNativeOpen(): Promise<void> | undefined;
+  getPendingPreparation(): Promise<void> | undefined;
+  captureClaim(assertBorrowed: () => void): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
-    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -105,4 +116,11 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
+    "database.integrityVerified": { input: { verifiedAt: number }; output: void };
   };
+
+export type AgentDatabaseExecutionState = {
+  owners: Map<string, AgentDatabaseFileExecutionOwner>;
+  // LRU entries keep their slots during eviction and after failed cleanup.
+  idle: Set<AgentDatabaseFileExecutionOwner>;
+};

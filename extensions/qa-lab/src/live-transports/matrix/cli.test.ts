@@ -1,4 +1,3 @@
-// Qa Lab Matrix tests cover the thin CLI selector and adapter registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,19 +12,20 @@ function mockProcessWrite(
   encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
   callback?: (err?: Error | null) => void,
 ) {
-  if (typeof encodingOrCallback === "function") {
-    encodingOrCallback();
-  } else {
-    callback?.();
-  }
+  (typeof encodingOrCallback === "function" ? encodingOrCallback : callback)?.();
   return true;
+}
+
+function runMatrix(...args: string[]) {
+  const qa = new Command();
+  matrixQaCliRegistration.register(qa);
+  return qa.parseAsync(["node", "openclaw", "matrix", ...args]);
 }
 
 describe("QA Lab Matrix CLI registration", () => {
   const originalExitCode = process.exitCode;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let stderrSpy: ReturnType<typeof vi.spyOn>;
-  let stdoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     process.exitCode = undefined;
@@ -34,27 +34,15 @@ describe("QA Lab Matrix CLI registration", () => {
       throw new Error(`process.exit(${String(code)})`);
     });
     stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(mockProcessWrite);
-    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(mockProcessWrite);
   });
 
   afterEach(() => {
     process.exitCode = originalExitCode;
-    exitSpy.mockRestore();
-    stderrSpy.mockRestore();
-    stdoutSpy.mockRestore();
+    vi.restoreAllMocks();
   });
 
   it("delegates command options to the Matrix runtime", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-
-    await qa.parseAsync([
-      "node",
-      "openclaw",
-      "matrix",
-      "--scenario",
-      "matrix-allowlist-hot-reload",
-    ]);
+    await runMatrix("--scenario", "matrix-allowlist-hot-reload");
 
     expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -69,13 +57,11 @@ describe("QA Lab Matrix CLI registration", () => {
   });
 
   it("prints a failed run and returns after its artifacts are written", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
     runLiveTransportQaSuiteCommand.mockRejectedValue(
       new Error("Matrix QA failed.\nreport: /tmp/report.md"),
     );
 
-    await qa.parseAsync(["node", "openclaw", "matrix"]);
+    await runMatrix();
 
     expect(stderrSpy).toHaveBeenCalledWith("Matrix QA failed.\nreport: /tmp/report.md\n");
     expect(exitSpy).not.toHaveBeenCalled();
@@ -83,8 +69,6 @@ describe("QA Lab Matrix CLI registration", () => {
   });
 
   it("keeps the command pending until the suite owner completes", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
     const entered = Promise.withResolvers<void>();
     const completed = Promise.withResolvers<void>();
     runLiveTransportQaSuiteCommand.mockImplementation(() => {
@@ -92,7 +76,7 @@ describe("QA Lab Matrix CLI registration", () => {
       return completed.promise;
     });
     let returned = false;
-    const command = qa.parseAsync(["node", "openclaw", "matrix"]).then(() => {
+    const command = runMatrix().then(() => {
       returned = true;
     });
     await entered.promise;

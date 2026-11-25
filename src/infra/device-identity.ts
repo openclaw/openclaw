@@ -1,14 +1,15 @@
-// Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
+// Client Ed25519 identity API backed by the local credential owner.
 import crypto from "node:crypto";
 import {
-  assertNoPendingLegacyIdentity,
+  resolveDeviceIdentityStore,
+  type DeviceIdentityStoreOptions,
+} from "./device-identity-store-options.js";
+import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
-  resolveDeviceIdentityStore,
   type DeviceIdentity,
-  type DeviceIdentityStoreOptions,
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
 import { normalizeEd25519PublicKeyBase64Url, verifyEd25519Signature } from "./ed25519-signature.js";
@@ -47,7 +48,6 @@ export function loadOrCreateDeviceIdentity(
   if (existing) {
     return toDeviceIdentity(existing);
   }
-  assertNoPendingLegacyIdentity(resolvedOptions);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
@@ -63,7 +63,6 @@ export function loadDeviceIdentityIfPresent(
   if (stored) {
     return toDeviceIdentity(stored);
   }
-  assertNoPendingLegacyIdentity(options);
   return null;
 }
 

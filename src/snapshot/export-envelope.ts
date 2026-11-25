@@ -5,6 +5,7 @@ import { sha256File } from "../infra/directory-durability.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { root } from "../infra/fs-safe.js";
 import { parseSnapshotManifest } from "./manifest.js";
+import { assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_MANIFEST_FILENAME, type SnapshotManifest } from "./snapshot-provider.js";
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/);
@@ -35,22 +36,40 @@ const postgresEnvelope = z
     exportSchemaVersion: version,
     activeFragments: z.array(identifier),
     verification: z.strictObject({
+      // Absent in exports from builds before typed row digests.
+      digest: z.literal("typed-v1").optional(),
       tables: z.record(identifier, table),
       allocations: z.record(identifier, allocation),
     }),
-    artifacts: z.strictObject({ "database.sqlite": artifact, "anchor.sqlite": artifact }),
+    /** A schema capture keeps its rows in a frozen copy on the source server. */
+    carrier: z.literal("postgres-schema").optional(),
+    schema: z
+      .string()
+      .regex(/^restore_[a-f0-9]{32}$/)
+      .optional(),
+    artifacts: z.strictObject({
+      "database.sqlite": artifact.optional(),
+      "anchor.sqlite": artifact,
+    }),
     sanitizedDifferences: z.array(identifier),
   })
   .refine((value) => value.profile !== "exact" || value.sanitizedDifferences.length === 0, {
     message: "Exact exports must not contain sanitization differences",
-  });
+  })
+  .refine(
+    (value) =>
+      value.carrier === "postgres-schema"
+        ? value.profile === "exact" && Boolean(value.schema) && !value.artifacts["database.sqlite"]
+        : !value.schema && Boolean(value.artifacts["database.sqlite"]),
+    { message: "Export carrier does not match its artifacts" },
+  );
 
 export type PostgresExportEnvelope = z.infer<typeof postgresEnvelope>;
 export type SnapshotExportEnvelope =
   | { engine: "sqlite"; manifest: SnapshotManifest }
   | { engine: "postgres"; manifest: PostgresExportEnvelope };
 
-function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
+export function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
   const manifest = postgresEnvelope.parse(value);
   if (manifest.snapshotId !== expectedId) {
     throw new Error("Export manifest id does not match its directory");
@@ -104,11 +123,18 @@ export async function verifyPostgresExportEnvelope(
   }
   const files = await root(directory);
   for (const name of ["database.sqlite", "anchor.sqlite"] as const) {
+    const expected = manifest.artifacts[name];
+    if (!expected) {
+      continue;
+    }
+    assertNoSqliteSidecarsSync(
+      path.join(directory, name),
+      "PostgreSQL export has unexpected SQLite sidecar",
+    );
     const opened = await files.open(name, { hardlinks: "reject", symlinks: "reject" });
     try {
       const before = await opened.handle.stat({ bigint: true });
       const actual = await sha256File(opened.handle);
-      const expected = manifest.artifacts[name];
       if (actual.digest !== expected.sha256 || actual.bytes !== expected.sizeBytes) {
         throw new Error(`Export artifact verification failed: ${name}`);
       }

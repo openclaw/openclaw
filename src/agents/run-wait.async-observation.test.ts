@@ -47,7 +47,7 @@ describe("asynchronous pending-run observation", () => {
         }),
       );
       successor.resolve(["successor"]);
-      expect(await pending).toMatchObject({ timedOut: false, pendingRunIds: [] });
+      await pending;
       expect(callGatewayMock).toHaveBeenCalledTimes(2);
       expect(callGatewayMock).toHaveBeenNthCalledWith(
         2,

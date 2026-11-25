@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -34,7 +34,7 @@ const stages = [
 ] as const;
 type Stage = (typeof stages)[number]["prefix"];
 let options: { env: { OPENCLAW_STATE_DIR: string } };
-let db: DatabaseSync;
+let db: EngineConnection;
 
 function inspect(decisionCursor: string, executionId = "execution-local") {
   return inspectExecutionIdentityRun(

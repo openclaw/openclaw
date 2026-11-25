@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import type { UserProfile } from "../../state/user-profiles.types.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const network = vi.hoisted(() => ({
@@ -55,10 +56,8 @@ export function resetPersonalGitHubNetwork() {
   });
   network.verify.mockReset().mockImplementation(async (token) => {
     const native = token === "synthetic-native";
-    if (
-      !native &&
-      ![tokens.accessToken, "synthetic-rotated-access", "new-access"].includes(token)
-    ) {
+    const personalTokens = [tokens.accessToken, "synthetic-rotated-access", "new-access"];
+    if (!native && !personalTokens.includes(token)) {
       return { status: "unavailable" };
     }
     return {
@@ -87,29 +86,15 @@ export function resetPersonalGitHubNetwork() {
   });
 }
 
-export function createPersonalGitHubTestClient(
-  clients: Set<GatewayClient>,
+export function createGitHubTestClient(
+  profile: UserProfile,
   email: string,
   scopes: string[],
 ): GatewayClient {
-  const profile = ensureProfileForEmail(email);
-  const client: GatewayClient = {
+  return {
     connId: `connection-${profile.id}`,
     authenticatedUserId: email,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
-  clients.add(client);
-  return client;
 }

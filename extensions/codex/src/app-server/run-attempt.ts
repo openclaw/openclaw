@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -42,8 +43,32 @@ export async function runCodexAppServerAttempt(
     }),
   );
   try {
+    // The connection owns execution placement, so its preparer decides whether
+    // the full request can become a file this runtime can read.
+    const fittedPrompt =
+      (await connection.params.hostCapabilities.fitCurrentInput?.({
+        prompt: connection.params.prompt,
+        maxChars: CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
+        stageAttachment: (maxChars, media) =>
+          connection.prepareInputAttachments({
+            maxChars,
+            turn: { media },
+            assertCurrent: () => {},
+          }),
+      })) ?? connection.params.prompt;
+    const fittedConnection =
+      fittedPrompt === connection.params.prompt
+        ? connection
+        : {
+            ...connection,
+            params: {
+              ...connection.params,
+              prompt: fittedPrompt,
+              transcriptPrompt: connection.params.transcriptPrompt ?? connection.params.prompt,
+            },
+          };
     const runtime = await preparation.measure("runtime", () =>
-      prepareCodexAttemptRuntime(connection),
+      prepareCodexAttemptRuntime(fittedConnection),
     );
     try {
       const attemptTools = await preparation.measure("tools", () =>
@@ -70,25 +95,27 @@ export async function runCodexAppServerAttempt(
         };
         let activeTurnOwnsCleanup = false;
         try {
-          await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
+          const startedResources = await preparation.measure("runtime-start", () =>
+            startCodexAttemptRuntime(resources),
+          );
 
-          const turnRuntime = createCodexAttemptTurnState(resources);
+          const turnRuntime = createCodexAttemptTurnState(startedResources);
           try {
-            const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
+            const lifecycle = createCodexAttemptLifecycleController(startedResources, turnRuntime);
             const notifications = createCodexAttemptNotificationController(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
             );
             const serverRequests = createCodexAttemptServerRequestController(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
               notifications.waitForNativeTerminalItems,
             );
             const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
               prepareCodexAttemptRoute(
-                resources,
+                startedResources,
                 turnRuntime,
                 notifications,
                 serverRequests.handleServerRequest,
@@ -96,7 +123,7 @@ export async function runCodexAppServerAttempt(
             );
             const turnRequest = await preparation.measure("turn-request", () =>
               prepareCodexAttemptTurnRequest(
-                resources,
+                startedResources,
                 turnRuntime,
                 ensureCurrentThreadRoute,
                 notifications.waitForActiveNativeTurnCompletion,
@@ -104,7 +131,7 @@ export async function runCodexAppServerAttempt(
             );
             preparation.ready();
             const turnStart = await startCodexAttemptTurn(
-              resources,
+              startedResources,
               turnRuntime,
               notifications,
               turnRequest,
@@ -114,11 +141,12 @@ export async function runCodexAppServerAttempt(
               return turnStart.result;
             }
             const activeTurn = activateCodexAttemptTurn(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
               notifications,
               turnStart,
+              turnRequest.codexModelCallDiagnostics.emitResponseObserved,
             );
             activeTurnOwnsCleanup = true;
             let finalizedResult: EmbeddedRunAttemptResult | undefined;
@@ -126,7 +154,7 @@ export async function runCodexAppServerAttempt(
               try {
                 await activeTurn.ready;
                 finalizedResult = await finalizeCodexAttempt(
-                  resources,
+                  startedResources,
                   turnRuntime,
                   lifecycle,
                   notifications,
@@ -135,7 +163,7 @@ export async function runCodexAppServerAttempt(
                 );
               } finally {
                 await cleanupCodexAttempt(
-                  resources,
+                  startedResources,
                   turnRuntime,
                   lifecycle,
                   turnRequest,
@@ -166,10 +194,10 @@ export async function runCodexAppServerAttempt(
             // Cleanup retires the execution lease; only then can device loss no longer
             // race the final result captured during asynchronous terminal processing.
             if (
-              resources.state.executionDisconnectError &&
+              startedResources.state.executionDisconnectError &&
               !connection.terminalState.explicitCancellationObserved
             ) {
-              throw resources.state.executionDisconnectError;
+              throw startedResources.state.executionDisconnectError;
             }
             connection.assertModelExecutionCurrent();
             return finalizedResult;
@@ -193,8 +221,12 @@ export async function runCodexAppServerAttempt(
     throw codexPrewriteRejectionCause(error);
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
-    connection.cancellation.dispose();
-    connection.releaseModelExecution();
-    connection.releaseSandboxContext();
+    try {
+      connection.cancellation.dispose();
+      connection.releaseModelExecution();
+      connection.releaseSandboxContext();
+    } finally {
+      connection.releaseBindingAuthority();
+    }
   }
 }

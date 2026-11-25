@@ -41,8 +41,8 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
       const result = await this.updateLatestCard(
         id,
         (current) => {
-          if (current.status === "done") {
-            throw new Error("Cannot promote a completed Workboard card.");
+          if (current.status !== "todo") {
+            throw new Error(`Cannot promote Workboard card in ${current.status}; expected todo.`);
           }
           assertCanMutateClaimedCard(current, scope === null ? undefined : scope);
           return {

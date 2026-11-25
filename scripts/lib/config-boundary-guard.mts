@@ -7,6 +7,8 @@ const DEFAULT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../.
 type SourceFile = { filePath: string; relPath: string };
 
 const COMPAT_CONFIG_API_FILES = new Set([
+  // Offline database port switches `database.engine` through the canonical config writer under custody and the config write lock.
+  "src/commands/doctor-database-port.ts",
   "src/config/config.ts",
   "src/config/io.runtime.ts",
   "src/config/io.ts",
@@ -32,7 +34,6 @@ const AMBIENT_RUNTIME_LOAD_CONFIG_COMPAT_FILES = new Set([
 ]);
 
 const PROCESS_BOUNDARY_DIRECT_CONFIG_LOAD_FILES = new Set([
-  "src/cli/banner-config-lite.ts",
   "src/cli/daemon-cli/status.gather.ts",
   // `agent exec --config <path>` must load one specific file. `getRuntimeConfig()`
   // reads the ambient location and resolves from an already published runtime

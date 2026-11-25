@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -14,7 +15,7 @@ describe("session goals", () => {
   it.each([
     { status: "active" as const, label: "Pursuing goal", kind: "ok" },
     { status: "paused" as const, label: "Goal paused", kind: "warn" },
-  ])("renders $status session goals in the status cell", async ({ status, label, kind }) => {
+  ])("renders $status session goals in expanded details", async ({ status, label, kind }) => {
     const container = document.createElement("div");
     const initial = {
       ...buildProps(
@@ -24,26 +25,22 @@ describe("session goals", () => {
           updatedAt: 20,
           hasActiveRun: true,
           status: "running",
-          goal: {
-            schemaVersion: 1,
-            id: "goal-1",
-            objective: "Ship the web goal indicator",
+          goal: createSessionGoalFixture("goal-1", "Ship the web goal indicator", {
             status,
-            createdAt: 1,
             updatedAt: 2,
             tokenStart: 100,
             tokensUsed: 12_400,
             tokenBudget: 50_000,
-            continuationTurns: 0,
-          },
+          }),
         }),
       ),
       searchQuery: "web goal",
+      expandedSessionKey: "agent:main:goal",
     };
     renderSessionsView(initial, container);
     await Promise.resolve();
 
-    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
+    const statuses = container.querySelectorAll(".session-details-panel__badges .settings-status");
     const goal = statuses[1];
     expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} (12k/50k)`);
     expect(goal?.classList.contains(`settings-status--${kind}`)).toBe(true);
@@ -55,7 +52,7 @@ describe("session goals", () => {
     );
     const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
     expect(tooltip?.content).toBe(`${label} (12k/50k): Ship the web goal indicator`);
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(container.querySelectorAll(".session-data-row, .session-details-row")).toHaveLength(2);
 
     document.body.append(container);
     try {
@@ -71,7 +68,9 @@ describe("session goals", () => {
         },
         container,
       );
-      const updatedGoal = container.querySelectorAll(".session-status-stack .settings-status")[1];
+      const updatedGoal = container.querySelectorAll(
+        ".session-details-panel__badges .settings-status",
+      )[1];
       expect(updatedGoal?.closest('[tabindex="0"]')).toBe(wrapper);
       expect(document.activeElement).toBe(wrapper);
       expect(wrapper?.getAttribute("aria-label")).toBe(

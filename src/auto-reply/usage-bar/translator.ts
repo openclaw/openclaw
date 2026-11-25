@@ -2,9 +2,11 @@ import {
   asFiniteNumber,
   asSafeIntegerInRange,
   expectDefined,
+  filterStringEntries,
   isRecord as isObject,
   parseStrictInteger,
 } from "@openclaw/normalization-core";
+import { formatTokenCount } from "../../utils/token-format.js";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -17,6 +19,10 @@ function coerceFiniteValue(value: unknown): number | undefined {
 }
 
 function num(n: number): string {
+  if (Math.abs(n) >= 1_000_000) {
+    const compact = formatTokenCount(Math.abs(n));
+    return n < 0 ? `-${compact}` : compact;
+  }
   if (Math.abs(n) >= 1000) {
     const v = n / 1000;
     return Math.abs(v) < 10 ? `${v.toFixed(1)}k` : `${Math.round(v)}k`;
@@ -42,11 +48,7 @@ function dur(raw: number): string {
 }
 
 function meter(value: unknown, width: number, scale: unknown): string {
-  const glyphs = Array.isArray(scale)
-    ? scale.filter((glyph): glyph is string => typeof glyph === "string")
-    : typeof scale === "string"
-      ? Array.from(scale)
-      : [];
+  const glyphs = typeof scale === "string" ? Array.from(scale) : filterStringEntries(scale);
   if (glyphs.length < 2 || width < 1) {
     return "";
   }

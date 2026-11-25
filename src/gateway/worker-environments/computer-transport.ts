@@ -14,6 +14,7 @@ import {
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../../infra/node-commands.js";
 import { parseComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../../plugins/runtime-state.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -70,6 +71,7 @@ type WorkerComputerOwnerOptions = {
   store: Pick<WorkerEnvironmentStore, "get">;
   resolveGatewayContext: GatewayContextResolver;
   getNodeTransport: () => NodeWorkerSupervisorTransport | undefined;
+  cleanupSignal?: AbortSignal;
   desktopRegistry?: Pick<
     DesktopSessionRegistry,
     "hasController" | "onControlChanged" | "takeControl"
@@ -127,7 +129,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
     };
     const assertPlacement = () => {
       if (!sourceIsCurrent()) {
-        throw new Error("Session desktop placement authority changed");
+        throw new Error("Session desktop placement changed. Start a new turn.");
       }
     };
     assertPlacement();
@@ -411,14 +413,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           };
           const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
           const commandParams = input.params;
-          const isCurrent = () => {
-            try {
-              assertInvocationCurrent();
-              return true;
-            } catch {
-              return false;
-            }
-          };
+          const isCurrent = () => assertionSucceeds(assertInvocationCurrent);
           const signal = AbortSignal.any([
             lifetime.signal,
             controller.signal,
@@ -523,7 +518,10 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                   executionId: execution.physicalId,
                   reason: reason.slice(0, 64),
                 },
-                { isDispatchAuthorized: resourceBindingIsCurrent },
+                {
+                  signal: options.cleanupSignal,
+                  isDispatchAuthorized: resourceBindingIsCurrent,
+                },
               );
               if (!resourceBindingIsCurrent()) {
                 throw new Error("Session computer cleanup owner changed");
@@ -691,7 +689,7 @@ export function createWorkerComputerTransportOwner(
           environment.attachedSessionIds.length !== 1 ||
           environment.attachedSessionIds[0] !== claim.sessionId
         ) {
-          throw new Error("Session desktop placement authority changed");
+          throw new Error("Session desktop placement changed. Start a new turn.");
         }
       },
     });

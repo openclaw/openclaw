@@ -28,7 +28,6 @@ export async function readAllSubagentRunsInWorker(
           if (
             !isRecord(item) ||
             !isCanonicalSubagentRunRecord(item.entry) ||
-            typeof item.version !== "string" ||
             typeof item.createdAt !== "number"
           ) {
             throw new Error("Subagent restore returned an invalid registry row");

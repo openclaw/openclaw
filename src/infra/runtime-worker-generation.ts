@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { setProcessRuntimeWorkerResolver } from "./runtime-worker-process-generation.js";
 
 export type RuntimeWorkerGeneration = {
   resolve(url: URL): URL;
@@ -14,14 +16,28 @@ const scope = resolveGlobalSingleton(
   Symbol.for("openclaw.runtimeWorkerGeneration"),
   () => new AsyncLocalStorage<GenerationScope>(),
 );
+/** Carry worker-code ownership through background work without retaining its originating turn. */
+export function captureRuntimeWorkerGenerationContext() {
+  const captured: GenerationScope = { generation: scope.getStore()?.generation };
+  return <T>(operation: () => T): T => scope.run(captured, operation);
+}
+
+/** Resolve through the carried generation; an absent generation stays unbound. */
+export function resolveRuntimeWorkerGenerationUrl(
+  url: URL,
+  generation: RuntimeWorkerGeneration | undefined,
+): URL {
+  return isEmbeddedStandaloneModule(url.href) ? url : (generation?.resolve(url) ?? url);
+}
+
 /** Capture before queues or detached pool contexts discard the caller's scope. */
 export function captureRuntimeWorkerSource(url: URL): {
   moduleUrl: URL;
   runtimeGeneration?: RuntimeWorkerGeneration;
 } {
   const generation = scope.getStore()?.generation;
-  const bound = generation?.resolve(url);
-  return bound && bound.href !== url.href
+  const bound = resolveRuntimeWorkerGenerationUrl(url, generation);
+  return bound.href !== url.href
     ? { moduleUrl: bound, runtimeGeneration: generation }
     : { moduleUrl: url };
 }
@@ -81,7 +97,20 @@ export async function withRuntimeWorkerGeneration<T>(
     const unregister = registerSignalExitFinalizer(settleGeneration);
     try {
       outcome = {
-        value: await operation((resolve) => {
+        value: await operation((bound) => {
+          // A spawn can meet the resolver twice (captured, then at spawn time); a URL this
+          // generation already produced is final.
+          const produced = new Set<string>();
+          const resolve = (url: URL) => {
+            if (produced.has(url.href)) {
+              return url;
+            }
+            const resolved = bound(url);
+            produced.add(resolved.href);
+            return resolved;
+          };
+          // Detached and pre-existing process owners spawn outside this scope.
+          setProcessRuntimeWorkerResolver(resolve);
           current.generation = Object.freeze({
             resolve,
             retain(owner: object, settle: Parameters<RuntimeWorkerGeneration["retain"]>[1]) {
@@ -106,6 +135,7 @@ export async function withRuntimeWorkerGeneration<T>(
       throw error;
     } finally {
       unregister();
+      setProcessRuntimeWorkerResolver(undefined);
     }
     if ("error" in outcome) {
       throw outcome.error;

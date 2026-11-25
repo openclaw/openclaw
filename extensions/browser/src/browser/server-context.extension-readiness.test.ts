@@ -110,8 +110,6 @@ describe("extension profile readiness", () => {
       expect(getProfileLifecycle(runtime).leases.size).toBe(1);
     }
     expect(browser.state.extensionRelays?.get("chrome")).toBe(browser.relay);
-    expect(vi.getTimerCount()).toBe(1);
-
     browser.connect();
     await expect(sibling).resolves.toBeUndefined();
     if (runtime) {

@@ -24,8 +24,6 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-
 export function readMemoryToolResultEvidence(params: {
   toolName: string;
   result: unknown;
@@ -156,7 +154,7 @@ async function waitForSubagentPartialTimeoutData(
         return { ...readPartialTimeoutData(error), settled: true as const };
       },
     ),
-    timeoutPartialDataGraceMs,
+    TIMEOUT_PARTIAL_DATA_GRACE_MS,
     () => ({ settled: false }),
     { ref: false },
   );
@@ -245,12 +243,4 @@ export function buildSubagentRecallResult(params: {
         ? "unavailable"
         : "no_relevant_memory";
   return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
-}
-
-export function resetActiveMemoryTranscriptForTests(): void {
-  timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-}
-
-export function setTimeoutPartialDataGraceMsForTests(value: number): void {
-  timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
 }

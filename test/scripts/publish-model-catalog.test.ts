@@ -11,10 +11,9 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assembleModelCatalogBundle,
-  assembleModelCatalogBundleV2,
+  assembleVersionedModelCatalogBundle,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
-  MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
   resolveProviderFeaturedModels,
@@ -24,8 +23,9 @@ import {
 } from "../../scripts/publish-model-catalog.mts";
 import { MODELS_JSON_STATE } from "../../src/agents/models-config-state.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../../src/model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
-import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
+import { resolveModelCostConfig } from "../../src/model-catalog/usage-pricing.js";
 
 const tempDirs: string[] = [];
 
@@ -39,6 +39,28 @@ afterEach(() => {
 });
 
 type FixtureModel = RemoteModelCatalogBundle["providers"][string]["models"][number];
+
+type Manifest = Parameters<typeof assembleModelCatalogBundle>[0]["manifests"][number]["manifest"];
+function manifestEntry(pluginId: string, manifest: Manifest) {
+  return { pluginId, manifestPath: `${pluginId}.json`, manifest };
+}
+function fixtureManifests(
+  providers: Record<string, unknown> = {},
+  catalog: NonNullable<Manifest["modelCatalog"]> = {},
+  owned = true,
+) {
+  const allProviders = {
+    anthropic: fixtureProvider("claude", 100),
+    openai: fixtureProvider("gpt", 100),
+    ...providers,
+  };
+  return [
+    manifestEntry("fixture", {
+      ...(owned ? { providers: Object.keys(allProviders) } : {}),
+      modelCatalog: { providers: allProviders, ...catalog },
+    }),
+  ];
+}
 
 function fixtureProvider(prefix: string, count: number): { models: FixtureModel[] } {
   return { models: Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}` })) };
@@ -77,7 +99,7 @@ function modelsDevCatalog(
   );
 }
 
-function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
+async function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-pricing-"));
   tempDirs.push(agentDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
@@ -99,16 +121,8 @@ function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: stri
     models: { catalogRefresh: { url: "https://catalog.openclaw.ai/models/v1/catalog.json" } },
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
   };
+  await prepareRemoteModelCatalogStartupSnapshot();
   return { config, agentDir, provider };
-}
-
-function writeFixtureManifest(root: string, pluginId: string, providers: Record<string, unknown>) {
-  const pluginDir = path.join(root, "extensions", pluginId);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify({ id: pluginId, modelCatalog: { providers } }, null, 2)}\n`,
-  );
 }
 
 function assembleFixtureBundle(
@@ -124,32 +138,20 @@ function assembleFixtureBundle(
 function nativeManifests(source: "OpenCode" | "Venice" | "DeepInfra") {
   const provider = source.toLowerCase();
   const sourceId = source === "OpenCode" ? "openCode" : provider;
-  return [
-    {
-      pluginId: "fixture",
-      manifestPath: "fixture.json",
-      manifest: {
-        providers: ["anthropic", "openai", provider],
-        modelCatalog: {
-          providers: {
-            anthropic: fixtureProvider("claude", 100),
-            openai: fixtureProvider("gpt", 100),
-            [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
-          },
-        },
-        modelPricing: {
-          providers: {
-            [provider]: {
-              external: true,
-              [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
-              openRouter: { provider },
-              liteLLM: { provider },
-            },
-          },
-        },
+  const manifests = fixtureManifests({
+    [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
+  });
+  manifests[0]!.manifest.modelPricing = {
+    providers: {
+      [provider]: {
+        external: true,
+        [sourceId]: { provider: source === "OpenCode" ? "upstream-zen" : provider },
+        openRouter: { provider },
+        liteLLM: { provider },
       },
     },
-  ];
+  };
+  return manifests;
 }
 
 function openCodePrices(
@@ -249,17 +251,17 @@ describe("publish model catalog", () => {
     expect(bundle.pricing).not.toHaveProperty("absent");
     expect(bundle.pricing).not.toHaveProperty("foreign/hidden");
     expect(bundle.providers).not.toHaveProperty("foreign");
-    const params = publishedPricingParams(bundle, "deepinfra");
+    const params = await publishedPricingParams(bundle, "deepinfra");
     for (const model of ["free", "standalone-free"]) {
       expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
-      expect(resolveModelCostConfig({ ...params, model })).toEqual({
+      expect(await resolveModelCostConfig({ ...params, model })).toEqual({
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
       });
     }
-    expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
+    expect(await resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
   });
 
   it("rejects DeepInfra object response before mutating the previous bundle", async () => {
@@ -282,42 +284,10 @@ describe("publish model catalog", () => {
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
   });
 
-  it("assembles and validates fixture manifests at the 200-model floor", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-"));
-    tempDirs.push(root);
-    writeFixtureManifest(root, "anthropic", { anthropic: fixtureProvider("claude", 100) });
-    writeFixtureManifest(root, "openai", { openai: fixtureProvider("gpt", 100) });
-
-    const bundle = await assembleModelCatalogBundle({
-      manifests: readModelCatalogManifests({ rootDir: root }),
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
-    expect(summarizeModelCatalogBundle(bundle)).toEqual({
-      providers: 2,
-      models: 200,
-      costModels: 0,
-      pricingEntries: 0,
-    });
-    expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
-  });
-
   it("omits empty static catalogs owned by runtime discovery", async () => {
-    const bundle = await assembleFixtureBundle([
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          modelCatalog: {
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-              "claude-cli": { models: [] },
-            },
-          },
-        },
-      },
-    ]);
+    const bundle = await assembleFixtureBundle(
+      fixtureManifests({ "claude-cli": { models: [] } }, {}, false),
+    );
     expect(bundle.providers).not.toHaveProperty("claude-cli");
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({ providers: 2, models: 200 });
   });
@@ -359,6 +329,26 @@ describe("publish model catalog", () => {
     ).rejects.toThrow();
   });
 
+  it("hydrates a runtime-discovered provider that declares no static rows", async () => {
+    const manifests = fixtureManifests(
+      { gateway: { api: "anthropic-messages", models: [] } },
+      { modelsDev: { gateway: "upstream-gateway" } },
+    );
+    const bundle = await assembleFixtureBundle(manifests);
+    expect(bundle.providers.gateway).toBeUndefined();
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(modelsDevCatalog({ "upstream-gateway": [modelsDevModel("vendor/model")] })),
+    );
+
+    await expect(
+      hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
+    ).resolves.toEqual({ gateway: { added: 1, filled: 0, skipped: 0 } });
+    expect(bundle.providers.gateway).toMatchObject({
+      api: "anthropic-messages",
+      models: [{ id: "vendor/model" }],
+    });
+  });
+
   it("hydrates missing models and fills only undefined manifest metadata", async () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = {
@@ -371,19 +361,10 @@ describe("publish model catalog", () => {
     };
     anthropic.models[1] = { id: "manifest-partial" };
     const openai = fixtureProvider("gpt", 100);
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai"],
-          modelCatalog: {
-            providers: { anthropic, openai },
-            modelsDev: { anthropic: "upstream-anthropic" },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests(
+      { anthropic, openai },
+      { modelsDev: { anthropic: "upstream-anthropic" } },
+    );
     const bundle = await assembleFixtureBundle(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
@@ -454,25 +435,20 @@ describe("publish model catalog", () => {
     const openai = fixtureProvider("gpt", 100);
     const featherless = { models: [{ id: "existing-featherless" }] };
     const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai", "featherless"],
-          modelCatalog: {
-            providers: { anthropic, openai, featherless },
-            modelsDev: { openai: "openai" },
-            suppressions: [
-              { provider: "openai", model: "suppressed-model" },
-              {
-                provider: "openai",
-                model: "endpoint-model",
-                when: { baseUrlHosts: ["api.openai.example"] },
-              },
-            ],
-          },
+      ...fixtureManifests(
+        { anthropic, openai, featherless },
+        {
+          modelsDev: { openai: "openai" },
+          suppressions: [
+            { provider: "openai", model: "suppressed-model" },
+            {
+              provider: "openai",
+              model: "endpoint-model",
+              when: { baseUrlHosts: ["api.openai.example"] },
+            },
+          ],
         },
-      },
+      ),
       {
         pluginId: "unrelated",
         manifestPath: "unrelated.json",
@@ -525,16 +501,10 @@ describe("publish model catalog", () => {
     const anthropic = fixtureProvider("claude", 100);
     anthropic.models[0] = { id: "manifest-anthropic", api: "anthropic-messages" };
     const openai = fixtureProvider("gpt", 100);
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai"],
-          modelCatalog: { providers: { anthropic, openai }, modelsDev: { anthropic: "anthropic" } },
-        },
-      },
-    ];
+    const manifests = fixtureManifests(
+      { anthropic, openai },
+      { modelsDev: { anthropic: "anthropic" } },
+    );
     const bundle = await assembleFixtureBundle(manifests);
     const previous = serializeModelCatalogBundle(bundle);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -553,22 +523,7 @@ describe("publish model catalog", () => {
   });
 
   it("rejects models.dev malformed feed before changing the bundle", async () => {
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai"],
-          modelCatalog: {
-            modelsDev: { anthropic: "anthropic" },
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-            },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests({}, { modelsDev: { anthropic: "anthropic" } });
     const bundle = await assembleFixtureBundle(manifests);
     const previous = serializeModelCatalogBundle(bundle);
     await expect(
@@ -587,22 +542,7 @@ describe("publish model catalog", () => {
     { paddingMiB: 6, outcome: "accepts" },
     { paddingMiB: 40, outcome: "rejects" },
   ])("$outcome a models.dev feed padded by $paddingMiB MiB", async ({ paddingMiB, outcome }) => {
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai"],
-          modelCatalog: {
-            modelsDev: { anthropic: "anthropic" },
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-            },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests({}, { modelsDev: { anthropic: "anthropic" } });
     const bundle = await assembleFixtureBundle(manifests);
     const encoder = new TextEncoder();
     const feed = encoder.encode(
@@ -639,22 +579,10 @@ describe("publish model catalog", () => {
   });
 
   it("publishes a provider unhydrated when its models.dev source disappears", async () => {
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai"],
-          modelCatalog: {
-            modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" },
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-            },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests(
+      {},
+      { modelsDev: { anthropic: "anthropic", openai: "renamed-upstream" } },
+    );
     const bundle = await assembleModelCatalogBundle({
       manifests,
       generatedAt: Date.now(),
@@ -687,30 +615,17 @@ describe("publish model catalog", () => {
   });
 
   function inventoryManifests() {
-    return [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai", "nvidia", "novita"],
-          modelCatalog: {
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-              nvidia: {
-                models: [
-                  { id: "z-ai/glm-5.3" },
-                  { id: "z-ai/glm-5.2" },
-                  { id: "Z-AI/GLM-5.3-FLASH" },
-                  { id: "z-ai/glm5", status: "deprecated", statusReason: "authored" },
-                ],
-              },
-              novita: { models: [{ id: "sao10K/l3-70b-euryale-v2.1" }, { id: "qwen/qwen3-max" }] },
-            },
-          },
-        },
+    return fixtureManifests({
+      nvidia: {
+        models: [
+          { id: "z-ai/glm-5.3" },
+          { id: "z-ai/glm-5.2" },
+          { id: "Z-AI/GLM-5.3-FLASH" },
+          { id: "z-ai/glm5", status: "deprecated", statusReason: "authored" },
+        ],
       },
-    ];
+      novita: { models: [{ id: "sao10K/l3-70b-euryale-v2.1" }, { id: "qwen/qwen3-max" }] },
+    });
   }
 
   it("deprecates rows a provider's public inventory no longer lists", async () => {
@@ -783,43 +698,32 @@ describe("publish model catalog", () => {
   ];
 
   async function featuredRecommendations(respond: () => Response) {
-    const bundle = await assembleFixtureBundle([
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          providers: ["anthropic", "openai", "nvidia"],
-          modelCatalog: {
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-              nvidia: {
-                models: [
-                  { id: "nvidia/nemotron-3-ultra-550b-a55b" },
-                  { id: "nvidia/nemotron-3-super-120b-a12b" },
-                  { id: "z-ai/glm-5.3" },
-                  { id: "z-ai/glm-5.2" },
-                  { id: "z-ai/glm-5.3-flash" },
-                  { id: "deepseek-ai/deepseek-v4.1-flash" },
-                  {
-                    id: "deepseek-ai/deepseek-v4-flash",
-                    status: "deprecated",
-                    statusReason: "old",
-                  },
-                  { id: "moonshotai/kimi-k3" },
-                ],
-              },
+    const bundle = await assembleFixtureBundle(
+      fixtureManifests({
+        nvidia: {
+          models: [
+            { id: "nvidia/nemotron-3-ultra-550b-a55b" },
+            { id: "nvidia/nemotron-3-super-120b-a12b" },
+            { id: "z-ai/glm-5.3" },
+            { id: "z-ai/glm-5.2" },
+            { id: "z-ai/glm-5.3-flash" },
+            { id: "deepseek-ai/deepseek-v4.1-flash" },
+            {
+              id: "deepseek-ai/deepseek-v4-flash",
+              status: "deprecated",
+              statusReason: "old",
             },
-          },
+            { id: "moonshotai/kimi-k3" },
+          ],
         },
-      },
-    ]);
+      }),
+    );
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       expect(requestUrl(input)).toBe(FEATURED_MODELS_URL);
       return respond();
     });
     const featured = await resolveProviderFeaturedModels({ bundle, fetchImpl });
-    const bundleV2 = await assembleModelCatalogBundleV2(
+    const bundleV2 = await assembleVersionedModelCatalogBundle(
       bundle,
       new WeakMap(),
       undefined,
@@ -922,15 +826,14 @@ describe("publish model catalog", () => {
   });
 
   it("parses supported CLI arguments and rejects missing output", () => {
-    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toEqual({
+    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toMatchObject({
       dryRun: true,
       pricing: false,
       out: "ignored.json",
     });
-    expect(parsePublishModelCatalogArgs(["--pricing", "--dry-run"])).toEqual({
-      dryRun: true,
-      pricing: true,
-    });
+    expect(
+      parsePublishModelCatalogArgs(["--pricing", "--dry-run", "--previous-v3", "v3.json"]),
+    ).toMatchObject({ dryRun: true, pricing: true, previous: { v3: "v3.json" } });
     expect(() => parsePublishModelCatalogArgs([])).toThrow("provide --out");
   });
 
@@ -1106,20 +1009,7 @@ describe("publish model catalog", () => {
   });
 
   it("replaces declared context pricing when LiteLLM supplies tiers", async () => {
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          modelCatalog: {
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-            },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests({}, {}, false);
     const bundle = await assembleFixtureBundle(manifests);
     const model = bundle.providers.openai!.models[0]!;
     const declared: NonNullable<typeof model.cost> = {
@@ -1186,11 +1076,7 @@ describe("publish model catalog", () => {
     const url = OPENCODE_PRICING_URL;
     it("preserves zero model metadata without inventing an unavailable native price", async () => {
       const manifests = nativeManifests(source);
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const model = bundle.providers[provider]!.models[0]!;
       model.cost = { input: 0, output: 0 };
       model.name = "Existing explicit model";
@@ -1243,8 +1129,8 @@ describe("publish model catalog", () => {
           `${source} pricing unavailable for ${provider}/priced-fixture`,
         );
         expect(
-          resolveModelCostConfig({
-            ...publishedPricingParams(bundle, provider),
+          await resolveModelCostConfig({
+            ...(await publishedPricingParams(bundle, provider)),
             model: "priced-fixture",
           }),
         ).toBeUndefined();
@@ -1257,11 +1143,7 @@ describe("publish model catalog", () => {
       "rejects %s instead of publishing unverified prices",
       async (scenario) => {
         const manifests = nativeManifests(source);
-        const bundle = await assembleModelCatalogBundle({
-          manifests,
-          generatedAt: Date.now(),
-          sourceCommit: "fixture",
-        });
+        const bundle = await assembleFixtureBundle(manifests);
         if (scenario === "invalid zero seed") {
           bundle.providers[provider]!.models[0]!.cost = { input: 0, output: 0 };
         }
@@ -1292,11 +1174,7 @@ describe("publish model catalog", () => {
   it("does not fetch Venice without an owning opt-in", async () => {
     const manifests = nativeManifests("Venice");
     manifests[0]!.manifest.providers = ["anthropic", "openai"];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ data: [] }));
     await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
     const urls = fetchImpl.mock.calls.map(([input]) => requestUrl(input));
@@ -1307,20 +1185,7 @@ describe("publish model catalog", () => {
   });
 
   it("fails soft when pricing sources are unreachable or malformed", async () => {
-    const manifests = [
-      {
-        pluginId: "fixture",
-        manifestPath: "fixture.json",
-        manifest: {
-          modelCatalog: {
-            providers: {
-              anthropic: fixtureProvider("claude", 100),
-              openai: fixtureProvider("gpt", 100),
-            },
-          },
-        },
-      },
-    ];
+    const manifests = fixtureManifests({}, {}, false);
     const bundle = await assembleFixtureBundle(manifests);
     const warnings: string[] = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {

@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
 describe("parseFenceSpans closing-fence rules", () => {
+  it("allows backticks in tilde-fence info strings", () => {
+    const text = "~~~literal`\ncode\n~~~\nParagraph";
+    const spans = parseFenceSpans(text);
+    expect(spans).toHaveLength(1);
+    expect(isSafeFenceBreak(spans, text.indexOf("code") + 1)).toBe(false);
+    expect(isSafeFenceBreak(spans, text.indexOf("Paragraph") + 1)).toBe(true);
+  });
+
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
     // CommonMark: a closing fence may be followed only by whitespace, so "``` not a close" is code
     // content and the block stays open until the real closing fence. Reporting an interior offset
@@ -41,10 +49,11 @@ describe("parseFenceSpans closing-fence rules", () => {
     const span = { start: 0, openLine: "  ~~~sh", marker: "~~~", indent: "  " };
 
     expect(scanFenceSpans("", state)).toEqual({ spans: [{ ...span, end: 0 }], state });
-    expect(scanFenceSpans(continued, state)).toEqual({
-      spans: [{ ...span, end: continued.length }],
-      state: { atLineStart: false },
-    });
+    const closed = scanFenceSpans(continued, state);
+    expect(closed.spans).toEqual([{ ...span, end: continued.length }]);
+    expect(closed.state.atLineStart).toBe(false);
+    expect(closed.state.open).toBeUndefined();
+    expect(scanFenceSpans("more text", closed.state).state.open).toEqual(state.open);
     expect(state).toMatchObject({ atLineStart: false, open: { openLine: "  ~~~sh" } });
   });
 });

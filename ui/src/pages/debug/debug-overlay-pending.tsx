@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { LazyViewError, type LazyElementState } from "../../components/solid/lazy-view-error.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
@@ -6,10 +6,7 @@ import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
 import type { DebugOverlayMode } from "./debug-overlay-state.ts";
 
 export interface DebugOverlayFrameHost {
-  readonly lazyCustomElements: {
-    retry(): void;
-    close(): void;
-  };
+  readonly elements: { pendingDebugOverlayFrame?: HTMLElement };
   readonly pendingDebugOverlayMode: DebugOverlayMode;
   togglePendingDebugOverlayMode(): void;
 }
@@ -18,13 +15,24 @@ export function renderPendingDebugOverlay(props: {
   host: DebugOverlayFrameHost;
   state: LazyElementState;
   mode: DebugOverlayMode;
+  onRetry: () => void;
+  onClose: () => void;
 }) {
+  let frame!: HTMLElement;
+  onSettled(() => {
+    const elements = props.host.elements;
+    elements.pendingDebugOverlayFrame = frame;
+    return () => {
+      elements.pendingDebugOverlayFrame = undefined;
+    };
+  });
   const error = () => (props.state.status === "error" ? props.state : undefined);
   return (
     <DebugOverlayFrame
+      ref={(element) => (frame = element)}
       mode={props.mode}
       onToggleMode={() => props.host.togglePendingDebugOverlayMode()}
-      onClose={() => props.host.lazyCustomElements.close()}
+      onClose={props.onClose}
       body={
         <Show
           when={error()}
@@ -42,7 +50,7 @@ export function renderPendingDebugOverlay(props: {
               error={state().error}
               stale={state().stale}
               subtitle={state().element.label}
-              onRetry={() => props.host.lazyCustomElements.retry()}
+              onRetry={props.onRetry}
             />
           )}
         </Show>

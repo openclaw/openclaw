@@ -9,13 +9,14 @@ import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
-import { isCodexFastServiceTier } from "./app-server/config.js";
+import { isCodexFastServiceTier, type CodexPluginConfig } from "./app-server/config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadResumeResponse,
@@ -44,19 +45,20 @@ import {
   type ParsedResumeArgs,
   parseResumeArgs,
 } from "./command-handler-args.js";
-import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import {
   conversationBindingIdentity,
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
-import type { CodexControlRequestOptions } from "./command-rpc.js";
+import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createCodexCliNodeConversationBindingData,
   createCodexConversationBindingData,
   readCodexConversationBindingData,
+  resolveCodexDefaultWorkspaceDir,
 } from "./conversation-binding-data.js";
-import { formatPermissionsMode } from "./conversation-control.js";
+import { formatPermissionsMode, readCodexConversationActiveTurn } from "./conversation-control.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
 export async function isCurrentSessionModelSelectionLocked(
@@ -84,7 +86,7 @@ export async function isCurrentSessionModelSelectionLocked(
 export async function bindConversation(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string[],
 ): Promise<PluginCommandResult> {
   const parsed = parseBindArgs(args);
@@ -97,7 +99,7 @@ export async function bindConversation(
     return { text: MODEL_SELECTION_LOCKED_MESSAGE };
   }
   const scope = resolveCodexConversationControlScope(ctx);
-  const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
+  const workspaceDir = parsed.cwd ?? resolveCodexDefaultWorkspaceDir(pluginConfig);
   const currentConversation = await ctx.getCurrentConversationBinding();
   const currentConversationData = readCodexConversationBindingData(currentConversation);
   const bindingId =
@@ -195,7 +197,7 @@ export async function detachConversation(
   if (data?.kind === "codex-app-server-session") {
     const binding = await deps.bindingStore.readAsync(identity!);
     assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
-    if (deps.readCodexConversationActiveTurn(identity!)) {
+    if (readCodexConversationActiveTurn(identity!)) {
       return "This Codex conversation has an active run; use /codex stop before detaching it.";
     }
     expectedThreadId = binding?.threadId;
@@ -257,7 +259,7 @@ export async function describeConversationBinding(
   }
   const identity = conversationBindingIdentity(data.bindingId);
   const threadBinding = await deps.bindingStore.readAsync(identity);
-  const active = deps.readCodexConversationActiveTurn(identity);
+  const active = readCodexConversationActiveTurn(identity);
   const sessionKey = ctx.sessionKey?.trim();
   const { agentId } = resolveCodexConversationControlScope(ctx);
   const sessionEntry = sessionKey
@@ -289,11 +291,12 @@ export async function describeConversationBinding(
 export async function buildThreads(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   filter: string,
 ): Promise<string> {
   const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
-  const response = await deps.codexControlRequest(
+  using _ = { [Symbol.dispose]: scope.release };
+  const response = await codexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.listThreads,
     {
@@ -325,7 +328,7 @@ export async function buildCodexCliSessions(
 export async function resumeThread(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string[],
 ): Promise<string> {
   const parsed = parseResumeArgs(args);
@@ -354,13 +357,14 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
-  const { authority } = await resolveCodexSessionBinding({
+  const { authority, release } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore: deps.bindingStore,
     identity,
     config: ctx.config,
     storePath: ctx.sessionTarget?.storePath,
   });
+  using _ = { [Symbol.dispose]: release };
   const assertHostGeneration = authority.assertLegacyCurrent;
   return await withExclusiveCodexAppServerThread({
     bindingStore: deps.bindingStore,
@@ -499,7 +503,7 @@ export async function resumeThread(
             throw error;
           }
         };
-        await deps.codexControlRequest(
+        await codexControlRequest(
           pluginConfig,
           CODEX_CONTROL_METHODS.resumeThread,
           {

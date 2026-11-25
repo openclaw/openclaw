@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readResolvedSessionStoreTargetsInWorker } from "../../config/sessions/session-accessor.entry-read-runtime.js";
 import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveSessionWorkerPlacementContext,
@@ -13,22 +13,21 @@ import {
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { resolveSessionWorkerPlacementMutationError } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import {
-  isSessionLifecycleMutationActive,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  isSessionMutationActive,
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../../sessions/session-row-changes.js";
 import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { WorktreeRemovalLockError } from "./removal-errors.js";
-import { IDLE_GC_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
 import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
-  now: () => number = Date.now,
 ): Required<
   Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
 > {
@@ -67,7 +66,12 @@ export function createManagedWorktreeOwnerPolicy(
       }
       const entry = target.entry;
       const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
-      if (entry?.archivedAt === undefined && activityAt > 0 && now() - activityAt <= IDLE_GC_MS) {
+      if (
+        entry?.archivedAt === undefined &&
+        !isTerminalSessionStatus(entry?.status) &&
+        activityAt > 0 &&
+        Date.now() - activityAt <= IDLE_GC_MS
+      ) {
         return "active";
       }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
@@ -83,9 +87,8 @@ export function createManagedWorktreeOwnerPolicy(
         return "active";
       }
       if (
-        isSessionWorkAdmissionActive(scope, identities) ||
-        (!(ownsCleanup && cleanup.lifecycleHeld) &&
-          isSessionLifecycleMutationActive(scope, identities))
+        isSessionControllerWorkActive(scope, identities) ||
+        (!(ownsCleanup && cleanup.lifecycleHeld) && isSessionMutationActive(scope, identities))
       ) {
         return "active";
       }
@@ -139,6 +142,12 @@ export function createManagedWorktreeOwnerPolicy(
         ),
       ];
       const states = new Map<string, ReturnType<typeof state>>();
+      const census: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt"> = {
+        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
+      };
+      if (ownerIds.length === 0) {
+        return census;
+      }
       try {
         const context = resolveSessionWorkerPlacementContext();
         if (!context.workerSessionPlacementService?.listAsync) {
@@ -149,6 +158,10 @@ export function createManagedWorktreeOwnerPolicy(
           context.workerSessionPlacementService.listAsync(),
         ]);
         preparedOwners = targets;
+        census.readOwnerActivityAt = (id) => {
+          const entry = targets.get(id)?.entry;
+          return Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+        };
         const placementsByKey = new Map<string, WorkerSessionPlacementRecord[]>();
         const placementsById = new Map<string, WorkerSessionPlacementRecord>();
         for (const placement of placements) {
@@ -183,9 +196,7 @@ export function createManagedWorktreeOwnerPolicy(
       } catch {
         // A failed census supplies no authority to remove a session-owned checkout.
       }
-      return {
-        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
-      };
+      return census;
     },
     readOwnerState: (kind, id) => state(kind, id),
     withOwnerCleanup: async (record, run, signal) => {
@@ -251,7 +262,9 @@ export function createManagedWorktreeOwnerPolicy(
           // The registry claim protects Git work; final guards consume receipt-invalidated facts.
           return await cleanupOwner.run({ ...owner, placements }, () =>
             run((mutation, options) =>
-              runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+              runSessionMutation({
+                diagnosticLabel: "worktree-cleanup",
+                policy: "wait",
                 scope,
                 identities,
                 signal: options?.settle ? undefined : signal,

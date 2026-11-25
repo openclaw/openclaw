@@ -141,10 +141,7 @@ export async function dispatchRequest(
   }
 }
 
-export async function withGatewayTempConfig(
-  prefix: string,
-  run: () => Promise<void>,
-): Promise<void> {
+async function withGatewayTempConfig(prefix: string, run: () => Promise<void>): Promise<void> {
   await withTempConfig({
     cfg: { gateway: { trustedProxies: [] } },
     prefix,

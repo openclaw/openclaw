@@ -1,14 +1,8 @@
-// Cron normalization tests cover job config normalization and defaults.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  DeliveryThreadIdFieldSchema,
-  LowercaseNonEmptyStringFieldSchema,
-  TrimmedNonEmptyStringFieldSchema,
-} from "./delivery-field-schemas.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { mergeCronPayload } from "./service/payload-merge.js";
 import type { CronPayload } from "./types.js";
@@ -19,26 +13,32 @@ const CRON_SCHEDULE = { kind: "cron", expr: "* * * * *" };
 const EVERY_SCHEDULE = { kind: "every", everyMs: 60_000 };
 const AGENT_TURN = { kind: "agentTurn", message: "hello" };
 const SYSTEM_EVENT = { kind: "systemEvent", text: "hi" };
+const AGENT_JOB = {
+  name: "test",
+  enabled: true,
+  schedule: CRON_SCHEDULE,
+  sessionTarget: "isolated",
+  wakeMode: "now",
+  payload: AGENT_TURN,
+};
+const MAIN_JOB = { sessionTarget: "main", wakeMode: "next-heartbeat", payload: SYSTEM_EVENT };
+const GROUP_SESSION = "agent:main:telegram:group:-100123";
+const DIRECT_SESSION = "agent:main:telegram:direct:42";
+const CUSTOM_SESSION = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+const STALE_SCHEDULE = {
+  ...CRON_SCHEDULE,
+  ...EVERY_SCHEDULE,
+  at: "2026-01-12T18:00:00",
+  anchorMs: 123,
+  tz: "UTC",
+  staggerMs: 30_000,
+};
 const CHANNEL_REQUESTER = {
   version: 1,
   channel: "discord",
   accountId: "work",
   senderId: "123456789012345678",
 };
-const STALE_AT_SCHEDULE = {
-  kind: "at",
-  at: "2026-01-12T18:00:00Z",
-  expr: "* * * * *",
-  everyMs: 60_000,
-  anchorMs: 123,
-  tz: "UTC",
-  staggerMs: 30_000,
-};
-const NORMALIZED_AT_SCHEDULE = {
-  kind: "at",
-  at: new Date("2026-01-12T18:00:00Z").toISOString(),
-};
-const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function normalizeCreate(raw: UnknownRecord, sessionKey?: string): UnknownRecord {
   return normalizeCronJobCreate(
@@ -47,577 +47,395 @@ function normalizeCreate(raw: UnknownRecord, sessionKey?: string): UnknownRecord
   ) as unknown as UnknownRecord;
 }
 
-function createMain(overrides: UnknownRecord = {}): UnknownRecord {
-  return normalizeCreate({
-    name: "test",
-    enabled: true,
-    schedule: CRON_SCHEDULE,
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: SYSTEM_EVENT,
-    ...overrides,
+const createAgent = (overrides: UnknownRecord = {}, sessionKey?: string) =>
+  normalizeCreate({ ...AGENT_JOB, ...overrides }, sessionKey);
+const createMain = (overrides: UnknownRecord = {}) => createAgent({ ...MAIN_JOB, ...overrides });
+const createDefaulted = (payload: UnknownRecord, overrides: UnknownRecord = {}) =>
+  normalizeCreate({ name: "test", schedule: EVERY_SCHEDULE, payload, ...overrides });
+const normalizePatch = (raw: UnknownRecord) =>
+  normalizeCronJobPatch(raw) as unknown as UnknownRecord;
+const child = (record: UnknownRecord, key: string) => record[key] as UnknownRecord;
+const provenance = (source: string, channelRequester: unknown) => ({
+  version: 1,
+  source,
+  callerOrigin: { kind: "local" },
+  channelRequester,
+});
+const undefinedFields = (...keys: string[]): UnknownRecord =>
+  Object.fromEntries(keys.map((key) => [key, undefined]));
+const withAccessor = (base: UnknownRecord, key: string, get: () => unknown) =>
+  Object.defineProperty(base, key, { enumerable: true, get });
+
+const envelopes = {
+  scheduledToolPolicy: { version: 1, mode: "trusted" },
+  toolsAllowProvenance: provenance("authenticated-requester", CHANNEL_REQUESTER),
+  toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+  toolsAllowExecTargetRequirement: {
+    version: 1,
+    target: { version: 1, host: "gateway", ask: "always" },
+    grantIndex: 0,
+  },
+  runtimeAuthority: {
+    version: 1,
+    runtimeId: "test-runtime",
+    namespace: "test.authority",
+    payload: { tools: [{ id: "read", enabled: true }] },
+  },
+};
+
+it("does not materialize omitted, undefined, or inherited authority fields", () => {
+  for (const input of [
+    {},
+    undefinedFields(...Object.keys(envelopes)),
+    Object.create(envelopes) as UnknownRecord,
+  ]) {
+    const normalized = normalizeCreate(input);
+    for (const field of Object.keys(envelopes)) {
+      expect(normalized).not.toHaveProperty(field);
+    }
+  }
+});
+
+it("retains valid envelopes without mutating or freezing the input", () => {
+  const input = structuredClone(envelopes);
+
+  const normalized = normalizeCreate(input);
+
+  expect(normalized).toMatchObject(envelopes);
+  expect(input).toEqual(envelopes);
+  const original = input.runtimeAuthority;
+  for (const item of [original, original.payload, original.payload.tools[0]]) {
+    expect(Object.isFrozen(item)).toBe(false);
+  }
+});
+
+it("retains a recovery marker while dropping invalid peer envelopes", () => {
+  const normalized = normalizeCreate({
+    scheduledToolPolicy: { version: 2, mode: "trusted" },
+    toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
+    toolsAllowExecTarget: { version: 1, host: "remote" },
+    toolsAllowExecTargetRequirement: null,
+    runtimeAuthority: { ...envelopes.runtimeAuthority, version: 2 },
   });
-}
 
-function createAgent(overrides: UnknownRecord = {}, sessionKey?: string): UnknownRecord {
-  return normalizeCreate(
-    {
-      name: "test",
-      enabled: true,
-      schedule: CRON_SCHEDULE,
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: AGENT_TURN,
-      ...overrides,
-    },
-    sessionKey,
-  );
-}
-
-function createDefaulted(payload: UnknownRecord, overrides: UnknownRecord = {}): UnknownRecord {
-  return normalizeCreate({ name: "test", schedule: EVERY_SCHEDULE, payload, ...overrides });
-}
-
-function normalizePatch(raw: UnknownRecord): UnknownRecord {
-  return normalizeCronJobPatch(raw) as unknown as UnknownRecord;
-}
-
-function child(record: UnknownRecord, key: string): UnknownRecord {
-  return record[key] as UnknownRecord;
-}
-
-function mainSchedule(schedule: UnknownRecord): UnknownRecord {
-  return child(createMain({ schedule }), "schedule");
-}
-
-function agentDelivery(delivery: UnknownRecord): UnknownRecord {
-  return child(createAgent({ delivery }), "delivery");
-}
-
-describe("normalizeCronJobCreate", () => {
-  it.each(["create"] as const)(
-    "does not validate absent delivery fields during %s normalization",
-    (mode) => {
-      const parsers = [
-        vi.spyOn(LowercaseNonEmptyStringFieldSchema, "safeParse"),
-        vi.spyOn(TrimmedNonEmptyStringFieldSchema, "safeParse"),
-        vi.spyOn(DeliveryThreadIdFieldSchema, "safeParse"),
-      ];
-      try {
-        for (const delivery of [
-          { mode: "none" },
-          {
-            mode: "none",
-            channel: undefined,
-            to: undefined,
-            threadId: undefined,
-            accountId: undefined,
-          },
-        ]) {
-          const normalized =
-            mode === "create" ? createAgent({ delivery }) : normalizePatch({ delivery });
-          expect(normalized.delivery).toEqual({ mode: "none" });
-        }
-        for (const parser of parsers) {
-          expect(parser).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const parser of parsers) {
-          parser.mockRestore();
-        }
-      }
-    },
-  );
-
-  describe.each(["create"] as const)("%s authority envelopes", (mode) => {
-    const normalize = mode === "create" ? normalizeCreate : normalizePatch;
-    const envelopes = {
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-      toolsAllowProvenance: {
-        version: 1,
-        source: "authenticated-requester",
-        callerOrigin: { kind: "local" },
-        channelRequester: CHANNEL_REQUESTER,
-      },
-      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
-      toolsAllowExecTargetRequirement: {
-        version: 1,
-        target: { version: 1, host: "gateway", ask: "always" },
-        grantIndex: 0,
-      },
-      runtimeAuthority: {
-        version: 1,
-        runtimeId: "test-runtime",
-        namespace: "test.authority",
-        payload: { tools: [{ id: "read", enabled: true }] },
-      },
-    };
-
-    it("does not materialize omitted, undefined, or inherited authority fields", () => {
-      for (const input of [
-        {},
+  expect(normalized.toolsAllowExecTargetRequirement).toEqual({
+    version: 1,
+    recoveryRequired: true,
+  });
+  expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+  expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+  expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+  expect(normalized).not.toHaveProperty("runtimeAuthority");
+});
+it.each([
+  ["schedule", { kind: "cron" }, { expr: "*/17 * * * *" }, "expr"],
+  ["payload", AGENT_TURN, { model: "openai/gpt-5" }, "model"],
+] as const)("does not promote prototype-only %s fields", (field, own, inherited, key) => {
+  const input = Object.assign(Object.create(inherited) as UnknownRecord, own);
+  const normalized =
+    field === "schedule" ? createMain({ schedule: input }) : createAgent({ payload: input });
+  expect(Object.hasOwn(input, key)).toBe(false);
+  expect(child(normalized, field)).not.toHaveProperty(key);
+});
+const requesterGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
+it.each<[UnknownRecord, UnknownRecord | undefined]>([
+  [
+    provenance(
+      "authenticated-requester",
+      withAccessor(
         {
-          scheduledToolPolicy: undefined,
-          toolsAllowProvenance: undefined,
-          toolsAllowExecTarget: undefined,
-          toolsAllowExecTargetRequirement: undefined,
-          runtimeAuthority: undefined,
+          ...CHANNEL_REQUESTER,
+          channel: " Discord ",
+          accountId: " Work ",
+          senderId: " 123456789012345678 ",
+          roles: ["administrator"],
         },
-        Object.create(envelopes) as UnknownRecord,
-      ]) {
-        const normalized = normalize(input);
-
-        expect(normalized).not.toHaveProperty("scheduledToolPolicy");
-        expect(normalized).not.toHaveProperty("toolsAllowProvenance");
-        expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
-        expect(normalized).not.toHaveProperty("toolsAllowExecTargetRequirement");
-        expect(normalized).not.toHaveProperty("runtimeAuthority");
-      }
-    });
-
-    it("retains valid envelopes without mutating or freezing the input", () => {
-      const input = structuredClone(envelopes);
-
-      const normalized = normalize(input);
-
-      expect(normalized).toMatchObject(envelopes);
-      expect(input).toEqual(envelopes);
-      const authority = child(normalized, "runtimeAuthority");
-      const payload = child(authority, "payload");
-      expect(authority).not.toBe(input.runtimeAuthority);
-      expect(payload).not.toBe(input.runtimeAuthority.payload);
-      expect(Object.isFrozen(authority)).toBe(true);
-      expect(Object.isFrozen(payload)).toBe(true);
-      expect(Object.isFrozen((payload.tools as unknown[])[0])).toBe(true);
-      expect(Object.isFrozen(input.runtimeAuthority)).toBe(false);
-      expect(Object.isFrozen(input.runtimeAuthority.payload)).toBe(false);
-      expect(Object.isFrozen(input.runtimeAuthority.payload.tools[0])).toBe(false);
-    });
-
-    it("retains a recovery marker while dropping invalid peer envelopes", () => {
-      const normalized = normalize({
-        scheduledToolPolicy: { version: 2, mode: "trusted" },
-        toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
-        toolsAllowExecTarget: { version: 1, host: "remote" },
-        toolsAllowExecTargetRequirement: null,
-        runtimeAuthority: { ...envelopes.runtimeAuthority, version: 2 },
-      });
-
-      expect(normalized.toolsAllowExecTargetRequirement).toEqual({
-        version: 1,
-        recoveryRequired: true,
-      });
-      expect(normalized).not.toHaveProperty("scheduledToolPolicy");
-      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
-      expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
-      expect(normalized).not.toHaveProperty("runtimeAuthority");
-    });
-  });
-
-  it.each(["create"] as const)(
-    "does not promote prototype-only schedule fields during %s normalization",
-    (mode) => {
-      const schedule = Object.assign(Object.create({ expr: "*/17 * * * *" }) as UnknownRecord, {
-        kind: "cron",
-      });
-      const normalized =
-        mode === "create" ? createMain({ schedule }) : normalizePatch({ schedule });
-
-      expect(Object.hasOwn(schedule, "expr")).toBe(false);
-      expect(Object.hasOwn(child(normalized, "schedule"), "expr")).toBe(false);
+        "senderIsOwner",
+        requesterGetter,
+      ),
+    ),
+    provenance("authenticated-requester", CHANNEL_REQUESTER),
+  ],
+  [
+    provenance("final-executable-surface", { ...CHANNEL_REQUESTER, senderId: 123 }),
+    provenance("final-executable-surface", undefined),
+  ],
+  ...[
+    withAccessor({ ...CHANNEL_REQUESTER }, "senderId", requesterGetter),
+    Object.create(CHANNEL_REQUESTER) as UnknownRecord,
+    undefined,
+  ].map((channelRequester): [UnknownRecord, undefined] => [
+    { version: 1, source: "authenticated-requester", channelRequester },
+    undefined,
+  ]),
+])("preserves only authored requester facts without invoking getters: %#", (input, expected) => {
+  const normalized = createAgent({ toolsAllowProvenance: input });
+  if (expected) {
+    expect(normalized.toolsAllowProvenance).toEqual(expected);
+  } else {
+    expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+  }
+  expect(requesterGetter).not.toHaveBeenCalled();
+});
+it.each<[UnknownRecord, UnknownRecord]>([
+  [CRON_SCHEDULE, { tz: " " }],
+  [
+    { kind: "at", at: "2026-01-12T18:00:00.000Z" },
+    { ...STALE_SCHEDULE, kind: "at" },
+  ],
+  [
+    { ...EVERY_SCHEDULE, anchorMs: 123 },
+    {
+      ...STALE_SCHEDULE,
+      everyMs: "60000",
+      anchorMs: "123.9",
+      staggerMs: "abc",
+      command: "leftover",
+      cwd: "/x",
     },
-  );
-  it("does not promote prototype-only payload fields", () => {
-    const payload = Object.assign(
-      Object.create({ model: "openai/gpt-5" }) as UnknownRecord,
-      AGENT_TURN,
-    );
+  ],
+  [
+    { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo/job " },
+    { ...STALE_SCHEDULE, kind: "on-exit" },
+  ],
+])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
+  const input = { ...structuredClone(expected), ...overrides };
+  const created = createMain({ schedule: input });
+  const patch = normalizePatch({ schedule: input });
+  expect([created.schedule, patch.schedule]).toEqual([expected, expected]);
+  expect(validateCronAddParams(created)).toBe(true);
+  expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
+  if (input.kind === "at") {
+    expect(created.deleteAfterRun).toBe(true);
+  }
+});
 
-    expect(child(createAgent({ payload }), "payload")).not.toHaveProperty("model");
-  });
-  it("retains only authored native requester and caller facts without claiming a captured tool surface", () => {
-    const ignoredGetter = vi.fn(() => true);
-    const channelRequester = Object.defineProperty(
-      {
-        ...CHANNEL_REQUESTER,
-        channel: " Discord ",
-        accountId: " Work ",
-        senderId: " 123456789012345678 ",
-        roles: ["administrator"],
-      },
-      "senderIsOwner",
-      { enumerable: true, get: ignoredGetter },
-    );
-    const normalized = createAgent({
-      toolsAllowProvenance: {
-        version: 1,
-        source: "authenticated-requester",
-        callerOrigin: { kind: "local" },
-        channelRequester,
-      },
-    });
+it.each<[UnknownRecord, number, number | undefined]>([
+  [{}, 5 * 60 * 1000, undefined],
+  [{ staggerMs: "30000" }, 30_000, 30_000],
+])("defaults only omitted create stagger: %j", (input, created, patched) => {
+  const schedule = { kind: "cron", expr: "0 * * * *", tz: "UTC", ...input };
+  expect(child(createMain({ schedule }), "schedule").staggerMs).toBe(created);
+  expect(child(normalizePatch({ schedule }), "schedule").staggerMs).toBe(patched);
+});
 
-    expect(normalized.toolsAllowProvenance).toEqual({
-      version: 1,
-      source: "authenticated-requester",
-      callerOrigin: { kind: "local" },
-      channelRequester: CHANNEL_REQUESTER,
-    });
-    expect(ignoredGetter).not.toHaveBeenCalled();
-  });
-  it.each([{ label: "non-string sender", patch: { senderId: 123 } }])(
-    "drops $label requester facts without losing genuine tool-surface proof",
-    ({ patch }) => {
-      const normalized = createAgent({
-        toolsAllowProvenance: {
-          version: 1,
-          source: "final-executable-surface",
-          callerOrigin: { kind: "local" },
-          channelRequester: { ...CHANNEL_REQUESTER, ...patch },
-        },
-      });
+it("rejects invalid explicit cron stagger before create or patch defaults", () => {
+  const schedule = { kind: "cron", expr: "0 * * * *", staggerMs: "abc" };
+  expect(() => createMain({ schedule })).toThrow(/staggerMs/);
+  expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+});
 
-      expect(normalized.toolsAllowProvenance).toEqual({
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: { kind: "local" },
-      });
-    },
-  );
-  it("rejects accessor and inherited requester identities without invoking getters", () => {
-    const senderGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
-    const accessorRequester = Object.defineProperty({ ...CHANNEL_REQUESTER }, "senderId", {
-      enumerable: true,
-      get: senderGetter,
-    });
-    const inheritedRequester = Object.create(CHANNEL_REQUESTER) as UnknownRecord;
-    for (const channelRequester of [accessorRequester, inheritedRequester, undefined]) {
-      const normalized = createAgent({
-        toolsAllowProvenance: {
-          version: 1,
-          source: "authenticated-requester",
-          channelRequester,
-        },
-      });
-      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+it("normalizes trigger scripts and preserves patch clears", () => {
+  expect(
+    createMain({ trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true } })
+      .trigger,
+  ).toEqual({ script: "json({ fire: true })", once: true });
+  expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+});
+
+it.each<[UnknownRecord, UnknownRecord]>([
+  [{ agentId: " Ops " }, { agentId: "ops" }],
+  [{ sessionKey: ` ${GROUP_SESSION} ` }, { sessionKey: GROUP_SESSION }],
+  [{ sessionKey: " " }, {}],
+])("normalizes authored job fields %j", (input, expected) => {
+  expect(normalizePatch(input)).toEqual(expected);
+  const created = createAgent(input);
+  for (const key of Object.keys(input)) {
+    if (Object.hasOwn(expected, key)) {
+      expect(created[key]).toEqual(expected[key]);
+    } else {
+      expect(created).not.toHaveProperty(key);
     }
-    expect(senderGetter).not.toHaveBeenCalled();
-  });
-  it.each<{
-    label: string;
-    input: UnknownRecord;
-    expected: UnknownRecord;
-  }>([
-    { label: "blank timezone", input: { ...CRON_SCHEDULE, tz: " " }, expected: CRON_SCHEDULE },
-    {
-      label: "one-shot",
-      input: { ...STALE_AT_SCHEDULE, at: "2026-01-12T18:00:00" },
-      expected: NORMALIZED_AT_SCHEDULE,
-    },
-    {
-      label: "interval",
-      input: {
-        kind: "every",
-        everyMs: "60000",
-        anchorMs: "123.9",
-        staggerMs: "abc",
-        command: "leftover",
-        cwd: "/x",
-      },
-      expected: { ...EVERY_SCHEDULE, anchorMs: 123 },
-    },
-    {
-      label: "on-exit",
-      input: {
-        kind: "on-exit",
-        command: "make build",
-        cwd: "/repo",
-        everyMs: 1000,
-        expr: "* * * * *",
-        at: "2026-01-01T00:00:00Z",
-      },
-      expected: { kind: "on-exit", command: "make build", cwd: "/repo" },
-    },
-    {
-      label: "on-exit escaped trailing space",
-      input: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
-      expected: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
-    },
-  ])("canonicalizes $label schedules on create and patch", ({ input, expected }) => {
-    const created = createMain({ schedule: input });
-    const patch = normalizePatch({ schedule: input });
-    expect(created.schedule).toEqual(expected);
-    expect(patch.schedule).toEqual(expected);
-    expect(validateCronAddParams(created)).toBe(true);
-    expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-    if (input.kind === "at") {
-      expect(created.deleteAfterRun).toBe(true);
-    }
-  });
+  }
+});
 
-  it.each([
-    { input: {}, created: DEFAULT_TOP_OF_HOUR_STAGGER_MS, patched: undefined },
-    { input: { staggerMs: "30000" }, created: 30_000, patched: 30_000 },
-  ])("defaults only omitted create stagger: $input", ({ input, created, patched }) => {
-    const schedule = { kind: "cron", expr: "0 * * * *", tz: "UTC", ...input };
-    expect(mainSchedule(schedule).staggerMs).toBe(created);
-    expect(child(normalizePatch({ schedule }), "schedule").staggerMs).toBe(patched);
-  });
+it.each<[string, string | undefined, string, string | undefined]>([
+  [" Current ", ` ${DIRECT_SESSION} `, "current", DIRECT_SESSION],
+  [CUSTOM_SESSION, undefined, CUSTOM_SESSION, undefined],
+])("resolves session target %s", (input, context, target, sessionKey) => {
+  const normalized = createAgent({ sessionTarget: input }, context);
+  expect(normalized.sessionTarget).toBe(target);
+  expect(normalized.sessionKey).toBe(sessionKey);
+  expect(normalized.delivery).toEqual({ mode: "announce" });
+});
 
-  it.each(["abc"])(
-    "rejects invalid explicit cron stagger %j before create or patch defaults",
-    (staggerMs) => {
-      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
-      expect(() => createMain({ schedule })).toThrow(/staggerMs/);
-      expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
-    },
+it("preserves custom session separators but rejects null bytes", () => {
+  expect(normalizePatch({ sessionTarget: "session:..\\outside" }).sessionTarget).toBe(
+    "session:..\\outside",
   );
+  expect(() => createAgent({ sessionTarget: "session:bad\0id" })).toThrow(
+    "invalid cron sessionTarget session id",
+  );
+});
 
-  it("normalizes trigger scripts and preserves patch clears", () => {
-    expect(
-      createMain({ trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true } })
-        .trigger,
-    ).toEqual({ script: "json({ fire: true })", once: true });
-    expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+it.each([
+  [
+    { mode: "none", ...undefinedFields("channel", "to", "threadId", "accountId") },
+    { mode: "none" },
+  ],
+  [
+    { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
+    { mode: "announce", channel: "telegram", threadId: 1008013 },
+  ],
+])("normalizes delivery fields %j", (delivery, expected) => {
+  expect(createAgent({ delivery }).delivery).toEqual(expected);
+});
+
+it("normalizes completion destinations without inventing an enclosing mode", () => {
+  const delivery = { completionDestination: { mode: " WeBhOoK ", to: " https://x.invalid/c " } };
+  const expected = {
+    completionDestination: { mode: "webhook", to: "https://x.invalid/c" },
+  };
+  const created = createMain({
+    schedule: EVERY_SCHEDULE,
+    wakeMode: "now",
+    delivery: { mode: "none", ...delivery },
   });
+  const patch = normalizePatch({ delivery });
+  expect(created.delivery).toEqual({ mode: "none", ...expected });
+  expect(validateCronAddParams(created)).toBe(false);
+  expect(patch.delivery).toEqual(expected);
+  expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
+});
 
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [{ agentId: " Ops " }, { agentId: "ops" }],
-    [
-      { sessionKey: " agent:main:telegram:group:-100123 " },
-      { sessionKey: "agent:main:telegram:group:-100123" },
-    ],
-    [{ sessionKey: " " }, {}],
-  ])("normalizes authored job fields %j", (input, expected) => {
-    expect(normalizePatch(input)).toEqual(expected);
-    const created = createAgent(input);
-    for (const key of Object.keys(input)) {
-      if (Object.hasOwn(expected, key)) {
-        expect(created[key]).toEqual(expected[key]);
-      } else {
-        expect(created).not.toHaveProperty(key);
-      }
-    }
-  });
+it.each([
+  { channel: null, to: null, threadId: null, accountId: null, failureDestination: null },
+  { failureDestination: { channel: null, to: null, accountId: null, mode: null } },
+])("preserves nullable delivery patch clears %j", (delivery) => {
+  const patch = normalizePatch({ delivery });
+  expect(patch.delivery).toEqual(delivery);
+  expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
+});
 
-  it.each([
-    {
-      input: " Current ",
-      context: " agent:main:telegram:direct:42 ",
-      target: "current",
-      sessionKey: "agent:main:telegram:direct:42",
-    },
-    {
-      input: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
-      context: undefined,
-      target: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
-      sessionKey: undefined,
-    },
-  ])("resolves session target $input", ({ input, context, target, sessionKey }) => {
-    const normalized = createAgent({ sessionTarget: input }, context);
-    expect(normalized.sessionTarget).toBe(target);
-    expect(normalized.sessionKey).toBe(sessionKey);
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-  });
-
-  it("preserves custom session separators but rejects null bytes", () => {
-    expect(normalizePatch({ sessionTarget: "session:..\\outside" }).sessionTarget).toBe(
-      "session:..\\outside",
-    );
-    expect(() => createAgent({ sessionTarget: "session:bad\0id" })).toThrow(
-      "invalid cron sessionTarget session id",
-    );
-  });
-
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [
-      { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
-      { mode: "announce", channel: "telegram", threadId: 1008013 },
-    ],
-  ])("normalizes delivery fields %j", (input, expected) => {
-    expect(agentDelivery(input)).toEqual(expected);
-  });
-
-  it("normalizes completion destinations without inventing an enclosing mode", () => {
-    const delivery = {
-      completionDestination: { mode: " WeBhOoK ", to: " https://example.invalid/complete " },
-    };
-    const expected = {
-      completionDestination: { mode: "webhook", to: "https://example.invalid/complete" },
-    };
-    const created = createMain({
-      schedule: EVERY_SCHEDULE,
-      wakeMode: "now",
-      delivery: { mode: "none", ...delivery },
-    });
-    const patch = normalizePatch({ delivery });
-    expect(created.delivery).toEqual({ mode: "none", ...expected });
-    expect(validateCronAddParams(created)).toBe(false);
-    expect(patch.delivery).toEqual(expected);
-    expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-  });
-
-  it.each([
-    { channel: null, to: null, threadId: null, accountId: null, failureDestination: null },
-    { failureDestination: { channel: null, to: null, accountId: null, mode: null } },
-  ])("preserves nullable delivery patch clears %j", (delivery) => {
-    const patch = normalizePatch({ delivery });
-    expect(patch.delivery).toEqual(delivery);
-    expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-  });
-
-  it("normalizes whitespace-only payload text to empty strings so validation rejects it", () => {
-    const agentTurn = createAgent({
-      schedule: EVERY_SCHEDULE,
-      payload: { kind: "agentTurn", message: "   " },
-    });
-    const systemEvent = createMain({
-      schedule: EVERY_SCHEDULE,
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "   " },
-    });
-    const patch = normalizePatch({ payload: { kind: "agentTurn", message: "   " } });
-    expect(agentTurn.payload).toEqual({ kind: "agentTurn", message: "" });
-    expect(systemEvent.payload).toEqual({ kind: "systemEvent", text: "" });
-    expect(patch.payload).toEqual({ kind: "agentTurn", message: "" });
-    expect(validateCronAddParams(agentTurn)).toBe(false);
-    expect(validateCronAddParams(systemEvent)).toBe(false);
+it.each([
+  { kind: "agentTurn", field: "message", create: createAgent },
+  { kind: "systemEvent", field: "text", create: createMain },
+])("normalizes blank $kind text so validation rejects it", ({ kind, field, create }) => {
+  const payload = { kind, [field]: "   " };
+  const expected = { kind, [field]: "" };
+  const created = create({ schedule: EVERY_SCHEDULE, wakeMode: "now", payload });
+  expect(created.payload).toEqual(expected);
+  expect(validateCronAddParams(created)).toBe(false);
+  if (kind === "agentTurn") {
+    const patch = normalizePatch({ payload });
+    expect(patch.payload).toEqual(expected);
     expect(validateCronUpdateParams({ id: "job", patch })).toBe(false);
-  });
+  }
+});
 
-  it("defaults command jobs while retaining argv bytes and normalizing execution options", () => {
-    const normalized = createDefaulted({
-      kind: "command",
-      argv: ["printf", "%s", "  padded value  "],
-      cwd: " /srv/example ",
-      env: { FOO: "bar" },
-      timeoutSeconds: 30,
-      noOutputTimeoutSeconds: 5,
-      outputMaxBytes: 4096,
-    });
-    expect(normalized.sessionTarget).toBe("isolated");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-    expect(normalized.payload).toEqual({
-      kind: "command",
-      argv: ["printf", "%s", "  padded value  "],
-      cwd: "/srv/example",
-      env: { FOO: "bar" },
-      timeoutSeconds: 30,
-      noOutputTimeoutSeconds: 5,
-      outputMaxBytes: 4096,
-    });
-    expect(validateCronAddParams(normalized)).toBe(true);
-  });
+it("defaults command jobs while retaining argv bytes and normalizing execution options", () => {
+  const payload = {
+    kind: "command",
+    argv: ["printf", "%s", "  padded value  "],
+    cwd: " /srv/example ",
+    env: { FOO: "bar" },
+    timeoutSeconds: 30,
+    noOutputTimeoutSeconds: 5,
+    outputMaxBytes: 4096,
+  };
+  const normalized = createDefaulted(structuredClone(payload));
+  expect(normalized.sessionTarget).toBe("isolated");
+  expect(normalized.delivery).toEqual({ mode: "announce" });
+  expect(normalized.payload).toEqual(payload);
+  expect(validateCronAddParams(normalized)).toBe(true);
+});
 
-  it.each([-5])(
-    "normalizes agentTurn timeout %s without inventing no-timeout",
-    (timeoutSeconds) => {
-      const normalized = createDefaulted({ ...AGENT_TURN, timeoutSeconds });
-      if (timeoutSeconds < 0) {
-        expect(normalized.payload).not.toHaveProperty("timeoutSeconds");
-        expect(createDefaulted(AGENT_TURN, { timeoutSeconds }).payload).not.toHaveProperty(
-          "timeoutSeconds",
-        );
-      } else {
-        expect(child(normalized, "payload").timeoutSeconds).toBe(timeoutSeconds);
-      }
-    },
+it("normalizes negative agentTurn timeouts without inventing no-timeout", () => {
+  expect(createDefaulted({ ...AGENT_TURN, timeoutSeconds: -5 }).payload).not.toHaveProperty(
+    "timeoutSeconds",
   );
-
-  it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
-    const normalized = createDefaulted({
-      text: " summarize the build ",
-      model: " openai/gpt-5 ",
-      fallbacks: [" anthropic/claude-haiku-3-5 "],
-      thinking: " high ",
-      timeoutSeconds: 45,
-      lightContext: true,
-      toolsAllow: [" read "],
-      allowUnsafeExternalContent: true,
-    });
-    expect(normalized.sessionTarget).toBe("isolated");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-    expect(normalized.payload).toEqual({
-      kind: "agentTurn",
-      message: "summarize the build",
-      model: "openai/gpt-5",
-      fallbacks: ["anthropic/claude-haiku-3-5"],
-      thinking: "high",
-      timeoutSeconds: 45,
-      lightContext: true,
-      toolsAllow: ["read"],
-      allowUnsafeExternalContent: true,
-    });
-    expect(validateCronAddParams(normalized)).toBe(true);
-  });
+  expect(createDefaulted(AGENT_TURN, { timeoutSeconds: -5 }).payload).not.toHaveProperty(
+    "timeoutSeconds",
+  );
 });
 
-describe("normalizeCronJobPatch", () => {
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [
-      { message: 7, text: null, model: {}, thinking: false, fallbacks: [7], toolsAllow: "read" },
-      { message: 7, text: null },
-    ],
-    [{ outputMaxBytes: 0, toolBudget: -1 }, {}],
-    [{ text: " report ", model: " ", thinking: " " }, { text: "report" }],
-  ])("normalizes partial payload %j", (input, expected) => {
-    expect(normalizePatch({ payload: input }).payload).toStrictEqual(expected);
+it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
+  const options = {
+    timeoutSeconds: 45,
+    lightContext: true,
+    skipIfScratchEmpty: true,
+    includeReasoning: false,
+    allowUnsafeExternalContent: true,
+  };
+  const normalized = createDefaulted({
+    text: " summarize the build ",
+    model: " openai/gpt-5 ",
+    fallbacks: [" anthropic/claude-haiku-3-5 "],
+    thinking: " high ",
+    ...options,
+    toolsAllow: [" read "],
   });
-
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [
-      { model: null, thinking: null, fallbacks: null, toolsAllow: null },
-      { model: null, thinking: null, fallbacks: null, toolsAllow: null },
-    ],
-    [
-      { fallbacks: [], toolsAllow: [] },
-      { fallbacks: [], toolsAllow: [] },
-    ],
-  ])("normalizes explicit agentTurn overrides %j", (input, expected) => {
-    const patch = normalizePatch({ payload: { kind: "agentTurn", ...input } });
-    expect(patch.payload).toStrictEqual({ kind: "agentTurn", ...expected });
-    expect(validateCronUpdateParams({ id: "job-1", patch })).toBe(true);
-    if (Array.isArray(input.toolsAllow) && input.toolsAllow.length === 0) {
-      const created = createAgent({
-        schedule: EVERY_SCHEDULE,
-        payload: { ...AGENT_TURN, toolsAllow: [] },
-      });
-      expect(child(created, "payload").toolsAllow).toStrictEqual([]);
-      expect(validateCronAddParams(created)).toBe(true);
-    }
+  expect(normalized.sessionTarget).toBe("isolated");
+  expect(normalized.delivery).toEqual({ mode: "announce" });
+  expect(normalized.payload).toEqual({
+    kind: "agentTurn",
+    message: "summarize the build",
+    model: "openai/gpt-5",
+    fallbacks: ["anthropic/claude-haiku-3-5"],
+    thinking: "high",
+    ...options,
+    toolsAllow: ["read"],
   });
+  expect(validateCronAddParams(normalized)).toBe(true);
+});
+it.each<[UnknownRecord, UnknownRecord]>([
+  [
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: " text " },
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: "text" },
+  ],
+  [
+    { message: 7, text: null, model: {}, thinking: false, fallbacks: [7], toolsAllow: "read" },
+    { message: 7, text: null },
+  ],
+  [{ outputMaxBytes: 0, toolBudget: -1 }, {}],
+  [{ text: " report ", model: " ", thinking: " " }, { text: "report" }],
+])("normalizes partial payload %j", (input, expected) => {
+  expect(normalizePatch({ payload: input }).payload).toStrictEqual(expected);
 });
 
-describe("cron timeout update lifecycle", () => {
-  const payloads = [
-    { kind: "agentTurn", message: "Synthetic reminder" },
-    { kind: "command", argv: ["printf", "synthetic-proof"] },
-    { kind: "script", script: "return { output: 'synthetic-proof' };" },
-  ] satisfies CronPayload[];
+it.each([
+  { model: null, thinking: null, fallbacks: null, toolsAllow: null },
+  { fallbacks: [], toolsAllow: [] },
+])("normalizes explicit agentTurn overrides %j", (input) => {
+  const expected = structuredClone(input);
+  const patch = normalizePatch({ payload: { kind: "agentTurn", ...input } });
+  expect(patch.payload).toStrictEqual({ kind: "agentTurn", ...expected });
+  expect(validateCronUpdateParams({ id: "job-1", patch })).toBe(true);
+  if (Array.isArray(input.toolsAllow) && input.toolsAllow.length === 0) {
+    const created = createAgent({
+      schedule: EVERY_SCHEDULE,
+      payload: { ...AGENT_TURN, toolsAllow: [] },
+    });
+    expect(child(created, "payload").toolsAllow).toStrictEqual([]);
+    expect(validateCronAddParams(created)).toBe(true);
+  }
+});
+const payloads = [
+  { kind: "agentTurn", message: "Synthetic reminder" },
+  { kind: "command", argv: ["printf", "synthetic-proof"] },
+  { kind: "script", script: "return { output: 'synthetic-proof' };" },
+] satisfies CronPayload[];
 
-  it.each(payloads)("sets, preserves, and clears a $kind timeout", (payload) => {
-    const existing = { ...payload, timeoutSeconds: 30 };
-    for (const timeout of [{}, { timeoutSeconds: 15 }, { timeoutSeconds: null }]) {
-      const patch = normalizeCronJobPatch({ payload: { kind: payload.kind, ...timeout } });
-      expect(patch?.payload).toEqual({ kind: payload.kind, ...timeout });
-      expect(validateCronUpdateParams({ id: "timeout-job", patch })).toBe(true);
-      if (!patch?.payload) {
-        throw new Error("expected normalized payload patch");
-      }
-      expect(mergeCronPayload(existing, patch.payload)).toEqual(
-        timeout.timeoutSeconds === null ? payload : { ...existing, ...timeout },
-      );
-    }
-  });
-
-  it.each(payloads)("omits a cleared timeout when replacing the payload with $kind", (payload) => {
-    const patch = normalizeCronJobPatch({ payload: { ...payload, timeoutSeconds: null } });
-    expect(patch?.payload).toEqual({ ...payload, timeoutSeconds: null });
+it.each(payloads)("sets, preserves, and clears a $kind timeout", (payload) => {
+  const existing = { ...payload, timeoutSeconds: 30 };
+  for (const timeout of [{}, { timeoutSeconds: 15 }, { timeoutSeconds: null }]) {
+    const patch = normalizeCronJobPatch({ payload: { kind: payload.kind, ...timeout } });
+    expect(patch?.payload).toEqual({ kind: payload.kind, ...timeout });
+    expect(validateCronUpdateParams({ id: "timeout-job", patch })).toBe(true);
     if (!patch?.payload) {
       throw new Error("expected normalized payload patch");
     }
-    expect(mergeCronPayload({ kind: "systemEvent", text: "before" }, patch.payload)).toEqual(
-      payload,
+    expect(mergeCronPayload(existing, patch.payload)).toEqual(
+      timeout.timeoutSeconds === null ? payload : { ...existing, ...timeout },
     );
-  });
+  }
+});
+
+it.each(payloads)("omits a cleared timeout when replacing the payload with $kind", (payload) => {
+  const patch = normalizeCronJobPatch({ payload: { ...payload, timeoutSeconds: null } });
+  expect(patch?.payload).toEqual({ ...payload, timeoutSeconds: null });
+  if (!patch?.payload) {
+    throw new Error("expected normalized payload patch");
+  }
+  expect(mergeCronPayload({ kind: "systemEvent", text: "before" }, patch.payload)).toEqual(payload);
 });

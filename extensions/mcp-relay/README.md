@@ -1,6 +1,6 @@
 # MCP Relay
 
-Bundled, disabled-by-default connector for the OpenClaw MCP relay. The Gateway
+Bundled, disabled-by-default plugin for the OpenClaw MCP relay. The Gateway
 opens an outbound WebSocket; no inbound Gateway port or configured Gateway token
 or password is shared with the relay. Enable the plugin, follow any restart or
 reload instruction printed by the command, then run `openclaw mcp-relay pair`.
@@ -18,7 +18,7 @@ or person principal, capped by its selected operator scopes and the principal's
 current authority. No ordinary paired-device token is created or sent through
 the relay.
 
-**Connected apps** is a native plugin-owned Control UI page. It lists your grants
+**Connected apps** is a native plugin-owned page in Control UI **Settings**, not the Pages sidebar. It lists your grants
 (administrators see all), revokes your grants (administrators can revoke any),
 issues pairing codes, and handles optional **Sign in with your Gateway** consent.
 Read/write is the default; full role access can include administration and

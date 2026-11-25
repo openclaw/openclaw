@@ -10,6 +10,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,15 +138,13 @@ it("fences real admitted worker credential exchange and inference I/O", async ({
                 apiKey: key,
                 baseUrl: `${endpoint}/v1`,
                 models: [
-                  {
+                  makeConfiguredModel({
                     id: "model",
                     name: "Boundary model",
                     reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 8192,
                     maxTokens: 128,
-                  },
+                  }),
                 ],
               },
             },

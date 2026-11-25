@@ -15,14 +15,21 @@ import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isDiagnosticsTimelineEnabled } from "../infra/diagnostics-timeline.js";
 import {
   bindModelLlmRuntime,
   getModelCompletionOwner,
   getModelCompletionTransport,
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
+import { getModelTransportContext } from "../llm/model-transport-context.js";
 import { completeSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { createModelLifecycle } from "./embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.js";
 import { createModelObserver } from "./embedded-agent-runner/run/attempt.model-diagnostic-observation.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
@@ -85,8 +92,10 @@ export async function completeWithPreparedSimpleCompletionModel(
 
 async function completePreparedModel(params: PreparedCompletionParams): Promise<AssistantMessage> {
   // Direct SDK calls prepare transport hooks before entering the stream facade.
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   params.assertCurrent?.();
+  assertProviderAuthAuthority(params.auth);
   params.options?.signal?.throwIfAborted();
   const runtime = getModelLlmRuntime(params.model);
   let completionModel =
@@ -99,6 +108,10 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       cfg: params.cfg,
       auth: { mode: params.auth.mode, authFlow: params.auth.authFlow },
     });
+  completionModel = attachProviderAuthAuthority(
+    completionModel,
+    getProviderAuthAuthority(params.auth),
+  );
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
@@ -122,7 +135,10 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
   }
-  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners()) {
+  if (
+    !isDiagnosticsTimelineEnabled({ config: params.cfg }) &&
+    (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners())
+  ) {
     return await completeSimple(
       completionModel,
       params.context,
@@ -144,13 +160,15 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       trace: getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
       nextCallId: () => callId,
       suppressPluginHooks: true,
+      // Keep admission priority, not the caller's request or wait-status identity.
+      priority: getModelTransportContext()?.priority,
     },
     options: completionOptions,
-    createObserver: (capturePromptStats) =>
+    createObserver: (capturePromptStats, captureByteStats) =>
       createModelObserver({
-        config: params.cfg,
         streamContext: params.context,
         capturePromptStats,
+        captureByteStats,
         suppressPluginHooks: true,
       }),
   });
@@ -158,11 +176,13 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     if (strictReasoningTags) {
       reasoningTagTextPolicy.markStrict(lifecycle.propagatedOptions);
     }
-    const result = await completeSimple(
-      completionModel,
-      params.context,
-      lifecycle.propagatedOptions,
-      params.assertCurrent,
+    const result = await lifecycle.runInTransportContext(() =>
+      completeSimple(
+        completionModel,
+        params.context,
+        lifecycle.propagatedOptions,
+        params.assertCurrent,
+      ),
     );
     lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
     lifecycle.emitCompleted();

@@ -1,52 +1,65 @@
 import fs from "node:fs";
+import nodePath from "node:path";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { registerConfigCli } from "../cli/config-cli.js";
+import { persistRequestedUpdateChannel } from "../cli/update-cli/update-command-config.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createConfigIO } from "./io.js";
 import * as metadata from "./io.plugin-metadata.js";
 import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import type { OpenClawConfig } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["get", "validate"] as const)(
-  "keeps core config %s independent of plugin metadata while preserving secret redaction",
-  async (command) => {
-    vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockRejectedValue(
-      new Error("Plugin metadata is unavailable"),
-    );
-    const output: unknown[] = [];
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
-      output.push(value);
-    });
-    await withOpenClawTestState({ prefix: "config-cli-core-only-" }, async (state) => {
-      await state.writeConfig({
-        gateway: { mode: "local", auth: { mode: "token", token: "synthetic-core-token" } },
-      });
-      const program = new Command();
-      program.exitOverride();
-      registerConfigCli(program);
-      await program.parseAsync(
-        command === "get"
-          ? ["config", "get", "gateway.auth.token", "--json"]
-          : ["config", "validate", "--json"],
-        { from: "user" },
-      );
-      if (command === "get") {
-        expect(output.at(-1)).toBe(REDACTED_SENTINEL);
-      } else {
-        expect(output.at(-1)).toMatchObject({ valid: true, warnings: [] });
+async function runCli(
+  config: OpenClawConfig,
+  args?: string[],
+  before?: (env: NodeJS.ProcessEnv) => Promise<void>,
+) {
+  let output: unknown;
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+    output = value;
+  });
+  if (!args) {
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  }
+  await withOpenClawTestState({ prefix: "config-cli-validation-" }, async (state) => {
+    await state.writeConfig(config);
+    const raw = fs.readFileSync(state.configPath, "utf8");
+    await before?.(state.env);
+    const program = new Command();
+    program.exitOverride();
+    registerConfigCli(program);
+    try {
+      await program.parseAsync(["config", ...(args ?? ["validate", "--json"])], { from: "user" });
+    } catch (error) {
+      if (args) {
+        throw error;
       }
-    });
-  },
-);
+      expect(error).toMatchObject({ name: "ExitError", code: 1 });
+    }
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+  });
+  return output;
+}
+
+it.each(["get", "validate"] as const)("core %s redacts without metadata", async (command) => {
+  vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockRejectedValue(
+    new Error("Plugin metadata is unavailable"),
+  );
+  const output = await runCli(
+    { gateway: { mode: "local", auth: { mode: "token", token: "synthetic-core-token" } } },
+    command === "get" ? ["get", "gateway.auth.token", "--json"] : ["validate", "--json"],
+  );
+  expect(output).toEqual(
+    command === "get" ? REDACTED_SENTINEL : expect.objectContaining({ valid: true, warnings: [] }),
+  );
+});
 
 async function validateThroughCli(
   config: OpenClawConfig,
@@ -56,145 +69,176 @@ async function validateThroughCli(
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
-        id: "validation-fixture",
+        id: "plugin",
         configSchema: schema,
-        ...(channelSchema
-          ? {
-              channels: ["validation-channel"],
-              channelConfigs: { "validation-channel": { schema: channelSchema } },
-            }
-          : {}),
+        ...(channelSchema && {
+          channels: ["channel"],
+          channelConfigs: { channel: { schema: channelSchema } },
+        }),
         configContracts: { secretInputs: { paths: [{ path: "credential", expected: "string" }] } },
       },
     ],
   });
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot").mockReturnValue(snapshot);
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockResolvedValue(snapshot);
-  const schemaValidation = vi.spyOn(schemas, "validatePluginSchemaValue");
-  const output: unknown[] = [];
-  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
-    output.push(value);
-  });
-  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  await withOpenClawTestState({ prefix: "config-validation-work-" }, async (state) => {
-    await state.writeConfig(config);
-    const before = fs.readFileSync(state.configPath, "utf8");
-    const program = new Command();
-    program.exitOverride();
-    registerConfigCli(program);
-    try {
-      await program.parseAsync(["config", "validate", "--json"], { from: "user" });
-    } catch (error) {
-      expect(error).toMatchObject({ name: "ExitError", code: 1 });
-    }
-    expect(fs.readFileSync(state.configPath, "utf8")).toBe(before);
-  });
-  return { output: output.at(-1), schemaValidation };
+  return runCli(config);
 }
 
 it("validates existing state through a private read-only snapshot", async () => {
-  const output: unknown[] = [];
-  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
-    output.push(value);
-  });
-  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  await withOpenClawTestState({ prefix: "config-validation-existing-state-" }, async (state) => {
-    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
-    const before = fs.readFileSync(state.configPath, "utf8");
-    openOpenClawStateDatabase({ env: state.env });
-    await closeOpenClawStateDatabaseAsync();
-    const program = new Command();
-    program.exitOverride();
-    registerConfigCli(program);
-    try {
-      await program.parseAsync(["config", "validate", "--json"], { from: "user" });
-    } catch (error) {
-      expect(error).toMatchObject({ name: "ExitError", code: 1 });
-    }
-    expect(output.at(-1)).toMatchObject({ valid: true });
-    expect(fs.readFileSync(state.configPath, "utf8")).toBe(before);
-  });
-});
-
-it.each([
-  { rootPath: "/synthetic", valid: true, calls: 1 },
-  { rootPath: "~/synthetic", valid: false, calls: 2 },
-])("preserves channel schema validation for $rootPath", async ({ rootPath, valid, calls }) => {
-  const { output, schemaValidation } = await validateThroughCli(
-    {
-      channels: { "validation-channel": { rootPath } },
-    },
-    { type: "object" },
-    {
-      type: "object",
-      properties: {
-        rootPath: { type: "string", pattern: "^/" },
-        label: { type: "string", default: "synthetic" },
-      },
+  const output = await runCli(
+    { gateway: { mode: "local" }, plugins: { enabled: false } },
+    undefined,
+    async (env) => {
+      stateDb.openOpenClawStateDatabase({ env });
+      await stateDb.closeOpenClawStateDatabaseAsync();
     },
   );
-  expect(output).toMatchObject({ valid });
-  if (!valid) {
-    expect(output).toMatchObject({
-      issues: [expect.objectContaining({ path: "channels.validation-channel.rootPath" })],
-    });
-  }
-  expect(schemaValidation).toHaveBeenCalledTimes(calls);
+  expect(output).toMatchObject({ valid: true });
 });
 
-it.each([
-  { enabled: true, authored: false, valid: true },
-  { enabled: false, authored: true, valid: false },
-])(
-  "preserves strict default ownership for $enabled/$authored",
-  async ({ enabled, authored, valid }) => {
-    const { output } = await validateThroughCli(
-      {
-        plugins: {
-          entries: { "validation-fixture": { enabled, ...(authored ? { config: {} } : {}) } },
-        },
-        secrets: {
-          providers: { shared: { source: "file", path: "/synthetic/secrets.json", mode: "json" } },
-        },
-      },
-      {
-        type: "object",
-        properties: {
-          credential: {
-            type: "object",
-            default: { source: "exec", provider: "shared", id: "synthetic" },
-          },
-        },
-      },
+const objectSchema = (properties = {}) => ({ type: "object", properties });
+const pluginConfig = (enabled: boolean, config?: Record<string, unknown>) => ({
+  plugins: { entries: { plugin: { enabled, ...(config ? { config } : {}) } } },
+});
+const issue = (path: string, details = {}) => ({
+  valid: false,
+  issues: [expect.objectContaining({ path, ...details })],
+});
+
+it.each(["mcp", "nodeHost"] as const)(
+  "rejects mixed %s MCP transports through the CLI",
+  async (owner) => {
+    const mcp = { servers: { docs: { command: "node", url: "https://example.com/mcp" } } };
+    const output = await runCli(owner === "mcp" ? { mcp } : { nodeHost: { mcp } });
+    expect(output).toMatchObject(
+      issue(`${owner === "mcp" ? "mcp" : "nodeHost.mcp"}.servers.docs`, {
+        message: expect.stringMatching(/command.*url/),
+      }),
     );
-    expect(output).toMatchObject({ valid });
-    if (!valid) {
-      expect(output).toMatchObject({
-        issues: [
-          expect.objectContaining({
-            path: "plugins.entries.validation-fixture.config.credential",
-            message: expect.stringContaining('has source "file" but ref requests "exec"'),
-          }),
-        ],
-      });
-    }
   },
 );
 
-it("retains raw schema rejection when runtime path normalization changes the input", async () => {
-  const { output, schemaValidation } = await validateThroughCli(
+it("warns for saved mixed config, rejects edits, and lets updates persist their channel", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-upgrade-" }, async (state) => {
+    await state.writeConfig({
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
+    });
+    const raw = fs.readFileSync(state.configPath, "utf8");
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const io = createConfigIO({
+      env: state.env,
+      configPath: state.configPath,
+      observe: false,
+      pluginValidation: "core-only",
+      logger,
+    });
+    expect(io.loadConfig().mcp?.servers?.docs).toEqual({
+      command: "node",
+      url: "https://example.com/mcp",
+      env: { DATA_DIR: nodePath.join(state.home, "data") },
+    });
+    expect(logger.warn.mock.calls.flat().join("\n")).toMatch(/mcp.servers.docs.*command.*url/s);
+    const explicit = await io.readConfigFileSnapshotWithPluginMetadata({
+      prepareValidation: "strict",
+      completePluginMetadata: false,
+    });
+    expect(explicit.strictIssues).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers.docs",
+        message: expect.stringMatching(/command.*url/),
+      }),
+    ]);
+    await expect(
+      io.writeConfigFile({
+        mcp: {
+          servers: {
+            docs: { command: "node", args: ["changed.js"], url: "https://example.com/mcp" },
+          },
+        },
+      }),
+    ).rejects.toThrow(/docs.*command.*url/s);
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+    await persistRequestedUpdateChannel({
+      configSnapshot: await io.readConfigFileSnapshot(),
+      requestedChannel: "beta",
+    });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      update: { channel: "beta" },
+      mcp: {
+        servers: {
+          docs: { command: "node", url: "https://example.com/mcp", env: { DATA_DIR: "~/data" } },
+        },
+      },
+    });
+  });
+});
+
+it("repairs one mixed server without blocking on another and rejects new or edited ambiguity", async () => {
+  await withOpenClawTestState({ prefix: "mixed-mcp-mutation-" }, async (state) => {
+    const mixed = {
+      command: "old-server",
+      url: "https://example.com/mcp",
+      env: { DATA_DIR: "~/data" },
+    };
+    await state.writeConfig({ mcp: { servers: { first: mixed, second: mixed } } });
+    expect(
+      await setConfiguredMcpServer({ name: "first", server: { command: "first-server" } }),
+    ).toMatchObject({ ok: true });
+    expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
+      mcp: { servers: { first: { command: "first-server" }, second: mixed } },
+    });
+    for (const name of ["second", "new"]) {
+      expect(
+        await setConfiguredMcpServer({ name, server: { ...mixed, command: "changed-server" } }),
+      ).toMatchObject({ ok: false, error: expect.stringMatching(/command.*url/) });
+    }
+  });
+});
+
+it.each([
+  { channel: true, rootPath: "/synthetic", valid: true },
+  { channel: true, rootPath: "~/synthetic", valid: false },
+  { channel: false, rootPath: "~/synthetic", valid: false },
+])(
+  "validates raw paths (channel=$channel, path=$rootPath)",
+  async ({ channel, rootPath, valid }) => {
+    const schema = objectSchema({ rootPath: { type: "string", pattern: "^/" } });
+    const output = await validateThroughCli(
+      channel ? { channels: { channel: { rootPath } } } : pluginConfig(true, { rootPath }),
+      channel ? objectSchema() : schema,
+      channel
+        ? objectSchema({ ...schema.properties, label: { type: "string", default: "synthetic" } })
+        : undefined,
+    );
+    const path = channel ? "channels.channel.rootPath" : "plugins.entries.plugin.config.rootPath";
+    expect(output).toMatchObject(valid ? { valid } : issue(path));
+  },
+);
+
+it.each([true, false])("preserves strict default ownership (enabled=%s)", async (enabled) => {
+  const output = await validateThroughCli(
     {
-      plugins: {
-        entries: { "validation-fixture": { enabled: true, config: { rootPath: "~/synthetic" } } },
+      ...pluginConfig(enabled, enabled ? undefined : {}),
+      secrets: {
+        providers: { shared: { source: "file", path: "/synthetic/secrets.json", mode: "json" } },
       },
     },
-    { type: "object", properties: { rootPath: { type: "string", pattern: "^/" } } },
+    objectSchema({
+      credential: {
+        type: "object",
+        default: { source: "exec", provider: "shared", id: "synthetic" },
+      },
+    }),
   );
-  expect(output).toMatchObject({
-    valid: false,
-    issues: [
-      expect.objectContaining({ path: "plugins.entries.validation-fixture.config.rootPath" }),
-    ],
-  });
-  expect(schemaValidation).toHaveBeenCalledTimes(2);
+  expect(output).toMatchObject(
+    enabled
+      ? { valid: true }
+      : issue("plugins.entries.plugin.config.credential", {
+          message: expect.stringContaining('has source "file" but ref requests "exec"'),
+        }),
+  );
 });

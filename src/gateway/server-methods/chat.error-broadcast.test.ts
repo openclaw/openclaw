@@ -4,8 +4,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -35,55 +37,59 @@ function createMockContext() {
   };
 }
 
+function sendExternal(
+  ctx: ReturnType<typeof createMockContext>,
+  params: Parameters<typeof handleDirectExternalChatSend>[0]["params"],
+) {
+  const respond = vi.fn();
+  return handleDirectExternalChatSend({
+    params,
+    respond: respond as never,
+    context: ctx as unknown as GatewayRequestContext,
+    req: {} as never,
+    client: null as never,
+    isWebchatConnect: () => false,
+  }).then(() => respond);
+}
+
 describe("chat.send error broadcast", () => {
   it("rejects a claimed leaf for a session that has not materialized", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-
-    await handleDirectExternalChatSend({
-      params: {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
+      const ctx = createMockContext();
+      const respond = await sendExternal(ctx, {
         sessionKey: "main",
         message: "hello",
         expectedLeafEntryId: "stale-leaf",
         idempotencyKey: "test-fresh-stale-leaf",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
+      });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        details: { reason: "active-leaf-changed" },
-      }),
-    );
-    expect(ctx.addChatRun).not.toHaveBeenCalled();
-    expect(ctx.broadcast).not.toHaveBeenCalled();
-    expect(ctx.recordClientActivity).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          details: { reason: "active-leaf-changed" },
+        }),
+      );
+      expect(ctx.addChatRun).not.toHaveBeenCalled();
+      expect(ctx.broadcast).not.toHaveBeenCalled();
+      expect(ctx.recordClientActivity).not.toHaveBeenCalled();
+    });
   });
 
   it.each([false, true])(
     "records new admission activity only if the socket remains live (closed=%s)",
     async (closedDuringAdmission) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await loadOrCreateProcessDeviceIdentityAsync();
         const ctx = createMockContext();
         const client: GatewayWsClient = {
           connId: "activity-send",
           presenceKey: "activity-send",
           usesSharedGatewayAuth: false,
           socket: { readyState: 1 } as GatewayWsClient["socket"],
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "openclaw-tui", version: "test", platform: "test", mode: "cli" },
-          },
+          connect: gatewayConnect(["operator.admin"], { id: "openclaw-tui", mode: "cli" }),
           authenticatedUserId: "send@activity.test",
           personPresence: { onlineSince: Date.now() - 1_000 },
         };
@@ -122,10 +128,9 @@ describe("chat.send error broadcast", () => {
         const duplicateResponse = vi.fn();
         await handleChatSend({ ...options, respond: duplicateResponse });
         expect(duplicateResponse).toHaveBeenCalledWith(
-          true,
-          { runId: "activity-send", status: "in_flight" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
         );
         expect(ctx.recordClientActivity).not.toHaveBeenCalled();
         if (closedDuringAdmission) {
@@ -159,20 +164,11 @@ describe("chat.send error broadcast", () => {
 
   it("rejects a stale routing contract before a stop side effect", async () => {
     const ctx = createMockContext();
-    const respond = vi.fn();
-
-    await handleDirectExternalChatSend({
-      params: {
-        sessionKey: "main",
-        message: "/stop",
-        expectedSessionRoutingContract: "global|main|main",
-        idempotencyKey: "test-stale-stop-routing",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
+    const respond = await sendExternal(ctx, {
+      sessionKey: "main",
+      message: "/stop",
+      expectedSessionRoutingContract: "global|main|main",
+      idempotencyKey: "test-stale-stop-routing",
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -184,54 +180,48 @@ describe("chat.send error broadcast", () => {
   });
 
   it("scopes selected-agent global errors to the linked agent", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
+      const ctx = createMockContext();
+      ctx.addChatRun.mockImplementation(() => {
+        throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
+      });
 
-    ctx.addChatRun.mockImplementation(() => {
-      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
-    });
-
-    await handleDirectExternalChatSend({
-      params: {
+      const respond = await sendExternal(ctx, {
         sessionKey: "global",
         agentId: "main",
         message: "hello",
         idempotencyKey: "test-run-global",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
+      });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.objectContaining({ runId: "test-run-global", status: "error" }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({ runId: "test-run-global", status: "error" }),
+        expect.any(Object),
+        expect.any(Object),
+      );
 
-    // The global agent alias canonicalizes to the agent's main session before
-    // load, so errors broadcast on the same key the visible thread subscribes
-    // to — the alias fan-out keys no longer carry sends.
-    expect(ctx.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: "test-run-global",
-        sessionKey: "agent:main:main",
+      // The global agent alias canonicalizes to the agent's main session before
+      // load, so errors broadcast on the same key the visible thread subscribes
+      // to — the alias fan-out keys no longer carry sends.
+      expect(ctx.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "test-run-global",
+          sessionKey: "agent:main:main",
+          state: "error",
+        }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+      const canonicalPayload = expectDefined(
+        ctx.nodeSendToSession.mock.calls.find(([sessionKey]) => sessionKey === "agent:main:main"),
+        "canonical node error payload",
+      )[2] as Record<string, unknown>;
+      expect(canonicalPayload).toMatchObject({
         state: "error",
-      }),
-      { sessionKeys: ["agent:main:main"] },
-    );
-    const canonicalPayload = expectDefined(
-      ctx.nodeSendToSession.mock.calls.find(([sessionKey]) => sessionKey === "agent:main:main"),
-      "canonical node error payload",
-    )[2] as Record<string, unknown>;
-    expect(canonicalPayload).toMatchObject({
-      state: "error",
-      errorMessage: expect.stringContaining("LLM timeout"),
+        errorMessage: expect.stringContaining("LLM timeout"),
+      });
+      expect(canonicalPayload).not.toHaveProperty("message");
     });
-    expect(canonicalPayload).not.toHaveProperty("message");
   });
 });

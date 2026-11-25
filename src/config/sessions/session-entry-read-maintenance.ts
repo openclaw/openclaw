@@ -3,13 +3,13 @@ import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admissio
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.types.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 /** Keep the physical reader owner through a registry maintenance consumer and its commit guard. */
-export function withSessionRegistryEntriesInWorker<T>(
+export function withSessionRegistryEntriesInWorker(
   input: SessionStoreWorkerReadScope,
-  consume: (entries: SessionEntrySummary[], assertCurrent: () => void) => Promise<T>,
-): Promise<T> {
+  consume: (entries: SessionEntrySummary[], assertCurrent: () => void) => Promise<void>,
+): Promise<void> {
   assertAgentDatabaseAdmitted(input.agentId, { env: input.env });
   return withSessionStoreReaderInWorker(
     input,
@@ -19,17 +19,21 @@ export function withSessionRegistryEntriesInWorker<T>(
         assertAgentDatabaseAdmitted(database.agentId, { env: database.env });
         assertReaderCurrent();
       };
-      assertCurrent();
-      const { entries } = await reader.readEntries({
-        agentId: database.agentId,
-        storePath: database.path,
-        env: database.env,
-        cronRetention: true,
-      });
-      assertCurrent();
-      return await consume(entries, assertCurrent);
+      let afterSessionKey: string | undefined;
+      do {
+        assertCurrent();
+        const { entries, nextCronRunSessionKey } = await reader.readEntries({
+          agentId: database.agentId,
+          storePath: database.path,
+          env: database.env,
+          cronRetention: { afterSessionKey, limit: 32 },
+        });
+        assertCurrent();
+        await consume(entries, assertCurrent);
+        afterSessionKey = nextCronRunSessionKey ?? undefined;
+      } while (afterSessionKey !== undefined);
     },
-    { lane: maintenanceLane },
+    { lane: sessionStoreLane },
   );
 }
 
@@ -44,22 +48,15 @@ export async function readExpiredCronRunEntriesInWorker(
   assertAgentDatabaseAdmitted(expiredCronRuns.agentId, { env: input.env });
   return withSessionStoreReaderInWorker(
     input,
-    async ({ reader, database, assertCurrent }) => {
-      const assertAdmitted = () => {
-        assertAgentDatabaseAdmitted(expiredCronRuns.agentId, { env: database.env });
-        assertAgentDatabaseAdmitted(database.agentId, { env: database.env });
-      };
-      assertAdmitted();
-      const { entries } = await reader.readEntries({
+    async ({ reader, database }) => {
+      const { entries, nextCronRunUpdatedAt } = await reader.readEntries({
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,
         expiredCronRuns,
       });
-      assertAdmitted();
-      assertCurrent();
-      return entries;
+      return { entries, nextCronRunUpdatedAt };
     },
-    { lane: maintenanceLane, dataOnly: true },
+    { lane: sessionStoreLane, dataOnly: true },
   );
 }

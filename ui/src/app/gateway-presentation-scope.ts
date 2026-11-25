@@ -1,5 +1,5 @@
 import { readOfflineStorageScope } from "./boot-record.ts";
-import type { ApplicationGateway } from "./gateway.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
 type GatewayPresentationScope = {
@@ -9,17 +9,22 @@ type GatewayPresentationScope = {
 };
 type OwnedPresentationScope = {
   scope: GatewayPresentationScope;
-  revision: number;
+  revision: number | undefined;
   userId?: string;
   recoveryScope?: string;
 };
+type GatewayPresentationSource = {
+  readonly snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase"> &
+    Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
+  readonly connectionRevision?: number;
+};
 
-const scopes = new WeakMap<ApplicationGateway, OwnedPresentationScope>();
+const scopes = new WeakMap<GatewayPresentationSource, OwnedPresentationScope>();
 let nextScopeKey = 0;
 
 /** Stable page scope and display identity; never an authentication source. */
 export function gatewayPresentationScope(
-  gateway: ApplicationGateway,
+  gateway: GatewayPresentationSource,
 ): Readonly<GatewayPresentationScope> {
   const revision = gateway.connectionRevision;
   const snapshot = gateway.snapshot;
@@ -48,19 +53,15 @@ export function gatewayPresentationScope(
     scopes.set(gateway, next);
     return next.scope;
   }
-  // First authentication completes the existing owner; reconnects may temporarily
-  // clear selfUser, including after hello while users.self is pending. Only an
-  // explicit null resolves profileless without retiring mounted pages or loaders.
+  // Transport/startup phases may temporarily clear selfUser, including after
+  // hello while users.self is pending. Keep display identity in this scope until
+  // explicit profileless resolution or stop; it never grants request authority.
   previous.userId ??= userId;
   previous.recoveryScope ??= recoveryScope;
   previous.scope.readyOnce ||= ready;
   if (user !== undefined) {
     previous.scope.displayUser = user;
-  } else if (
-    snapshot.phase !== "connected" &&
-    snapshot.phase !== "reconnecting" &&
-    snapshot.phase !== "reload-required"
-  ) {
+  } else if (snapshot.phase === "stopped") {
     previous.scope.displayUser = null;
   }
   return previous.scope;

@@ -221,6 +221,13 @@ extension ControlUIDocumentHost {
             decisionHandler(.allow)
             return
         }
+        if navigationAction.shouldPerformDownload {
+            let allowed = self.hasCurrentBrowserSession && navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(navigationAction.sourceFrame.request.url, dashboardURL: self.currentURL) &&
+                Self.shouldAllowNavigation(to: url, dashboardURL: self.currentURL, isMainFrame: true)
+            decisionHandler(allowed ? .download : .cancel)
+            return
+        }
         if navigationAction.targetFrame == nil {
             let allowEditorURLs = ControlUIDocumentHost.shouldAllowEditorURLLaunch(
                 from: navigationAction.sourceFrame.request.url,

@@ -6,16 +6,17 @@ import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 export type NativeSessionDeletionParticipant = {
   binding?: PluginStateNativeBindingPlan;
   source?: DatabasePathIdentity;
-  /** Selected before execution only when the host requires native transaction atomicity. */
-  nativeMutation?: AgentHarnessSessionDeletionMutation & { prepare(): Promise<void> };
-  assertCurrent(): void;
+  /** Awaited inside the memory owner's FIFO, including compensating writes. */
+  memoryMutation?: {
+    commit(assertCurrent: () => void): Promise<void>;
+    rollback(assertCurrent: () => void): Promise<void>;
+  };
+  assertCurrent(this: void): void;
   renewalPending(): boolean;
   joinRenewal(): Promise<void>;
   quiesce(): void;
   retain(custody: object): void;
   settle(outcome: "committed" | "rolled-back" | "unknown", error?: Error): void;
-  /** A confirmed compound rollback may restore a row without publishing its postimage. */
-  refreshCommittedFacts?(): Promise<void>;
   unknown: boolean;
 };
 
@@ -58,16 +59,24 @@ export function wrapNativeSessionDeletionMutation(
   const wrapped = wrap(mutation);
   const participant = participants.get(mutation);
   if (participant) {
-    const nativeMutation = participant.nativeMutation;
+    const memoryMutation = participant.memoryMutation;
     // An unresolved binding must keep the outer exact-client cleanup owner reachable.
     participant.retain(hooks);
     participants.set(wrapped, {
       ...participant,
-      ...(nativeMutation
+      ...(memoryMutation
         ? {
-            nativeMutation: {
-              ...wrap(nativeMutation),
-              prepare: () => nativeMutation.prepare(),
+            memoryMutation: {
+              async commit(assertCurrent) {
+                await memoryMutation.commit(assertCurrent);
+                hooks.committed();
+              },
+              async rollback(assertCurrent) {
+                await memoryMutation.rollback(assertCurrent);
+                if (!participant.unknown) {
+                  hooks.rolledBack();
+                }
+              },
             },
           }
         : {}),

@@ -20,6 +20,55 @@ function createRunner(options: Pick<RunnerOptions, "getClient"> & Partial<Runner
 }
 
 describe("ModelSetupWizardRunner", () => {
+  it("binds runtime enablement to its explicit agent and cancels late admission on the original client", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000002";
+    const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);
+    const admission = createDeferred<WizardNextResult>();
+    const original = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+    const replacement = new GatewayBrowserClient({ url: "ws://gateway-b.example.test" });
+    const originalRequest = vi
+      .spyOn(original, "request")
+      .mockReturnValueOnce(admission.promise)
+      .mockResolvedValue({ status: "cancelled" });
+    const replacementRequest = vi.spyOn(replacement, "request");
+    let client = original;
+    const getAgentId = vi.fn(() => "wrong-agent");
+    const runner = createRunner({ getClient: () => client, getAgentId });
+    const params = {
+      agentId: "research",
+      runtimeId: "acp-opencode",
+      configPatch: {
+        plugins: { entries: { acpx: { config: { nativeAgents: { opencode: true } } } } },
+      },
+    };
+    try {
+      const start = runner.startRuntime(params, "OpenCode");
+      expect(originalRequest).toHaveBeenCalledWith(
+        "openclaw.setup.runtime.start",
+        { ...params, sessionId },
+        { timeoutMs: null },
+      );
+      expect(getAgentId).not.toHaveBeenCalled();
+      client = replacement;
+      await runner.cancel();
+      admission.resolve({ done: false, status: "running" });
+      await expect(start).resolves.toBeNull();
+      expect(originalRequest).toHaveBeenCalledTimes(3);
+      expect(originalRequest.mock.calls.slice(1)).toEqual([
+        ["wizard.cancel", { sessionId, closeInput: true }, { timeoutMs: 30_000 }],
+        ["wizard.cancel", { sessionId, closeInput: true }, { timeoutMs: 30_000 }],
+      ]);
+      expect(replacementRequest).not.toHaveBeenCalled();
+      expect(runner.state).toEqual({ phase: "idle" });
+    } finally {
+      admission.resolve({ done: true, status: "cancelled" });
+      await runner.cancel();
+      originalRequest.mockRestore();
+      replacementRequest.mockRestore();
+      generateUUID.mockRestore();
+    }
+  });
+
   it("cleans a late MCP admission on the captured client without replaying or selecting an agent", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000001";
     const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);

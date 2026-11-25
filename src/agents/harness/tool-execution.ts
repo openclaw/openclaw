@@ -46,7 +46,7 @@ export function createAgentHarnessToolExecutionBoundaryRegistry() {
       arguments: Record<string, unknown>;
       retainAfterCompletion?: boolean;
     }) {
-      let executedArguments = structuredClone(params.arguments);
+      let executedArguments: Readonly<Record<string, unknown>> = structuredClone(params.arguments);
       let didDispatchExecution = false;
       let didStartExecution = false;
       let executionPrevented = false;
@@ -94,7 +94,7 @@ export function createAgentHarnessToolExecutionBoundaryRegistry() {
           // middleware completes after the timeout owner has detached the row.
           if (!state.consumed) {
             state.snapshot = {
-              executedArguments: structuredClone(executedArguments),
+              executedArguments,
               executionStarted: didStartExecution && !executionPrevented,
             };
           }
@@ -115,8 +115,8 @@ export function createAgentHarnessToolExecutionBoundaryRegistry() {
 }
 
 export type AgentHarnessToolExecutionSnapshot = {
-  executedArguments: Record<string, unknown>;
-  executionStarted: boolean;
+  readonly executedArguments: Readonly<Record<string, unknown>>;
+  readonly executionStarted: boolean;
 };
 
 type ToolExecutionBoundaryState = {

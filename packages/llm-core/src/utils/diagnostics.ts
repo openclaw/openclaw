@@ -1,4 +1,40 @@
-export { readProviderRefusalReview, type ProviderRefusalReview } from "./provider-refusal.js";
+import { Guard } from "typebox/guard";
+import type { AssistantMessage } from "../types.js";
+
+/** Provider-authored findings; continuation is offered only after explicit user review. */
+export type ProviderRefusalReview = {
+  explanation: string;
+  continuation?: { message: string };
+  errorType?: string;
+};
+
+const encoder = new TextEncoder();
+
+function isBoundedText(value: unknown, maxBytes: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= maxBytes &&
+    value.trim().length > 0 &&
+    encoder.encode(value).byteLength <= maxBytes
+  );
+}
+
+/** Keep exact provider text. Truncation must never make an invalid continuation usable. */
+export function readProviderRefusalReview(value: unknown): ProviderRefusalReview | undefined {
+  if (!Guard.IsObjectNotArray(value) || !isBoundedText(value.explanation, 64 * 1024)) {
+    return undefined;
+  }
+  const continuation = Guard.IsObjectNotArray(value.continuation)
+    ? value.continuation.message
+    : undefined;
+  return {
+    explanation: value.explanation,
+    ...(isBoundedText(continuation, 1024) ? { continuation: { message: continuation } } : {}),
+    ...(typeof value.errorType === "string" && value.errorType.trim()
+      ? { errorType: value.errorType }
+      : {}),
+  };
+}
 
 export interface DiagnosticErrorInfo {
   name?: string;
@@ -63,4 +99,28 @@ export function appendAssistantMessageDiagnostic(
   diagnostic: AssistantMessageDiagnostic,
 ): void {
   message.diagnostics = [...(message.diagnostics ?? []), diagnostic];
+}
+/** Records only the presence of hidden reasoning; never copies its content. */
+export function recordSuppressedReasoning(message: AssistantMessage): Error | undefined {
+  if (!message.diagnostics?.some((entry) => entry.type === "reasoning_suppressed")) {
+    appendAssistantMessageDiagnostic(message, {
+      type: "reasoning_suppressed",
+      timestamp: Date.now(),
+    });
+  }
+  if (
+    (message.stopReason !== "stop" && message.stopReason !== "length") ||
+    message.content.some(
+      (block) => block.type === "toolCall" || (block.type === "text" && block.text.trim()),
+    )
+  ) {
+    return undefined;
+  }
+  return new Error(
+    `${message.provider}/${message.model} returned only reasoning while configured reasoning: false. ` +
+      `Set reasoning: true for this model in models.providers.${message.provider}.models or choose a non-thinking model.` +
+      (message.stopReason === "length"
+        ? " The output token limit was reached before an answer."
+        : ""),
+  );
 }

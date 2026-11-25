@@ -1,3 +1,5 @@
+import { listen } from "./reactive/listener.ts";
+
 /** Subscriber identity and producer cancellation remain owned by the caller. */
 export async function subscribeToSharedRequest<T, Subscriber extends object>(
   pending: {
@@ -10,28 +12,26 @@ export async function subscribeToSharedRequest<T, Subscriber extends object>(
   onRelease?: () => void,
 ): Promise<T> {
   pending.subscribers.add(subscriber);
-  let onAbort: (() => void) | undefined;
+  let stopAbort: (() => void) | undefined;
   try {
     if (!signal) {
       return await pending.promise;
     }
     const { promise: aborted, reject: rejectAbort } = Promise.withResolvers<never>();
-    onAbort = () => {
+    const onAbort = () => {
       pending.subscribers.delete(subscriber);
       if (pending.subscribers.size === 0) {
         pending.controller?.abort(signal.reason);
       }
       rejectAbort(signal.reason);
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    stopAbort = listen(signal, "abort", onAbort, { once: true });
     if (signal.aborted) {
       onAbort();
     }
     return await Promise.race([pending.promise, aborted]);
   } finally {
-    if (onAbort) {
-      signal?.removeEventListener("abort", onAbort);
-    }
+    stopAbort?.();
     pending.subscribers.delete(subscriber);
     onRelease?.();
   }

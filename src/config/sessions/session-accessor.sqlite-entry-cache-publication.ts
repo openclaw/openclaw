@@ -1,11 +1,12 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-borrower.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   publishRetainedSessionEntryChange,
@@ -43,6 +44,7 @@ import {
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
+import { publishSessionParticipationMemberChange } from "./session-participation-source.js";
 import type { SessionEntry } from "./types.js";
 
 export {
@@ -63,7 +65,7 @@ export function bindPreparedSessionEntryPublication(
   preparedSharingChanges.changes.set(change, record);
 }
 
-export function bindSessionEntryPublicationSource<T extends SessionRowChange>(
+function bindSessionEntryPublicationSource<T extends SessionRowChange>(
   change: T,
   database: SessionEntryCacheDatabase,
 ): T {
@@ -96,10 +98,8 @@ export function emitPreparedSessionSharingChange(
   if (record.kind === "metadata") {
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
-      !stageSqliteTransactionState(database.db, {
-        stage() {},
+      !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
         commit: seal,
-        rollback() {},
       })
     ) {
       seal();
@@ -118,7 +118,7 @@ export function invalidateSessionEntryCaches(databaseIdentity: string): void {
 }
 
 /** Retire all facts in a failed installation, including pending older worker receipts. */
-export function invalidateSessionEntryPublication(
+function invalidateSessionEntryPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   authorityChanged = true,
@@ -136,11 +136,13 @@ export function publishSessionEntryWorkerMetadataInvalidation(params: {
   databaseIdentity: string;
   sessionKey: string;
   entry?: SessionEntry;
+  fullEntry?: SessionEntry;
 }): void {
   invalidateSessionEntryCaches(params.databaseIdentity);
   for (const read of retainedSharingReads(params.databaseIdentity, params.sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, params.entry, params.entry !== undefined, {
       preserveMatchingEntry: true,
+      fullEntry: params.fullEntry,
     });
   }
   const change: SessionRowChange = {
@@ -272,7 +274,29 @@ export function publishSessionEntryPlaceholderInsertion(
   });
 }
 
-export function publishSessionSharingFieldChange(
+/** Install a committed field from either a native transaction or a worker receipt. */
+export function commitSessionSharingFieldChange(
+  database: SessionEntryCacheDatabase | string,
+  sessionKey: string,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
+): void {
+  // A newer write invalidates a delayed cache receipt; the next read reloads it.
+  recordCommittedSessionMetadataPublication(database, sessionKey, change);
+  for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+    if (read.acquisition) {
+      if (change.kind === "member") {
+        recordAcquiringSessionMember(read.acquisition, change);
+      } else {
+        // A pending worker snapshot cannot establish which field assignment it read.
+        recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
+      }
+    } else if (read.facts) {
+      read.facts = updateSessionSharingField(read.facts, change);
+    }
+  }
+}
+
+function publishSessionSharingFieldChange(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
   change: Extract<SessionRowFacts, { kind: "member" | "owner" | "category" }>,
@@ -280,19 +304,9 @@ export function publishSessionSharingFieldChange(
   publishTrackedCacheUpdate(
     database,
     () => {
-      // A newer write invalidates a delayed cache receipt; the next read reloads it.
-      recordCommittedSessionMetadataPublication(database, sessionKey, change);
-      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-        if (read.acquisition) {
-          if (change.kind === "member") {
-            recordAcquiringSessionMember(read.acquisition, change);
-          } else {
-            // A pending worker snapshot cannot establish which field assignment it read.
-            recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
-          }
-        } else if (read.facts) {
-          read.facts = updateSessionSharingField(read.facts, change);
-        }
+      commitSessionSharingFieldChange(database, sessionKey, change);
+      if (change.kind === "member") {
+        publishSessionParticipationMemberChange(database.agentId, sessionKey, change);
       }
     },
     () =>
@@ -320,6 +334,7 @@ export function publishSessionSharingEntryChange(
   update: {
     sessionKey: string;
     entry?: SessionEntry;
+    fullEntry?: SessionEntry;
     previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
     facts?: SessionRowFacts;
   },
@@ -335,7 +350,13 @@ export function publishSessionSharingEntryChange(
     publishTrackedCacheUpdate(
       database,
       () =>
-        recordCommittedSessionMetadataPublication(database, update.sessionKey, facts, update.entry),
+        recordCommittedSessionMetadataPublication(
+          database,
+          update.sessionKey,
+          facts,
+          update.entry,
+          update.fullEntry,
+        ),
       undefined,
       () => invalidateSessionEntryPublication(database, update.sessionKey, false),
     );
@@ -355,6 +376,7 @@ export function publishSessionSharingEntryChange(
           previousIdentity,
           sharingEntry !== undefined || facts?.kind === "removed",
           update.entry,
+          update.fullEntry,
         );
       },
       () => stageSessionSharingPublication(database, update.sessionKey),

@@ -1,6 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
+import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { writeSessionEntrySnapshots } from "./session-entry-snapshots.js";
@@ -60,4 +61,5 @@ export function clearSqliteSessionEntryPreservingWindows(
       .values({ session_key: params.sessionKey, ...cleared })
       .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
+  conversationPublication.stageRows(database, { removedNodes: [params.sessionKey] });
 }

@@ -1,4 +1,5 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import type { ProgressCardStore } from "./progress-card-store.types.js";
 
 /** Stores private progress cards in the session actor selected by the routing owner. */
@@ -39,10 +40,8 @@ export function createSessionActorProgressCardStore(
           },
         },
       );
-      if (result.kind === "rolled-back") {
-        throw Object.assign(new Error(result.error.message), { name: result.error.name });
-      }
-      return "card" in result.value ? result.value : { card: null };
+      const value = readSessionActorStorageResult(result);
+      return "card" in value ? value : { card: null };
     },
   };
 }

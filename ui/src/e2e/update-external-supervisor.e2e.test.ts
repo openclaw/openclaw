@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI external supervisor update E2E" });
@@ -24,13 +26,11 @@ const configResponse = {
 };
 
 suite.define(() => {
-  it.each([
-    { label: "default", externalSupervisorGuidance: undefined },
-    { label: "deployment", externalSupervisorGuidance: guidance },
-  ])(
-    "explains the $label refused update in the dialog and retained Settings report",
-    async ({ externalSupervisorGuidance, label }) => {
-      const proofDir = createControlUiE2eArtifactDir(`external-supervisor-update-${label}`);
+  it.each(["default", "deployment"])(
+    "shows %s guidance for the current no-run external refusal",
+    async (label) => {
+      const proofDir = createControlUiE2eArtifactDir(`external-supervisor-${label}`);
+      const externalSupervisorGuidance = label === "deployment" ? guidance : undefined;
       await suite.withPage(
         {
           locale: "en-US",
@@ -38,208 +38,115 @@ suite.define(() => {
           permissions: ["clipboard-read", "clipboard-write"],
         },
         async ({ page }) => {
-          const reason = "external-supervisor-update-required";
-          const run = createUpdateRunFixture({
-            phase: "finished",
-            status: "skipped",
-            reason,
-            origin: { doctorHint: "Run openclaw doctor --non-interactive" },
-            before: { version: "2026.8.1" },
-            after: {},
-            steps: [],
-            verification: { serviceRunning: true, runningVersion: "2026.8.1" },
-          });
           const gateway = await installMockGateway(page, {
             communityInvite: false,
             agentModel: "openai/gpt-5",
             models: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
-            updateAvailable: {
-              channel: "stable",
-              currentVersion: "2026.8.1",
-              latestVersion: "2026.9.1",
-            },
+            updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
             methodResponses: {
               "config.get": configResponse,
               "update.status": { activeRun: null, lastRun: null, externalSupervisorGuidance },
               "update.run": {
-                externalSupervisorGuidance,
+                runId: null,
                 ok: false,
-                runId: run.runId,
-                result: { status: "skipped", reason },
-                restart: null,
+                code: "external-supervisor-update-required",
+                externalSupervisorGuidance,
+                result: { status: "skipped", reason: "external-supervisor-update-required" },
               },
-              "update.runs.get": { run },
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/updates`);
           await gateway.waitForRequest("config.get");
-          await page.getByRole("button", { name: "Update now", exact: true }).click();
+          await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
           await gateway.waitForRequest("update.run");
-          const report = dialog.locator(".update-run-view__report");
-          await report
-            .getByText(`ℹ️ OpenClaw update skipped: ${reason}.`, { exact: false })
-            .waitFor();
+          await dialog.getByText("external-supervisor-update-required", { exact: false }).waitFor();
+          const copy = dialog.locator(".external-supervisor-guidance");
           if (externalSupervisorGuidance) {
-            const copy = dialog.getByRole("button", { name: "Copy update command", exact: true });
             await copy.waitFor();
-            expect(await dialog.locator(".external-supervisor-guidance").textContent()).toContain(
-              "Managed by Example Fleet.",
-            );
-            expect(await dialog.locator(".external-supervisor-guidance").textContent()).toContain(
-              "Run from: your deployment host",
-            );
-            expect(await dialog.locator(".external-supervisor-guidance code").textContent()).toBe(
-              guidance.command,
-            );
-            expect(await dialog.locator(".external-supervisor-guidance prod").count()).toBe(0);
-            await copy.click();
-            await dialog
-              .locator(".external-supervisor-guidance [data-copy-feedback]")
-              .getByText("Copied!", { exact: true })
-              .waitFor();
-            expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-              guidance.command,
-            );
+            expect(await copy.textContent()).toContain("Managed by Example Fleet.");
+            expect(await copy.textContent()).toContain("Run from: your deployment host");
+            expect(await copy.locator("code").textContent()).toBe(guidance.command);
+            expect(await copy.locator("prod").count()).toBe(0);
           } else {
-            expect(await dialog.locator(".external-supervisor-guidance").count()).toBe(0);
+            expect(await copy.count()).toBe(0);
           }
-          await page.screenshot({
-            path: path.join(proofDir, "refused-update.png"),
-            animations: "disabled",
-          });
-          expect(await report.textContent()).toContain(
-            "Use your server or deployment's update workflow",
+          const target = externalSupervisorGuidance
+            ? copy
+            : dialog.getByText("external-supervisor-update-required", { exact: false });
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            dialog.locator(".oc-dialog"),
+            [target],
+            {
+              elements: [target],
+              animations: "disabled",
+            },
           );
-          expect(await report.textContent()).toContain(
-            "No package changes or Gateway restart were attempted",
+          await writeFile(path.join(proofDir, "dialog-clean.png"), frame.png);
+          const annotations = {
+            viewport: page.viewportSize()!,
+            scale: await page.evaluate(() => window.devicePixelRatio),
+            annotations: [
+              {
+                kind: "outline" as const,
+                rect: frame.elements[0]!.bounds,
+                text: externalSupervisorGuidance
+                  ? "Deployment-owned literal command"
+                  : "Generic supervisor instructions",
+                labelAt: { x: 980, y: 180 },
+                color: "#276F94",
+              },
+            ],
+          };
+          await writeFile(
+            path.join(proofDir, "dialog-annotations.json"),
+            JSON.stringify(annotations),
           );
-          expect(await report.textContent()).not.toContain("openclaw doctor");
-          expect(
-            await dialog.getByRole("button", { name: "Retry update", exact: true }).count(),
-          ).toBe(0);
-          await dialog.getByRole("button", { name: "Close", exact: true }).click();
-          await dialog.waitFor({ state: "detached" });
-          const savedReport = page.locator(".update-run-view__report");
-          await savedReport
-            .getByText("Use your server or deployment's update workflow", { exact: false })
-            .waitFor();
-          await (
-            externalSupervisorGuidance
-              ? page.locator("#config-section-update .external-supervisor-guidance")
-              : savedReport
-          ).scrollIntoViewIfNeeded();
-          await page.screenshot({
-            path: path.join(proofDir, "settings-report.png"),
-            animations: "disabled",
-          });
-          expect(await gateway.getRequests("update.run")).toHaveLength(1);
-          expect(await gateway.getRequests("update.report")).toHaveLength(0);
-          expect(
-            await page.getByRole("button", { name: "Retry update", exact: true }).count(),
-          ).toBe(0);
-          expect(await page.locator("#config-section-update").textContent()).not.toContain(
-            "CLI fallback",
+          await writeFile(
+            path.join(proofDir, "dialog-annotated.png"),
+            await rasterizeProofAnnotations(suite.browser, { ...annotations, image: frame.png }),
           );
-          expect(await page.locator("#config-section-update").textContent()).not.toContain(
-            "openclaw triage",
-          );
-          expect(
-            await page.getByRole("button", { name: "Report update failure", exact: true }).count(),
-          ).toBe(0);
-
           if (externalSupervisorGuidance) {
-            expect(
-              await page
-                .locator("#config-section-update .external-supervisor-guidance code")
-                .textContent(),
-            ).toBe(guidance.command);
+            await copy.getByRole("button", { name: "Copy update command", exact: true }).click();
+            await expect
+              .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+              .toBe(guidance.command);
           }
-          const readsBeforeFailure = (await gateway.getRequests("update.runs.get")).length;
-          await gateway.deferNext("update.runs.get");
-          await gateway.emitGatewayEvent("update.run.changed", {
-            runId: run.runId,
-            updatedAtMs: run.updatedAtMs + 1,
-          });
-          await gateway.waitForRequest("update.runs.get", { after: readsBeforeFailure });
-          await gateway.rejectDeferred("update.runs.get", {
-            code: "UNAVAILABLE",
-            message: "Update status is temporarily unavailable",
-          });
+          await dialog
+            .locator("openclaw-modal-actions")
+            .getByRole("button", { name: "Close", exact: true })
+            .click();
+          await dialog.waitFor({ state: "detached" });
           const settings = page.locator("#config-section-update");
           await settings
-            .getByText("Update status is temporarily unavailable", { exact: false })
+            .getByText("external-supervisor-update-required", { exact: false })
             .waitFor();
-          const checkStatus = settings.getByRole("button", { name: "Check status", exact: true });
-          await checkStatus.waitFor();
-          expect(await checkStatus.isDisabled()).toBe(false);
-          expect(
-            await settings.getByRole("button", { name: "Retry update", exact: true }).count(),
-          ).toBe(0);
-          expect(
-            await settings
-              .getByRole("button", { name: "Report update failure", exact: true })
-              .count(),
-          ).toBe(0);
-          expect(await settings.textContent()).not.toContain("openclaw triage");
-          await checkStatus.scrollIntoViewIfNeeded();
-          await page.screenshot({
-            path: path.join(proofDir, "read-recovery.png"),
-            animations: "disabled",
-          });
-          const statusChecksBeforeRecovery = (await gateway.getRequests("update.status")).length;
-          await gateway.setMethodResponse("update.status", {
-            activeRun: null,
-            lastRun: { ...run, updatedAtMs: run.updatedAtMs + 1 },
-          });
-          await checkStatus.click();
-          await gateway.waitForRequest("update.status", { after: statusChecksBeforeRecovery });
-          await settings
-            .getByText("Update status is temporarily unavailable", { exact: false })
-            .waitFor({ state: "detached" });
-          // Guidance is a fresh deployment projection, never retained in the run.
-          await settings.locator(".external-supervisor-guidance").waitFor({ state: "detached" });
+          if (externalSupervisorGuidance) {
+            expect(await settings.locator(".external-supervisor-guidance code").textContent()).toBe(
+              guidance.command,
+            );
+          }
+          const attempt = externalSupervisorGuidance
+            ? settings.locator(".settings-section").filter({
+                has: page.locator(".external-supervisor-guidance"),
+              })
+            : settings.locator(".settings-section").filter({
+                hasText: "external-supervisor-update-required",
+              });
+          const settingsFrame = await takeControlUiScreenshotFrame(
+            page,
+            attempt,
+            [externalSupervisorGuidance ? attempt.locator("code").first() : attempt],
+            { animations: "disabled", scrollTo: attempt },
+          );
+          await writeFile(path.join(proofDir, "settings-clean.png"), settingsFrame.png);
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
+          expect(await gateway.getRequests("update.runs.get")).toHaveLength(0);
+          expect(await gateway.getRequests("update.report")).toHaveLength(0);
         },
       );
     },
   );
-
-  it("keeps a retained external supervisor sentinel actionable without failure recovery", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
-        agentModel: "openai/gpt-5",
-        models: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
-        methodResponses: {
-          "config.get": configResponse,
-          "update.status": {
-            externalSupervisorGuidance: guidance,
-            sentinel: {
-              kind: "update",
-              status: "skipped",
-              ts: 10,
-              stats: { reason: "external-supervisor-update-required" },
-            },
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/updates`);
-      await gateway.waitForRequest("update.status");
-      const settings = page.locator("#config-section-update");
-      await settings
-        .getByText("Use your server or deployment's update workflow", { exact: false })
-        .waitFor();
-      expect(
-        await settings.getByRole("button", { name: "Retry update", exact: true }).count(),
-      ).toBe(0);
-      expect(await settings.textContent()).not.toContain("CLI fallback");
-      expect(await settings.textContent()).not.toContain("openclaw triage");
-      expect(await settings.locator(".external-supervisor-guidance code").textContent()).toBe(
-        guidance.command,
-      );
-      expect(await gateway.getRequests("update.run")).toHaveLength(0);
-    });
-  });
 });

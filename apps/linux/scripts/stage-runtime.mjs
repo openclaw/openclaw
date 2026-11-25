@@ -4,29 +4,31 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resourceBytes, stagePackage } from "./stage-package.mjs";
+import { stageAotRuntime } from "./stage-standalone.mjs";
+import { desktopRuntimeReleaseTag } from "../../../scripts/lib/desktop-runtime-plugins.mjs";
+import { stageStandaloneSqlite } from "../../../scripts/lib/bun-standalone-sqlite.mjs";
+
+export { resourceBytes };
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const destination = path.join(root, "apps/linux/src-tauri/target/desktop-runtime");
 
-export function resourceBytes(executable) {
-  // linuxdeploy rewrites ELF resources even without executable permissions.
-  // This fixed envelope is stripped by bundled_runtime.rs; hashes cover raw bytes.
-  return Buffer.concat([Buffer.from("OPENCLAW-BUN-RUNTIME-V1\n"), executable]);
-}
-
 export function runtimeTarget(triple) {
-  if (
-    triple.endsWith("-apple-darwin") ||
-    triple.endsWith("-unknown-freebsd")
-  ) {
+  if (triple.endsWith("-unknown-freebsd")) {
     return null;
   }
   const arch = triple.startsWith("aarch64-") ? "arm64" : triple.startsWith("x86_64-") ? "x64" : null;
-  const platform = triple.endsWith("-pc-windows-msvc") ? "windows" : "linux";
-  if ((!triple.endsWith("-unknown-linux-gnu") && platform !== "windows") || !arch) {
+  const platform = triple.endsWith("-pc-windows-msvc") ? "windows" : triple.endsWith("-apple-darwin") ? "darwin" : "linux";
+  if ((!triple.endsWith("-unknown-linux-gnu") && !["windows", "darwin"].includes(platform)) || !arch) {
     throw new Error(`Unsupported embedded runtime target: ${triple}`);
   }
   return { platform, arch };
+}
+
+export function runtimeFlavor(value = process.env.OPENCLAW_DESKTOP_RUNTIME ?? "jit") {
+  assert.ok(["jit", "aot"].includes(value), "OPENCLAW_DESKTOP_RUNTIME must be jit or aot");
+  return value;
 }
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -42,7 +44,9 @@ export async function stageWindowsRuntime(work, target, pin) {
     const response = await fetch(`https://github.com/openclaw/bun/releases/download/${encodeURIComponent(pin.tag)}/${encodeURIComponent(name)}`, {
       signal: AbortSignal.timeout(300_000),
     });
-    if (!response.ok) throw new Error(`Bun ${name} download failed: HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Bun ${name} download failed: HTTP ${response.status}`);
+    }
     return Buffer.from(await response.arrayBuffer());
   };
   const sums = (await download("SHA256SUMS")).toString("utf8").trim().split("\n");
@@ -71,7 +75,9 @@ export async function stageWindowsRuntime(work, target, pin) {
     executableSha256: published.executable.sha256,
   };
   for (const field of ["authenticodeSigned", "testOnly", "signerSubject"]) {
-    if (Object.hasOwn(artifact, field)) expected[field] = published.executable[field];
+    if (Object.hasOwn(artifact, field)) {
+      expected[field] = published.executable[field];
+    }
   }
   assert.deepEqual(expected, artifact, "Bun release artifact differs from pin");
   assert.equal(checksum(artifact.asset), artifact.sha256, "Bun release archive sha256 mismatch");
@@ -111,19 +117,30 @@ export async function stageWindowsRuntime(work, target, pin) {
   assert.equal(executable.readUInt16LE(pe + 4), target.arch === "arm64" ? 0xaa64 : 0x8664, "Bun executable architecture mismatch");
   fs.writeFileSync(path.join(work, "manifest.json"), `${JSON.stringify({
     tag: pin.tag, commit: pin.commit, revision: pin.revision, ...target,
+    runtime: { flavor: "jit", executable: "bin/bun.exe" },
     authenticodeSigned: true, testOnly: false, files: { "bin/bun.exe": artifact.executableSha256 },
   }, null, 2)}\n`);
   return true;
 }
 
-export async function stageRuntime(triple) {
+export async function stageRuntime(triple, { runtimeOnly = false, flavor = runtimeFlavor(), artifact = process.env.OPENCLAW_DESKTOP_AOT_ARTIFACT } = {}) {
+  runtimeFlavor(flavor);
   const target = runtimeTarget(triple);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   const work = fs.mkdtempSync(`${destination}-`);
   try {
-    if (target?.platform === "windows") {
+    if (flavor === "aot") {
+      const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+      if (process.env.RELEASE_TAG !== undefined || process.env.RELEASE_SHA !== undefined) {
+        const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        desktopRuntimeReleaseTag(root, version, commit);
+      }
+      await stageAotRuntime(work, target, artifact, version);
+    } else if (target?.platform === "windows") {
       const pin = JSON.parse(fs.readFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), "utf8"));
-      if (!(await stageWindowsRuntime(work, target, pin))) fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+      if (!(await stageWindowsRuntime(work, target, pin))) {
+        fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+      }
     } else if (target) {
       const pin = JSON.parse(fs.readFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), "utf8"));
       execFileSync(path.join(root, "scripts/stage-openclaw-bun.sh"), [work, target.platform, target.arch], {
@@ -132,15 +149,28 @@ export async function stageRuntime(triple) {
       });
       const executablePath = path.join(work, "bin/bun");
       const executable = fs.readFileSync(executablePath);
-      fs.writeFileSync(executablePath, resourceBytes(executable));
+      const files = { "bin/bun": digest(executable) };
+      if (target.platform === "darwin") {
+        const sqlite = stageStandaloneSqlite({
+          repoRoot: root, runtimeRoot: work, bunExecutable: executablePath, ...target,
+        });
+        for (const file of sqlite.files) {
+          files[file.destination] = digest(fs.readFileSync(path.join(work, file.destination)));
+        }
+      }
+      if (target.platform === "linux") fs.writeFileSync(executablePath, resourceBytes(executable));
       fs.chmodSync(executablePath, 0o644);
-      const files = { "bin/bun": createHash("sha256").update(executable).digest("hex") };
       fs.writeFileSync(path.join(work, "manifest.json"), `${JSON.stringify({
         tag: pin.tag, commit: pin.commit, revision: pin.revision, ...target, files,
+        runtime: { flavor: "jit", executable: "bin/bun" },
       }, null, 2)}\n`);
       fs.rmSync(path.join(work, "bun-manifest.json"));
     } else {
       fs.writeFileSync(path.join(work, "manifest.json"), "{}\n");
+    }
+    // Native CI supplies its synthetic CLI next; real Tauri builds need the full package.
+    if (flavor === "jit" && !runtimeOnly && target && JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8")).files) {
+      stagePackage(root, work, target);
     }
     fs.rmSync(destination, { recursive: true, force: true });
     fs.renameSync(work, destination);
@@ -151,5 +181,5 @@ export async function stageRuntime(triple) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const host = `${process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch}-${process.platform === "darwin" ? "apple-darwin" : process.platform === "linux" ? "unknown-linux-gnu" : process.platform === "win32" ? "pc-windows-msvc" : `unknown-${process.platform}`}`;
-  await stageRuntime(process.env.TAURI_ENV_TARGET_TRIPLE || host);
+  await stageRuntime(process.env.TAURI_ENV_TARGET_TRIPLE || host, { runtimeOnly: process.argv.includes("--runtime-only") });
 }

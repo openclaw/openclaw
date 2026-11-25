@@ -5,11 +5,13 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 
 type StorageEnvironment = Readonly<SqliteWorkerStateContext["environment"]>;
 
 const storageEnvironmentKeys = new Set([
   "OPENCLAW_STATE_DIR",
+  "OPENCLAW_PROFILE",
   "OPENCLAW_SUPERVISOR_MODE",
   "OPENCLAW_HOME",
   "HOME",
@@ -78,7 +80,7 @@ export function sameSessionTranscriptTargetBinding(
     ? left.agentId === right.agentId &&
         left.sessionId === right.sessionId &&
         left.sessionKey === right.sessionKey &&
-        left.storePath === right.storePath &&
+        sameSessionTranscriptStorePath(left.storePath, right.storePath) &&
         sameSessionTranscriptStorageEnvironment(left.env, right.env)
     : left === right;
 }

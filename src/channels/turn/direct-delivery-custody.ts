@@ -1,5 +1,6 @@
 import {
   getReplyPayloadMetadata,
+  readReplyPayloadSourceOccurrence,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -9,6 +10,7 @@ import {
 } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { trackActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 import type { ChannelDeliveryInfo } from "./types.js";
 
 type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDelivery"> & {
@@ -16,6 +18,15 @@ type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDeli
   onPlatformSendDispatch: () => Promise<void>;
   release: () => void;
 };
+
+export class PendingFinalDeliveryNotOwnedError extends PlatformMessageNotDispatchedError {
+  constructor(state: string) {
+    super("Pending final delivery ownership changed before platform dispatch", {
+      cause: new Error(`pending final delivery is ${state}`),
+      retryable: false,
+    });
+  }
+}
 
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
   assertPlatformSendAuthorized: () => undefined,
@@ -43,6 +54,7 @@ export async function createDirectPendingFinalCustody(
   );
   const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
   let admission: Promise<void> | undefined;
+  let releaseActiveDelivery: (() => void) | undefined;
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
@@ -50,22 +62,24 @@ export async function createDirectPendingFinalCustody(
         ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
       }),
     assertPlatformSendAuthorized: () => assertSessionWriterDeliveryAuthorized(authority),
-    release,
+    release: () => {
+      releaseActiveDelivery?.();
+      release();
+    },
     onPlatformSendDispatch: async () => {
       // One logical delivery retains custody across all of its physical posts.
       await (admission ??= (async () => {
         if (!completion) {
           return;
         }
+        // Keep crash-safe debt, but defer its notice until this live send settles.
+        releaseActiveDelivery = trackActiveDirectPendingFinalDelivery(completion);
         const result = await settlePendingFinalDelivery(completion, "unknown", [
           "prepared",
           "queued",
         ]);
         if (result.state !== "unknown") {
-          throw new PlatformMessageNotDispatchedError(
-            "Pending final delivery ownership changed before platform dispatch",
-            { cause: new Error(`pending final delivery is ${result.state}`) },
-          );
+          throw new PendingFinalDeliveryNotOwnedError(result.state);
         }
       })());
       assertSessionWriterDeliveryAuthorized(authority);
@@ -73,12 +87,14 @@ export async function createDirectPendingFinalCustody(
   };
 }
 
-export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
+export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo, payload: ReplyPayload) {
+  const blockSource = info.kind === "block" ? readReplyPayloadSourceOccurrence(payload) : undefined;
   return {
     kind: info.kind,
     ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}
       : { assistantMessageIndex: info.assistantMessageIndex }),
+    ...(blockSource ? { blockSourceRange: blockSource.sourceRange } : {}),
   };
 }

@@ -74,7 +74,7 @@ export async function captureUpdateCommandTerminalRecord(
   assertCurrent();
   const identity = readDatabasePathIdentitySync(pathname).key;
   const record = captureCompletedUpdateRun(run.runId, assertCurrent, {
-    env: run.env,
+    ...run,
     path: pathname,
   });
   assertCurrent();

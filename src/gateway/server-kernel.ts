@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -18,6 +20,7 @@ import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -112,8 +115,14 @@ export async function createGatewayKernel(
   opts: GatewayServerOptions = {},
   options: GatewayKernelOptions = {},
 ) {
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
   const scheduler = new GatewayScheduler();
-  const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
+  const sdkResourceHost =
+    options.sdkResourceHost ??
+    new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   sdkResourceHost.bindScheduler(scheduler);
   return await sdkResourceHost.run(() =>
     createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
@@ -138,8 +147,13 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Join catalog publication and retained cancellation code before bootstrap owns resources.
   const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
-    prepareRemoteModelCatalogStartupSnapshot(),
-    import("../agents/prepared-model-runtime.js"),
+    measureGatewayBootstrapStep("gateway.catalog-startup-snapshot", () =>
+      prepareRemoteModelCatalogStartupSnapshot(),
+    ),
+    measureGatewayBootstrapStep(
+      "gateway.model-runtime-import",
+      () => import("../agents/prepared-model-runtime.js"),
+    ),
   ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
@@ -203,12 +217,16 @@ async function createGatewayKernelWithSdkHost(
         log,
         logCron,
         shutdownRuntime,
+        exitAfterStartupFailure: opts.exitAfterStartupFailure,
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
     const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
     if (databaseStartupAdmission) {
-      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars({
+        name: "database-admission",
+        ...databaseStartupAdmission.adopt(),
+      });
     }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });
@@ -255,7 +273,7 @@ async function createGatewayKernelWithSdkHost(
     await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
-      await lifecycleRuntime.closeOnStartupFailure();
+      await lifecycleRuntime.closeOnStartupFailure(startupError);
     } else {
       closeStartupTrace?.();
       await kernelState?.mentionInbox.dispose();

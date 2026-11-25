@@ -1,11 +1,8 @@
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionMember = {
-  identityId: string;
-  addedBy: string;
-  addedAt: number;
-};
+export type { SessionMember } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 
 export type SessionParticipantProjection = Pick<SessionEntry, "participants" | "participantCount">;
 
@@ -16,6 +13,7 @@ export type SessionMembershipFact = readonly [
   membership: readonly string[],
   participants: SessionParticipantProjection,
   sessionId: string | null,
+  access?: Readonly<Record<string, SessionMemberPermissionLevel>>,
 ];
 
 export type SessionMembershipFacts = {

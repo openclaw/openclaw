@@ -5,6 +5,7 @@ import {
   insertGitHubPublicationRequest,
 } from "../gateway/github-publication-store.worker.js";
 import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
@@ -20,7 +21,6 @@ import {
 } from "./github-publication-source.worker.js";
 import type {
   GitHubPublicationInsert,
-  PublicationMutationReceipt,
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
@@ -84,7 +84,7 @@ function assertRequestedSource(
     throw new Error("GitHub publication requested session changed.");
   }
   if (input.kind === "shared") {
-    assertGitHubPublicationWorktreeSource(source, input.input.worktree);
+    assertGitHubPublicationWorktreeSource(source, input.input.worktree, true);
     const actor = input.input.requester.actor;
     if ((actor.kind === "operator" ? actor.profileId : undefined) !== selector.profileId) {
       throw new Error("GitHub publication requested actor changed.");
@@ -130,7 +130,7 @@ export const publicationRequestOperations = {
   "githubPublications.insert": (
     input: PublicationWorkerOperations["githubPublications.insert"]["input"],
     { open },
-  ): PublicationMutationReceipt => {
+  ): void => {
     const database = open();
     if (input.kind === "shared") {
       ensureGitHubPublicationSchema(database.db);
@@ -148,11 +148,15 @@ export const publicationRequestOperations = {
               if (claim.sessionId !== input.input.sessionId) {
                 throw new Error("GitHub publication requested turn session changed.");
               }
-              assertSharedGitHubPublicationClaimInDatabase(database.db, {
-                claim,
-                sessionKey: input.input.request.sessionKey,
-                agentId: input.input.request.agentId,
-              });
+              // Plain-local claims belong to the host placement owner and are checked
+              // by the source admission grant; remote claims remain transaction-owned.
+              if (claim.owner.kind !== "local" || claim.owner.environmentId !== undefined) {
+                assertSharedGitHubPublicationClaimInDatabase(database.db, {
+                  claim,
+                  sessionKey: input.input.request.sessionKey,
+                  agentId: input.input.request.agentId,
+                });
+              }
             }
             const row = insertGitHubPublicationRequest(database.db, {
               ...input.input,
@@ -198,13 +202,15 @@ export const publicationRequestOperations = {
         }
         throw new Error("Unknown GitHub publication request kind.");
       };
-      const receipt = captureGitHubPublicationWorkerReceipt(database.db, () => {
-        const { value, changes } = captureGitHubPublicationChanges(write);
-        return { ...value, changes };
-      });
+      const receipt = captureGitHubPublicationWorkerReceipt(
+        sqlPublicationAnchor(database.db),
+        () => {
+          const { value, changes } = captureGitHubPublicationChanges(write);
+          return { ...value, changes };
+        },
+      );
       assertCurrent();
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
-      return receipt;
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
     });
   },
 } satisfies WorkerOperationHandlers;

@@ -1,5 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   getSqliteReadOperationRevision,
   type SqliteReadOperationRevision,
@@ -29,14 +30,14 @@ export type UserProfileCatalogIdentityRead = {
 };
 
 const retainedPages = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   SqliteReadOperationRevision & { pages: Map<string, UserProfileCatalogIdentityRead> }
 >();
 const MAX_RETAINED_PAGES = 8;
 const MAX_RETAINED_PROFILES = 1_000;
 
 function readDisplays(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids: readonly string[],
 ): ReturnType<typeof selectUserProfileDisplaysInDatabase> {
   return tableExists(db, "user_profiles")
@@ -45,7 +46,7 @@ function readDisplays(
 }
 
 function readIdentities(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids?: readonly string[],
 ): ReturnType<typeof selectStoredGitHubIdentities> {
   return tableExists(db, "user_profile_identities")
@@ -54,7 +55,7 @@ function readIdentities(
 }
 
 function readProfiles(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids: readonly string[],
   includeGitHub: boolean,
 ): Map<string, UserProfileCatalogIdentityResult> {
@@ -83,13 +84,13 @@ function readProfiles(
   );
 }
 
-function readCatalogIdentity(db: DatabaseSync, input: UserProfileCatalogIdentityInput) {
+function readCatalogIdentity(db: EngineConnection, input: UserProfileCatalogIdentityInput) {
   const accounts = new Map<string, string>();
   const owners = new Map<string, string>();
   if (input.kind === "source") {
     return { profiles: readProfiles(db, [...new Set(input.profileIds)], true), accounts, owners };
   }
-  const byAccount = new Map<string, string>();
+  const byAccount = new Map<string, string | undefined>();
   const byLogin = new Map<string, string>();
   for (const [profileId, identity] of readIdentities(db)) {
     for (const account of identity.accounts) {
@@ -97,6 +98,8 @@ function readCatalogIdentity(db: DatabaseSync, input: UserProfileCatalogIdentity
       const login = account.login.toLowerCase();
       if (!byAccount.has(id)) {
         byAccount.set(id, profileId);
+      } else if (byAccount.get(id) !== profileId) {
+        byAccount.set(id, undefined);
       }
       if (!byLogin.has(login)) {
         byLogin.set(login, profileId);
@@ -128,7 +131,7 @@ function readCatalogIdentity(db: DatabaseSync, input: UserProfileCatalogIdentity
 
 /** Committed writer revisions retain pages only while the read remains unchanged and unpinned. */
 export function readUserProfileCatalogIdentity(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: UserProfileCatalogIdentityInput,
 ): UserProfileCatalogIdentityRead {
   const revision = getSqliteReadOperationRevision(db);
@@ -138,7 +141,7 @@ export function readUserProfileCatalogIdentity(
     if (!retained) {
       retained = { ...revision, pages: new Map() };
       retainedPages.set(db, retained);
-      registerNodeSqliteDisposeCallback(db, () => retainedPages.delete(db));
+      registerNodeSqliteDisposeCallback(sqlPublicationAnchor(db), () => retainedPages.delete(db));
     } else if (
       retained.schema !== revision.schema ||
       retained.writeRevision !== revision.writeRevision ||

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
@@ -7,7 +7,6 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { transcriptSessionExportKey } from "./store-artifacts.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
@@ -19,6 +18,7 @@ import {
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
 import { appendMeetingTranscriptUtterance } from "./store-sqlite.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 type ExportInput = {
@@ -31,7 +31,7 @@ function writeTranscript<T>(
   input: { readOnly?: boolean },
   { open, stateOptions }: WorkerOperationContext,
   operationLabel: string,
-  write: (db: DatabaseSync) => T,
+  write: (db: EngineConnection) => T,
   exportInput?: ExportInput,
 ) {
   const options = { database: open(), ...stateOptions(), readOnly: input.readOnly };

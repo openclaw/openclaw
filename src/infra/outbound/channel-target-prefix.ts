@@ -16,7 +16,7 @@ const TARGET_KIND_PATTERN = new RegExp(`^(${TARGET_KIND_PREFIXES.join("|")}):`, 
 /** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
-  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const lower = trimmed.toLowerCase();
   for (const provider of providers) {
     const normalizedProvider = normalizeOptionalLowercaseString(provider);
     if (normalizedProvider && lower.startsWith(`${normalizedProvider}:`)) {
@@ -39,16 +39,6 @@ export function stripOutboundTargetKindPrefix(
     .filter((kind): kind is string => Boolean(kind))
     .join("|");
   return kindPattern ? raw.replace(new RegExp(`^(${kindPattern}):`, "i"), "").trim() : raw.trim();
-}
-
-/** Strips plugin topic suffixes while preserving ordinary colon-containing targets. */
-export function stripTargetTopicSuffix(
-  raw: string,
-  options: { allowNumericShorthand?: boolean } = {},
-): string {
-  const trimmed = raw.trim();
-  const numericTopicMatch = options.allowNumericShorthand ? /^(-?\d+):(\d+)$/.exec(trimmed) : null;
-  return numericTopicMatch?.[1] ?? trimmed.replace(/:topic:.*$/i, "").trim();
 }
 
 function resolveChannelTargetProviderPrefix(
@@ -82,8 +72,7 @@ export function validateTargetProviderPrefix(params: {
   channel: string;
   to?: string | null;
 }): Error | undefined {
-  const selectedChannel =
-    normalizeMessageChannel(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
+  const selectedChannel = normalizeMessageChannel(params.channel);
   if (!selectedChannel || selectedChannel === "last") {
     return undefined;
   }

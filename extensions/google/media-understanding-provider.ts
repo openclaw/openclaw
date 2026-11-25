@@ -85,11 +85,12 @@ async function generateGeminiInlineDataText(params: {
   });
 
   try {
-    await assertOkOrThrowProviderError(res, params.httpErrorLabel);
+    await assertOkOrThrowProviderError(res, params.httpErrorLabel, { requestHeaders: headers });
 
     const payload = await readProviderJsonResponse<GoogleGenerateContentResponse>(
       res,
       params.httpErrorLabel,
+      { requestHeaders: headers },
     );
     const parts = payload.candidates?.[0]?.content?.parts ?? [];
     const text = parts

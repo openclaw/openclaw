@@ -13,14 +13,17 @@ function withOptionalAccountId<T extends { accountId?: string | null }>(params: 
   return { ...params, accountId: params.accountId ?? undefined };
 }
 
-export const telegramThreadBindingLifecycle: Pick<
+export const telegramThreadBindingSupport: Pick<
   ConversationBindings,
+  | "prepareFork"
   | "createManager"
   | "setIdleTimeoutBySessionKey"
   | "setMaxAgeBySessionKey"
   | "setIdleTimeoutBySessionKeyAsync"
   | "setMaxAgeBySessionKeyAsync"
 > = {
+  prepareFork: async (params) =>
+    (await import("./conversation-fork.js")).prepareTelegramConversationFork(params),
   createManager: ({ cfg, accountId }) =>
     createTelegramThreadBindingManager({
       cfg,
@@ -28,6 +31,7 @@ export const telegramThreadBindingLifecycle: Pick<
       persist: false,
       enableSweeper: false,
     }),
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
   setIdleTimeoutBySessionKey: (params) =>
     setTelegramThreadBindingIdleTimeoutBySessionKey(withOptionalAccountId(params)),
   setMaxAgeBySessionKey: (params) =>

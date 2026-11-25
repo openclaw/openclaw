@@ -57,7 +57,6 @@ describe("repository prepared worker reserves", () => {
           options.runSetupScript,
           options.projectRepository,
         ),
-        preparationKey: PREPARATION_KEY,
       };
     });
     await fixture.schedule(fixture.pool({ prepareIntent }));

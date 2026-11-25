@@ -4,6 +4,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../../../config/sessions/session-entry-current.types.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import {
   capturePluginStateNativeBindingFacts,
   type PluginStatePinnedEntry,
@@ -15,10 +16,7 @@ import type {
 import { capturePluginStateNativeBindingStore } from "../../../plugin-state/plugin-state-store.native-binding.js";
 import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { sleep } from "../../../utils/sleep.js";
-import {
-  combineNativeSessionBindingAuthority,
-  type NativeSessionBindingAuthority,
-} from "./binding-authority.js";
+import type { NativeSessionBindingAuthority } from "./binding-authority.js";
 
 /** Legacy adapter for released native binding stores. */
 export function createNativeSessionBindingLeases<TRecord extends NativeSessionBindingRecord>(
@@ -98,14 +96,34 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       ttlMs?: number;
     },
     assertCurrent?: () => void,
-    authority?: NativeSessionBindingAuthority,
+    authorities: readonly NativeSessionBindingAuthority[] = [],
   ): Promise<boolean> => {
-    const mutationAuthority = await authority?.prepareMutation();
+    const mutations: Awaited<ReturnType<NativeSessionBindingAuthority["prepareMutation"]>>[] = [];
+    for (const authority of new Set(authorities)) {
+      mutations.push(await authority.prepareMutation());
+    }
+    const restrictions = mutations.flatMap(({ sessionEntryCurrent }) =>
+      sessionEntryCurrent ? [sessionEntryCurrent] : [],
+    );
+    const sessionEntryCurrent: SessionEntriesCurrentCheck | undefined = restrictions.length
+      ? {
+          sources: restrictions.flatMap(({ sources }) => sources),
+          assertCurrent: (entries) => {
+            let offset = 0;
+            for (const restriction of restrictions) {
+              restriction.assertCurrent(entries.slice(offset, offset + restriction.sources.length));
+              offset += restriction.sources.length;
+            }
+          },
+        }
+      : undefined;
     const store = state.withCurrent({
-      sessionEntryCurrent: mutationAuthority?.sessionEntryCurrent,
+      sessionEntryCurrent,
       assertCurrent: () => {
         assertCurrent?.();
-        mutationAuthority?.assertCurrent();
+        for (const mutation of mutations) {
+          mutation.assertCurrent();
+        }
       },
     });
     let observed = await store.observe(key);
@@ -144,7 +162,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     assertCurrent?: () => void,
     authority?: NativeSessionBindingAuthority,
   ): Promise<TResult> => {
-    const deadline = Date.now() + options.lease.waitMs;
+    const deadline = performance.now() + options.lease.waitMs;
     while (true) {
       assertSettled(key);
       let busy = false;
@@ -191,13 +209,12 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
           };
         },
         assertOwnerCurrent,
-        authority || owner?.authority
-          ? combineNativeSessionBindingAuthority(authority, owner?.authority)
-          : undefined,
+        [authority, owner?.authority].filter((value) => value !== undefined),
       );
       if (leaseLost) {
         const failure = options.errors.lostLease(key);
         if (owner) {
+          materializeErrorStack(failure);
           owner.failure = failure;
         }
         throw failure;
@@ -205,7 +222,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (!busy) {
         return result;
       }
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         throw options.errors.leaseTimeout(key);
       }
       await sleep(options.lease.retryIntervalMs);
@@ -254,6 +271,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
         owner.phase = "settling";
       },
       block(error, custody) {
+        materializeErrorStack(error);
         owner.phase = "unknown";
         owner.failure = error;
         unresolved.set(key, { error, custody });
@@ -376,14 +394,16 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
             throw owner.failure ?? options.errors.lostLease(key);
           }
         },
-        owner.authority,
+        owner.authority ? [owner.authority] : [],
       );
       if (!stored && owner.phase === "held") {
         owner.failure = options.errors.lostLease(key);
+        materializeErrorStack(owner.failure);
       }
     } catch (error) {
       if (owner.phase === "held") {
         owner.failure = options.errors.lostLease(key, error);
+        materializeErrorStack(owner.failure);
       }
     }
   };
@@ -416,6 +436,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     owner: (key: string) => context.getStore()?.get(key),
     assertSettled,
     block(key: string, error: Error, custody: unknown) {
+      materializeErrorStack(error);
       unresolved.set(key, { error, custody });
     },
   };
@@ -426,7 +447,7 @@ type NativeSessionBindingLease = { token: string; expiresAt: number };
 export type NativeSessionBindingRecord = { lease?: NativeSessionBindingLease };
 
 /**
- * @deprecated Use NativeSessionBindingStateStoreV2; removed in the next Plugin SDK major.
+ * @deprecated Use NativeSessionBindingStateStoreV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export type NativeSessionBindingStateStore<TRecord extends NativeSessionBindingRecord> = Pick<
   PluginStateSyncKeyedStore<TRecord>,

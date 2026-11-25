@@ -94,32 +94,15 @@ function systemDrivePrepWarning(systemDrive: string): string {
   );
 }
 
-/**
- * Emits an advisory warning when the system drive is not prepared for
- * AppContainer directory access. Non-fatal: the sandbox still activates.
- */
-export function warnMxcHostPrepIfNeeded(): void {
-  if (process.platform !== "win32") {
-    return;
-  }
-  if (!isSystemDrivePrepared()) {
-    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
-  }
-}
-
-/**
- * Fails plugin activation unless MXC's host probe selects an isolation tier for
- * `executablePath`. Degradation warnings from the probe are reported but do not
- * block activation.
- */
-export function assertMxcReadiness(params: { executablePath: string }): void {
-  if (process.platform !== "win32") {
-    return;
-  }
-  const probe = probeMxcIsolationTier(params.executablePath);
+export function prepareMxcHost(executablePath: string): void {
+  const probe = probeMxcIsolationTier(executablePath);
   if (probe.warnings.length > 0) {
     console.warn(
       `[mxc] MXC sandbox is using the ${probe.tier} isolation tier: ${probe.warnings.join("; ")}`,
     );
+  }
+  // Advisory: missing AppContainer directory access does not block activation.
+  if (!isSystemDrivePrepared()) {
+    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
   }
 }

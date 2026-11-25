@@ -60,52 +60,46 @@ export class ProtocolError extends Error {
   constructor(
     readonly code: ProtocolErrorCode,
     message: string = code,
+    name = "ProtocolError",
   ) {
     super(message);
-    this.name = "ProtocolError";
+    this.name = name;
   }
 }
 
 export class BadSignatureError extends ProtocolError {
   constructor(message?: string) {
-    super("bad_signature", message);
-    this.name = "BadSignatureError";
+    super("bad_signature", message, "BadSignatureError");
   }
 }
 export class NotPinnedError extends ProtocolError {
   constructor(message?: string) {
-    super("not_pinned", message);
-    this.name = "NotPinnedError";
+    super("not_pinned", message, "NotPinnedError");
   }
 }
 class WrongRecipientError extends ProtocolError {
   constructor(message?: string) {
-    super("wrong_recipient", message);
-    this.name = "WrongRecipientError";
+    super("wrong_recipient", message, "WrongRecipientError");
   }
 }
 export class ExpiredError extends ProtocolError {
   constructor(message?: string) {
-    super("expired", message);
-    this.name = "ExpiredError";
+    super("expired", message, "ExpiredError");
   }
 }
 export class ReplayedError extends ProtocolError {
   constructor(message?: string) {
-    super("replayed", message);
-    this.name = "ReplayedError";
+    super("replayed", message, "ReplayedError");
   }
 }
 export class TooLargeError extends ProtocolError {
   constructor(message?: string) {
-    super("too_large", message);
-    this.name = "TooLargeError";
+    super("too_large", message, "TooLargeError");
   }
 }
 export class MalformedError extends ProtocolError {
   constructor(message?: string) {
-    super("malformed", message);
-    this.name = "MalformedError";
+    super("malformed", message, "MalformedError");
   }
 }
 
@@ -143,12 +137,8 @@ const HKDF_INFO = utf8("reef-v1");
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
 export function seal(options: SealOptions): Envelope {
-  validateEnvelopeMetadata(
-    options.id,
-    options.from,
-    options.to,
-    options.ts ?? Math.floor(Date.now() / 1000),
-  );
+  const ts = options.ts ?? Math.floor(Date.now() / 1000);
+  validateEnvelopeMetadata(options.id, options.from, options.to, ts);
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
   if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
@@ -169,7 +159,7 @@ export function seal(options: SealOptions): Envelope {
     id: options.id,
     from: options.from,
     to: options.to,
-    ts: options.ts ?? Math.floor(Date.now() / 1000),
+    ts,
     epk: base64(ephemeral.publicKey),
     n: base64(nonce),
     ct: base64(gcm(key, nonce).encrypt(plaintext)),
@@ -193,7 +183,9 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       canonicalBytes(unsigned),
       decodeKey(options.senderSigningPublicKey),
     );
-  } catch {}
+  } catch {
+    // Malformed signature/key material follows the same BadSignatureError path as a mismatch.
+  }
   if (!validSignature) {
     throw new BadSignatureError();
   }

@@ -58,10 +58,11 @@ const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--bun",
 ]);
 
-/** One runtime walk preserves command identity and possible artifact operands. */
-export function resolveRuntimeScriptPosition(args: string[]): {
+/** One runtime walk locates the script, eval source, and possible artifact operands. */
+export function resolveRuntimeScriptPosition(args: readonly string[]): {
   position: number | { kind: "not-runtime" | "other" } | { kind: "unclassified"; reason: string };
   operands: Array<{ value: string; module: boolean }>;
+  sourceIndices: number[];
 } {
   const operands: Array<{ value: string; module: boolean }> = [];
   const executable = args[0] ?? "";
@@ -70,27 +71,28 @@ export function resolveRuntimeScriptPosition(args: string[]): {
   const tsx = basename === "tsx" || basename === "tsx.cmd";
   let pendingSubcommand: "run" | "watch" | undefined = bun ? "run" : tsx ? "watch" : undefined;
   let unresolved: { kind: "unclassified"; reason: string } | undefined;
-  let inlineCommand = false;
+  const sourceIndices: number[] = [];
   if (!isNodeRuntime(executable) && !bun && !tsx) {
-    return { position: { kind: "not-runtime" }, operands };
+    return { position: { kind: "not-runtime" }, operands, sourceIndices };
   }
   for (let index = 1; index < args.length; index++) {
     const arg = args[index]!;
     if (arg === "--") {
       if (!unresolved) {
         return {
-          position: !inlineCommand && args[index + 1] ? index + 1 : { kind: "other" },
+          position: sourceIndices.length === 0 && args[index + 1] ? index + 1 : { kind: "other" },
           operands,
+          sourceIndices,
         };
       }
       operands.push(...args.slice(index + 1).map((value) => ({ value, module: false })));
       break;
     }
     if (arg === "-e" || arg === "-p" || /^--(?:eval|print|run)(?:=|$)/.test(arg)) {
-      inlineCommand = true;
       if (!arg.includes("=")) {
         index++;
       }
+      sourceIndices.push(index);
       continue;
     }
     const equals = arg.indexOf("=");
@@ -117,21 +119,27 @@ export function resolveRuntimeScriptPosition(args: string[]): {
         RUNTIME_BOOLEAN_OPTIONS.has(option) ||
         (bun && (option === "--hot" || option === "--no-install")) ||
         (nodeOption && process.allowedNodeEnvironmentFlags.has(negated));
-      if (!inlineCommand && !knownBoolean && !/^--[^=]+=/.test(arg)) {
+      if (sourceIndices.length === 0 && !knownBoolean && !/^--[^=]+=/.test(arg)) {
         unresolved ??= { kind: "unclassified", reason: `unsupported runtime option ${arg}` };
       }
       if (equals >= 0 && !knownBoolean && !nodeOption) {
         operands.push({ value: arg.slice(equals + 1), module: true });
       }
-    } else if (!inlineCommand && arg === pendingSubcommand) {
+    } else if (sourceIndices.length === 0 && arg === pendingSubcommand) {
       pendingSubcommand = undefined;
-    } else if (!inlineCommand) {
+    } else if (sourceIndices.length === 0) {
       if (!unresolved) {
-        return { position: index, operands };
+        return { position: index, operands, sourceIndices };
       }
       pendingSubcommand = undefined;
       operands.push({ value: arg, module: false });
+    } else {
+      break;
     }
   }
-  return { position: unresolved ?? { kind: "other" }, operands };
+  return {
+    position: unresolved ?? { kind: "other" },
+    operands,
+    sourceIndices: unresolved ? [] : sourceIndices,
+  };
 }

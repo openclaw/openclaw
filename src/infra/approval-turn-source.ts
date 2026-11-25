@@ -1,4 +1,3 @@
-// Checks whether an approval reply can route to the initiating turn source.
 import { getRuntimeConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ChannelApprovalKind } from "./approval-types.js";

@@ -3,10 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect } from "vitest";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
-import type { AcpLedgerOptions } from "./event-ledger.types.js";
 
 type TestAcpLedgerHandle = {
   tempDir: string;
@@ -15,11 +14,11 @@ type TestAcpLedgerHandle = {
 const testLedgerHandles: TestAcpLedgerHandle[] = [];
 
 /** Creates a test-owned SQLite ACP ledger and registers its DB/tempdir cleanup. */
-export function createTestAcpEventLedger(options: AcpLedgerOptions = {}): AcpEventLedger {
+export function createTestAcpEventLedger(): AcpEventLedger {
   const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")));
   const databasePath = path.join(tempDir, "openclaw.sqlite");
   testLedgerHandles.push({ tempDir });
-  return createSqliteAcpEventLedger({ ...options, path: databasePath });
+  return createSqliteAcpEventLedger({ path: databasePath });
 }
 
 export async function withTestAcpEventLedgerDatabase<T>(
@@ -30,7 +29,7 @@ export async function withTestAcpEventLedgerDatabase<T>(
     try {
       return await fn({ databasePath });
     } finally {
-      await closeOpenClawStateDatabaseAsync();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
   });
 }
@@ -41,13 +40,9 @@ async function closeTestAcpEventLedgers(): Promise<void> {
   if (handles.length === 0) {
     return;
   }
-  try {
-    await closeOpenClawStateDatabaseAsync();
-  } catch (error) {
-    errors.push(error);
-  }
   for (const { tempDir } of handles) {
     try {
+      await closeOpenClawStateDatabaseByPathAsync(path.join(tempDir, "openclaw.sqlite"));
       fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     } catch (error) {
       errors.push(error);

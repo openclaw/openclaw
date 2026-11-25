@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
@@ -6,23 +7,26 @@ const MIN_SECRET_VALUE_LENGTH = 6;
 const MAX_SECRET_VALUES = 512;
 
 type SecretValueRedactor = (text: string, mask: (value: string, index: number) => string) => string;
-type SecretRedactionRegistryState = {
+// Native and source module copies share membership and matcher invalidation.
+const state = resolveGlobalSingleton<{
+  revision: number;
   registeredValues: Map<string, true>;
   registeredValueRedactor: SecretValueRedactor | undefined;
-};
-
-// Native and source module copies share membership and matcher invalidation.
-const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
-  Symbol.for("openclaw.secretRedactionRegistry"),
-  () => ({
-    registeredValues: new Map<string, true>(),
-    registeredValueRedactor: undefined,
-  }),
-);
+}>(Symbol.for("openclaw.secretRedactionRegistry"), () => ({
+  revision: 0,
+  registeredValues: new Map<string, true>(),
+  registeredValueRedactor: undefined,
+}));
 
 type SecretRedactionRegistrySnapshot = { values: readonly string[] };
 function invalidateMatcher(): void {
+  state.revision += 1;
   state.registeredValueRedactor = undefined;
+}
+
+/** Invalidates prepared redacted facts when exact secret membership changes. */
+export function getSecretRedactionRegistryRevision(): number {
+  return state.revision;
 }
 
 function registerOneSecretValue(value: string): void {
@@ -70,6 +74,14 @@ export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistr
   return { values: [...state.registeredValues.keys()] };
 }
 
+/** Install the request's already-expanded membership in an isolated redaction worker. */
+export function installSecretRedactionRegistrySnapshot(
+  snapshot: SecretRedactionRegistrySnapshot,
+): void {
+  state.registeredValues = new Map(snapshot.values.map((value) => [value, true]));
+  invalidateMatcher();
+}
+
 /** Replaces registered exact values while preserving the caller's mask convention. */
 export function redactRegisteredSecretValues(
   text: string,
@@ -102,16 +114,10 @@ function createSecretValueRedactor(values: readonly string[]): SecretValueRedact
       return text;
     }
     if (!compiledMatcher) {
-      const buckets = new Map<string, string[]>();
-      for (const value of values.toSorted((left, right) => right.length - left.length)) {
-        const prefix = value.slice(0, MIN_SECRET_VALUE_LENGTH);
-        const bucket = buckets.get(prefix);
-        if (bucket) {
-          bucket.push(value);
-        } else {
-          buckets.set(prefix, [value]);
-        }
-      }
+      const buckets = groupRecords(
+        values.toSorted((left, right) => right.length - left.length),
+        (value) => value.slice(0, MIN_SECRET_VALUE_LENGTH),
+      );
       // Supported store values can exceed the regex engine's literal span limit.
       // Compile fixed-width prefixes; verify complete values against the text.
       compiledMatcher = {

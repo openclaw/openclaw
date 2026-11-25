@@ -9,6 +9,10 @@ import {
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  RETIRED_COMMITMENTS_SCHEMA_SQL,
+  SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
+} from "./openclaw-state-schema-retired.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 export const logRetiredStateTableMigration = (message: string) => stateDbLog.info(message);
@@ -23,65 +27,6 @@ export const RETIRED_DEAD_STATE_TABLES_V10 = [
   "media_blobs",
   "model_capability_cache",
 ] as const;
-const RETIRED_COMMITMENTS_COLUMNS_SQL = `
-  id TEXT NOT NULL PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  account_id TEXT,
-  recipient_id TEXT,
-  thread_id TEXT,
-  sender_id TEXT,
-  kind TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
-  source TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  suggested_text TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  due_earliest_ms INTEGER NOT NULL,
-  due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL,
-  source_message_id TEXT,
-  source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL,
-  last_attempt_at_ms INTEGER,
-  sent_at_ms INTEGER,
-  dismissed_at_ms INTEGER,
-  snoozed_until_ms INTEGER,
-  expired_at_ms INTEGER,
-  record_json TEXT NOT NULL
-`;
-
-const RETIRED_COMMITMENTS_BASE_INDEXES_SQL = `CREATE INDEX idx_commitments_scope_due
-  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-CREATE INDEX idx_commitments_status_due
-  ON commitments(status, due_earliest_ms, due_latest_ms);
-CREATE INDEX idx_commitments_scope_dedupe
-  ON commitments(agent_id, session_key, channel, dedupe_key, status);`;
-
-// Canonical v7-era shape: STRICT typing plus the two indexes added after the
-// table shipped. Index fingerprints below are derived from this exact text.
-const RETIRED_COMMITMENTS_SCHEMA_SQL = `
-CREATE TABLE commitments (${RETIRED_COMMITMENTS_COLUMNS_SQL.slice(1, -1)}
-) STRICT;
-${RETIRED_COMMITMENTS_BASE_INDEXES_SQL}
-CREATE INDEX idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
-CREATE INDEX idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
-`;
-
-// The non-STRICT shape older releases actually wrote, without the later indexes.
-const SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL = `
-CREATE TABLE commitments (${RETIRED_COMMITMENTS_COLUMNS_SQL.slice(1, -1)}
-);
-${RETIRED_COMMITMENTS_BASE_INDEXES_SQL}
-`;
-
 const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
   "commitments.account_id",
   "commitments.recipient_id",
@@ -107,8 +52,7 @@ const RETIRED_COMMITMENTS_ADDITIVE_COLUMNS = [
 ] as const;
 
 function deriveRetiredCommitmentsContract() {
-  // Derivation opens guarded SQLite. Diagnostics must be importable before that
-  // capability is available; the canonical schema cache owns reuse after admission.
+  // Keep the generated contract lazy so diagnostics do not load the full catalog.
   const indexFingerprints = new Map(
     getCanonicalSqliteNamedIndexContracts(RETIRED_COMMITMENTS_SCHEMA_SQL).map(
       ({ fingerprint, name }) => [name, JSON.stringify(fingerprint)],

@@ -7,8 +7,10 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -96,7 +98,8 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--no-restart", "Skip update activation; Doctor may restore a service it stops")
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option("--no-restart", "Skip updater restart (package Gateways may restart themselves)")
     .addHelpText(
       "after",
       () =>
@@ -116,6 +119,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
+        if (hasCliProcessScope()) {
+          requestOneShotSettledExitWatchdog();
+        }
         const repair = hidden
           ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
           : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
@@ -129,6 +135,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
+          fullIntegrityCheck:
+            Boolean(opts.fullIntegrityCheck) ||
+            Boolean(inheritOptionFromParent<boolean>(actionCommand, "fullIntegrityCheck")),
           deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
       }),
@@ -155,7 +164,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
-        ["openclaw update --no-restart", "Update without restarting the service"],
+        ["openclaw update --no-restart", "Update without an updater-managed restart"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
         ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],
@@ -216,11 +225,59 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           drainTimeout: opts.drainTimeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
+          fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),
           admission: opts.admission,
         });
       } catch (err) {
         handleUpdateCommandError(err);
       }
+    });
+
+  update
+    .command("check-release")
+    .description("Check a staged release without changing configuration or state")
+    .option("--json", "Output result as JSON", false)
+    .action(async () => {
+      const deadline = setTimeout(() => {
+        defaultRuntime.writeJson({ ok: false, reason: "check-release-timeout", surfaces: [] }, 0);
+        defaultRuntime.exit(1);
+      }, 3 * 60_000);
+      try {
+        const { checkRelease } = await import("../update/check-release.js");
+        const result = await checkRelease();
+        defaultRuntime.writeJson(result, 0);
+        if (!result.ok) {
+          process.exitCode = 1;
+        }
+      } finally {
+        clearTimeout(deadline);
+      }
+    });
+
+  update
+    .command("plugins")
+    .description("Update installed plugins for this release (run by openclaw update)")
+    .requiredOption("--channel <channel>", "Update channel the plugins follow")
+    .requiredOption("--timeout <seconds>", "Budget for plugin maintenance in seconds")
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .option("--json", "Output result as JSON", false)
+    .action(async (opts: { channel: string; timeout: string; acceptCapabilities: boolean }) => {
+      const [{ maintainPlugins }, { normalizeUpdateChannel }, { parseUpdateTimeoutMs }] =
+        await Promise.all([
+          import("../update/plugins.js"),
+          import("../infra/update-channels.js"),
+          import("./update-cli/shared.js"),
+        ]);
+      const channel = normalizeUpdateChannel(opts.channel);
+      if (!channel) {
+        throw new Error(`Unknown update channel: ${opts.channel}`);
+      }
+      const result = await maintainPlugins({
+        channel,
+        timeoutMs: parseUpdateTimeoutMs(opts.timeout)!,
+        acceptCapabilities: opts.acceptCapabilities,
+      });
+      defaultRuntime.writeJson(result, 0);
     });
 
   update
@@ -324,16 +381,38 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
+    .description("Internal isolated candidate readiness protocol")
+    .option("--json", "Output the readiness receipt as JSON", true)
+    .option("--source-root <path>", "Absolute serving package root")
+    .option("--timeout <seconds>", "Override candidate check deadlines in seconds")
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
+        await updatePreflightCommand({
+          sourceRoot: typeof opts.sourceRoot === "string" ? opts.sourceRoot : undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+        });
+      }),
+    );
+
   for (const action of ["migrate", "restore", "finish"] as const) {
     setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
       .description(`Internal externally supervised update ${action}`)
       .requiredOption("--backup-root <path>", "Absolute recovery artifact prefix")
       .action(
-        createUpdateLeafAction(async (opts) => {
+        createUpdateLeafAction(async (opts, command) => {
           const { updateMigrateCommand, updateRestoreCommand, updateFinishCommand } =
             await import("./update-cli/update-command-migrate.js");
+          if (action === "migrate") {
+            await updateMigrateCommand(requiredUpdateLeafString(opts, "backupRoot"), {
+              fullIntegrityCheck: Boolean(
+                inheritOptionFromParent<boolean>(command, "fullIntegrityCheck"),
+              ),
+            });
+            return;
+          }
           const execute = {
-            migrate: updateMigrateCommand,
             restore: updateRestoreCommand,
             finish: updateFinishCommand,
           }[action];
@@ -348,6 +427,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .option("--dry-run", "Inspect recovery metadata without writes", false)
     .option("--json", "Output one JSON result; never implies consent", false)
     .option("--yes", "Acknowledge permanent loss of the selected rollback originals", false)
+    .option(
+      "--include-unmanifested <path>",
+      "Explicitly select one known unmanifested original or orphan capture (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .action(
       createUpdateLeafAction(
         async (opts, command) => {
@@ -367,6 +452,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
               Boolean(opts.dryRun) || Boolean(inheritOptionFromParent<boolean>(command, "dryRun")),
             json: Boolean(opts.json) || inheritedUpdateJson(command),
             yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(command, "yes")),
+            ...(Array.isArray(opts.includeUnmanifested) &&
+            opts.includeUnmanifested.every((value) => typeof value === "string") &&
+            opts.includeUnmanifested.length > 0
+              ? { includeUnmanifested: opts.includeUnmanifested }
+              : {}),
           });
         },
         { supportsDryRun: true },
@@ -378,7 +468,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
   update
     .command("migration-plan", { hidden: true })
-    .description("Plan Doctor-owned state migrations against an isolated snapshot")
+    .description(
+      "Diagnostic only: list Doctor-owned state migrations for an isolated snapshot (always refused; never authorizes update repair)",
+    )
     .requiredOption("--snapshot-home <path>", "Copied environment home")
     .requiredOption("--snapshot-config <path>", "Copied OpenClaw config")
     .requiredOption("--snapshot-state <path>", "Copied OpenClaw state directory")
@@ -403,6 +495,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .option(
+      "--full-integrity-check",
+      "Unavailable for prepared-release updates; use openclaw doctor --fix --full-integrity-check",
+      false,
+    )
     .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",
@@ -417,6 +514,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
+          fullIntegrityCheck:
+            Boolean(opts.fullIntegrityCheck) ||
+            Boolean(inheritOptionFromParent<boolean>(command, "fullIntegrityCheck")),
         });
       }),
     );
@@ -425,7 +525,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("status")
     .description("Show update channel and version status")
     .option("--json", "Output result as JSON", false)
-    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+    .option("--timeout <seconds>", "Check timeout (default: shared 30s; longer values extend it)")
     .addHelpText(
       "after",
       () =>

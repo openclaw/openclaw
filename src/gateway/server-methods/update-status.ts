@@ -1,11 +1,11 @@
 import { performance } from "node:perf_hooks";
 import {
   validateUpdateHoldParams,
-  validateUpdateHoldResult,
   validateUpdateRunsGetParams,
   validateUpdateRunsListParams,
   validateUpdateStatusParams,
-  validateUpdateStatusResult,
+  type UpdateHoldResult,
+  type UpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -152,7 +152,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       const externalSupervisorGuidance = await resolveExternalSupervisorGuidance("update", {
         config: currentConfig,
       });
-      const result = {
+      const result: UpdateStatusResult = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
         ...(lastRun ? { lastRun: toPublicUpdateRun(lastRun) } : {}),
@@ -161,13 +161,6 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         ...(schedule ? { schedule } : {}),
         ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
       };
-      if (!validateUpdateStatusResult(result)) {
-        respond(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "update status is temporarily unavailable",
-        });
-        return;
-      }
       respond(true, result);
     } finally {
       if (timing && startedAt !== undefined && areDiagnosticsEnabledForProcess()) {
@@ -213,17 +206,10 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         reason,
       });
     }
-    const result = {
+    const result: UpdateHoldResult = {
       ok,
       ...(schedule ? { schedule } : {}),
     };
-    if (!validateUpdateHoldResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update hold status is temporarily unavailable",
-      });
-      return;
-    }
     respond(true, result);
   },
   "update.runs.get": async ({ params, respond, context }) => {

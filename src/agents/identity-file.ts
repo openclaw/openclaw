@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
@@ -90,7 +91,10 @@ function normalizeIdentityLabel(label: string): string {
 }
 
 function parseIdentityLine(line: string): { label: string; value: string } | undefined {
-  const cleaned = line.trim().replace(/^\s*-\s*/, "");
+  const cleaned = line
+    .trim()
+    .replace(/^\s*-\s*/, "")
+    .replace(/^([*_`]+)([A-Za-z]+):\1/u, "$2:");
   const colonIndex = cleaned.indexOf(":");
   return colonIndex === -1
     ? undefined
@@ -100,6 +104,23 @@ function parseIdentityLine(line: string): { label: string; value: string } | und
       };
 }
 
+function stripIdentityValueDecoration(value: string): string {
+  let cleaned = value.trim();
+  for (;;) {
+    const paired = cleaned.match(/^(\*{1,2}|_{1,2}|`+)([\s\S]+)\1$/u);
+    const marker = paired?.[1];
+    const inner = paired?.[2];
+    if (!marker || inner === undefined) {
+      return cleaned;
+    }
+    cleaned = inner.trim();
+    // Code spans preserve their contents, including literal emphasis markers.
+    if (marker.startsWith("`")) {
+      return cleaned;
+    }
+  }
+}
+
 function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
   const identity: AgentIdentityFile = {};
   for (const line of content.split(/\r?\n/)) {
@@ -107,7 +128,7 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
     if (!parsed) {
       continue;
     }
-    const value = parsed.value.replace(/^[*_`\s]+|[*_`\s]+$/g, "").trim();
+    const value = stripIdentityValueDecoration(parsed.value);
     if (!value || IDENTITY_PLACEHOLDER_VALUES.has(normalizeIdentityValue(value))) {
       continue;
     }
@@ -207,7 +228,7 @@ export type IdentityFileRead = { identityPath: string; knownRevision?: string };
 export type IdentityFileSnapshot =
   | { kind: "unchanged" }
   | { kind: "loaded"; revision: string; size: number; identity: AgentIdentityFile | null }
-  | { kind: "missing" | "too-large" };
+  | { kind: "missing" | "too-large" | "invalid-encoding" };
 
 /** Shared admission kernel for the worker and the shipped synchronous SDK reader. */
 export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileSnapshot {
@@ -241,6 +262,9 @@ export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileS
         return { kind: "unchanged" };
       }
       const buffer = readFileDescriptorBoundedSync(opened.fd, MAX_IDENTITY_FILE_BYTES);
+      if (!isUtf8(buffer)) {
+        return { kind: "invalid-encoding" };
+      }
       const identity = parseIdentityMarkdown(buffer.toString("utf-8"));
       return {
         kind: "loaded",
@@ -264,6 +288,9 @@ export async function loadAgentIdentityFromFile(
 ): Promise<AgentIdentityFile | null> {
   const { prepareIdentityFile } = await import("./identity-file-runtime.js");
   const result = await prepareIdentityFile(identityPath);
+  if (result.kind === "invalid-encoding") {
+    throw new Error(`Identity file ${identityPath} must be valid UTF-8`);
+  }
   if (result.kind === "too-large") {
     throw new Error(
       `Identity file ${identityPath} exceeds the maximum size of ${MAX_IDENTITY_FILE_BYTES} bytes`,

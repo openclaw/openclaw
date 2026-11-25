@@ -1,4 +1,3 @@
-// Imessage plugin module verifies provider message ownership in the local Messages database.
 import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isIMessageEmailChatIdentifier, type IMessageChatContext } from "./chat-context.js";
 import { openIMessageChatDbReader, type IMessageChatDbOperations } from "./chat-db.js";

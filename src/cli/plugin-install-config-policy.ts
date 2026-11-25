@@ -1,75 +1,29 @@
 import type { Command } from "commander";
 import {
+  resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
 
-function resolvePluginInstallArgvTokens(commandPath: string[], argv: string[]): string[] {
-  const args = argv.slice(2);
-  let cursor = 0;
-  for (const segment of commandPath) {
-    while (cursor < args.length && args[cursor] !== segment) {
-      cursor += 1;
-    }
-    if (cursor >= args.length) {
-      return [];
-    }
-    cursor += 1;
-  }
-  return args.slice(cursor);
-}
-
-function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) {
-  const tokens = resolvePluginInstallArgvTokens(commandPath, argv);
-  let rawSpec: string | null = null;
-  let marketplace: string | undefined;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens.at(index);
-    if (token === undefined) {
-      break;
-    }
-    if (token.startsWith("--marketplace=")) {
-      marketplace = token.slice("--marketplace=".length);
-      continue;
-    }
-    if (token === "--marketplace") {
-      const value = tokens[index + 1];
-      if (typeof value === "string") {
-        marketplace = value;
-        index += 1;
-      }
-      continue;
-    }
-    if (token.startsWith("-")) {
-      continue;
-    }
-    rawSpec ??= token;
-  }
-  return rawSpec ? { rawSpec, marketplace } : null;
-}
-
-/** Recover the plugin install request from Commander state plus raw argv fallback parsing. */
-export function resolvePluginInstallPreactionRequest(params: {
-  actionCommand: Command;
-  commandPath: string[];
-  argv: string[];
-}): PluginInstallRequestContext | null {
-  if (params.commandPath[0] !== "plugins" || params.commandPath[1] !== "install") {
-    return null;
-  }
-  const argvRequest = resolvePluginInstallArgvRequest(params.commandPath, params.argv);
-  const opts = params.actionCommand.opts<Record<string, unknown>>();
+/** Commander resolves arguments and options before invoking pre-action hooks. */
+function resolvePluginInstallPreactionRequest(
+  actionCommand: Command,
+): PluginInstallRequestContext | null {
+  const opts = actionCommand.opts<Record<string, unknown>>();
   const marketplace =
-    (typeof opts.marketplace === "string" && opts.marketplace.trim()
-      ? opts.marketplace
-      : argvRequest?.marketplace) || undefined;
+    typeof opts.marketplace === "string" ? opts.marketplace || undefined : undefined;
   const rawSpec =
-    (typeof params.actionCommand.processedArgs?.[0] === "string"
-      ? params.actionCommand.processedArgs[0]
-      : argvRequest?.rawSpec) ?? null;
+    typeof actionCommand.processedArgs[0] === "string" ? actionCommand.processedArgs[0] : null;
   if (!rawSpec) {
     return null;
   }
   const request = resolvePluginInstallRequestContext({ rawSpec, marketplace });
   return request.ok ? request.request : null;
+}
+
+export function allowsPluginInstallConfigRecovery(actionCommand: Command): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(resolvePluginInstallPreactionRequest(actionCommand)) ===
+    "allow-plugin-recovery"
+  );
 }

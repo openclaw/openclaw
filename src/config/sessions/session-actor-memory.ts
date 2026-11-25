@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { validateWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
   SessionActor,
@@ -23,9 +22,13 @@ import {
   selectSessionActorMemoryConversations,
   syncSessionActorMemoryConversations,
 } from "./session-actor-memory-conversation.js";
+import type {
+  MemoryOwnerOptions,
+  MemorySessionActorOwner,
+} from "./session-actor-memory-owner-contract.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
 import { publishSessionActorMemoryChanges } from "./session-actor-memory-publication.js";
-import { validateSessionActorMemoryRecoveryInput } from "./session-actor-memory-recovery.js";
+import { registerMemorySessionActorHandle } from "./session-actor-memory-registry.js";
 import { validateSessionActorMemorySources } from "./session-actor-memory-sources.js";
 import {
   advanceSessionActorMemoryState,
@@ -47,6 +50,7 @@ import {
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
 
 function errorFacts(error: unknown) {
   return error instanceof Error
@@ -54,18 +58,10 @@ function errorFacts(error: unknown) {
     : { name: "Error", message: "Session actor command failed" };
 }
 
-const actorOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.memorySessionActorHandles"),
-  () => new WeakMap<SessionActor, ReturnType<typeof createMemorySessionActorOwner>>(),
-);
-
-/** A selected handle retains its actual owner, including directly constructed owners. */
-export function readMemorySessionActorOwner(actor: SessionActor) {
-  return actorOwners.get(actor);
-}
-
 /** Memory is authoritative until session close; it is never evicted into a database. */
-export function createMemorySessionActorOwner(options: { agentId: string; path: string }) {
+export function createMemorySessionActorOwner(
+  options: MemoryOwnerOptions,
+): MemorySessionActorOwner {
   const identity = Object.freeze({
     kind: "memory" as const,
     handle: randomUUID(),
@@ -87,7 +83,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
     }
   };
   let queue = Promise.resolve();
-  const enqueue = <T>(run: () => T): Promise<T> => {
+  const enqueue = <T>(run: () => T | Promise<T>): Promise<T> => {
     const result = queue.then(run);
     queue = result.then(
       () => {},
@@ -111,11 +107,10 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       }
       const { sessionKey } = requestedTarget;
       if (
-        !isIncognitoSessionKey(sessionKey) ||
         parseAgentSessionKey(sessionKey)?.agentId !== options.agentId ||
         toAgentStoreSessionKey({ agentId: options.agentId, requestKey: sessionKey }) !== sessionKey
       ) {
-        throw new Error("Memory session actors require an incognito session key");
+        throw new Error("Memory session actors require a canonical session key for their agent");
       }
       const target = structuredClone(requestedTarget);
       let selected = sessions.get(sessionKey);
@@ -169,9 +164,10 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
               },
             }),
             snapshot,
+            snapshotEntry: snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
             command: (phase, input, authority, observer) =>
-              enqueue(() => {
+              enqueue(async () => {
                 type Value = SessionActorPhaseResults[typeof phase];
                 try {
                   const before = current();
@@ -229,8 +225,6 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     },
                     ...transcript,
                     validateSources,
-                    validateRecoveryInput: (claim) =>
-                      validateSessionActorMemoryRecoveryInput(working, claim),
                     mutatePendingInput: (value) => pending.mutate(value),
                     admit,
                   });
@@ -245,6 +239,14 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                   }
                   prepareInstall(working);
                   advanceSessionActorMemoryState(working);
+                  if (authority.readCustody?.length) {
+                    await prepareSessionStoreCandidatesInWorker({
+                      validate: { readCustody: authority.readCustody, candidates: [], sources: [] },
+                    });
+                  }
+                  for (const evidence of authority.workspaceEvidence ?? []) {
+                    await validateWorkspaceFilesystemEvidence(evidence);
+                  }
                   // This is the sole effect boundary; no asynchronous work runs inside it.
                   authority.authorize("commit", structuredClone(working.hot));
                   guards.assertAccepted();
@@ -290,7 +292,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
           };
         },
       });
-      actorOwners.set(actor, owner);
+      registerMemorySessionActorHandle(actor, owner);
       return actor;
     },
   };
@@ -305,7 +307,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
     authority.assertCurrent();
     return hot;
   };
-  const owner = {
+  const owner: MemorySessionActorOwner = {
     ...createSessionActorMemoryConversationOwner({
       conversations: () => conversations,
       installConversations: (value) => {

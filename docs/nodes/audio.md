@@ -15,7 +15,7 @@ When audio understanding is enabled (or auto-detected), OpenClaw:
 
 1. Locates the first audio attachment (local path or URL) and downloads it if needed.
 2. Enforces `maxBytes` before sending to each model entry.
-3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried.
+3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried. A provider that returns an empty transcript for audio without detected speech is skipped, not failed; a batch response missing a required transcript field in any channel is still a failure. A Deepgram Flux stream that closes cleanly after flushing audio without any turns also represents silence.
 4. On success, replaces `Body` with an `[Audio]` block and sets `{{Transcript}}`.
 
 When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcript so slash commands still work. With `--verbose`, logs show when transcription runs and when it replaces the body.
@@ -71,7 +71,7 @@ The provider inventory reports the local fallback winner separately from global 
 OpenAI audio uses the standard `/v1/audio/transcriptions` endpoint with the
 selected API-key or ChatGPT/Codex OAuth profile. An OAuth login can transcribe
 when the account permits it; access, quota, and billing remain account-specific.
-The default model is `gpt-4o-transcribe`; configured models, prompts, and language
+The default model is `gpt-transcribe`; configured models, prompts, and language
 hints are sent through the same multipart request for either credential class.
 Custom endpoints and request overrides require an API-key profile.
 
@@ -136,7 +136,7 @@ installation, run them once for that agent.
          models: [
            {
              provider: "openai",
-             model: "gpt-4o-transcribe",
+             model: "gpt-transcribe",
              profile: "openai:audio",
              baseUrl: "https://api.openai.com/v1",
              capabilities: ["audio"],
@@ -172,7 +172,7 @@ provider-wide rather than scoped to the audio model entry.
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        { provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] },
         {
           type: "cli",
           command: "whisper",
@@ -181,7 +181,7 @@ provider-wide rather than scoped to the audio model entry.
           capabilities: ["audio"],
         },
       ],
-      audio: { enabled: true, preferredModel: "openai/gpt-4o-transcribe" },
+      audio: { enabled: true, preferredModel: "openai/gpt-transcribe" },
     },
   },
 }
@@ -260,9 +260,11 @@ provider-wide rather than scoped to the audio model entry.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
-- OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
+- OpenAI auto-detect default is `gpt-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
+- Telegram echoes with an account, chat, and source message ID use the durable outbound queue to suppress same-source replays. Completed receipts are retained for 24 hours, capped at 2,000 receipts across Telegram transcript echoes; replay after pruning can echo again. If durable admission fails, the keyed echo is skipped while transcription and agent replies continue.
+- For deliverable channels (Telegram, Discord, WhatsApp, …) the echo is sent as an outbound message before agent processing. WebChat/Control UI and the mobile apps are internal clients, not deliverable channels: there the formatted transcript is persisted as part of the user's own turn text in the session transcript, so it stays visible in `chat.history` after reload. WebChat never becomes an outbound channel for the echo. Internal clients use the configured audio attachment selection for this transcription and reuse that selection during later media processing. An empty `echoFormat` or one without `{transcript}` leaves speech processing to the normal media pipeline and adds no transcript text to history.
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.

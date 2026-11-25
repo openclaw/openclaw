@@ -1,94 +1,263 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI session kinds" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("sorts and groups by displayed kind while preserving pins", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const sessions = [
-        { key: "agent:main:alpha", kind: "direct", label: "Alpha conversation", updatedAt: 6 },
-        { key: "agent:main:cron:daily", kind: "direct", label: "Daily check", updatedAt: 5 },
-        { key: "agent:main:beta", kind: "direct", label: "Beta conversation", updatedAt: 4 },
-        { key: "agent:main:room", kind: "group", label: "Project room", updatedAt: 3 },
-        { key: "cron:weekly", kind: "direct", label: "Weekly check", updatedAt: 2 },
-        {
-          key: "agent:main:pinned",
-          kind: "direct",
-          label: "Pinned conversation",
-          updatedAt: 1,
-          pinned: true,
-          pinnedAt: 100,
-        },
-      ];
-      const gateway = await installMockGateway(page, {
-        sessionKey: "unknown",
+  it("keeps the sessions header and actions usable on desktop", async () => {
+    const width = 1440;
+    await suite.withPage(
+      { viewport: { width, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const header = page.locator(".sessions-hub-header");
+        const title = header.getByRole("heading", { name: "Sessions", level: 1 });
+        await title.waitFor({ state: "visible" });
+        await expect
+          .poll(() =>
+            header.evaluate((element) => {
+              const heading = element.querySelector(".page-title")?.getBoundingClientRect();
+              const tabRow = element
+                .querySelector(".hub-page-header__tabs")
+                ?.getBoundingClientRect();
+              return heading && tabRow
+                ? {
+                    visibleTitle: heading.width > 1 && heading.height > 1,
+                    leftAligned: Math.abs(heading.left - tabRow.left) <= 1,
+                    tabsBelowTitle: tabRow.top >= heading.bottom,
+                  }
+                : null;
+            }),
+          )
+          .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
+
+        const actions = page.locator(".settings-section__actions");
+        const search = actions.getByRole("button", { name: "Search chats" });
+        const refresh = actions.getByRole("button", { name: "Refresh" });
+        const filter = actions.getByRole("button", { name: "Filters", exact: true });
+        const create = actions.getByRole("link", { name: "New session" });
+        const controls = [search, refresh, filter, create];
+        for (const control of controls) {
+          await control.waitFor({ state: "visible" });
+        }
+        expect(await create.getAttribute("href")).toContain("/new");
+        const styles = await Promise.all(
+          controls.map((control) =>
+            control.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                left: element.getBoundingClientRect().left,
+                width: element.getBoundingClientRect().width,
+                height: element.getBoundingClientRect().height,
+                background: style.backgroundColor,
+              };
+            }),
+          ),
+        );
+        for (let index = 1; index < styles.length; index++) {
+          expect(styles[index - 1]!.left).toBeLessThan(styles[index]!.left);
+        }
+        expect(
+          styles.slice(0, 3).every(({ background }) => background === "rgba(0, 0, 0, 0)"),
+        ).toBe(true);
+        expect(styles[3]?.background).not.toBe("rgba(0, 0, 0, 0)");
+        expect(await page.locator(".settings-section__heading .settings-count").count()).toBe(0);
+        expect(await page.locator(".sessions-filter-bar").count()).toBe(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+        await search.click();
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
+        await transcriptInput.waitFor();
+        await transcriptInput.press("Escape");
+        await filter.click();
+        const popover = page.locator(".sessions-filter-popover:popover-open");
+        await popover.waitFor();
+        await popover.getByRole("searchbox", { name: "Search sessions…" }).waitFor();
+        await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
+        await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
+        await page.keyboard.press("Escape");
+        await create.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      },
+    );
+  });
+
+  // Narrow phones drop the big title but keep the heading for assistive tech.
+  it.each([
+    [390, false],
+    [620, false],
+  ])("keeps the phone list toolbar usable at %i px", async (width, visibleTitle) => {
+    await suite.withPage(
+      { viewport: { width, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const title = page
+          .locator(".sessions-hub-header")
+          .getByRole("heading", { name: "Sessions", level: 1 });
+        await title.waitFor({ state: "attached" });
+        expect(await title.evaluate((heading) => heading.getBoundingClientRect().width > 1)).toBe(
+          visibleTitle,
+        );
+
+        const actions = page.locator(".settings-section__actions");
+        const search = actions.getByRole("button", { name: "Search chats" });
+        const refresh = actions.getByRole("button", { name: "Refresh" });
+        const filter = actions.getByRole("button", { name: "Filters", exact: true });
+        await actions.getByRole("searchbox", { name: "Search sessions" }).waitFor();
+        for (const control of [search, refresh, filter]) {
+          await control.waitFor({ state: "visible" });
+        }
+        // The header's new-session action covers this one on phones.
+        expect(await actions.getByRole("link", { name: "New session" }).isVisible()).toBe(false);
+        expect(await page.locator(".session-list-cell").count()).toBeGreaterThan(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+
+        await search.click();
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
+        await transcriptInput.waitFor();
+        await transcriptInput.press("Escape");
+        await filter.click();
+        const sheet = page.locator(".sessions-filter-popover:popover-open");
+        await sheet.getByRole("radiogroup", { name: "Session state" }).waitFor();
+        for (const [label, value] of [
+          ["Group by", "Agent"],
+          ["Sort", "Session"],
+          ["Direction", "Ascending"],
+        ]) {
+          const choice = sheet.getByRole("combobox", { name: label, exact: true });
+          await choice.selectOption({ label: value });
+          await expect.poll(() => choice.locator("option:checked").textContent()).toBe(value);
+        }
+        await sheet.getByRole("button", { name: "Close" }).last().click();
+        await sheet.waitFor({ state: "hidden" });
+
+        const row = page.locator(".session-data-row").first();
+        await row.getByRole("checkbox").check();
+        const bulkCount = page.locator(".data-table-bulk-bar > span");
+        const rowTitle = row.locator(".session-list-cell__title");
+        expect(await bulkCount.evaluate((el) => el.getBoundingClientRect().left)).toBe(
+          await rowTitle.evaluate((el) => el.getBoundingClientRect().left),
+        );
+        await row.locator(".session-details-toggle").click();
+        const details = page.locator(".session-details-panel");
+        const factLeft = await details
+          .locator(".session-detail-stat__label")
+          .first()
+          .evaluate((el) => el.getBoundingClientRect().left);
+        expect(
+          await details
+            .locator(".session-details-panel__eyebrow")
+            .evaluateAll((headings) => headings.map((el) => el.getBoundingClientRect().left)),
+        ).toEqual([factLeft, factLeft]);
+      },
+    );
+  });
+
+  it("shows the full expanded session name without pushing its badges out of the phone drawer", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const row = sessionRow(
+        "agent:main:dashboard:77d49b41-7f39-496e-987d-19c8ab47be60",
+        "Release readiness for the international observatory calibration workspaces",
+        10,
+      );
+      await installMockGateway(page, {
         methodResponses: {
           "sessions.list": {
-            count: sessions.length,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
+            sessions: [row],
+            count: 1,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
             path: "",
-            sessions,
             ts: 10,
           },
+          "sessions.describe": { session: row },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const drawer = page.locator("openclaw-sessions-page .session-details-panel");
+      await page.locator(".session-data-row .session-details-toggle").click();
+      await drawer.waitFor();
+      const heading = drawer.locator(".session-details-panel__title");
+      const fullHeading = await heading.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return Array.from(range.getClientRects()).every(
+          (rect) => rect.right <= el.getBoundingClientRect().right + 1,
+        );
+      });
+      expect(fullHeading).toBe(true);
+      const badges = await drawer.locator(".session-details-panel__badges").boundingBox();
+      const panel = await drawer.boundingBox();
+      expect(badges!.x + badges!.width).toBeLessThanOrEqual(panel!.x + panel!.width);
+    });
+  });
+
+  it("groups by displayed kind while keeping the scan table compact", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const sessions = [
+        sessionRow("agent:main:alpha", "Alpha conversation", 6),
+        sessionRow("agent:main:cron:daily", "Daily check", 5),
+        sessionRow("agent:main:beta", "Beta conversation", 4),
+        sessionRow("agent:main:room", "Project room", 3, { kind: "group" }),
+        sessionRow("cron:weekly", "Weekly check", 2),
+        sessionRow("agent:main:pinned", "Pinned conversation", 1),
+      ];
+      await installMockGateway(page, {
+        sessionKey: "unknown",
+        sessions,
+        presenceUsers: [{ id: "reader", self: true }],
+        bootstrapPreferences: {
+          profileId: "reader",
+          entries: { "ui.railShortcuts": ["session:agent:main:pinned"] },
         },
       });
       await page.goto(`${suite.server.baseUrl}sessions`);
       const table = page.locator(".sessions-table");
       await expect.poll(() => table.locator(".session-data-row").count()).toBe(6);
-      const kinds = () => table.locator(".session-data-row .session-kind").allTextContents();
-      const kindHeader = table.locator("th[data-sortable]").filter({ hasText: "Kind" });
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("descending");
-      expect.soft(await kinds()).toEqual(["direct", "group", "direct", "direct", "cron", "cron"]);
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("ascending");
-      const ascending = await kinds();
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "kind-sort.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [table]),
-        );
-      }
-      expect.soft(ascending).toEqual(["direct", "cron", "cron", "direct", "direct", "group"]);
+      expect(await table.locator("thead th").allTextContents()).toEqual([
+        "",
+        "Session",
+        "Updated",
+        "Actions",
+      ]);
+      expect(await table.locator(".session-data-row .session-kind").count()).toBe(0);
+      const selectAllLeft = await table
+        .getByRole("checkbox", { name: "Select all on page", exact: true })
+        .evaluate((box) => box.getBoundingClientRect().left);
+      expect(
+        await table
+          .getByRole("checkbox", { name: /^Select session:/ })
+          .first()
+          .evaluate((box) => box.getBoundingClientRect().left),
+      ).toBe(selectAllLeft);
 
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      const filters = page.getByRole("button", { name: "Filters", exact: true });
+      const popover = page.locator(".sessions-filter-popover");
+      const openFilters = async () => {
+        await filters.click();
+        await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      };
+      await openFilters();
       await page.locator(".session-groupby__select").selectOption("kind");
       await page.keyboard.press("Escape");
-      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
+      await popover.waitFor({ state: "hidden" });
       await table.locator(".session-group-row").first().waitFor();
       const groups = await table.locator(".session-group-row__label").allTextContents();
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "kind-groups.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [table]),
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "kind-proof.json"),
-          JSON.stringify(
-            { ascending, groups, requests: await gateway.getRequests("sessions.list") },
-            null,
-            2,
-          ),
-        );
-      }
       expect.soft(groups).toEqual(["cron", "direct", "group"]);
-      expect.soft(await kinds()).toEqual(["cron", "cron", "direct", "direct", "direct", "group"]);
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      await openFilters();
       await page.locator(".session-groupby__select").selectOption("none");
       await expect.poll(() => table.locator(".session-group-row").count()).toBe(0);
       expect(await table.locator(".session-data-row").first().textContent()).toContain(
         "Pinned conversation",
       );
       await page.keyboard.press("Escape");
-      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
+      await popover.waitFor({ state: "hidden" });
       await table
         .locator(".session-data-row")
         .filter({ hasText: "Daily check" })
@@ -99,22 +268,19 @@ suite.define(() => {
       expect(await details.locator(".session-kind").textContent()).toBe("cron");
       expect(
         await details
-          .locator(".session-detail-stat")
-          .filter({ has: page.locator(".session-detail-stat__label", { hasText: "Kind" }) })
+          .locator('.session-detail-stat:has(.session-detail-stat__label:text("Kind"))')
           .locator(".session-detail-stat__value")
           .textContent(),
       ).toBe("cron");
 
-      const search = page.locator(".sessions-toolbar__search input");
+      await openFilters();
+      const search = popover.locator(".sessions-filter-popover__search input");
       await search.fill("Pinned");
-      const filters = page.getByRole("button", { name: "Filters", exact: true });
-      await filters.click();
-      const popover = page.locator(".sessions-filter-popover");
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      expect(await search.inputValue()).toBe("Pinned");
       await expect
-        .poll(() => popover.evaluate((element) => document.activeElement === element))
+        .poll(() => popover.evaluate((element) => element.contains(document.activeElement)))
         .toBe(true);
-      await page.keyboard.press("Escape");
+      await filters.click();
       await popover.waitFor({ state: "hidden" });
       await expect
         .poll(() => filters.evaluate((element) => document.activeElement === element))

@@ -23,14 +23,6 @@ type ReplyDispatchBeforeDeliverStageInput =
 type ReplyDispatchBeforeDeliverStages = readonly ReplyDispatchBeforeDeliverStage[];
 const stagesByHook = new WeakMap<ReplyDispatchBeforeDeliver, ReplyDispatchBeforeDeliverStages>();
 
-function resolveTimeoutMs(options: ReplyDispatchBeforeDeliverOptions | undefined): number {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
-  }
-  return timeoutMs;
-}
-
 export async function runReplyDispatchBeforeDeliverStage(
   stage: ReplyDispatchBeforeDeliverStage,
   payload: ReplyPayload,
@@ -49,27 +41,30 @@ export async function runReplyDispatchBeforeDeliverStage(
   );
 }
 
-function resolveStages(
-  input: ReplyDispatchBeforeDeliverStageInput,
-): readonly ReplyDispatchBeforeDeliverStage[] {
-  if (!input) {
-    return [];
-  }
-  const hook = typeof input === "function" ? input : input.hook;
-  return (
-    stagesByHook.get(hook) ?? [
-      {
-        hook,
-        timeoutMs: resolveTimeoutMs(typeof input === "function" ? undefined : input.options),
-      },
-    ]
-  );
-}
-
 export function composeReplyDispatchBeforeDeliver(
   ...hooks: ReplyDispatchBeforeDeliverStageInput[]
 ): ReplyDispatchBeforeDeliver | undefined {
-  const stages = hooks.flatMap(resolveStages);
+  const stages = hooks.flatMap((input): readonly ReplyDispatchBeforeDeliverStage[] => {
+    if (!input) {
+      return [];
+    }
+    const hook = typeof input === "function" ? input : input.hook;
+    const existing = stagesByHook.get(hook);
+    if (existing) {
+      return existing;
+    }
+    const options = typeof input === "function" ? undefined : input.options;
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
+    }
+    return [
+      {
+        hook,
+        timeoutMs,
+      },
+    ];
+  });
   if (stages.length === 0) {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,54 +10,18 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../../src/config/runtime-snapshot.js";
+import type { AgentSandboxConfig } from "../../../../src/config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 
 afterEach(clearRuntimeConfigSnapshot);
 
-function createConfig(params: {
-  image: string;
-  prefix: string;
-  workspaceRoot: string;
-}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        skipBootstrap: true,
-        sandbox: {
-          mode: "all",
-          backend: "docker",
-          scope: "session",
-          workspaceAccess: "rw",
-          workspaceRoot: params.workspaceRoot,
-          docker: {
-            image: params.image,
-            containerPrefix: params.prefix,
-          },
-          browser: { enabled: false },
-          prune: { idleHours: 0, maxAgeDays: 0 },
-        },
-      },
-    },
-    tools: {
-      exec: {
-        host: "auto",
-        security: "full",
-        ask: "off",
-      },
-    },
-  };
-}
-
 test("host:auto executes inside the resolved Docker sandbox", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandboxed-exec-"));
-  const stateDir = path.join(root, "state");
   const workspaceDir = path.join(root, "workspace");
   const outsideDir = path.join(root, "host-only");
   const outsideScript = path.join(outsideDir, "must-not-run.sh");
   const outsideMarker = path.join(outsideDir, "executed.txt");
-  const workspaceMarker = path.join(workspaceDir, "container-marker.txt");
-  const image = process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:bookworm-slim";
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
   let runtimeId: string | undefined;
 
@@ -69,16 +34,29 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
     `#!/bin/sh\nprintf executed > ${JSON.stringify(outsideMarker)}\n`,
     { mode: 0o755 },
   );
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state"));
 
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:sandboxed-exec:qa:${sessionId}`;
-    const config = createConfig({
-      image,
-      prefix: `oc-qa-exec-${process.pid}-`,
+    const execPolicy = { host: "auto", security: "full", ask: "off" } as const;
+    const sandbox: AgentSandboxConfig = {
+      mode: "all",
+      backend: "docker",
+      scope: "session",
+      workspaceAccess: "rw",
       workspaceRoot: path.join(root, "sandboxes"),
-    });
+      docker: {
+        image: process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:trixie-slim",
+        containerPrefix: `oc-qa-exec-${process.pid}-`,
+      },
+      browser: { enabled: false },
+      prune: { idleHours: 0, maxAgeDays: 0 },
+    };
+    const config: OpenClawConfig = {
+      agents: { defaults: { skipBootstrap: true, sandbox } },
+      tools: { exec: execPolicy },
+    };
     setRuntimeConfigSnapshot(config);
     const workspace = await resolveAttemptWorkspaceSandbox({
       agentId: "sandboxed-exec",
@@ -87,26 +65,20 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
       sessionKey,
       workspaceDir,
     });
-    expect(workspace.sandbox).not.toBeNull();
-    if (!workspace.sandbox) {
-      throw new Error("expected a provisioned Docker sandbox");
-    }
+    assert(workspace.sandbox, "expected a provisioned Docker sandbox");
     runtimeId = workspace.sandbox.runtimeId;
 
     const exec = createOpenClawCodingTools({
       agentId: workspace.sessionAgentId,
       config,
       cwd: workspace.effectiveCwd,
-      exec: { host: "auto", security: "full", ask: "off" },
+      exec: execPolicy,
       sandbox: workspace.sandbox,
       sessionId,
       sessionKey,
       workspaceDir: workspace.effectiveWorkspace,
     }).find((tool) => tool.name === "exec");
-    expect(exec).toBeDefined();
-    if (!exec) {
-      throw new Error("exec tool missing from sandboxed agent surface");
-    }
+    assert(exec, "exec tool missing from sandboxed agent surface");
 
     const result = await exec.execute("sandboxed-exec", {
       command: [
@@ -125,9 +97,11 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
     expect(result.details).toMatchObject({
       status: "completed",
       exitCode: 0,
+      aggregated: expect.stringContaining("sandbox-ok"),
     });
-    expect((result.details as { aggregated?: string }).aggregated).toContain("sandbox-ok");
-    await expect(fs.readFile(workspaceMarker, "utf8")).resolves.toBe("sandbox-ok\n");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "container-marker.txt"), "utf8"),
+    ).resolves.toBe("sandbox-ok\n");
     await expect(fs.access(outsideMarker)).rejects.toThrow();
     await expect(fs.readFile(outsideScript, "utf8")).resolves.toContain("printf executed");
   } finally {

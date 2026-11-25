@@ -4,8 +4,6 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ManagedWorktreeService } from "./service.js";
 
 assert.ok(isMainThread, "Worktree GC regression requires the Node main thread");
-const now = Number(process.argv[2]);
-assert.ok(Number.isSafeInteger(now), "Worktree GC fixture requires its test clock");
 setRuntimeConfigSnapshot({});
-const service = new ManagedWorktreeService({ now: () => now });
+const service = new ManagedWorktreeService();
 console.log(JSON.stringify(await service.gc()));

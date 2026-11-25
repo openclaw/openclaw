@@ -10,6 +10,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-pnpm.sh"
+source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 RECOVERY_DIR="$ROOT_DIR/dist/macos-notarization-recovery"
@@ -71,34 +73,11 @@ IFS=' ' read -r -a DSYM_ARCHS <<< "$DSYM_ARCHS_VALUE"
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
 export BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
 
-DIST_PNPM_CMD=()
 SPARKLE_BUILD_DEPS_RETRIED=0
-
-resolve_dist_pnpm_cmd() {
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    DIST_PNPM_CMD=(corepack pnpm)
-    return 0
-  fi
-
-  if command -v pnpm >/dev/null 2>&1; then
-    DIST_PNPM_CMD=(pnpm)
-    return 0
-  fi
-
-  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
-  exit 1
-}
-
-run_dist_pnpm() {
-  if [[ "${#DIST_PNPM_CMD[@]}" -eq 0 ]]; then
-    resolve_dist_pnpm_cmd
-  fi
-  (cd "$ROOT_DIR" && "${DIST_PNPM_CMD[@]}" "$@")
-}
 
 ensure_sparkle_build_deps() {
   echo "📦 Ensuring deps for Sparkle build metadata" >&2
-  run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
 }
 
 run_sparkle_build_node() {
@@ -234,12 +213,16 @@ audit_app_async_frames() {
 
 audit_retained_dmg_async_frames() (
   set -euo pipefail
+  dmg="$1"
   mount_dir="$(mktemp -d "$ROOT_DIR/dist/.notary-dmg.XXXXXX")"
   mounted=0
   cleanup_audit_mount() {
     local result=$?
     if [[ "$mounted" == "1" ]]; then
       hdiutil detach "$mount_dir" >/dev/null || result=1
+    else
+      # A failed attach can leave the DMG's devices attached without a mount.
+      detach_disk_image "$dmg" || result=1
     fi
     rmdir "$mount_dir" || result=1
     exit "$result"
@@ -247,7 +230,7 @@ audit_retained_dmg_async_frames() (
   trap cleanup_audit_mount EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
-  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$1" >/dev/null
+  hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
   mounted=1
   audit_app_async_frames "$mount_dir/OpenClaw.app"
 )

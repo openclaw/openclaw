@@ -1,3 +1,4 @@
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
@@ -8,6 +9,8 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 export type AgentRunModel = { provider: string; model: string };
 
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
+
+export type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
@@ -30,9 +33,15 @@ export type AgentRunContext = {
   eventState?: AgentRunEventState;
   /** Model request numbering survives provider fallback within this registered run. */
   modelCallSequence?: { value: number };
+  /** Accepted human input owns a reply even when the run began as an optional wake. */
+  acceptedUserReply?: {
+    operationalRunInstance: AgentRunDelegatedAuthority["operationalRunInstance"];
+    expectation: "required" | "result-required";
+  };
+  /** Active provider-owned local wait; cleared on first response or call settlement. */
+  localModelWait?: { requestId: string };
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
@@ -45,8 +54,17 @@ export type AgentRunContext = {
   projectSessionLifecycle?: boolean;
   /** Sticky diagnostic provenance only; never authorization for recovery work. */
   mainSessionRestartRecovery?: true;
-  /** Active cadence state by job; admission permits one invocation per job. */
-  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
+  /** Active invocation state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<
+    string,
+    {
+      nextCheckEnabled: boolean;
+      nextCheckMs?: number;
+      assertCurrent?: () => void;
+      closed?: boolean;
+      result?: AutomationResult;
+    }
+  >;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Bounded presentation facts from this registration's accepted events; never authority. */

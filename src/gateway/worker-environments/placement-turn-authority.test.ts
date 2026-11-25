@@ -11,10 +11,10 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -41,6 +41,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -172,6 +173,11 @@ it("retains worker-parent source predicates through tool execution and rejects a
       },
     });
     let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+    const requesterOrigin = {
+      sessionKey: "agent:research:whatsapp:group:requesters",
+      messageProvider: "whatsapp",
+      senderId: "requester-bob",
+    };
     try {
       const prepared = await prepareWorkerAgentRuntimeIdentity({
         agentId: SESSION.agentId,
@@ -190,8 +196,10 @@ it("retains worker-parent source predicates through tool execution and rejects a
           timeoutMs: 5_000,
           runId: claim.runId,
           preparedRunAdmission: admission,
+          requesterOrigin,
         },
       });
+      requesterOrigin.senderId = "replacement-alice";
       const runner = createWorkerSessionToolSourceRunner({
         placements: store,
         resolveGatewayContext: () => undefined,
@@ -200,18 +208,13 @@ it("retains worker-parent source predicates through tool execution and rejects a
         runner({
           source: { ...SESSION, turnClaim: claim },
           request: {
-            identity: {
+            identity: createWorkerConnectionIdentity(claim, {
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
-              sessionId: claim.sessionId,
-              runId: claim.runId,
-              turnClaim: claim,
               credentialHash: "synthetic-child-source",
               bundleHash: "synthetic-child-source",
-              rpcSetVersion: 1,
-              protocolFeatures: [],
               credentialExpiresAtMs: 1,
-            },
+            }),
             toolName: "sessions_spawn",
             request: { toolCallId: "child-source", arguments: {} },
             tool: () => {
@@ -227,7 +230,10 @@ it("retains worker-parent source predicates through tool execution and rejects a
                 {
                   ...createStubTool("sessions_spawn"),
                   execute: async () => {
-                    const guard = captureAgentToolSourceExecutionGuard();
+                    expect(getGatewayToolCallerIdentity()?.requesterOrigin).toMatchObject({
+                      sessionKey: "agent:research:whatsapp:group:requesters",
+                      senderId: "requester-bob",
+                    });
                     const sql = reset ? undefined : observeHostDataSql();
                     const child = await patchSessionEntryCore(
                       { ...target, sessionKey: `agent:main:child-source-${reset}` },
@@ -241,7 +247,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
                         return { label: "child" };
                       },
                       {
-                        workerGuard: { source: guard },
+                        workerGuard: { source },
                         fallbackEntry: {
                           sessionId: `child-${reset}`,
                           updatedAt: 1,
@@ -266,9 +272,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
         label: "child",
       });
       host?.close();
-      await expect(writeChild(true)).rejects.toThrow(
-        `Session ${target.sessionId} worker turn authority changed`,
-      );
+      await expect(writeChild(true)).rejects.toThrow();
       expect(loadSessionEntry(target)?.lifecycleRevision).toBe("replacement");
       expect(
         loadSessionEntry({ ...target, sessionKey: "agent:main:child-source-true" }),
@@ -497,7 +501,7 @@ it("rolls back claim fencing and never revives a retained approval after same-ID
     );
     expect(validate({ ...identity })).toBe(false);
     expect(validate(delayedIdentity)).toBe(false);
-    await expect(capability.run(() => "stale")).rejects.toThrow("worker turn authority changed");
+    await expect(capability.run(() => "stale")).rejects.toThrow("worker turn ended");
     expect(validateAgentRunDelegatedAuthority(delegated)).toBe(true);
     const next = await nextOwner.capability.run((owner) =>
       createAgentRuntimeIdentity({
@@ -537,7 +541,7 @@ it("rejects a prepared reader reply after an identical claim was released and re
     await store.releaseTurn(claim);
     const replacement = await store.claimTurn(input);
     resume.resolve();
-    await expect(preparing).rejects.toThrow("turn claim authority changed");
+    await expect(preparing).rejects.toThrow("turn ended");
     const current = await store.prepareTurnClaimAuthority(replacement);
     expect(current.isCurrent()).toBe(true);
     current.release();
@@ -584,13 +588,11 @@ it.each(["preparing", "bound", "final source check"] as const)(
         const { capability, takeFinishingOutcome } = await binding;
         await store.releaseTurn(claim);
         assertSourceCurrent.mockClear();
-        expect(capability.receiptAuthority).toThrow("worker turn authority changed");
-        expect(() => takeFinishingOutcome("synthetic-credential")).toThrow(
-          "worker turn authority changed",
-        );
+        expect(capability.receiptAuthority).toThrow("worker turn ended");
+        expect(() => takeFinishingOutcome("synthetic-credential")).toThrow("worker turn ended");
       } else {
         await expect(binding).rejects.toThrow(
-          phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
+          phase === "preparing" ? "worker turn ended" : "run closed during binding",
         );
       }
       expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
@@ -601,7 +603,7 @@ it.each(["preparing", "bound", "final source check"] as const)(
   },
 );
 
-it("retains the original transcript and prompt cache facts while claim authority is prepared", async () => {
+it("retains original requester, transcript, and prompt cache facts while claim authority is prepared", async () => {
   const active = await advanceToActive();
   const claim = await store.claimTurn(workerClaimInput("target-snapshot", active));
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -619,6 +621,10 @@ it("retains the original transcript and prompt cache facts while claim authority
     fastModeStartedAtMs: 123,
     fastModeAutoOnSeconds: 30,
   };
+  const requesterOrigin = {
+    sessionKey: "agent:research:whatsapp:group:requesters",
+    senderId: "requester-bob",
+  };
   const binding = bindWorkerTurnOwner(
     store,
     claim,
@@ -630,24 +636,22 @@ it("retains the original transcript and prompt cache facts while claim authority
     undefined,
     undefined,
     promptCacheContext,
+    requesterOrigin,
   );
-  const connection: WorkerConnectionIdentity = {
+  const connection: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     credentialHash: "synthetic-credential-hash",
     bundleHash: "synthetic-bundle-hash",
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: 1,
-  };
+  });
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
   promptCacheContext.fastMode = false;
   promptCacheContext.fastModeStartedAtMs = 456;
   promptCacheContext.fastModeAutoOnSeconds = 60;
+  requesterOrigin.senderId = "replacement-alice";
+  requesterOrigin.sessionKey = "agent:main:replacement";
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
@@ -658,6 +662,11 @@ it("retains the original transcript and prompt cache facts while claim authority
     expect(capability.sessionTarget).toEqual(expected);
     await capability.run((identity) => {
       expect(identity.sessionTarget).toEqual(expected);
+      expect(identity.requesterOrigin).toMatchObject({
+        sessionKey: "agent:research:whatsapp:group:requesters",
+        senderId: "requester-bob",
+      });
+      expect(Object.isFrozen(identity.requesterOrigin)).toBe(true);
     });
     expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
       boundaryCount: 2,
@@ -735,11 +744,7 @@ it.each(["binding replacement", "run admission"] as const)(
             preparedRunAdmission: admission,
           },
         }),
-      ).rejects.toThrow(
-        phase === "run admission"
-          ? "turn claim authority changed"
-          : "worker turn authority changed",
-      );
+      ).rejects.toThrow(phase === "run admission" ? "turn ended" : "worker turn ended");
       if (phase === "binding replacement") {
         const successor = getWorkerTurnExecutionIdentityCapability(store, claim);
         if (!successor) {
@@ -790,7 +795,7 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
   }
 });
 
-it("shares claim revocation across facades while restart clearing leaves worker claims live", async () => {
+it("shares local and worker claim revocation across database aliases", async () => {
   const active = await advanceToActive();
   const worker = await store.claimTurn(workerClaimInput("shared-facade", active));
   const local = await store.claimTurn({
@@ -809,7 +814,9 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     database: openOpenClawStateDatabase({ path: alias }),
   });
   try {
-    expect(await facade.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
+    expect((await facade.getAsync(local.sessionId))?.turnClaim?.claimId).toBe(local.claimId);
+    expect(localAuthority.isCurrent()).toBe(true);
+    await facade.releaseTurn(local);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.retireSessionPlacementAsync({

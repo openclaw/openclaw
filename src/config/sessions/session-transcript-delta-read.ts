@@ -8,13 +8,20 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import type {
+  SessionTranscriptReplayGroup,
+  SessionTranscriptReplaySelection,
+} from "./session-transcript-replay.types.js";
 
 type SessionTranscriptDeltaReader = {
+  replayGroups: (
+    selection: SessionTranscriptReplaySelection,
+  ) => Promise<SessionTranscriptReplayGroup[]>;
   raw: (limits: SessionTranscriptRawDeltaLimits) => Promise<SessionTranscriptRawDeltaResult>;
   visible: (
     limits: SessionTranscriptVisibleMessageDeltaLimits,
@@ -45,6 +52,14 @@ export async function withSessionTranscriptDeltaReader<T>(
     };
     try {
       const result = await consume({
+        replayGroups: async (selection) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            throw new Error("Canonical session transcript is unavailable");
+          }
+          return memory.read("session.history.replay-groups", { selection });
+        },
         raw: async (limits) => {
           assertActive();
           if (memory.missing) {
@@ -76,7 +91,7 @@ export async function withSessionTranscriptDeltaReader<T>(
     }
   };
   try {
-    return await withSessionTranscriptReadSource(
+    const result = await withSessionTranscriptReadSource(
       scope,
       async (source) => {
         const reader = source.preparedReads ?? source.owner;
@@ -86,24 +101,19 @@ export async function withSessionTranscriptDeltaReader<T>(
         };
         const read = async <Value>(operation: () => Promise<Value>) => {
           assertCurrent();
-          const value = await readRestoredSessionTranscript(source.scope, operation, {
-            assertCurrent,
-            coldRead: {
-              target: source.resolved,
-              readMetadata: async () =>
-                (
-                  await reader.readColdMetadata({
-                    sessionId: source.resolved.sessionId,
-                    env: source.scope.env,
-                  })
-                ).archive,
-            },
-          });
+          const value = await readRestoredSessionTranscriptInWorker(
+            { ...source, owner: reader, assertCurrent },
+            operation,
+          );
           assertCurrent();
           return value;
         };
         if (!source.expectedIdentity) {
           return consume({
+            replayGroups: async () => {
+              assertCurrent();
+              throw new Error("Canonical session transcript is unavailable");
+            },
             raw: async () => {
               assertCurrent();
               return { kind: "missing" };
@@ -121,6 +131,21 @@ export async function withSessionTranscriptDeltaReader<T>(
           expectedIdentity: source.expectedIdentity,
         };
         return consume({
+          replayGroups: (selection) =>
+            read(async () => {
+              try {
+                return await reader.readReplayGroups({ ...request, selection }, signal);
+              } catch (error) {
+                if (isSessionTranscriptProjectionUnavailableError(error)) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...toDatabaseOptions(source.resolved),
+                    preferredSessionId: source.resolved.sessionId,
+                  });
+                }
+                throw error;
+              }
+            }),
           raw: (limits) =>
             read(() => reader.readRawDelta({ ...request, limits: { ...limits } }, signal)),
           visible: (limits) =>
@@ -142,6 +167,8 @@ export async function withSessionTranscriptDeltaReader<T>(
       },
       signal,
     );
+    assertActive();
+    return result;
   } finally {
     active = false;
   }

@@ -47,7 +47,7 @@ export function mount(request: ReturnType<typeof vi.fn>, search = "", scopes = [
 
 export function button(page: Element, text: string) {
   const result = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-    (entry) => entry.textContent?.trim() === text,
+    (entry) => entry.textContent?.trim() === text || entry.getAttribute("aria-label") === text,
   );
   if (!result) {
     throw new Error(`Missing button: ${text}`);

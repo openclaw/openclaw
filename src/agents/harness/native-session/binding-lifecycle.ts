@@ -16,14 +16,14 @@ import {
   type NativeSessionBindingStateStore,
   type NativeSessionBindingStateStoreV2,
 } from "./binding-leases.js";
-import { createNativeSessionBindingNativeSettlement } from "./binding-native-settlement.js";
+import { createNativeSessionBindingMemorySettlement } from "./binding-memory-settlement.js";
 import {
   bindNativeSessionDeletionParticipant,
   type NativeSessionDeletionParticipant,
 } from "./deletion-participant.js";
 
 /**
- * @deprecated Use createNativeSessionBindingLifecycleV2; removed in the next Plugin SDK major.
+ * @deprecated Use createNativeSessionBindingLifecycleV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createNativeSessionBindingLifecycle<TRecord extends NativeSessionBindingRecord>(
   state: NativeSessionBindingStateStore<TRecord>,
@@ -203,9 +203,6 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
           custody.add(custodian);
         },
         unknown: false,
-        async refreshCommittedFacts() {
-          await owner?.facts?.refresh();
-        },
         settle(outcome, error) {
           if (outcome === "unknown") {
             participant.unknown = true;
@@ -221,11 +218,12 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
         },
       };
       if (source.version === 2) {
-        participant.nativeMutation = createNativeSessionBindingNativeSettlement({
+        participant.memoryMutation = createNativeSessionBindingMemorySettlement({
           plan: participant.binding!,
+          context: workerSource,
           env: store.options.env,
-          assertCurrent: () => participant.assertCurrent(),
-          settle: (outcome) => participant.settle(outcome),
+          readRecord: options.readRecord,
+          participant,
         });
       }
       return bindNativeSessionDeletionParticipant(mutation, participant);

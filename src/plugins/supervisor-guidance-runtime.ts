@@ -9,10 +9,10 @@ import type {
 } from "./supervisor-guidance.js";
 
 /** Resolve display data without activating plugin code or granting lifecycle authority. */
-export async function resolveExternalSupervisorGuidance(
-  action: SupervisorAction,
+export async function resolveExternalSupervisorGuidance<Action extends SupervisorAction>(
+  action: Action,
   options: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv } = {},
-): Promise<SupervisorDisplayGuidance | undefined> {
+): Promise<SupervisorDisplayGuidance<Action> | undefined> {
   const env = options.env ?? process.env;
   if (!isGatewayExternallySupervised(env)) {
     return undefined;
@@ -53,7 +53,7 @@ export async function resolveExternalSupervisorGuidance(
       guidance = plugin.supervisorGuidance;
     }
     const command = guidance?.actions[action];
-    if (!guidance || !command || !isGatewayExternallySupervised(env)) {
+    if (!guidance || !command) {
       return undefined;
     }
     return {

@@ -91,6 +91,7 @@ final class BrowserProfileImportModel {
     @ObservationIgnored private var phaseGeneration = 0
     @ObservationIgnored private var pendingForcedRefreshGeneration: Int?
     @ObservationIgnored private var statusRequest: StatusRequest?
+    @ObservationIgnored private var hasRequestedImport = false
     /// A dismissal must stick for this app session even while its
     /// fire-and-forget persistence write is pending or lost — otherwise the
     /// next automatic poll reads the still-null server state and re-offers.
@@ -115,11 +116,15 @@ final class BrowserProfileImportModel {
         status.enabled && !status.importableProfiles.isEmpty && (force || status.state == nil)
     }
 
-    /// Read availability without changing the banner or overriding a remembered dismissal.
+    /// Before an explicit import request, advertise the action without reading another app's data.
     func refreshAvailability() async {
         guard self.isLocalMode() else {
             self.statusRequest = nil
             self.importAvailable = false
+            return
+        }
+        guard self.hasRequestedImport else {
+            self.importAvailable = true
             return
         }
         let request = self.startStatusRequest(timeoutMs: 5000)
@@ -164,7 +169,7 @@ final class BrowserProfileImportModel {
     func requestAutomaticOfferIfEligible(
         while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
     {
-        guard self.isOnboarded(), self.isLocalMode(), shouldApply() else { return false }
+        guard self.hasRequestedImport, self.isOnboarded(), self.isLocalMode(), shouldApply() else { return false }
         return await self.refreshIfIdle(while: shouldApply)
     }
 
@@ -172,7 +177,8 @@ final class BrowserProfileImportModel {
     /// and reports why nothing can be offered so the caller can tell the user.
     @discardableResult
     func refresh(force: Bool) async -> ForceRefreshOutcome {
-        await self.performRefresh(force: force).outcome
+        if force { self.hasRequestedImport = true }
+        return await self.performRefresh(force: force).outcome
     }
 
     /// Automatic offers are consumed only after a status response is applied.

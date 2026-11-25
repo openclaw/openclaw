@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -7,6 +6,7 @@ import {
   type UserProfile as UserProfileListItem,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -20,6 +20,7 @@ import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
 import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
+import { assertProfilesAreNotDelegated } from "./user-profile-delegation.worker.js";
 import { normalizeProfileEmail as normalizeEmail } from "./user-profile-email.kernel.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import {
@@ -43,8 +44,10 @@ import {
   requireResolvedUserProfileMetadataById,
   userProfilesDb,
   toUserProfile,
+  isUserProfileEmailAddress,
   selectUserProfileEmails,
   userProfileAvatarPresence,
+  type UserProfileRow,
 } from "./user-profiles-internal.js";
 import { mergeUserProfiles } from "./user-profiles-merge.js";
 import {
@@ -84,7 +87,10 @@ type PendingPublication = {
   githubConnections: UserGitHubConnectionCommit;
 };
 
-function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
+function selectUserProfileListItemById(
+  db: EngineConnection,
+  profileId: string,
+): UserProfileListItem {
   const kysely = userProfilesDb(db);
   const profile = executeSqliteQueryTakeFirstSync(
     db,
@@ -107,7 +113,7 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
   }
   return {
     ...toUserProfile(profile),
-    emails: selectUserProfileEmails(db, profileId),
+    emails: selectUserProfileEmails(db, profileId).filter(isUserProfileEmailAddress),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
     hasAvatar: profile.has_avatar === 1,
   };
@@ -276,23 +282,41 @@ export function setUserProfileRole(
   role: string | null,
   options: UserProfileMutationOptions = {},
 ): UserProfileListItem {
-  ensureUserProfileRoleSchema(options);
+  return updateUserProfile(profileId, { role }, "role", options);
+}
+
+function updateUserProfile(
+  profileId: string,
+  update: Partial<
+    Pick<UserProfileRow, "role" | "display_name" | "avatar" | "avatar_mime" | "avatar_sha256">
+  >,
+  operation: "role" | "display-name" | "avatar",
+  options: UserProfileMutationOptions,
+): UserProfileListItem {
   const now = Date.now();
+  if (operation === "role") {
+    ensureUserProfileRoleSchema(options);
+  } else {
+    ensureUserProfilesSchema(options);
+  }
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileMetadataById(db, profileId);
       options.mutation?.before(db, profile.id);
-      if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
+      if (
+        operation === "role" &&
+        (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID)
+      ) {
         throw new UserProfileOwnerError("role");
       }
       executeSqliteQuerySync(
         db,
         userProfilesDb(db)
           .updateTable("user_profiles")
-          .set({ role, updated_at: now })
+          .set({ ...update, updated_at: now })
           .where("id", "=", profile.id),
       );
-      if ((profile.role ?? null) !== role) {
+      if (operation === "role" && (profile.role ?? null) !== update.role) {
         options.mutation?.authority(profile.id);
         publishUserProfileAuthorityChange(db, profile.id);
       }
@@ -301,7 +325,7 @@ export function setUserProfileRole(
       return selectUserProfileListItemById(db, profile.id);
     },
     options,
-    { operationLabel: "user-profiles.set-role" },
+    { operationLabel: `user-profiles.set-${operation}` },
   );
 }
 
@@ -405,6 +429,7 @@ export function linkEmail(
         return selectUserProfileListItemById(db, target.id);
       }
       const changedIds = [target.id, ...(existingAlias ? [existingAlias.profile_id] : [])];
+      assertProfilesAreNotDelegated(db, changedIds);
       options.mutation?.before(db, ...changedIds);
       setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
       const remainingAliases = existingAlias
@@ -513,26 +538,7 @@ export function setDisplayName(
   name: string | null,
   options: UserProfileMutationOptions = {},
 ): UserProfileListItem {
-  const now = Date.now();
-  ensureUserProfilesSchema(options);
-  return runUserProfileWriteTransaction(
-    ({ db }) => {
-      const profile = requireResolvedUserProfileMetadataById(db, profileId);
-      options.mutation?.before(db, profile.id);
-      executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .updateTable("user_profiles")
-          .set({ display_name: name, updated_at: now })
-          .where("id", "=", profile.id),
-      );
-      options.mutation?.publish(profile.id);
-      publishUserProfilesChange(db, profile.id);
-      return selectUserProfileListItemById(db, profile.id);
-    },
-    options,
-    { operationLabel: "user-profiles.set-display-name" },
-  );
+  return updateUserProfile(profileId, { display_name: name }, "display-name", options);
 }
 
 export function setAvatar(
@@ -547,26 +553,15 @@ export function setAvatar(
   if (!USER_PROFILE_AVATAR_MIME_TYPES.some((candidate) => candidate === mime)) {
     return err({ code: "unsupported_avatar_mime", mime });
   }
-  const now = Date.now();
-  ensureUserProfilesSchema(options);
-  const value = runUserProfileWriteTransaction(
-    ({ db }) => {
-      const profile = requireResolvedUserProfileMetadataById(db, profileId);
-      options.mutation?.before(db, profile.id);
-      const sha256 = createHash("sha256").update(bytes).digest("hex");
-      executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .updateTable("user_profiles")
-          .set({ avatar: bytes, avatar_mime: mime, avatar_sha256: sha256, updated_at: now })
-          .where("id", "=", profile.id),
-      );
-      options.mutation?.publish(profile.id);
-      publishUserProfilesChange(db, profile.id);
-      return selectUserProfileListItemById(db, profile.id);
+  const value = updateUserProfile(
+    profileId,
+    {
+      avatar: bytes,
+      avatar_mime: mime,
+      avatar_sha256: createHash("sha256").update(bytes).digest("hex"),
     },
+    "avatar",
     options,
-    { operationLabel: "user-profiles.set-avatar" },
   );
   return ok(value);
 }

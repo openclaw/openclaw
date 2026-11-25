@@ -12,7 +12,7 @@ export function applyCodexCatalogLiveFields(
   return {
     ...session,
     ...settings,
-    status: live?.status ?? "notLoaded",
+    status: session.catalogError ? "systemError" : (live?.status ?? "notLoaded"),
     ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
   };
 }

@@ -1,8 +1,13 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import type * as GatewayCall from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import type * as UpdateCli from "../../update/cli.js";
+import { resolvePrefix } from "../../update/store.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
@@ -11,12 +16,26 @@ import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "./restart-health.constants.js";
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
 const runServiceStart = vi.hoisted(() => vi.fn());
 const runServiceRestart = vi.hoisted(() => vi.fn());
+const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 const terminateStaleGatewayPids = vi.hoisted(() => vi.fn());
 const waitForGatewayHealthyRestart = vi.hoisted(() => vi.fn());
 const waitForGatewayHttpReadiness = vi.hoisted(() => vi.fn());
 const renderRestartDiagnostics = vi.hoisted(() => vi.fn(() => ["runtime diagnostics"]));
 const readServiceConfig = vi.hoisted(() => vi.fn());
 const readCliConfig = vi.hoisted(() => vi.fn(async () => ({})));
+const tryAdoptInstalledPackageForGateway = vi.hoisted(() => vi.fn());
+const waitForReleaseUpdateFailure = vi.hoisted(() => vi.fn());
+const isImplicitLocalGatewayTarget = vi.hoisted(() => vi.fn(async () => true));
+
+vi.mock("../../update/cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof UpdateCli>()),
+  tryAdoptInstalledPackageForGateway,
+  waitForReleaseUpdateFailure,
+}));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof GatewayCall>()),
+  isImplicitLocalGatewayTarget,
+}));
 
 vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: readCliConfig,
@@ -41,7 +60,8 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceStop: vi.fn(),
   runServiceUninstall: vi.fn(),
 }));
-vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart: vi.fn() }));
+// mock-isolation: lifecycle observations use synthetic repair facts and must not install a real service.
+vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart }));
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -55,15 +75,22 @@ vi.mock("./restart-health.js", () => ({
 }));
 
 const { runDaemonStart, runDaemonRestart } = await import("./lifecycle.js");
+// A static recovery import initializes the restart-health mock before its formatter dependency.
+const { waitForGatewayUpdateRecovery } = await import("./lifecycle-context.js");
 
 describe("Gateway service readiness", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+    mockSystemAccountHome();
+    tryAdoptInstalledPackageForGateway.mockReset().mockResolvedValue(undefined);
+    waitForReleaseUpdateFailure.mockReset().mockResolvedValue(undefined);
+    isImplicitLocalGatewayTarget.mockReset().mockResolvedValue(true);
     service.readCommand.mockReset().mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     runServiceStart.mockReset();
+    repairLoadedGatewayServiceForStart.mockReset();
     runServiceRestart.mockReset().mockImplementation(async (params: RestartParams) => {
       await params.postRestartCheck?.({
         activationAccepted: true,
@@ -89,6 +116,160 @@ describe("Gateway service readiness", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each([
+    { action: "start", repair: false },
+    { action: "restart", repair: false },
+    { action: "recovery", repair: false },
+    { action: "start", repair: true },
+    { action: "restart", repair: true },
+  ] as const)(
+    "keeps $action readiness on preactivation facts (repair=$repair)",
+    async ({ action, repair }) => {
+      const command = {
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      const repairedCommand = {
+        programArguments: ["openclaw", "gateway", "--port", "19001"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "repaired-service-token" },
+      };
+      const repairedConfig = { gateway: { auth: { token: "repaired-config-token" } } };
+      let activated = false;
+      service.readCommand.mockImplementation(async () => {
+        if (activated) {
+          throw new Error("Service command storage is no longer available after activation.");
+        }
+        return command;
+      });
+      repairLoadedGatewayServiceForStart.mockImplementation(async () => {
+        activated = true;
+        readServiceConfig.mockRejectedValue(new Error("Runtime config custody was handed off."));
+        readCliConfig.mockRejectedValue(new Error("Caller config custody was handed off."));
+        return {
+          result: action === "start" ? "started" : "restarted",
+          loaded: true,
+          lifecycle: {
+            command: repairedCommand,
+            env: repairedCommand.environment,
+            config: repairedConfig,
+          },
+        };
+      });
+      runServiceStart.mockImplementation(async ({ repairLoadedService, postStartCheck }) => {
+        if (repair) {
+          await repairLoadedService({ json: true, stdout: process.stdout, state: {}, issues: [] });
+        }
+        activated = true;
+        await postStartCheck({ warnings: [], fail: vi.fn() });
+      });
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        if (repair) {
+          await params.repairLoadedService?.({
+            json: true,
+            stdout: process.stdout,
+            state: {},
+            issues: [],
+          });
+        }
+        activated = true;
+        await params.postRestartCheck?.({
+          ...createDaemonActionContext({ action: "restart", json: true }),
+          json: true,
+          activationAccepted: true,
+        });
+        return true;
+      });
+      waitForGatewayHealthyRestart.mockImplementation(async (options) => {
+        activated = true;
+        expect(await options.service.readCommand(process.env)).toBe(
+          repair ? repairedCommand : command,
+        );
+        if (repair) {
+          expect(options.config).toBe(repairedConfig);
+          expect(options.env.OPENCLAW_GATEWAY_TOKEN).toBe("repaired-service-token");
+          expect(options.port).toBe(19001);
+        }
+        return { healthy: true };
+      });
+
+      if (action === "recovery") {
+        expect((await waitForGatewayUpdateRecovery("2026.11.8")).healthy).toBe(true);
+      } else {
+        await (action === "start" ? runDaemonStart : runDaemonRestart)({ json: true });
+      }
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["custom-command", "remote-target"] as const)(
+    "keeps ordinary managed restart for %s",
+    async (scenario) => {
+      service.readCommand.mockResolvedValue({
+        programArguments: [
+          process.execPath,
+          scenario === "custom-command"
+            ? "/custom/openclaw.mjs"
+            : path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+          "gateway",
+          "run",
+        ],
+      });
+      isImplicitLocalGatewayTarget.mockResolvedValue(scenario !== "remote-target");
+
+      expect(await runDaemonRestart({ json: true })).toBe(true);
+
+      expect(runServiceRestart).toHaveBeenCalledOnce();
+      expect(tryAdoptInstalledPackageForGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["start", "restart"] as const)(
+    "does not activate after failed preparation or report trial rollback as successful native %s",
+    async (action) => {
+      service.readCommand.mockResolvedValue({
+        programArguments: [
+          process.execPath,
+          path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+          "gateway",
+          "run",
+        ],
+      });
+      const run = action === "start" ? runDaemonStart : runDaemonRestart;
+      tryAdoptInstalledPackageForGateway.mockResolvedValue(false);
+      expect(await run({ json: true })).toBe(false);
+      expect(action === "start" ? runServiceStart : runServiceRestart).not.toHaveBeenCalled();
+      tryAdoptInstalledPackageForGateway.mockResolvedValue("adopted-run");
+      waitForReleaseUpdateFailure.mockResolvedValue(
+        "Update failed: Candidate crashed. Restored 2026.11.8; Gateway ready.",
+      );
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`exit ${code}`);
+      });
+      runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+        await postStartCheck({
+          ...createDaemonActionContext({ action, json: true }),
+          warnings: [],
+        });
+      });
+      runServiceRestart.mockImplementation(async ({ postRestartCheck }) => {
+        await postRestartCheck({
+          ...createDaemonActionContext({ action, json: true }),
+          warnings: [],
+          activationAccepted: true,
+        });
+      });
+      await expect(run({ json: true })).rejects.toThrow("exit 1");
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringContaining("Restored 2026.11.8; Gateway ready."),
+        }),
+      );
+      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith();
+    },
+  );
 
   it("gives Windows start and restart the same cold-boot readiness allowance", async () => {
     mockProcessPlatform("win32");
@@ -118,7 +299,7 @@ describe("Gateway service readiness", () => {
     { preserveDefinition: false, updateMarker: undefined },
     { preserveDefinition: true, updateMarker: "1" },
   ])(
-    "checks the activated port and required health (preserve=$preserveDefinition, update=$updateMarker)",
+    "checks the activated port and listener ownership (preserve=$preserveDefinition, update=$updateMarker)",
     async ({ preserveDefinition, updateMarker }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       readCliConfig.mockResolvedValue({ gateway: { port: 19001 } });
@@ -139,16 +320,20 @@ describe("Gateway service readiness", () => {
       );
       expect(
         requireMockCallArg(waitForGatewayHealthyRestart, "waitForGatewayHealthyRestart")
-          .requirePluginHealth,
-      ).toBe(updateMarker ? undefined : false);
+          .requireOwnedListener,
+      ).toBe(!updateMarker);
     },
   );
 
   it.each([
-    { outcome: "still-starting", runtime: "running", code: 2 },
+    { outcome: "still-starting", code: 2, message: /still starting.*openclaw gateway status/ },
     { outcome: "stopped-free", runtime: "stopped", code: 1 },
-    { outcome: "timeout", runtime: "running", code: 1 },
-  ])("reports managed start $outcome with exit $code", async ({ outcome, runtime, code }) => {
+    { outcome: "timeout", code: 1, message: "Gateway start timed out after 45s" },
+    { outcome: "auth-rejected", code: 1, message: "Gateway start failed: the Gateway rejected" },
+  ])("reports managed start $outcome with exit $code", async (testCase) => {
+    const { outcome, runtime = "running", code, message } = testCase;
+    // The 45s timeout message is the non-Windows startup deadline.
+    mockProcessPlatform("linux");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
       throw new Error(`exit ${exitCode}`);
@@ -174,11 +359,12 @@ describe("Gateway service readiness", () => {
 
     const response = writeJson.mock.calls[0]?.[0];
     expect(response).toMatchObject({ ok: false, action: "start" });
+    // Each failure names what actually happened rather than a generic timeout.
+    if (message) {
+      expect(response).toHaveProperty("error", expect.stringMatching(message));
+    }
     if (outcome === "still-starting") {
-      expect(response).toMatchObject({
-        result: "still-starting",
-        error: expect.stringMatching(/still starting.*openclaw gateway status/),
-      });
+      expect(response).toHaveProperty("result", "still-starting");
     } else {
       expect(response).not.toHaveProperty("result", "still-starting");
     }
@@ -189,35 +375,15 @@ describe("Gateway service readiness", () => {
   });
 
   it.each([
-    {
-      outcome: "channel-errors",
-      reason: /channel health checks failed/,
-      json: true,
-      updateMarker: undefined,
-      code: 1,
-      result: "restart-health-failed",
-    },
-    {
-      outcome: "plugin-errors",
-      reason: /plugins reported load errors/,
-      json: true,
-      updateMarker: undefined,
-      code: 1,
-      result: "restart-health-failed",
-    },
-    { json: true, updateMarker: undefined, code: 2, result: "still-starting" },
-    { json: false, updateMarker: undefined, code: 2, result: "still-starting" },
-    { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },
+    { outcome: "stopped-free", reason: /service stayed stopped/, json: true, code: 1 },
+    { outcome: "channel-errors", reason: /channel health checks failed/, json: true, code: 1 },
+    { json: true, code: 2 },
+    { json: false, code: 2 },
+    { json: true, updateMarker: "1", code: 1 },
   ])(
     "reports restart readiness with the caller's response contract ($outcome, json=$json, update=$updateMarker)",
-    async ({
-      outcome = "still-starting",
-      reason,
-      json,
-      updateMarker,
-      code: expectedExitCode,
-      result,
-    }) => {
+    async ({ outcome = "still-starting", reason, json, updateMarker, code: expectedExitCode }) => {
+      const result = expectedExitCode === 2 ? "still-starting" : "restart-health-failed";
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -236,11 +402,11 @@ describe("Gateway service readiness", () => {
       waitForGatewayHealthyRestart.mockResolvedValue({
         healthy: false,
         staleGatewayPids: [],
-        runtime: { status: "running", pid: 4242 },
+        runtime: { status: outcome === "stopped-free" ? "stopped" : "running", pid: 4242 },
         portUsage: {
           port: 18789,
-          status: reason ? "busy" : "free",
-          listeners: reason ? [{ pid: 4242 }] : [],
+          status: reason && outcome !== "stopped-free" ? "busy" : "free",
+          listeners: reason && outcome !== "stopped-free" ? [{ pid: 4242 }] : [],
           hints: [],
         },
         waitOutcome: outcome,

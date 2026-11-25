@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createEventManagerHarness } from "../manager.test-harness.js";
@@ -13,54 +14,54 @@ const { cleanup, createContext, createProvider, setup } = createEventManagerHarn
 beforeEach(setup);
 afterEach(cleanup);
 
+function delayedOperation<T>() {
+  const result = createDeferred<T>();
+  const started = createDeferred<void>();
+  const invoke = vi.fn(() => {
+    started.resolve();
+    return result.promise;
+  });
+  return { ...result, started: started.promise, invoke };
+}
+
+const WEBHOOK = "https://example.com/voice/webhook";
+const CANONICAL_ID = "canonical-call-uuid";
+const contextWith = (overrides: Parameters<typeof createProvider>[0]) =>
+  createContext({ provider: createProvider(overrides), webhookUrl: WEBHOOK });
+
 it.each([
-  { phase: "active", requestUuid: undefined, payload: "CallUUID-only parser control" },
-  { phase: "active", requestUuid: "request-uuid", payload: "complete callback" },
-  { phase: "ended", requestUuid: "request-uuid", payload: "complete callback" },
+  { phase: "active", requestUuid: undefined },
+  { phase: "active", requestUuid: "request-uuid" },
+  { phase: "ended", requestUuid: "request-uuid" },
 ])(
-  "preserves callback-owned identity when initiation settles after the call is $phase ($payload)",
+  "preserves callback-owned identity after $phase (request=$requestUuid)",
   async ({ phase, requestUuid }) => {
-    const placement = createDeferred<InitiateCallResult>();
-    const placementStarted = createDeferred<void>();
+    const placement = delayedOperation<InitiateCallResult>();
     const playback = vi.fn(async () => {});
-    const ctx = createContext({
-      provider: createProvider({
-        initiateCall: () => {
-          placementStarted.resolve();
-          return placement.promise;
-        },
-        playTts: playback,
-      }),
-      webhookUrl: "https://example.com/voice/webhook",
-    });
+    const ctx = contextWith({ initiateCall: placement.invoke, playTts: playback });
     const parser = new PlivoProvider({ authId: "MA-fixture", authToken: "synthetic-token" });
     const pending = initiateCall(ctx, "+15550000001");
     try {
-      await Promise.race([placementStarted.promise, pending]);
-      const call = [...ctx.activeCalls.values()][0];
-      if (!call) {
-        throw new Error("expected the pending outbound call");
-      }
+      await Promise.race([placement.started, pending]);
+      const call = expectDefined([...ctx.activeCalls.values()][0], "pending outbound call");
       const deliver = async (fields: Record<string, string>) => {
         const parsed = parser.parseWebhookEvent({
           headers: {},
           method: "POST",
-          url: `https://example.com/voice/webhook?callId=${call.callId}`,
+          url: `${WEBHOOK}?callId=${call.callId}`,
           query: { callId: call.callId },
           rawBody: new URLSearchParams({
-            CallUUID: "canonical-call-uuid",
+            CallUUID: CANONICAL_ID,
             ...(requestUuid ? { RequestUUID: requestUuid } : {}),
             Direction: "outbound",
             ...fields,
           }).toString(),
         });
         expect(parsed.events).toHaveLength(1);
-        for (const event of parsed.events) {
-          await processEvent(ctx, event);
-        }
+        await processEvent(ctx, expectDefined(parsed.events[0], "callback event"));
       };
       await deliver({ CallStatus: "in-progress" });
-      expect(call.providerCallId).toBe("canonical-call-uuid");
+      expect(call.providerCallId).toBe(CANONICAL_ID);
       if (phase === "ended") {
         await deliver({ CallStatus: "completed" });
       }
@@ -68,7 +69,7 @@ it.each([
 
       placement.resolve({ providerCallId: "request-uuid", status: "initiated" });
       await expect(pending).resolves.toEqual({ callId: call.callId, success: true });
-      expect(call.providerCallId).toBe("canonical-call-uuid");
+      expect(call.providerCallId).toBe(CANONICAL_ID);
 
       if (phase === "active") {
         await deliver({ CallStatus: "in-progress", Speech: "Continue the connected call." });
@@ -76,13 +77,12 @@ it.each([
           success: true,
         });
         expect(playback).toHaveBeenCalledWith(
-          expect.objectContaining({ callId: call.callId, providerCallId: "canonical-call-uuid" }),
+          expect.objectContaining({ callId: call.callId, providerCallId: CANONICAL_ID }),
         );
-        expect(ctx.providerCallIdMap).toEqual(new Map([["canonical-call-uuid", call.callId]]));
+        expect(ctx.providerCallIdMap).toEqual(new Map([[CANONICAL_ID, call.callId]]));
       } else {
         expect(await getCallHistoryFromStore(ctx.storePath)).toEqual(beforeResult);
-        expect(ctx.activeCalls.size).toBe(0);
-        expect(ctx.providerCallIdMap.size).toBe(0);
+        expect([ctx.activeCalls.size, ctx.providerCallIdMap.size]).toEqual([0, 0]);
       }
     } finally {
       placement.resolve({ providerCallId: "request-uuid", status: "initiated" });
@@ -92,16 +92,8 @@ it.each([
 );
 
 it("keeps outbound capacity available after storage failure without dialing", async () => {
-  const placement = createDeferred<InitiateCallResult>();
-  const placementStarted = createDeferred<void>();
-  const dial = vi.fn(() => {
-    placementStarted.resolve();
-    return placement.promise;
-  });
-  const ctx = createContext({
-    provider: createProvider({ initiateCall: dial }),
-    webhookUrl: "https://example.com/voice/webhook",
-  });
+  const placement = delayedOperation<InitiateCallResult>();
+  const ctx = contextWith({ initiateCall: placement.invoke });
   ctx.config.maxConcurrentCalls = 1;
   const statePath = path.join(ctx.storePath, "state");
   fs.writeFileSync(statePath, "block the database directory");
@@ -109,9 +101,8 @@ it("keeps outbound capacity available after storage failure without dialing", as
   await expect(initiateCall(ctx, "+15550000001")).rejects.toMatchObject({
     code: "PLUGIN_STATE_OPEN_FAILED",
   });
-  expect(dial).not.toHaveBeenCalled();
-  expect(ctx.activeCalls.size).toBe(0);
-  expect(ctx.providerCallIdMap.size).toBe(0);
+  expect(placement.invoke).not.toHaveBeenCalled();
+  expect([ctx.activeCalls.size, ctx.providerCallIdMap.size]).toEqual([0, 0]);
 
   fs.unlinkSync(statePath);
   const recovered = initiateCall(ctx, "+15550000001");
@@ -120,8 +111,8 @@ it("keeps outbound capacity available after storage failure without dialing", as
       success: false,
       error: "Maximum concurrent calls (1) reached",
     });
-    await Promise.race([placementStarted.promise, recovered]);
-    expect(dial).toHaveBeenCalledOnce();
+    await Promise.race([placement.started, recovered]);
+    expect(placement.invoke).toHaveBeenCalledOnce();
   } finally {
     placement.resolve({ providerCallId: "provider-recovered", status: "initiated" });
     await recovered;
@@ -130,12 +121,8 @@ it("keeps outbound capacity available after storage failure without dialing", as
   expect(result.success).toBe(true);
   expect(ctx.activeCalls.size).toBe(1);
   expect(ctx.providerCallIdMap.get("provider-recovered")).toBe(result.callId);
-  expect(
-    (await loadActiveCallsFromStore(ctx.storePath)).activeCalls.get(result.callId),
-  ).toMatchObject({
-    providerCallId: "provider-recovered",
-    state: "initiated",
-  });
+  const stored = (await loadActiveCallsFromStore(ctx.storePath)).activeCalls.get(result.callId);
+  expect(stored).toMatchObject({ providerCallId: "provider-recovered", state: "initiated" });
 });
 
 it.each([
@@ -144,30 +131,18 @@ it.each([
   { phase: "replaced", playbackFails: false },
   { phase: "replaced", playbackFails: true },
 ] as const)(
-  "does not rewrite a $phase call after delayed playback (failure=$playbackFails)",
+  "ignores delayed playback on $phase calls (failure=$playbackFails)",
   async ({ phase, playbackFails }) => {
-    const playbackStarted = createDeferred<void>();
-    const playback = createDeferred<void>();
-    const ctx = createContext({
-      provider: createProvider({
-        playTts: () => {
-          playbackStarted.resolve();
-          return playback.promise;
-        },
-      }),
-      webhookUrl: "https://example.com/voice/webhook",
-    });
+    const playback = delayedOperation<void>();
+    const ctx = contextWith({ playTts: playback.invoke });
     const started = await initiateCall(ctx, "+15550000001");
     expect(started.success).toBe(true);
-    const call = ctx.activeCalls.get(started.callId);
-    if (!call) {
-      throw new Error("expected the connected outbound call");
-    }
+    const call = expectDefined(ctx.activeCalls.get(started.callId), "connected outbound call");
     const pending = speak(ctx, call.callId, "Pending playback");
     const replacement = { ...structuredClone(call), state: "active" as const };
     let historyBeforeSettlement: Awaited<ReturnType<typeof getCallHistoryFromStore>>;
     try {
-      await Promise.race([playbackStarted.promise, pending]);
+      await Promise.race([playback.started, pending]);
       if (phase === "terminal") {
         await processEvent(ctx, {
           id: "ended-during-playback",
@@ -199,8 +174,7 @@ it.each([
       expect(call.state).toBe("completed");
     } else {
       expect(ctx.activeCalls.get(call.callId)).toBe(replacement);
-      expect(replacement.state).toBe("active");
-      expect(replacement.transcript).toEqual([]);
+      expect(replacement).toMatchObject({ state: "active", transcript: [] });
     }
   },
 );

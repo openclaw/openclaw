@@ -1,3 +1,4 @@
+import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -5,6 +6,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -12,6 +14,24 @@ type HarnessAuthProfileSelection = {
   authProfileProvider: string;
   authProfileMode?: string;
 };
+
+/** A successful fallback credential becomes automatic; the selected credential keeps its origin. */
+export function createCommandSuccessfulAuthProfileCallback(
+  params: Pick<AgentAttemptParams, "onSuccessfulAuthProfile">,
+  selection: Pick<HarnessAuthProfileSelection, "authProfileId" | "authProfileIdSource">,
+) {
+  return params.onSuccessfulAuthProfile
+    ? (successfulProfileId: string | undefined) =>
+        params.onSuccessfulAuthProfile?.({
+          authProfileId: successfulProfileId,
+          authProfileIdSource: successfulProfileId
+            ? successfulProfileId === selection.authProfileId
+              ? selection.authProfileIdSource
+              : "auto"
+            : undefined,
+        })
+    : undefined;
+}
 
 export function resolveCommandAuthProfileSelection(params: {
   sessionEntry?: SessionEntry;
@@ -45,6 +65,14 @@ export async function resolveHarnessAuthProfileSelection(params: {
   allowHarnessAuthProfileForwarding: boolean;
 }): Promise<HarnessAuthProfileSelection> {
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
+  // A command-owned provider must not acquire the Codex harness’s default OpenAI account.
+  // Explicit pins still reach auth preparation, which rejects mixed credential ownership.
+  if (
+    resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "native-command" &&
+    (!sessionAuthProfileId || params.sessionAuthProfileSource === "auto")
+  ) {
+    return { authProfileProvider: params.authProfileProvider };
+  }
   if (sessionAuthProfileId) {
     const credential = (
       await ensureAuthProfileStoreAsync(params.agentDir, {

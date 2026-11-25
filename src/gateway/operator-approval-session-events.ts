@@ -2,39 +2,65 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
+  SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import {
+  canSubscribeOperatorApprovals,
+  participationExecApprovalRecipient,
+} from "./exec-approval-delivery.js";
 import type {
   ExecApprovalManager,
   OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
+import {
+  canObserveParticipationExecApproval,
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "./exec-approval-participation.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   canAccessOperatorApproval,
   canReviewOperatorApproval,
 } from "./operator-approval-authorization.js";
-import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
+import {
+  matchesOperatorApprovalReviewerBinding,
+  type OperatorApprovalExecSelection,
+} from "./operator-approval-reviewer-binding.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
-  expireDueOperatorApprovals,
   listPendingOperatorApprovals,
+  prepareOperatorApprovalReplay,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import {
+  canAccessInvitedApprovalSession,
+  prepareProjectedApprovalSessionAccess,
+  readOperatorApprovalRequestSource,
+} from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
-type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
+const MAX_IDLE_REPLAY_SCOPES = 64;
+type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release"> & {
+  records: OperatorApprovalRecord[];
+  reusable: boolean;
+};
 type ApprovalReplayScope = {
   sessionKey: string;
   reviewerDeviceId: string | undefined;
+  execApprovalSelection?: OperatorApprovalExecSelection;
+  kind?: "exec";
   references: number;
   revision: number;
   preparation?: Promise<ApprovalReplaySnapshot>;
+  completed?: ApprovalReplaySnapshot;
 };
 
 type OperatorApprovalSessionEventRuntime = {
@@ -60,8 +86,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
@@ -69,12 +94,85 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   isCurrent?: () => boolean;
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
-  const now = params.now ?? Date.now;
   const replayScopes = new Map<string, ApprovalReplayScope>();
+  const idleScopes = new Map<string, ApprovalReplayScope>();
+  // Pending participation exec approvals by audience session; ordinary sessions stay empty.
+  const participationApprovals = new Map<string, Set<string>>();
+  const trackParticipationApproval = (record: OperatorApprovalRecord, bound: boolean) => {
+    for (const sessionKey of record.audienceSessionKeys) {
+      const ids = participationApprovals.get(sessionKey);
+      if (bound) {
+        participationApprovals.set(sessionKey, (ids ?? new Set()).add(record.id));
+      } else if (ids?.delete(record.id) && ids.size === 0) {
+        participationApprovals.delete(sessionKey);
+      }
+    }
+  };
+
+  const approvalRecipient = (record: OperatorApprovalRecord) => {
+    const manager = params.getLiveManager?.(record.kind);
+    const live = manager?.getLiveSnapshot(record.id);
+    const participation =
+      record.kind === "exec" ? participationExecApprovalRecipient(manager, record.id) : undefined;
+    return (client: GatewayClient | null) =>
+      Boolean(
+        params.isCurrent?.() !== false &&
+        !client?.invalidated &&
+        // No durable projection can reconstruct a lost host-only exec binding.
+        (record.kind !== "exec" ||
+          !params.getLiveManager ||
+          (live &&
+            manager?.runtimeEpoch === record.runtimeEpoch &&
+            params.getLiveManager(record.kind) === manager &&
+            manager.getLiveSnapshot(record.id) === live)) &&
+        (participation
+          ? client && participation(client)
+          : canAccessInvitedApprovalSession({
+              cfg: getRuntimeConfig(),
+              client,
+              ...readOperatorApprovalRequestSource(record),
+              prepared: prepareProjectedApprovalSessionAccess({
+                cfg: getRuntimeConfig(),
+                client,
+                projection: params.getSessionRowProjection?.(),
+              }),
+            }) && canAccessOperatorApproval({ client, binding: record })),
+      );
+  };
+
+  const participantProjection = (record: OperatorApprovalRecord, sessionKey: string) => {
+    const manager = params.getLiveManager?.("exec");
+    const live = record.kind === "exec" ? manager?.getLiveSnapshot(record.id) : undefined;
+    if (
+      !live?.participation ||
+      resolveApprovalSourceStreamKey(live.participation.sessionKey, record.source.agentId) !==
+        sessionKey ||
+      !record.source.runId ||
+      manager?.runtimeEpoch !== record.runtimeEpoch
+    ) {
+      return undefined;
+    }
+    const canReceive = (client: GatewayClient | null) =>
+      params.isCurrent?.() !== false &&
+      params.getLiveManager?.("exec") === manager &&
+      manager.getLiveSnapshot(record.id) === live &&
+      canObserveParticipationExecApproval(live, client);
+    const event: Extract<SessionApprovalEvent, { phase: "participant" }> = {
+      phase: "participant",
+      sessionKey,
+      updatedAtMs: record.updatedAtMs,
+      approvalId: record.id,
+      runId: record.source.runId,
+      participantId: live.participation.participantProfileId,
+      status: record.status === "pending" ? "pending" : "terminal",
+      expiresAtMs: record.expiresAtMs,
+    };
+    return { event, canReceive };
+  };
 
   const authorizedRecipients = (
     sessionKey: string,
-    record: OperatorApprovalRecord,
+    canReceive: (client: GatewayClient) => boolean,
   ): ReadonlySet<string> => {
     const subscribed = params.sessionMessageSubscribers.getApprovals(sessionKey);
     if (subscribed.size === 0) {
@@ -83,12 +181,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     const recipients = new Set<string>();
     for (const client of params.clients) {
       const connId = client.connId;
-      if (
-        !client.invalidated &&
-        connId &&
-        subscribed.has(connId) &&
-        canAccessOperatorApproval({ client, binding: record })
-      ) {
+      if (!client.invalidated && connId && subscribed.has(connId) && canReceive(client)) {
         recipients.add(connId);
       }
     }
@@ -96,14 +189,21 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   };
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
-    for (const scope of replayScopes.values()) {
+    for (const [key, scope] of replayScopes) {
       if (
         event.record.audienceSessionKeys.includes(scope.sessionKey) &&
-        (scope.reviewerDeviceId === undefined ||
+        (scope.execApprovalSelection?.include.includes(event.record.id) ||
+          scope.execApprovalSelection?.exclude.includes(event.record.id) ||
+          scope.reviewerDeviceId === undefined ||
           matchesOperatorApprovalReviewerBinding(event.record, scope.reviewerDeviceId))
       ) {
         scope.revision += 1;
         scope.preparation = undefined;
+        scope.completed = undefined;
+        if (scope.references === 0) {
+          idleScopes.delete(key);
+          replayScopes.delete(key);
+        }
       }
     }
     const source = event.record.source;
@@ -115,7 +215,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       manager?.runtimeEpoch === event.record.runtimeEpoch &&
       live &&
       live.resolvedAtMs === undefined &&
-      live.expiresAtMs > now() &&
+      live.expiresAtMs > Date.now() &&
       request?.runId === source.runId &&
       request?.sessionId === source.sessionId &&
       request?.sessionKey === source.sessionKey,
@@ -137,7 +237,18 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         data: { approval: { id: event.record.id, state: pending ? "pending" : "resolved" } },
       });
     }
-    const approval = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
+    const snapshot = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
+    const boundRecord = manager?.getLiveSnapshot(event.record.id);
+    if (event.record.kind === "exec") {
+      trackParticipationApproval(event.record, pending && boundRecord?.participation !== undefined);
+    }
+    const turnActor = participationApprovalTurnActor(boundRecord);
+    const approval = snapshot && {
+      ...snapshot,
+      ...(turnActor ? { turnActor } : {}),
+      // Full participation snapshots go only to the exact creator/admin recipient below.
+      ...(snapshot.status === "pending" && boundRecord?.participation ? { canDecide: true } : {}),
+    };
     if (!approval || event.record.audienceSessionKeys.length === 0) {
       return;
     }
@@ -146,8 +257,22 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     // with a stream key they subscribed to. Raw source aliases (bare "global",
     // "main", unscoped child keys) never reach subscribers.
     const sourceStreamKey = resolveApprovalSourceStreamKeyForRecord(event.record);
+    const canReceive = approvalRecipient(event.record);
+    const participationApprovalRecipient =
+      event.record.kind === "exec"
+        ? participationExecApprovalRecipient(manager, event.record.id)
+        : undefined;
     for (const sessionKey of event.record.audienceSessionKeys) {
-      const recipients = authorizedRecipients(sessionKey, event.record);
+      const participant = participantProjection(event.record, sessionKey);
+      if (participant) {
+        const recipients = authorizedRecipients(sessionKey, participant.canReceive);
+        if (recipients.size > 0) {
+          params.broadcastToConnIds("session.approval", participant.event, recipients, {
+            participationApprovalRecipient: participant.canReceive,
+          });
+        }
+      }
+      const recipients = authorizedRecipients(sessionKey, canReceive);
       if (recipients.size === 0) {
         continue;
       }
@@ -168,45 +293,52 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
         payload = { ...common, phase: "terminal", approval };
       }
-      params.broadcastToConnIds("session.approval", payload, recipients);
+      if (participationApprovalRecipient) {
+        params.broadcastToConnIds("session.approval", payload, recipients, {
+          participationApprovalRecipient: canReceive,
+        });
+      } else {
+        params.broadcastToConnIds("session.approval", payload, recipients);
+      }
     }
   };
 
   const prepareReplay = async (scope: ApprovalReplayScope): Promise<ApprovalReplaySnapshot> => {
     const { sessionKey, reviewerDeviceId } = scope;
-    const snapshotAtMs = now();
-    const expired = await expireDueOperatorApprovals({
+    const snapshotAtMs = Date.now();
+    const input = {
+      audienceSessionKey: sessionKey,
+      reviewerDeviceId,
+      kind: scope.kind,
+      execApprovalSelection: scope.execApprovalSelection,
+      limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
-    });
+    };
+    const readRevision = scope.revision;
+    const prepared = await prepareOperatorApprovalReplay(input);
     // A replay read can be the first observer after a suspended timer. Emit
     // the durable timeout tombstone before returning the authoritative set.
-    for (const record of expired.records) {
-      const reconciled = await params.reconcileTerminal?.(record);
-      if (reconciled !== true) {
-        publish({ phase: "terminal", record });
+    if (prepared.outcome === "expired") {
+      for (const record of prepared.records) {
+        const reconciled = await params.reconcileTerminal?.(record);
+        if (reconciled !== true) {
+          publish({ phase: "terminal", record });
+        }
       }
     }
     if (params.isCurrent?.() === false) {
-      throw new Error("Operator approval replay authority is no longer current");
+      throw new Error("Approval replay runtime ended. Start a new request.");
     }
-    const revision = scope.revision;
-    const records = await listPendingOperatorApprovals({
-      audienceSessionKey: sessionKey,
-      reviewerDeviceId,
-      limit: MAX_SESSION_APPROVAL_REPLAY + 1,
-      nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
-    });
-    const isCurrent = () => revision === scope.revision;
+    const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
+    const records =
+      prepared.outcome === "expired" ? await listPendingOperatorApprovals(input) : prepared.records;
+    const storeIsCurrent = prepared.outcome === "pending" ? prepared.isCurrent : undefined;
+    const isCurrent = () => revision === scope.revision && storeIsCurrent?.() !== false;
     const approvals: PendingApprovalSnapshot[] = [];
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
       if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
-        return {
-          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
-          isCurrent,
-        };
+        break;
       }
       const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
       if (approval?.status === "pending") {
@@ -217,43 +349,86 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         });
       }
     }
-    return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
+    const replay: SessionApprovalReplay = {
+      sessionKey,
+      updatedAtMs: snapshotAtMs,
+      approvals,
+      truncated,
+    };
+    return { replay, records, isCurrent, reusable: storeIsCurrent !== undefined };
   };
 
   return {
     publish,
     replay: async (sessionKey, client) => {
-      if (!canReviewOperatorApproval(client)) {
+      if (!canSubscribeOperatorApprovals(client)) {
         return {
-          replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
-          isCurrent: () => !canReviewOperatorApproval(client),
+          replay: {
+            sessionKey,
+            updatedAtMs: Date.now(),
+            approvals: [],
+            truncated: false,
+          },
+          isCurrent: () => true,
           release: () => {},
         };
       }
-      const scopes = [...(client?.connect.scopes ?? [])];
+      const admin = client?.connect.scopes?.includes(ADMIN_SCOPE) === true;
       const deviceId = client?.connect.device?.id;
-      const reviewerDeviceId = scopes.includes(ADMIN_SCOPE) ? undefined : deviceId?.trim();
+      const reviewerDeviceId = admin ? undefined : deviceId?.trim();
+      const ordinaryReviewer = canReviewOperatorApproval(client);
+      // Resolve this session's live participation approvals before the store applies its
+      // bounded replay limit; ordinary approvals keep the store's reviewer selection.
+      const liveManager = params.getLiveManager?.("exec");
+      const include: string[] = [];
+      const exclude: string[] = [];
+      for (const id of [...(participationApprovals.get(sessionKey) ?? [])].toSorted()) {
+        const record = liveManager?.getLiveSnapshot(id);
+        if (!record?.participation || record.resolvedAtMs !== undefined) {
+          continue;
+        }
+        if (
+          canObserveParticipationExecApproval(record, client) ||
+          canResolveParticipationExecApproval(record, client) === true
+        ) {
+          include.push(id);
+        } else {
+          exclude.push(id);
+        }
+      }
+      const execApprovalSelection: OperatorApprovalExecSelection | undefined = !ordinaryReviewer
+        ? { include, exclude: [], ordinary: false }
+        : include.length || exclude.length
+          ? { include, exclude, ordinary: true }
+          : undefined;
+      const kind = ordinaryReviewer ? undefined : "exec";
       const assertCurrent = () => {
         if (
           params.isCurrent?.() === false ||
           client?.invalidated ||
-          !canReviewOperatorApproval(client) ||
-          scopes.join("\0") !== client?.connect.scopes?.join("\0") ||
-          (!scopes.includes(ADMIN_SCOPE) && deviceId !== client?.connect.device?.id)
+          (!admin && deviceId !== client?.connect.device?.id)
         ) {
-          throw new Error("Operator approval replay authority is no longer current");
+          throw new Error("Approval replay connection or device changed. Start a new request.");
         }
       };
       assertCurrent();
-      // Only share unsettled work. Lifecycle publications fence replies but are
-      // not a durable store revision suitable for retaining completed snapshots.
-      const key = JSON.stringify([sessionKey, reviewerDeviceId]);
+      // Completed replay is reusable only while the durable owner confirms its
+      // selection and deadline, independently of runtime lifecycle publications.
+      const key = JSON.stringify([sessionKey, reviewerDeviceId, kind, execApprovalSelection]);
       let scope = replayScopes.get(key);
       if (!scope) {
-        scope = { sessionKey, reviewerDeviceId, references: 0, revision: 0 };
+        scope = {
+          sessionKey,
+          reviewerDeviceId,
+          kind,
+          execApprovalSelection,
+          references: 0,
+          revision: 0,
+        };
         replayScopes.set(key, scope);
       }
       const retained = scope;
+      idleScopes.delete(key);
       retained.references += 1;
       let released = false;
       const release = () => {
@@ -263,26 +438,88 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         released = true;
         retained.references -= 1;
         if (retained.references === 0) {
-          replayScopes.delete(key);
+          if (retained.completed?.isCurrent()) {
+            idleScopes.set(key, retained);
+            if (idleScopes.size > MAX_IDLE_REPLAY_SCOPES) {
+              const oldest = idleScopes.keys().next().value!;
+              idleScopes.delete(oldest);
+              replayScopes.delete(oldest);
+            }
+          } else {
+            replayScopes.delete(key);
+          }
         }
       };
       try {
-        let preparation = retained.preparation;
-        if (!preparation) {
-          preparation = prepareReplay(retained).finally(() => {
-            if (retained.preparation === preparation) {
-              retained.preparation = undefined;
-            }
-          });
-          retained.preparation = preparation;
+        let prepared = retained.completed;
+        if (!prepared?.isCurrent()) {
+          retained.completed = undefined;
+          let preparation = retained.preparation;
+          if (!preparation) {
+            preparation = prepareReplay(retained)
+              .then((snapshot) => {
+                if (
+                  retained.preparation === preparation &&
+                  snapshot.reusable &&
+                  snapshot.isCurrent()
+                ) {
+                  retained.completed = snapshot;
+                }
+                return snapshot;
+              })
+              .finally(() => {
+                if (retained.preparation === preparation) {
+                  retained.preparation = undefined;
+                }
+              });
+            retained.preparation = preparation;
+          }
+          prepared = await preparation;
         }
-        const prepared = await preparation;
         assertCurrent();
+        // Cached store selections are shared; authorization and live bindings never are.
+        const recipients = new Map(
+          prepared.records.map((record) => [record.id, approvalRecipient(record)]),
+        );
+        const approvals = prepared.replay.approvals
+          .filter((approval) => recipients.get(approval.id)?.(client))
+          .map((approval) => {
+            const record =
+              approval.presentation.kind === "exec"
+                ? params.getLiveManager?.("exec")?.getLiveSnapshot(approval.id)
+                : undefined;
+            const turnActor = participationApprovalTurnActor(record);
+            return Object.assign(
+              {},
+              approval,
+              turnActor ? { turnActor } : {},
+              record?.participation
+                ? { canDecide: canResolveParticipationExecApproval(record, client) === true }
+                : {},
+            );
+          });
+        const participants = prepared.records.flatMap((record) => {
+          const projection = participantProjection(record, sessionKey);
+          return projection?.event.status === "pending" && projection.canReceive(client)
+            ? [projection]
+            : [];
+        });
         return {
-          replay: prepared.replay,
+          replay: {
+            ...prepared.replay,
+            approvals,
+            ...(participants.length
+              ? { participantApprovals: participants.map(({ event }) => event) }
+              : {}),
+          },
           isCurrent: () => {
             assertCurrent();
-            return !released && prepared.isCurrent();
+            return (
+              !released &&
+              prepared.isCurrent() &&
+              approvals.every((approval) => recipients.get(approval.id)?.(client)) &&
+              participants.every(({ canReceive }) => canReceive(client))
+            );
           },
           release,
         };

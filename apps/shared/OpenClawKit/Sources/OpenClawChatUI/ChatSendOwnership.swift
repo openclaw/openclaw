@@ -13,7 +13,7 @@ public final class OpenClawChatSendOwnership: @unchecked Sendable {
             mainKey: String? = nil,
             defaultAgentID: String? = nil)
         {
-            let key = OpenClawChatSessionKey.canonicalOwnershipKey(sessionKey)
+            let key = OpenClawChatSessionKey.comparisonKey(sessionKey)
             let owner = OpenClawChatSessionKey.agentID(from: key) ?? agentID ?? defaultAgentID
             self.agentID = owner?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let main = mainKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "main"
@@ -94,46 +94,6 @@ public final class OpenClawChatSendOwnership: @unchecked Sendable {
             self.webClaims[scope]?.remove(owner)
             if self.webClaims[scope]?.isEmpty == true { self.webClaims.removeValue(forKey: scope) }
         }
-    }
-}
-
-extension OpenClawChatSessionKey {
-    /// Mirrors session-url-contract/session-key-normalization.ts. Folding opaque IDs
-    /// would merge distinct conversations; failing to fold structure splits ownership.
-    fileprivate static func canonicalOwnershipKey(_ value: String) -> String {
-        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
-        let full = NSRange(location: 0, length: raw.length)
-        var spans: [(range: NSRange, trim: Bool)] = []
-        let signal = try? NSRegularExpression(pattern: "(^|:)signal:group:([^:]+)", options: .caseInsensitive)
-        for match in signal?.matches(in: raw as String, range: full) ?? [] {
-            spans.append((match.range(at: 2), true))
-        }
-        let matrix = try? NSRegularExpression(
-            pattern: "^(?:(?:agent:[^:]*:)+:*)?matrix:(?:channel|group):", options: .caseInsensitive)
-        if let match = matrix?.firstMatch(in: raw as String, range: full), NSMaxRange(match.range) < raw.length {
-            let start = NSMaxRange(match.range)
-            let tail = NSRange(location: start, length: raw.length - start)
-            let thread = raw.range(of: ":thread:", options: [.caseInsensitive, .backwards], range: tail)
-            if thread.location == NSNotFound {
-                spans.append((tail, false))
-            } else {
-                spans.append((NSRange(location: start, length: thread.location - start), false))
-                spans.append((NSRange(location: NSMaxRange(thread), length: raw.length - NSMaxRange(thread)), false))
-            }
-        }
-        var cursor = 0
-        var result = ""
-        for span in spans.filter({ $0.range.length > 0 }).sorted(by: { $0.range.location < $1.range.location }) {
-            // Matrix tails may contain Signal-shaped text. The outer opaque span wins.
-            guard span.range.location >= cursor else { continue }
-            result += raw.substring(with: NSRange(location: cursor, length: span.range.location - cursor))
-                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let preserved = raw.substring(with: span.range)
-            result += span.trim ? preserved.trimmingCharacters(in: .whitespacesAndNewlines) : preserved
-            cursor = NSMaxRange(span.range)
-        }
-        result += raw.substring(from: cursor).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return result
     }
 }
 

@@ -6,8 +6,10 @@ export function readChatSessionActionAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   hasLocalRun: boolean,
   options: {
-    session?: Pick<GatewaySessionRow, "sharingRole">;
+    session?: Pick<GatewaySessionRow, "sharingRole" | "invitedAccess">;
     sessionAbortable?: boolean;
+    /** A pane can adopt another participant's run; the Gateway still checks its initiator. */
+    runId?: string | null;
   } = {},
 ) {
   const adminAction = (method: string) =>
@@ -16,6 +18,7 @@ export function readChatSessionActionAccess(
     compact: adminAction("sessions.compact"),
     abort: readSessionMethodAccess(snapshot, {
       method: hasLocalRun && !options.sessionAbortable ? "chat.abort" : "sessions.abort",
+      params: { runId: options.runId },
       requiredScope: "operator.write",
       sessionScope: true,
       session: options.session,
@@ -24,6 +27,8 @@ export function readChatSessionActionAccess(
     fork: readSessionMethodAccess(snapshot, {
       method: "sessions.fork",
       requiredScope: "operator.write",
+      sessionScope: true,
+      session: options.session,
     }),
     reset: adminAction("sessions.reset"),
     branchSwitch: adminAction("sessions.branches.switch"),

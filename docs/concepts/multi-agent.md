@@ -12,6 +12,8 @@ An **agent** is the full per-persona scope: workspace files, auth profiles, mode
 
 For a focused setup guide with account and conversation examples, see [Agent bindings](/concepts/agent-bindings).
 
+A second agent does not have to be a separate person, persona, or channel account. It can also be a separate job, such as reviewing pull requests or watching dependencies, with its own instructions, skills, and schedule. See [Agents and Templates](/concepts/agents-and-templates) for when to make one and how to package it for others.
+
 ## What is one agent
 
 Each agent has its own:
@@ -96,7 +98,7 @@ edits keep their normal automatic save behavior.
 
 OpenClaw records how each configured agent was created: `operator` for CLI,
 onboarding, and Gateway requests; `agent` when the system agent requested it;
-and `claw` when a Claw install added it. Agent-created entries also retain the
+and `template` when a Template install added it. Agent-created entries also retain the
 requesting agent id. A configured agent can ask OpenClaw to create another
 agent through its `openclaw` tool. The system agent files the typed operation,
 shows the requesting agent id to the operator, and creates the agent only after
@@ -126,12 +128,12 @@ artifacts and evidence to the coordinator without delegating further. Their
 operating programs live in `AGENTS.md`, so they also apply in spawned sessions
 that do not load `SOUL.md` or `IDENTITY.md`.
 
-The bundled roles are [Claw sources](/cli/claws), sharing the portable
+The bundled roles are [Template sources](/cli/templates), sharing the portable
 `CLAW.md` format for identity, the `SOUL.md` body, and declared workspace
 files. `agents add --role <role>` loads one of these sources. With the
-experimental Claws surface enabled, the equivalent source path from a source
-checkout is `openclaw claws add docs/reference/templates/roles/<role>`; follow
-the [Claw preview and consent flow](/cli/claws#inspect-and-preview).
+Templates surface enabled, the equivalent source path from a source
+checkout is `openclaw templates add docs/reference/templates/roles/<role>`; follow
+the [Template preview and consent flow](/cli/templates#inspect-and-preview).
 
 You can also create the chief of staff or the full team from the Control UI:
 choose **New agent** in the sidebar or Agents home, then select the role or
@@ -163,8 +165,8 @@ not a scheduler. `allowAgents` controls explicit spawn targets. The preset keeps
 `agents.defaults.subagents` and `tools.*` unchanged, so existing tool availability
 and access policy still apply. Role instructions require human approval before
 external sends, publication, purchases, deletion, or production changes.
-These delegation settings remain team wiring in config. The role Claws will
-carry them once the separate Claw profile support lands.
+These delegation settings remain team wiring in config. The role Templates will
+carry them once the separate Template profile support lands.
 
 The coordinator is an explicit target. Team creation
 sets `agents.defaults.systemAgent.agentId` to the coordinator only when that
@@ -281,7 +283,6 @@ Direct chats collapse to the agent's main session key by default, so true isolat
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "alex" },
-      heartbeat: { agentId: "alex" },
       systemAgent: { agentId: "alex" },
     },
     entries: {
@@ -321,7 +322,7 @@ Bindings follow a fixed order, and the most-specific match wins. See [Channel ro
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, Talk, and auth-inheritance owners where needed. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the current roster format, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
+For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit Custodian, Talk, and auth-inheritance owners where needed. It resolves legacy heartbeat enrollment before converting each monitor into an ordinary automation. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the current roster format, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
 
 For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
@@ -367,7 +368,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 ## Platform examples
 
 These examples select channel and service owners explicitly. Channel bindings route
-messages; `systemAgent`, `heartbeat`, and `talk.agentId` select their own owners.
+messages; `systemAgent`, each automation job, and `talk.agentId` select their own owners.
 When the previous owner was not `main`, `authInheritance.agentId` preserves the
 shared credential source independently of channel routing.
 
@@ -380,7 +381,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -434,7 +434,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -491,7 +490,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "home" },
-          heartbeat: { agentId: "home" },
           systemAgent: { agentId: "home" },
         },
         entries: {
@@ -566,7 +564,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -602,7 +599,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -692,7 +688,6 @@ Each agent can have its own sandbox and tool restrictions:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "personal" },
-      heartbeat: { agentId: "personal" },
       systemAgent: { agentId: "personal" },
     },
     entries: {

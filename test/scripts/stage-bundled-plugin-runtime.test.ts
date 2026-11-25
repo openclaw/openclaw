@@ -1,6 +1,5 @@
 // Stage Bundled Plugin Runtime tests cover stage bundled plugin runtime script behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,16 +10,8 @@ import {
 import { readInstalledPluginOverview } from "../../src/plugins/installed-plugin-overview.js";
 import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import { createCommandFixture } from "../helpers/command-fixture.js";
-
-async function withTempDir(run: (dir: string) => Promise<void>) {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
-  try {
-    await run(dir);
-  } finally {
-    await fs.promises.rm(dir, { recursive: true, force: true });
-  }
-}
 
 describe("stageBundledPluginRuntime", () => {
   afterEach(() => {
@@ -28,7 +19,7 @@ describe("stageBundledPluginRuntime", () => {
   });
 
   it("copies files when Windows rejects runtime overlay symlinks", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const sourceFile = path.join(repoRoot, "dist", "extensions", "acpx", "assets", "fixture.txt");
       await fs.promises.mkdir(path.dirname(sourceFile), { recursive: true });
       await fs.promises.writeFile(sourceFile, "asset-body\n", "utf8");
@@ -65,7 +56,7 @@ describe("stageBundledPluginRuntime", () => {
   });
 
   it("refuses to stage through a symlinked dist root", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const targetDir = path.join(repoRoot, "gateway-dist");
       const pluginFile = path.join(targetDir, "extensions", "acpx", "index.js");
       await fs.promises.mkdir(path.dirname(pluginFile), { recursive: true });
@@ -135,6 +126,9 @@ describe("prepareBundledPluginRuntime", () => {
       const owner = pathToFileURL(
         path.join(sourceRoot, "scripts/lib/source-update-artifact-preflight.mts"),
       ).href;
+      const lockOwner = pathToFileURL(
+        path.join(sourceRoot, "scripts/lib/dist-artifact-lock.mts"),
+      ).href;
       const result = await command.run(
         resolveTestNodeExecPath(),
         [
@@ -143,15 +137,15 @@ describe("prepareBundledPluginRuntime", () => {
           `import assert from "node:assert/strict";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { inspectSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+import { inspectOwnedSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+import { acquireDistArtifactOwnership } from ${JSON.stringify(lockOwner)};
 execFileSync("git", ["init", "--quiet"]);
-const admission = await inspectSourceUpdateArtifacts(process.cwd());
+const lock = await acquireDistArtifactOwnership(fs.realpathSync(process.cwd()));
 try {
-  assert(admission.lock);
   assert(fs.existsSync(".artifacts/dist-artifacts.lock/owner.json"));
-  assert.equal(admission.sourceRuntimePrepared, true);
+  assert.equal(await inspectOwnedSourceUpdateArtifacts(fs.realpathSync(process.cwd())), true);
 } finally {
-  await admission.lock?.release();
+  await lock.release();
 }`,
         ],
         { cwd: repoRoot, env: { ...process.env, NODE_OPTIONS: "" } },
@@ -174,7 +168,7 @@ try {
   });
 
   it("prepares both roots without mutation and publishes imports valid at their final paths", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
       const prepared = prepareBundledPluginRuntime({ repoRoot });
       expect(prepared.changed).toBe(true);
@@ -219,7 +213,7 @@ try {
 
   it("preserves canonical static assets without writing through staging links", async () => {
     vi.stubEnv("OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS", undefined);
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
       const sourceRoot = path.join(repoRoot, "dist/extensions/demo");
       const staticAssets = ["index.html", "assets/app.js", "assets/app.css"].map((name) => ({
@@ -262,7 +256,7 @@ try {
   });
 
   it("detects stale mode even when every required path exists", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot } = writeRuntimeFixture(repoRoot);
       stageBundledPluginRuntime({ repoRoot });
       fs.chmodSync(path.join(runtimeRoot, "extensions/demo/package.json"), 0o444);
@@ -273,7 +267,7 @@ try {
   });
 
   it("leaves both live roots intact when preparation fails", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
       stageBundledPluginRuntime({ repoRoot });
       const runtimeBefore = fs.statSync(runtimeRoot).ino;
@@ -296,7 +290,7 @@ try {
   });
 
   it("restores originals when alias publication fails", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
       stageBundledPluginRuntime({ repoRoot });
       fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
@@ -320,7 +314,7 @@ try {
   });
 
   it("keeps live paths present when authority is revoked between root swaps", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
       stageBundledPluginRuntime({ repoRoot });
       fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
@@ -355,7 +349,7 @@ try {
   });
 
   it("keeps supported Windows copy fallbacks unchanged", async () => {
-    await withTempDir(async (repoRoot) => {
+    await withTempDir("openclaw-stage-runtime-", async (repoRoot) => {
       const { runtimeRoot } = writeRuntimeFixture(repoRoot);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const symbolicLink = vi.spyOn(fs, "symlinkSync").mockImplementation(() => {

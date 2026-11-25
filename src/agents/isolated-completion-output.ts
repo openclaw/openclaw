@@ -5,6 +5,18 @@ import {
   classifyAssistantFailoverReason,
 } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
+import type { UsageLike } from "./usage.js";
+
+export type IsolatedCompletionResult = {
+  text: string;
+  provider: string;
+  model: string;
+  owner: { kind: "cli" | "harness"; id: string };
+  /** CLI runtimes may not report token usage; absence must not be projected as zero. */
+  usage?: UsageLike;
+  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
+  diagnosticUsage?: UsageLike;
+};
 
 type IsolatedCompletionErrorCode =
   | "unsupported"
@@ -20,28 +32,6 @@ export class IsolatedCompletionError extends Error {
     this.name = "IsolatedCompletionError";
     this.code = code;
   }
-}
-
-export function hasCliSideEffectEvidence(result: {
-  didSendViaMessagingTool?: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  messagingToolSentTexts?: unknown[];
-  messagingToolSentMediaUrls?: unknown[];
-  messagingToolSentTargets?: unknown[];
-  messagingToolSourceReplyPayloads?: unknown[];
-  acceptedSessionSpawns?: unknown[];
-  successfulCronAdds?: number;
-}): boolean {
-  return Boolean(
-    result.didSendViaMessagingTool ||
-    result.didDeliverSourceReplyViaMessageTool ||
-    result.messagingToolSentTexts?.length ||
-    result.messagingToolSentMediaUrls?.length ||
-    result.messagingToolSentTargets?.length ||
-    result.messagingToolSourceReplyPayloads?.length ||
-    result.acceptedSessionSpawns?.length ||
-    result.successfulCronAdds,
-  );
 }
 
 export function requireIsolatedAssistantText(assistant: AssistantMessage): string {

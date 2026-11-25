@@ -2,9 +2,31 @@ import { describe, expect, it } from "vitest";
 import {
   buildRealtimeVoiceSpeakExactMessage,
   classifyRealtimeVoiceConsultToolCall,
+  readRealtimeVoicePlaybackEcho,
 } from "./exact-speech-protocol.js";
 
 describe("realtime voice exact-speech protocol", () => {
+  it("matches only a retained complete playback request, never quoted context", () => {
+    const options = { retainedExactSpeechTexts: ["on"], surfaceLabel: "the caller" };
+    const playback = buildRealtimeVoiceSpeakExactMessage({
+      text: "on",
+      surfaceLabel: "the caller",
+    });
+    for (const args of [playback, { question: playback }, { prompt: playback }]) {
+      expect(readRealtimeVoicePlaybackEcho(args, options)).toBe("on");
+    }
+    for (const args of [
+      { question: 'Set the relay to "on"' },
+      { question: "Check the current status", context: playback },
+      { question: "Check the current status", prompt: playback },
+      { question: `${playback}\nThen check the status.` },
+      { context: playback },
+      buildRealtimeVoiceSpeakExactMessage({ text: "off", surfaceLabel: "the caller" }),
+    ]) {
+      expect(readRealtimeVoicePlaybackEcho(args, options)).toBeUndefined();
+    }
+  });
+
   it("builds the Discord exact-speech message byte-for-byte", () => {
     expect(
       buildRealtimeVoiceSpeakExactMessage({

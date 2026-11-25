@@ -39,12 +39,12 @@ export async function restoreDoctorSessionSqliteTargets(params: {
       storePath: restore.manifestPaths[0] || resolveSessionSqliteMigrationRunsDir(params.env),
     });
   reportTarget.restore = restore;
-  reportTarget.issues.push(
-    ...restore.conflicts.map((conflict) => ({
+  for (const conflict of restore.conflicts) {
+    reportTarget.issues.push({
       code: "restore_conflict",
       message: `${conflict.sourcePath}: ${conflict.reason}`,
-    })),
-  );
+    });
+  }
   const targets = targetReports.length > 0 ? targetReports : [reportTarget];
   return summarizeDoctorSessionSqliteReport("restore", targets);
 }

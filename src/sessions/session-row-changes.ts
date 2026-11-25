@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type {
+  SessionMembershipFact,
+  SessionMember,
+  SessionParticipantRecord,
+} from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   hasSqlitePostCommitScope,
   publishSqliteCommittedState,
@@ -37,7 +42,13 @@ export type SessionRowFacts =
       communicationBinding?: string;
       lifecycleChanged?: boolean;
     }
-  | { kind: "member"; sessionId: string; identityId: string; present: boolean }
+  | {
+      kind: "member";
+      sessionId: string;
+      identityId: string;
+      present: boolean;
+      access?: SessionMember["access"];
+    }
   | {
       kind: "owner";
       sessionId: string;
@@ -50,9 +61,11 @@ export type SessionRowFacts =
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
       /** Count-only contributions leave display identity and ordering unchanged. */
       projectionChanged?: false;
+      records?: readonly SessionParticipantRecord[];
+      actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
-  | { kind: "removed" };
+  | { kind: "removed"; transcriptInventoryUnchanged?: true };
 
 export type SessionRowChange =
   | {
@@ -60,6 +73,8 @@ export type SessionRowChange =
       agentId?: string;
       storePath?: string;
       scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
+      /** Runtime aliases can select stored rows by session ID independently of their key. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
@@ -68,6 +83,8 @@ export type SessionRowChange =
   | {
       all: true;
       scope: string | { agentId?: string; storePath?: string; topology?: true };
+      /** Run owners without a logical key retain the identity for indexed row invalidation. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       factsInvalidated?: true;
     };
 
@@ -103,6 +120,33 @@ export function isSessionStoreTopologyChange(change: SessionRowChange): boolean 
     (change.scope === "stores" ||
       (typeof change.scope === "object" && change.scope.topology === true))
   );
+}
+
+/** Replay descriptive reads when a committed topology change supersedes their captured stores. */
+export async function readWithSessionStoreTopology<T>(read: () => Promise<T>): Promise<T> {
+  let changed: boolean;
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if (isSessionStoreTopologyChange(change)) {
+      changed = true;
+    }
+  });
+  try {
+    for (;;) {
+      changed = false;
+      try {
+        const result = await read();
+        if (!changed) {
+          return result;
+        }
+      } catch (error) {
+        if (!changed) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    stop();
+  }
 }
 
 type SessionRowNotification =
@@ -145,19 +189,20 @@ export function readSessionRowChangeRevision(): number {
 
 /** Worker receipts borrow the producer's transaction postimages, including savepoint rollback. */
 export function captureSessionRowChanges<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   run: (changes: readonly SessionRowChange[]) => T,
 ) {
+  const anchor = sqlPublicationAnchor(database);
   const changes: SessionRowChange[] = [];
-  const active = captures.get(database) ?? new Set<SessionRowChange[]>();
+  const active = captures.get(anchor) ?? new Set<SessionRowChange[]>();
   active.add(changes);
-  captures.set(database, active);
+  captures.set(anchor, active);
   try {
     return { result: run(changes), changes };
   } finally {
     active.delete(changes);
     if (active.size === 0) {
-      captures.delete(database);
+      captures.delete(anchor);
     }
   }
 }
@@ -193,19 +238,20 @@ export const sessionChanges = {
     }
   },
   /** SQLite observers run only after all committed owner state has settled. */
-  emit(change: SessionRowChange, database?: DatabaseSync): void {
+  emit(change: SessionRowChange, database?: EngineConnection): void {
     sessionChanges.emitBatch([change], database);
   },
   emitBatch(
     changes: readonly SessionRowChange[],
-    database?: DatabaseSync,
+    database?: EngineConnection,
     beforePublicNotifications?: () => void,
   ): void {
-    if (database && hasSqlitePostCommitScope(database)) {
-      for (const captured of captures.get(database) ?? []) {
+    const anchor = database && sqlPublicationAnchor(database);
+    if (anchor && hasSqlitePostCommitScope(anchor)) {
+      for (const captured of captures.get(anchor) ?? []) {
         const start = captured.length;
         if (
-          !stageSqliteTransactionState(database, {
+          !stageSqliteTransactionState(anchor, {
             stage: () => captured.push(...changes),
             commit() {},
             rollback: () => captured.splice(start),
@@ -287,7 +333,7 @@ export const sessionChanges = {
       },
       notify: publish,
     };
-    if (!database || !stageSqliteCommittedPublication(database, publication)) {
+    if (!anchor || !stageSqliteCommittedPublication(anchor, publication)) {
       publishSqliteCommittedState(publication);
     }
   },

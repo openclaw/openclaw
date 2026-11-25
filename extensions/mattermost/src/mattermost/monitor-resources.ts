@@ -163,7 +163,7 @@ export function createMattermostMonitorResources(params: {
           responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
-        const contentType = saved.contentType ?? undefined;
+        const contentType = saved.contentType;
         out.push({
           path: saved.path,
           contentType,

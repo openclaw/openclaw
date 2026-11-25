@@ -94,7 +94,7 @@ export function createSessionActorTranscriptReader(
       ]);
       const cfg = getRuntimeConfig();
       await Promise.all(
-        [...sourceKeys].map(async (sessionKey) => {
+        Array.from(sourceKeys, async (sessionKey) => {
           const source = await readAcpSessionEntryAsync({
             sessionKey,
             cfg,

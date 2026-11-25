@@ -1,276 +1,227 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
+  prepareCronModelResolveInput,
   resolveCronFallbacksOverride,
   resolveCronPreflightCandidates,
 } from "./run-fallback-policy.js";
 
-function makeJob(payload: CronJob["payload"]): CronJob {
+it.each([undefined, "cron", "event"] as const)(
+  "classifies model routing as %s only from the trusted caller, not the hook session key",
+  async (trigger) => {
+    const { modelResolve } = await prepareCronModelResolveInput({
+      cwd: "/tmp/event-model-routing",
+      prompt: "Synthetic immediate event",
+      cronSession: { sessionEntry: {} },
+      job: { id: "caller-classification" },
+      trigger,
+      runSessionKey: "agent:main:hook:caller-classification",
+      resolvedDelivery: {},
+      messageChannel: undefined,
+    });
+
+    expect(modelResolve.context?.trigger).toBe(trigger ?? "cron");
+  },
+);
+
+function makeJob(
+  payload: Partial<Extract<CronJob["payload"], { kind: "agentTurn" }>> = {},
+): CronJob {
   return {
     id: "cron-fallback-policy",
     name: "Cron fallback policy",
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    payload,
+    payload: { kind: "agentTurn", message: "summarize", ...payload },
     state: {},
   } as CronJob;
 }
 
-function makeConfig(fallbacks?: string[]): OpenClawConfig {
+function subagentConfig(
+  model: { primary?: string; fallbacks: string[] },
+  options: { agentPrimary?: boolean; defaultFallbacks?: string[] } = {},
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: {
-          primary: "anthropic/claude-opus-4-6",
-          ...(fallbacks !== undefined ? { fallbacks } : {}),
-        },
+        ...(!options.agentPrimary ? makeConfig(options.defaultFallbacks).agents?.defaults : {}),
+        subagents: { model },
       },
+      ...(options.agentPrimary
+        ? { entries: { research: { model: { primary: "anthropic/claude-opus-4-6" } } } }
+        : {}),
     },
   };
 }
 
-describe("resolveCronFallbacksOverride", () => {
-  it("returns an empty override for payload model overrides without configured fallbacks", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: makeConfig(),
-        agentId: "main",
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-          model: "google/gemini-2.0-flash",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("lets payload fallbacks override the configured fallback policy", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: makeConfig(["openai/gpt-5.4"]),
-        agentId: "main",
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-          model: "google/gemini-2.0-flash",
-          fallbacks: [],
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("uses default subagent fallbacks ahead of the agent primary", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: {
-          agents: {
-            defaults: {
-              subagents: {
-                model: {
-                  primary: "kimi/kimi-code",
-                  fallbacks: ["openai/gpt-5.2"],
-                },
-              },
-            },
-            entries: {
-              research: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                },
-              },
-            },
-          },
+function makeConfig(
+  fallbacks?: string[],
+  primary = "anthropic/claude-opus-4-6",
+  agentModel?: string,
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: {
+          primary,
+          ...(fallbacks !== undefined ? { fallbacks } : {}),
         },
-        agentId: "research",
-        useSubagentFallbacks: true,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toEqual(["openai/gpt-5.2"]);
-  });
-
-  it("keeps the agent primary strict when the default subagent model has no primary", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: {
-          agents: {
-            defaults: {
-              subagents: {
-                model: {
-                  fallbacks: ["openai/gpt-5.2"],
-                },
-              },
-            },
-            entries: {
-              research: {
-                model: {
-                  primary: "anthropic/claude-opus-4-6",
-                },
-              },
-            },
-          },
-        },
-        agentId: "research",
-        useSubagentFallbacks: true,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps explicit empty subagent fallbacks as a fallback override", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "anthropic/claude-opus-4-6",
-                fallbacks: ["openai/gpt-5.4"],
-              },
-              subagents: {
-                model: {
-                  primary: "kimi/kimi-code",
-                  fallbacks: [],
-                },
-              },
-            },
-          },
-        },
-        agentId: "main",
-        useSubagentFallbacks: true,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("ignores subagent fallbacks when cron did not select the subagent model", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "anthropic/claude-opus-4-6",
-              },
-              subagents: {
-                model: {
-                  primary: "kimi/kimi-code",
-                  fallbacks: ["openai/gpt-5.2"],
-                },
-              },
-            },
-          },
-        },
-        agentId: "main",
-        useSubagentFallbacks: false,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("inherits default fallbacks for cron runs when the agent model is a string", () => {
-    expect(
-      resolveCronFallbacksOverride({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "deepseek/deepseek-v4-pro",
-                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
-              },
-            },
-            entries: {
-              main: {
-                model: "deepseek/deepseek-v4-pro",
-              },
-            },
-          },
-        },
-        agentId: "main",
-        inheritDefaultFallbacksForAgentStringModel: true,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
-  });
-
-  it("keeps cron preflight strict when payload fallbacks are explicitly empty", () => {
-    expect(
-      resolveCronPreflightCandidates({
-        cfg: makeConfig(["openai/gpt-5.4"]),
-        agentId: "main",
-        provider: "ollama",
-        model: "qwen3:32b",
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-          fallbacks: [],
-        }),
-      }),
-    ).toStrictEqual([
-      {
-        provider: "ollama",
-        model: "qwen3:32b",
-        routeOrigin: "requested",
-        routeResolution: "resolved",
       },
-    ]);
-  });
+      ...(agentModel ? { entries: { main: { model: agentModel } } } : {}),
+    },
+  };
+}
 
-  it("plans the full configured candidate chain for cron preflight", () => {
-    expect(
-      resolveCronPreflightCandidates({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "ollama/qwen3:32b",
-                fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-        agentId: "main",
-        provider: "ollama",
-        model: "qwen3:32b",
-        job: makeJob({
-          kind: "agentTurn",
-          message: "summarize",
-        }),
-      }),
-    ).toEqual([
-      {
-        provider: "ollama",
-        model: "qwen3:32b",
-        routeOrigin: "requested",
-        routeResolution: "resolved",
-      },
-      {
-        provider: "openrouter",
-        model: "nvidia/nemotron-3-super-120b-a12b:free",
-        routeOrigin: "configured-fallback",
-        routeResolution: "resolved",
-      },
-      {
-        provider: "openai",
-        model: "gpt-5.4",
-        routeOrigin: "configured-fallback",
-        routeResolution: "resolved",
-      },
-    ]);
-  });
+type FallbackCase = [
+  name: string,
+  cfg: OpenClawConfig,
+  options: Partial<Omit<Parameters<typeof resolveCronFallbacksOverride>[0], "cfg">>,
+  expected: string[] | undefined,
+];
+it.each<FallbackCase>([
+  [
+    "strict payload model",
+    makeConfig(),
+    { job: makeJob({ model: "google/gemini-2.0-flash" }) },
+    [],
+  ],
+  [
+    "explicit payload fallbacks",
+    makeConfig(["openai/gpt-5.4"]),
+    { job: makeJob({ model: "google/gemini-2.0-flash", fallbacks: [] }) },
+    [],
+  ],
+  [
+    "selected subagent",
+    subagentConfig(
+      { primary: "kimi/kimi-code", fallbacks: ["openai/gpt-5.2"] },
+      { agentPrimary: true },
+    ),
+    { agentId: "research", useSubagentFallbacks: true },
+    ["openai/gpt-5.2"],
+  ],
+  [
+    "subagent without primary",
+    subagentConfig({ fallbacks: ["openai/gpt-5.2"] }, { agentPrimary: true }),
+    {
+      agentId: "research",
+      useSubagentFallbacks: true,
+    },
+    [],
+  ],
+  [
+    "empty subagent fallbacks",
+    subagentConfig(
+      { primary: "kimi/kimi-code", fallbacks: [] },
+      { defaultFallbacks: ["openai/gpt-5.4"] },
+    ),
+    { useSubagentFallbacks: true },
+    [],
+  ],
+  [
+    "unselected subagent",
+    subagentConfig({ primary: "kimi/kimi-code", fallbacks: ["openai/gpt-5.2"] }),
+    {
+      useSubagentFallbacks: false,
+    },
+    undefined,
+  ],
+  [
+    "string agent model",
+    makeConfig(
+      ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4-pro",
+    ),
+    { inheritDefaultFallbacksForAgentStringModel: true },
+    ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+  ],
+  [
+    "user session selection",
+    makeConfig(["fallback/model-b"]),
+    { sessionModelOverrideSource: "user" },
+    [],
+  ],
+  [
+    "automatic session selection",
+    makeConfig(["fallback/model-b"]),
+    { sessionModelOverrideSource: "auto" },
+    undefined,
+  ],
+  [
+    "user session selection under a payload model",
+    makeConfig(["fallback/model-b"]),
+    { job: makeJob({ model: "jobmodel/model-d" }), sessionModelOverrideSource: "user" },
+    ["fallback/model-b"],
+  ],
+  [
+    "user session selection with explicit payload fallbacks",
+    makeConfig(["fallback/model-b"]),
+    {
+      job: makeJob({ fallbacks: ["jobfallback/model-c"] }),
+      sessionModelOverrideSource: "user",
+    },
+    ["jobfallback/model-c"],
+  ],
+])("resolves %s fallback policy", (_name, cfg, options, expected) => {
+  expect(
+    resolveCronFallbacksOverride({ cfg, agentId: "main", job: makeJob(), ...options }),
+  ).toStrictEqual(expected);
+});
+
+it.each([
+  ["payload fallbacks are explicitly empty", { job: makeJob({ fallbacks: [] }) }],
+  ["a user session selection is pinned", { job: makeJob(), sessionModelOverrideSource: "user" }],
+] as const)("keeps cron preflight strict when %s", (_name, options) => {
+  expect(
+    resolveCronPreflightCandidates({
+      cfg: makeConfig(["openai/gpt-5.4"]),
+      agentId: "main",
+      provider: "ollama",
+      model: "qwen3:32b",
+      ...options,
+    }),
+  ).toStrictEqual([
+    {
+      provider: "ollama",
+      model: "qwen3:32b",
+      routeOrigin: "requested",
+      routeResolution: "resolved",
+    },
+  ]);
+});
+
+it("plans the full configured candidate chain for cron preflight", () => {
+  expect(
+    resolveCronPreflightCandidates({
+      cfg: makeConfig(
+        ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
+        "ollama/qwen3:32b",
+      ),
+      agentId: "main",
+      provider: "ollama",
+      model: "qwen3:32b",
+      job: makeJob(),
+    }),
+  ).toEqual([
+    {
+      provider: "ollama",
+      model: "qwen3:32b",
+      routeOrigin: "requested",
+      routeResolution: "resolved",
+    },
+    {
+      provider: "openrouter",
+      model: "nvidia/nemotron-3-super-120b-a12b:free",
+      routeOrigin: "configured-fallback",
+      routeResolution: "resolved",
+    },
+    {
+      provider: "openai",
+      model: "gpt-5.4",
+      routeOrigin: "configured-fallback",
+      routeResolution: "resolved",
+    },
+  ]);
 });

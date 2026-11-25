@@ -5,6 +5,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import {
+  readLatestUserMarker,
+  writeOpenAiResponsesItem,
+} from "../../../helpers/openai-responses-item.test-support.js";
+import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -114,21 +119,29 @@ async function readCommandHistory(
                 .filter((part) => part.type === "toolCall" && part.name === "node_exec")
             : [],
         );
-        return (
-          calls.length > 0 &&
-          (expectedReply === undefined ||
-            (messages.some(
-              (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
-            ) &&
-              messages.some(
-                (message) =>
-                  message.role === "assistant" && textContent(message).trim() === expectedReply,
-              )))
-        );
+        return {
+          nodeExecCallPresent: calls.length > 0,
+          ...(expectedReply === undefined
+            ? {}
+            : {
+                matchingToolResultPresent: messages.some(
+                  (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
+                ),
+                exactAssistantReplyPresent: messages.some(
+                  (message) =>
+                    message.role === "assistant" && textContent(message).trim() === expectedReply,
+                ),
+              }),
+        };
       },
       { timeout: 30_000, interval: 100 },
     )
-    .toBe(true);
+    .toEqual({
+      nodeExecCallPresent: true,
+      ...(expectedReply === undefined
+        ? {}
+        : { matchingToolResultPresent: true, exactAssistantReplyPresent: true }),
+    });
   expect(calls).toHaveLength(1);
   const call = calls[0];
   if (!isRecord(call) || typeof call.id !== "string") {
@@ -148,10 +161,6 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
     "honors foreground command budgets and stops a zero-timeout node process",
     { timeout: 20 * 60_000 },
     async () => {
-      const apiKey = process.env.OPENAI_API_KEY?.trim();
-      if (!apiKey) {
-        throw new Error("OPENAI_API_KEY is required for the Codex node_exec live proof");
-      }
       const repoRoot = process.cwd();
       const root = tempDirs.make("openclaw-codex-node-exec-timeout-");
       const gatewayParent = path.join(root, "gateway");
@@ -164,7 +173,9 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
       const owner = createQaGatewayChild();
       let node: ReturnType<typeof startNodeProcess> | undefined;
       const activeSessions = new Set<string>();
+      const commands = new Map<string, { args: Record<string, unknown>; reply: string }>();
       let gateway: QaGatewayChild | undefined;
+      let provider: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>> | undefined;
 
       await Promise.all(
         [gatewayParent, nodeState, nodeTemp, proofDir].map((dir) =>
@@ -208,6 +219,65 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
 
       await runQaGatewayFixture(
         async () => {
+          // Script only inference. Codex, dynamic tool dispatch, the Gateway, and node processes are real.
+          provider = await startOpenAiResponsesModelServer({
+            modelId: MODEL_REF.slice("openai/".length),
+            bindError: "Could not bind node_exec Responses fixture",
+            onRequest: async (request, response) => {
+              const chunks: Buffer[] = [];
+              for await (const chunk of request) {
+                chunks.push(Buffer.from(chunk));
+              }
+              const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+              if (!isRecord(body) || !Array.isArray(body.input)) {
+                throw new Error("Expected a Responses request with input items");
+              }
+              const marker = readLatestUserMarker(
+                body,
+                Array.from(commands.keys(), (key) => [key, key] as const),
+              );
+              const command = marker && commands.get(marker);
+              if (!command) {
+                throw new Error("No registered node_exec command for this turn");
+              }
+              const callId = `call_${marker}`;
+              const completed = body.input.some(
+                (item) =>
+                  isRecord(item) && item.type === "function_call_output" && item.call_id === callId,
+              );
+              const responseId = `resp_${randomUUID()}`;
+              if (completed) {
+                writeOpenAiResponsesItem(response, responseId, {
+                  type: "message",
+                  role: "assistant",
+                  id: `msg_${marker}`,
+                  content: [{ type: "output_text", text: command.reply }],
+                });
+                return;
+              }
+              const tools = (Array.isArray(body.tools) ? body.tools : []).filter(isRecord);
+              const namespace = tools.find(
+                (tool) =>
+                  tool.type === "namespace" &&
+                  typeof tool.name === "string" &&
+                  Array.isArray(tool.tools) &&
+                  tool.tools.some((entry) => isRecord(entry) && entry.name === "node_exec"),
+              )?.name;
+              if (
+                !namespace &&
+                !tools.some((tool) => tool.type === "function" && tool.name === "node_exec")
+              ) {
+                throw new Error("Codex did not advertise node_exec");
+              }
+              writeOpenAiResponsesItem(response, responseId, {
+                type: "function_call",
+                call_id: callId,
+                name: "node_exec",
+                ...(namespace ? { namespace } : {}),
+                arguments: JSON.stringify(command.args),
+              });
+            },
+          });
           gateway = await owner.start({
             repoRoot,
             command: {
@@ -219,12 +289,13 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
             },
             transportBaseUrl: "http://127.0.0.1",
             controlUiEnabled: false,
-            providerMode: "live-frontier",
+            providerMode: "mock-openai",
+            providerBaseUrl: `${provider.baseUrl}/v1`,
             forcedRuntime: "codex",
             primaryModel: MODEL_REF,
             alternateModel: MODEL_REF,
             enabledPluginIds: ["codex"],
-            runtimeEnvPatch: { OPENAI_API_KEY: apiKey, OPENCLAW_SKIP_CHANNELS: "1" },
+            runtimeEnvPatch: { OPENAI_API_KEY: "node-exec-fixture", OPENCLAW_SKIP_CHANNELS: "1" },
             mutateConfig: (cfg) => ({
               ...cfg,
               agents: {
@@ -303,19 +374,13 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
                 : {}),
             };
             const expectedReply = `${marker}_DONE`;
+            commands.set(marker, { args: expectedArgs, reply: expectedReply });
             activeSessions.add(sessionKey);
             const run = liveGateway.call(
               "agent",
               {
                 sessionKey,
-                message: [
-                  "Execute this synthetic command on the paired node exactly once using node_exec.",
-                  `Use exactly these arguments: ${JSON.stringify(expectedArgs)}`,
-                  "Use tool discovery if needed. Do not change files, add timeout arguments, run other commands, retry the command, or run it in the background.",
-                  testCase.name === "process-timeout"
-                    ? `The command is expected to time out. After its tool result returns, reply exactly ${expectedReply}.`
-                    : `Wait for the tool result. Only after it succeeds, reply exactly ${expectedReply}.`,
-                ].join("\n"),
+                message: marker,
                 deliver: false,
                 idempotencyKey: randomUUID(),
               },
@@ -327,7 +392,40 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
               (error: unknown) => ({ kind: "error" as const, error }),
             );
             const prefix = path.join(proofDir, marker);
-            const started = await waitForProof(`${prefix}.started.json`, START_TIMEOUT_MS);
+            const started = await waitForProof(`${prefix}.started.json`, START_TIMEOUT_MS).catch(
+              async (error: unknown) => {
+                // Distinguish a model that skipped node_exec, a stalled provider turn, and a
+                // failed dispatch without logging prompts or tool payloads.
+                const turn = await Promise.race([
+                  outcome,
+                  new Promise<{ kind: "pending" }>((resolve) => {
+                    setTimeout(() => resolve({ kind: "pending" }), 1_000);
+                  }),
+                ]);
+                const history = await liveGateway
+                  .call("chat.history", { sessionKey, limit: 100 })
+                  .catch(() => undefined);
+                const shape =
+                  isRecord(history) && Array.isArray(history.messages)
+                    ? history.messages.filter(isRecord).map((message) => ({
+                        role: message.role,
+                        isError: message.isError,
+                        tools: Array.isArray(message.content)
+                          ? message.content
+                              .filter(isRecord)
+                              .filter((part) => part.type === "toolCall")
+                              .map((part) => part.name)
+                          : [],
+                      }))
+                    : [];
+                const status =
+                  turn.kind === "result" && isRecord(turn.value) ? turn.value.status : turn.kind;
+                throw new Error(
+                  `${testCase.name} never started on the node: turn=${String(status)} history=${JSON.stringify(shape)}\n${liveGateway.logs()}`,
+                  { cause: error },
+                );
+              },
+            );
             expect(started).toMatchObject({ marker, home: nodeHome });
             expect(started.pid).not.toBe(node?.child.pid);
             console.info(`[node-exec-live] ${testCase.name} started on the paired node`);
@@ -423,6 +521,7 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
         },
         () => stopChild(node),
         () => stopQaGatewayFixture(owner),
+        () => provider?.close(),
       );
     },
   );

@@ -22,6 +22,7 @@ type PluginStateStoreBinding = {
   assertCurrent?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
   moduleSource?: PluginStateOperationModuleSource;
+  assertReadable: () => void;
 };
 
 // Only async stores minted by the keyed owner can lend their admitted storage scope.
@@ -33,11 +34,12 @@ const stores = resolveGlobalSingleton(
 export function bindPluginStateNativeBindingStore<T extends object>(
   store: T,
   options: PreparedKeyedStoreOptions,
+  assertReadable: () => void,
   assertCurrent?: () => void,
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck,
   moduleSource?: PluginStateOperationModuleSource,
 ): T {
-  stores.set(store, { options, assertCurrent, sessionEntryCurrent, moduleSource });
+  stores.set(store, { options, assertReadable, assertCurrent, sessionEntryCurrent, moduleSource });
   return store;
 }
 

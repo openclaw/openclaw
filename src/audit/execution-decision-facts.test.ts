@@ -25,6 +25,7 @@ import {
 } from "./execution-decision-facts.test-support.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "./execution-decision-receipts.js";
 import { createExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
+import { pruneExpiredExecutionIdentityContextsInDatabase } from "./execution-identity-context.js";
 import {
   bindExecutionOwnerLifecycleMetadata,
   ensureExecutionOwnerLifecycleBindingSchema,
@@ -50,47 +51,6 @@ function databaseOptions() {
 }
 
 describe("execution decision facts", () => {
-  it("retains generic task and flow facts as unverified evidence after lifecycle retirement", () => {
-    const database = databaseOptions();
-    const context = seedExecutionContext(database);
-    const opened = openOpenClawStateDatabase(database);
-    for (const family of ["task", "flow"]) {
-      expect(
-        recordExecutionDecisionFactInDatabase(
-          {
-            ...receipt("historical-" + family),
-            action: { family, operation: "lifecycle", summary: "private historical summary" },
-          },
-          { ...database, database: opened, now: 100 },
-        ),
-      ).toBe("inserted");
-    }
-    const inspection = presentExecutionDecisionReceiptsInDatabase(opened.db, {
-      schema: noLifecycleBindings,
-      context,
-      decisionCursor: "g:0:0",
-      now: 100,
-    });
-    // Equal timestamps are ordered by receipt identity, not insertion order.
-    expect(inspection.decisions.map((decision) => decision.action.family)).toEqual([
-      "flow",
-      "task",
-    ]);
-    expect(inspection.decisionDisplays).toHaveLength(2);
-    for (const display of inspection.decisionDisplays) {
-      expect(display).toMatchObject({
-        action: { family: "decision", operation: "record" },
-        decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
-        provenance: { state: "unverified" },
-      });
-    }
-    expect(JSON.stringify(inspection.decisionDisplays)).not.toContain("private historical summary");
-    expect(inspection.coverage.state).toBe("unknown");
-    expect(
-      opened.db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get(),
-    ).toEqual({ count: 2 });
-  });
-
   it("persists repeated same-reason broadcast denials with opaque distinct ids", () => {
     const database = databaseOptions();
     seedExecutionContext(database);
@@ -640,6 +600,14 @@ describe("execution decision facts", () => {
     recordExecutionDecisionFactInDatabase(
       {
         ...receipt(receiptIdSecret),
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: {
           family: "tool",
           operation: "policy",
@@ -696,6 +664,14 @@ describe("execution decision facts", () => {
       }),
       expect.objectContaining({
         selectorId: "decision-fact:1",
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: { family: "decision", operation: "record" },
         decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
         enforcement: {
@@ -712,7 +688,7 @@ describe("execution decision facts", () => {
     expect(Compile(AuditRunInspectResultSchema).Check(result)).toBe(false);
   });
 
-  it("rejects a generic fact whose context, execution, and run tuple is not exact", () => {
+  it("requires an exact retained context for every generic fact append", () => {
     const database = databaseOptions();
     seedExecutionContext(database);
     expect(() =>
@@ -724,6 +700,31 @@ describe("execution decision facts", () => {
     expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(
       false,
     );
+    expect(
+      recordExecutionDecisionFactInDatabase(receipt("before-context-prune"), {
+        ...database,
+        database: openOpenClawStateDatabase(database),
+        now: 100,
+      }),
+    ).toBe("inserted");
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: 100 + RETENTION_MS,
+      }),
+    ).toBe(1);
+    expect(() =>
+      recordExecutionDecisionFactInDatabase(receipt("after-context-prune"), {
+        ...database,
+        database: openOpenClawStateDatabase(database),
+        now: 100 + RETENTION_MS,
+      }),
+    ).toThrow("exact retained execution context");
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
+        .get(),
+    ).toEqual({ count: 1 });
   });
 
   it("projects a fact as unknown when the requested tuple does not match", () => {
@@ -782,6 +783,35 @@ describe("execution decision facts", () => {
         .db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
         .get(),
     ).toEqual({ count: 1 });
+  });
+
+  it("prunes oldest overflow across timestamp ties within the remaining expiry budget", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    const opened = openOpenClawStateDatabase(database);
+    const add = (id: string, now: number, limits?: { maxRows: number; pruneBatchRows: number }) =>
+      recordExecutionDecisionFactInDatabase(receipt(id, now), {
+        ...database,
+        database: opened,
+        now,
+        limits,
+      });
+    add("expired-a", 0);
+    add("expired-b", 0);
+    for (const id of ["b", "c", "d", "e"]) {
+      add(id, RETENTION_MS - 100);
+    }
+    const retained = () =>
+      opened.db
+        .prepare("SELECT receipt_id FROM execution_decision_facts ORDER BY occurred_at, receipt_id")
+        .all();
+    const limits = { maxRows: 2, pruneBatchRows: 3 };
+    add("new", RETENTION_MS + 1, limits);
+    expect(retained()).toEqual(["c", "d", "e", "new"].map((receipt_id) => ({ receipt_id })));
+    add("newer", RETENTION_MS + 2, limits);
+    expect(retained()).toEqual([{ receipt_id: "new" }, { receipt_id: "newer" }]);
+    add("last", RETENTION_MS + 3, { maxRows: 0, pruneBatchRows: 3 });
+    expect(retained()).toEqual([]);
   });
 
   it("turns corrupt retained payloads into bounded unknown receipts", () => {

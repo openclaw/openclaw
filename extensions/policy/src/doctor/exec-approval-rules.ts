@@ -4,7 +4,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_URI, execApprovalsPolicyUri } from "../exec-approvals-uri.js";
 import type { PolicyExecApprovalEvidence } from "../policy-state.js";
 import { getPolicyPath } from "../policy-value.js";
-import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
+import { policyShapeFinding } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
 
 export function execApprovalAllowlistExpectedShapeFinding(
@@ -71,7 +71,7 @@ function execApprovalAllowlistRequirement(
   if (!isRecord(value)) {
     return undefined;
   }
-  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+  if (Object.keys(value).some((key) => key !== "argPattern" && key !== "pattern")) {
     return undefined;
   }
   const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";

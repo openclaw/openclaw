@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -25,6 +25,7 @@ suite.define(() => {
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
       );
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: selected.key,
         sessions: [selected, ...pins],
@@ -36,7 +37,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await page.locator("openclaw-app-sidebar .sidebar-rail").waitFor();
       await page.locator("openclaw-app-sidebar").evaluate(async (element) => {
-        await (element as AppSidebarSessionNavigationElement).updateComplete;
+        await (element as AppSidebarElement).updateComplete;
       });
       const pinReads = async () =>
         (await gateway.getRequests("sessions.describe")).filter((request) =>
@@ -46,12 +47,37 @@ suite.define(() => {
       expect(await pinReads()).toHaveLength(0);
       await gateway.resolveDeferred("chat.startup");
       await page.getByText("Selected conversation ready.", { exact: true }).waitFor();
-      await page.getByRole("link", { name: "Pinned chat 29", exact: true }).waitFor();
-      expect(
-        await page
-          .locator(".sidebar-rail__pin")
-          .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
-      ).toEqual(entries);
+      const pinned = page.locator('[data-session-section="pinned"] .sidebar-recent-session');
+      const viewport = page.locator(".sidebar-shell__body");
+      await pinned.getByText("Pinned chat 0", { exact: true }).waitFor();
+      // Describe replies can settle out of order; collect rows only after all pins arrive.
+      await page
+        .locator('[data-session-section="pinned"] [role="listitem"][aria-setsize="30"]')
+        .first()
+        .waitFor();
+      const seen = new Map<string, number>();
+      await expect
+        .poll(async () => {
+          for (const [key, position] of await pinned.evaluateAll((rows) =>
+            rows.map(
+              (row) =>
+                [
+                  `session:${row.getAttribute("data-session-key")}`,
+                  Number(row.closest('[role="listitem"]')?.getAttribute("aria-posinset")),
+                ] as const,
+            ),
+          )) {
+            seen.set(key, position);
+          }
+          if (seen.size < pins.length) {
+            await viewport.evaluate((element) => {
+              element.scrollTop += element.clientHeight * 0.75;
+            });
+          }
+          return [...seen].toSorted((a, b) => a[1] - b[1]);
+        })
+        .toEqual(entries.map((entry, index) => [entry, index + 1]));
+      await pinned.getByText("Pinned chat 29", { exact: true }).waitFor();
       expect(await pinReads()).toHaveLength(30);
     });
   });

@@ -1,5 +1,6 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  agentControlText,
   legacyInteractiveReplyToPresentation,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
@@ -121,12 +122,9 @@ export function isFeishuCardWithinEnvelope(card: Record<string, unknown>): boole
   }
 }
 
-export function assertFeishuCardWithinEnvelope(
-  card: Record<string, unknown>,
-  label = "Feishu card",
-): void {
+export function assertFeishuCardWithinEnvelope(card: Record<string, unknown>): void {
   if (!isFeishuCardWithinEnvelope(card)) {
-    throw new Error(`${label} exceeds the 30 KB or 200-element API limit.`);
+    throw new Error("Feishu native card exceeds the 30 KB or 200-element API limit.");
   }
 }
 
@@ -172,6 +170,10 @@ function resolveFeishuButtonUrl(button: MessagePresentationButton): string | und
 function resolveFeishuCommandButtonValue(button: MessagePresentationButton): string | undefined {
   if (button.action?.type === "command") {
     return button.action.command;
+  }
+  // Typed callbacks render only when a message action authored them for the agent.
+  if (button.action?.type === "callback" && agentControlText(button.action.value)) {
+    return button.action.value;
   }
   if (button.action) {
     return undefined;
@@ -424,7 +426,7 @@ export function buildFeishuPayloadCard(params: {
     };
   }
   if (isNativeCard) {
-    assertFeishuCardWithinEnvelope(card, "Feishu native card");
+    assertFeishuCardWithinEnvelope(card);
     return markRenderedFeishuCard(card);
   }
   return isFeishuCardWithinEnvelope(card) && feishuCardWithinTableLimit(card)

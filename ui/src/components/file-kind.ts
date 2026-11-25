@@ -89,32 +89,6 @@ type SuffixTrieNode = {
   children: Map<string, SuffixTrieNode>;
 };
 
-// A reversed-segment trie keeps suffix resolution linear in total path length.
-function insertReversedSegments(root: SuffixTrieNode, segments: readonly string[]): void {
-  let node = root;
-  for (let i = segments.length - 1; i >= 0; i--) {
-    const segment = segments[i]!;
-    let child = node.children.get(segment);
-    if (!child) {
-      child = { pathCount: 0, children: new Map() };
-      node.children.set(segment, child);
-    }
-    node = child;
-    node.pathCount += 1;
-  }
-}
-
-function shortestUniqueSuffixDepth(root: SuffixTrieNode, segments: readonly string[]): number {
-  let node = root;
-  for (let depth = 1; depth <= segments.length; depth++) {
-    node = node.children.get(segments[segments.length - depth]!) ?? node;
-    if (node.pathCount === 1 || depth === segments.length) {
-      return depth;
-    }
-  }
-  return segments.length;
-}
-
 /**
  * Shortest unambiguous label per path: the basename alone when it is unique
  * among the supplied paths, otherwise the smallest trailing run of segments
@@ -125,13 +99,32 @@ export function shortestFileLabels(paths: readonly string[]): Map<string, string
   const unique = [...new Set(paths)];
   // The leading empty segment distinguishes absolute paths from matching relative paths.
   const segmentsByPath = new Map(unique.map((path) => [path, path.split(PATH_SEPARATOR_RE)]));
+  // A reversed-segment trie keeps suffix resolution linear in total path length.
   const suffixTrie: SuffixTrieNode = { pathCount: 0, children: new Map() };
   for (const segments of segmentsByPath.values()) {
-    insertReversedSegments(suffixTrie, segments);
+    let node = suffixTrie;
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const segment = segments[i]!;
+      let child = node.children.get(segment);
+      if (!child) {
+        child = { pathCount: 0, children: new Map() };
+        node.children.set(segment, child);
+      }
+      node = child;
+      node.pathCount += 1;
+    }
   }
   const labels = new Map<string, string>();
   for (const [path, segments] of segmentsByPath) {
-    const depth = shortestUniqueSuffixDepth(suffixTrie, segments);
+    let node = suffixTrie;
+    let depth = segments.length;
+    for (let candidate = 1; candidate <= segments.length; candidate++) {
+      node = node.children.get(segments[segments.length - candidate]!) ?? node;
+      if (node.pathCount === 1 || candidate === segments.length) {
+        depth = candidate;
+        break;
+      }
+    }
     // Render the suffix with the separator the path itself used so a Windows
     // path never reads as a POSIX one.
     labels.set(path, segments.slice(-depth).join(path.includes("\\") ? "\\" : "/"));

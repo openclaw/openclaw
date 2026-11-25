@@ -1,5 +1,4 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { StatementSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { isSessionEntryDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -13,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -132,21 +132,12 @@ it.each([
     const requesterAgent = owner === "bound" ? "main" : "native";
     const beforeOwners = memorySessionActorOwners.list();
     const requesterSql: string[] = [];
-    const observers = (["get", "all", "iterate", "run"] as const).map((method) => {
-      const original = StatementSync.prototype[method];
-      return vi.spyOn(StatementSync.prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver: StatementSync, args) {
-            if (
-              isSessionEntryDataSql(receiver.sourceSQL) &&
-              JSON.stringify(args).includes(requesterKey)
-            ) {
-              requesterSql.push(receiver.sourceSQL);
-            }
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
+    const sql = observeMainThreadSql({
+      onStatement: (query) => {
+        if (isSessionEntryDataSql(query) && query.includes(requesterKey)) {
+          requesterSql.push(query);
+        }
+      },
     });
     let reachedAdmission = false;
     const callGateway = gateway(async () => {
@@ -208,7 +199,7 @@ it.each([
       expect(memorySessionActorOwners.list()).toEqual(beforeOwners);
     } finally {
       await work.drain();
-      observers.forEach((observer) => observer.mockRestore());
+      sql.restore();
       if (change !== "none") {
         await replaceSessionEntry(
           { agentId: "main", sessionKey: actorKey },

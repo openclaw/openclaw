@@ -1,103 +1,47 @@
-import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
-import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils.js";
+import type { GatewaySessionEntryRead } from "../session-utils.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
+/**
+ * What a sender saw must be a prefix of the active path: its leaf, or an ancestor that later
+ * appends extended. An empty view is a prefix of every path. A rewind, branch switch or reset
+ * away from the leaf leaves it off the path and refuses the send.
+ */
 export function assertExpectedLeafActive(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  > & {
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath"> & {
     transcript?: SessionTranscriptAnchorFacts;
   },
-  agentId: string,
   expectedLeafEntryId: string | null,
-  requestedSessionId: string | undefined,
-  options?: { allowEmptyAncestor?: boolean },
 ) {
-  const activePathRelation =
-    session.transcript?.activePathRelation ??
-    (session.entry?.sessionId
-      ? isIncognitoSessionKey(session.canonicalKey)
-        ? readSessionTranscriptActivePathEntryRelation(
-            {
-              agentId,
-              sessionId: session.entry.sessionId,
-              sessionKey: session.canonicalKey,
-              sessionEntry: session.entry,
-              storePath: session.storePath,
-            },
-            expectedLeafEntryId,
-          )
-        : undefined
-      : expectedLeafEntryId === null
-        ? "exact"
-        : "off-path");
-  if (activePathRelation === undefined) {
+  const onActivePath =
+    expectedLeafEntryId === null ||
+    (session.entry?.sessionId ? session.transcript?.onActivePath : false);
+  if (onActivePath === undefined) {
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
-  // Branch switches preserve entry ids while rotating session ids. A supplied session id
-  // fences exact and ancestor matches; omission remains legacy exact-only compatibility.
-  const matchesRequestedSession =
-    requestedSessionId === undefined || requestedSessionId === session.entry?.sessionId;
-  // Only message admission treats a pinned empty root as an ancestor.
-  const matchesActivePath =
-    activePathRelation === "exact" ||
-    (requestedSessionId !== undefined &&
-      (activePathRelation === "ancestor" ||
-        (options?.allowEmptyAncestor === true && expectedLeafEntryId === null)));
-  if (!matchesRequestedSession || !matchesActivePath) {
+  if (!onActivePath) {
     throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
   }
 }
 
-/** Read the current row and active path in one existing worker snapshot before a Stop effect. */
-export async function assertExpectedLeafActiveAsync(
-  session: Pick<
-    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "canonicalKey" | "entry" | "storePath"
-  >,
+/**
+ * Incognito transcripts live in the process-local session actor, which read workers cannot
+ * open. This read precedes the caller's entry snapshot; its session-id fence rejects resets, and
+ * an append landing between the two reads is an accepted, retryable race.
+ */
+export async function readIncognitoActivePath(
+  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath">,
   agentId: string,
   expectedLeafEntryId: string | null,
-  requestedSessionId: string | undefined,
-  options?: { allowEmptyAncestor?: boolean },
-): Promise<void> {
-  if (isIncognitoSessionKey(session.canonicalKey)) {
-    assertExpectedLeafActive(session, agentId, expectedLeafEntryId, requestedSessionId, options);
-    return;
+): Promise<SessionTranscriptAnchorFacts | undefined> {
+  const sessionId = session.entry?.sessionId;
+  if (!sessionId) {
+    return undefined;
   }
-  await withSessionEntriesFromStoresInWorker(
-    [
-      {
-        agentId,
-        storePath: session.storePath,
-        sessionKeys: [session.canonicalKey],
-        transcript: {
-          sessionKey: session.canonicalKey,
-          agentId,
-          entryIds: [],
-          activePathEntryId: expectedLeafEntryId,
-        },
-      },
-    ],
-    ([owner]) => {
-      owner!.assertCurrent();
-      assertExpectedLeafActive(
-        {
-          canonicalKey: session.canonicalKey,
-          storePath: session.storePath,
-          entry: owner!.result.entries[0]?.entry,
-          transcript: owner!.result.transcript,
-        },
-        agentId,
-        expectedLeafEntryId,
-        requestedSessionId,
-        options,
-      );
-    },
-    { ordered: true },
+  return readSessionTranscriptAnchorsAsync(
+    { agentId, sessionId, sessionKey: session.canonicalKey, storePath: session.storePath },
+    { entryIds: [], activePathEntryId: expectedLeafEntryId },
   );
 }

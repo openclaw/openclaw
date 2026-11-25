@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { readPreparedPluginStateNativeBinding } from "./plugin-state-native-binding-codec.js";
 import type {
   PluginStateNativeBindingDeletion,
@@ -10,13 +10,11 @@ import type {
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   bindPluginStateEntry,
-  createPluginStateError,
   deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   deletePluginStateEntryRow,
   getPluginStateKysely,
   insertPluginStateEntryIfAbsent,
-  isRetainedPluginStateNamespace,
   parseStoredJson,
   resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
@@ -28,7 +26,6 @@ import {
   enforcePostRegisterLimits,
   type PluginStateRegisterEntryParams,
 } from "./plugin-state-store.retention.js";
-import type { PluginStateMoveEntries } from "./plugin-state-store.types.js";
 import { prepareRegisterParams } from "./plugin-state-store.validation.js";
 
 /** The executing worker owns the transaction containing this exact native binding predicate. */
@@ -79,7 +76,7 @@ export function restorePluginStateNativeBinding(
 }
 
 export function clearPluginStateNamespace(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string },
 ): void {
   const result = executeSqliteQuerySync(
@@ -175,63 +172,4 @@ export function consumePluginStateEntry(
     return undefined;
   }
   return parseStoredJson(row.value_json, "consume", store.path);
-}
-
-export type PluginStateMoveEntriesParams = {
-  pluginId: string;
-  namespace: string;
-  sourceNamespace: string;
-  entries: PluginStateMoveEntries["entries"];
-};
-
-/** The worker owns the transaction; no payload decoding or plugin callback occurs here. */
-export function movePluginStateEntries(
-  store: PluginStateDatabase,
-  params: PluginStateMoveEntriesParams,
-): number {
-  if (
-    !isRetainedPluginStateNamespace(params.namespace) ||
-    isRetainedPluginStateNamespace(params.sourceNamespace)
-  ) {
-    throw createPluginStateError({
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation: "register",
-      message: "Plugin state moves require a bounded source and a retained destination.",
-    });
-  }
-  const now = Date.now();
-  let moved = 0;
-  for (const entry of params.entries) {
-    const source = {
-      pluginId: params.pluginId,
-      namespace: params.sourceNamespace,
-      key: entry.sourceKey,
-    };
-    const row = selectPluginStateEntry(store.db, { ...source, now });
-    if (!row) {
-      continue;
-    }
-    if (row.expires_at !== null) {
-      throw createPluginStateError({
-        code: "PLUGIN_STATE_INVALID_INPUT",
-        operation: "register",
-        message: "Cannot move live expiring plugin state into a retained store.",
-        path: store.path,
-      });
-    }
-    insertPluginStateEntryIfAbsent(
-      store.db,
-      {
-        plugin_id: params.pluginId,
-        namespace: params.namespace,
-        entry_key: entry.targetKey,
-        value_json: row.value_json,
-        created_at: row.created_at,
-        expires_at: row.expires_at,
-      },
-      now,
-    );
-    moved += deletePluginStateEntry(store.db, source);
-  }
-  return moved;
 }

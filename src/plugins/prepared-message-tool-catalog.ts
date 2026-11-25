@@ -1,3 +1,4 @@
+import { createConfiguredMessageToolDiscoveryAdapter } from "../channels/plugins/outbound-message-tool-discovery.js";
 /** Registry-owned message-tool metadata prepared once per channel registry generation. */
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelMessageActionAdapter } from "../channels/plugins/types.core.js";
@@ -10,6 +11,7 @@ import {
 type PreparedMessageToolCatalogEntry = Readonly<{
   id: string;
   actions?: ChannelMessageActionAdapter;
+  outboundDiscovery?: ChannelMessageActionAdapter;
   reconcilesUnknownSend: boolean;
 }>;
 
@@ -46,23 +48,20 @@ export function settlePreparedMessageToolCatalog(
   if (existing?.version === version) {
     return existing;
   }
-  const channels = Object.freeze(
-    listLoadedChannelPluginsForRegistry(registry).map((plugin) =>
-      Object.freeze({
-        id: plugin.id,
-        ...(plugin.actions ? { actions: plugin.actions } : {}),
-        reconcilesUnknownSend:
-          plugin.message?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
-          typeof plugin.message.durableFinal.reconcileUnknownSend === "function",
-      }),
-    ),
-  );
+  const channels = listLoadedChannelPluginsForRegistry(registry).map((plugin) => ({
+    id: plugin.id,
+    actions: plugin.actions,
+    outboundDiscovery: createConfiguredMessageToolDiscoveryAdapter(plugin),
+    reconcilesUnknownSend:
+      plugin.message?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
+      typeof plugin.message.durableFinal.reconcileUnknownSend === "function",
+  }));
   const byId = new Map(channels.map((entry) => [entry.id, entry] as const));
-  const catalog = Object.freeze({
+  const catalog: PreparedMessageToolCatalog = {
     version,
     channels,
     getChannel: (id: string) => byId.get(id),
-  });
+  };
   catalogsByRegistry.set(registry, catalog);
   return catalog;
 }

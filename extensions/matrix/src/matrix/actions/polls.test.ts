@@ -39,8 +39,9 @@ describe("matrix poll actions", () => {
       optionIndex: 2,
     });
 
+    const responseType = "org.matrix.msc3381.poll.response";
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(sendEvent).toHaveBeenCalledWith("!room:example.org", "m.poll.response", {
+    expect(sendEvent).toHaveBeenCalledWith("!room:example.org", responseType, {
       "m.poll.response": { answers: ["berry"] },
       "m.relates_to": {
         event_id: "$poll",

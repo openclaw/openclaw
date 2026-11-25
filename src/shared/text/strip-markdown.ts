@@ -21,21 +21,6 @@ type StripMarkdownOptions = {
   stripHtml?: boolean;
 };
 
-function collectLinkInsertions(ir: MarkdownIR, options: StripMarkdownOptions): MarkdownTextEdit[] {
-  const insertions: MarkdownTextEdit[] = [];
-  if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
-    for (const link of ir.links) {
-      const href = link.href.trim();
-      const label = ir.text.slice(link.start, link.end).trim();
-      const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-      if (href && label && label !== href && label !== comparableHref) {
-        insertions.push({ start: link.end, end: link.end, text: ` (${href})` });
-      }
-    }
-  }
-  return insertions;
-}
-
 function collectAssistantTranscriptRoleInsertions(
   source: string | MarkdownIR,
   options: StripMarkdownOptions,
@@ -105,13 +90,33 @@ export function stripMarkdown(
       ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
       : profile;
   const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
-  const plainText = applyMarkdownTextEdits(projectedIr.text, [
-    ...collectLinkInsertions(projectedIr, options),
+  const insertions: MarkdownTextEdit[] = [];
+  if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
+    for (const link of projectedIr.links) {
+      const href = link.href.trim();
+      const label = projectedIr.text.slice(link.start, link.end).trim();
+      const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+      if (href && label && label !== href && label !== comparableHref) {
+        insertions.push({ start: link.end, end: link.end, text: ` (${href})` });
+      }
+    }
+  }
+  const expanded = applyMarkdownTextEdits(projectedIr.text, [
+    ...insertions,
     ...collectAssistantTranscriptRoleInsertions(projectedIr, options),
-  ]).text.trim();
+  ]);
+  const body = expanded.text.trimEnd();
+  const plainText = body.trimStart();
   const projected = applyMarkdownTextEdits(
     plainText,
     collectAssistantTranscriptRoleInsertions(plainText, options),
   ).text.trim();
-  return options.mode === "speech" ? cleanSpeechText(projected) : projected;
+  if (options.mode === "speech") {
+    return cleanSpeechText(projected);
+  }
+  // Keep trailing spaces through the last code span, accounting for inserted links and role prefixes.
+  const lastCode = projectedIr.styles.findLast((span) => span.style === "code");
+  return lastCode
+    ? projected + expanded.text.slice(body.length, expanded.mapOffset(lastCode.end))
+    : projected;
 }

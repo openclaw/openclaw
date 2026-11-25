@@ -28,14 +28,18 @@ const turn = {
   timeoutMs: 1000,
 };
 let uninstall: (() => void) | undefined;
+const noop = async () => undefined;
+const localResult = async () => ({ meta: { durationMs: 1 } });
 const install = (
   withRequiredSession?: SessionPlacementAdmissionProvider["withRequiredSession"],
+  overrides: Partial<SessionPlacementAdmissionProvider> = {},
 ) => {
   uninstall = installSessionPlacementAdmissionProvider({
     withRequiredSession,
     assertCompactionSuccessorAllowed: () => {},
     executeLocalTurn: async (_claim, run) => await run(),
     executeTurn: async (_claim, _turn, run) => await run(),
+    ...overrides,
   });
 };
 beforeEach(() => {
@@ -49,24 +53,16 @@ afterEach(() => {
 
 describe("required worker run admission", () => {
   it("rejects unavailable ownership and sessionless helpers without creating a session", async () => {
-    await expect(withRequiredSessionPlacement(identity, {}, async () => undefined)).rejects.toThrow(
+    await expect(withRequiredSessionPlacement(identity, {}, noop)).rejects.toThrow(
       "available Gateway placement owner",
     );
     let preparations = 0;
-    const prepare: NonNullable<SessionPlacementAdmissionProvider["withRequiredSession"]> = async (
-      _identity,
-      task,
-    ) => {
+    install(async (_identity, task) => {
       preparations += 1;
       return await task(() => {});
-    };
-    install(prepare);
+    });
     await expect(
-      withRequiredSessionPlacement(
-        { sessionId: "helper", agentId: "main" },
-        {},
-        async () => undefined,
-      ),
+      withRequiredSessionPlacement({ sessionId: "helper", agentId: "main" }, {}, noop),
     ).rejects.toThrow("sessionless model helpers");
     expect(preparations).toBe(0);
   });
@@ -75,7 +71,7 @@ describe("required worker run admission", () => {
     if (mode === "local provider") {
       install();
     }
-    const run = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const run = vi.fn(localResult);
     await expect(withSessionPlacementTurnAdmission(turn, turn, run)).rejects.toThrow(
       "Gateway execution is disabled",
     );
@@ -85,67 +81,52 @@ describe("required worker run admission", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("rechecks the exact provider after awaited preparation", async () => {
-    const started = createDeferredCore();
-    const finish = createDeferredCore();
-    install(async (_identity, task, assertCurrent) => {
-      assertCurrent?.();
-      started.resolve();
-      await finish.promise;
-      return await task(() => assertCurrent?.());
-    });
-    const pending = withRequiredSessionPlacement(identity, {}, async () => undefined);
-    const outcome = pending.catch((error: unknown) => error);
-    await started.promise;
-    uninstall?.();
-    finish.resolve();
-    expect(await outcome).toMatchObject({
-      message: "session placement owner changed during required worker preparation",
-    });
-  });
-
-  it("rechecks the exact caller after awaited preparation", async () => {
-    const started = createDeferredCore();
-    const finish = createDeferredCore();
-    let callerCurrent = true;
-    const assertCaller = vi.fn(() => {
-      if (!callerCurrent) {
-        throw new Error("caller changed during required worker preparation");
+  it.each(["provider", "caller"])(
+    "rechecks the exact %s after awaited preparation",
+    async (owner) => {
+      const started = createDeferredCore();
+      const finish = createDeferredCore();
+      let callerCurrent = true;
+      const message = `${owner === "provider" ? "session placement owner" : "caller"} changed during required worker preparation`;
+      const assertCaller = () => {
+        if (!callerCurrent) {
+          throw new Error(message);
+        }
+      };
+      install(async (_identity, task, assertCurrent) => {
+        assertCurrent?.();
+        started.resolve();
+        await finish.promise;
+        return await task(() => assertCurrent?.());
+      });
+      const pending = withRequiredSessionPlacement(
+        identity,
+        owner === "caller" ? { assertCurrent: assertCaller } : {},
+        noop,
+      );
+      const outcome = pending.catch((error: unknown) => error);
+      await started.promise;
+      if (owner === "provider") {
+        uninstall?.();
+      } else {
+        callerCurrent = false;
       }
-    });
-    install(async (_identity, task, assertCurrent) => {
-      assertCurrent?.();
-      started.resolve();
-      await finish.promise;
-      return await task(() => assertCurrent?.());
-    });
-    const pending = withRequiredSessionPlacement(
-      identity,
-      { assertCurrent: assertCaller },
-      async () => undefined,
-    );
-    const outcome = pending.catch((error: unknown) => error);
-    await started.promise;
-    callerCurrent = false;
-    finish.resolve();
-    expect(await outcome).toMatchObject({
-      message: "caller changed during required worker preparation",
-    });
-  });
+      finish.resolve();
+      expect(await outcome).toMatchObject({ message });
+    },
+  );
 
   it("rejects a local CLI task when mandatory placement is enabled during admission", async () => {
     state.config = {};
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const run = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-    uninstall = installSessionPlacementAdmissionProvider({
-      assertCompactionSuccessorAllowed: () => {},
+    const run = vi.fn(localResult);
+    install(undefined, {
       executeLocalTurn: async (_claim, runLocal) => {
         entered.resolve();
         await resume.promise;
         return await runLocal();
       },
-      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
     });
     const pending = withLocalSessionPlacementTurnSettlement(turn, run);
     const outcome = pending.catch((error: unknown) => error);
@@ -165,10 +146,7 @@ describe("required worker run admission", () => {
     let released = false;
     let current = true;
     let preparations = 0;
-    const prepare: NonNullable<SessionPlacementAdmissionProvider["withRequiredSession"]> = async (
-      _identity,
-      task,
-    ) => {
+    install(async (_identity, task) => {
       preparations += 1;
       try {
         return await task(() => {
@@ -179,16 +157,15 @@ describe("required worker run admission", () => {
       } finally {
         released = true;
       }
-    };
-    install(prepare);
+    });
     let retainedUse: (() => Promise<void>) | undefined;
     await withRequiredSessionPlacement(identity, {}, async () => {
-      await withRequiredSessionPlacement(identity, {}, async () => undefined);
+      await withRequiredSessionPlacement(identity, {}, noop);
       expect(released).toBe(false);
       current = false;
-      await expect(
-        withRequiredSessionPlacement(identity, {}, async () => undefined),
-      ).rejects.toThrow("required placement authority ended");
+      await expect(withRequiredSessionPlacement(identity, {}, noop)).rejects.toThrow(
+        "required placement authority ended",
+      );
       current = true;
       // Async work can retain the scope after the awaited turn ends; it cannot retain authority.
       const deferred = createDeferredCore();
@@ -198,7 +175,7 @@ describe("required worker run admission", () => {
       };
       const outcome = (async () => {
         await deferred.promise;
-        await withRequiredSessionPlacement(identity, {}, async () => undefined);
+        await withRequiredSessionPlacement(identity, {}, noop);
       })();
     });
     expect(preparations).toBe(1);
@@ -209,7 +186,7 @@ describe("required worker run admission", () => {
   it("preserves standalone local execution when the requirement is absent", async () => {
     state.config = {};
     await expect(
-      withRequiredSessionPlacement({ sessionId: "helper" }, {}, async () => undefined),
+      withRequiredSessionPlacement({ sessionId: "helper" }, {}, noop),
     ).resolves.toBeUndefined();
     const result = { meta: { durationMs: 1 } };
     await expect(withSessionPlacementTurnAdmission(turn, turn, async () => result)).resolves.toBe(

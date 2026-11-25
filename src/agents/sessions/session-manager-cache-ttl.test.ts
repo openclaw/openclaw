@@ -17,18 +17,15 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import { sessionManagerReadToolResultProjectionEntries } from "./session-manager-view-types.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cache-ttl-");
 
 async function createSessionScope(sessionId: string) {
   const dir = tempDirs.make();
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const scope = sessionScope(path.join(dir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }
@@ -150,9 +147,23 @@ it.each(["events", "bytes"] as const)(
       fixture.deltaId,
     ]);
     expect(bounded.getEntry(fixture.checkpointId)).toBeUndefined();
-    expect(bounded.getToolResultProjectionEntries().map((entry) => entry.id)).toContain(
-      fixture.checkpointId,
+    const shared = bounded[sessionManagerReadToolResultProjectionEntries]().find(
+      (entry) => entry.id === fixture.checkpointId,
     );
+    const exposed = bounded
+      .getToolResultProjectionEntries()
+      .find((entry) => entry.id === fixture.checkpointId);
+    const sharedData = shared && Reflect.get(shared, "data");
+    const exposedData = exposed && Reflect.get(exposed, "data");
+    expect(isRecord(sharedData) && Object.isFrozen(sharedData)).toBe(true);
+    if (!isRecord(exposedData)) {
+      throw new Error("Missing writable projection metadata");
+    }
+    exposedData.sdkOnly = true;
+    expect(sharedData).not.toHaveProperty("sdkOnly");
+    expect(
+      bounded.getToolResultProjectionEntries().find((entry) => entry.id === fixture.checkpointId),
+    ).toBe(exposed);
     expect(replay(bounded)).toEqual([fixture.expected]);
     expect(bounded.getBranch()).toHaveLength(2);
   },

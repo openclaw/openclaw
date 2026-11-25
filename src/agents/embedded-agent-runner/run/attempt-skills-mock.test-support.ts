@@ -1,11 +1,7 @@
 import { vi } from "vitest";
 
 const skillMocks = vi.hoisted(() => ({
-  resolveEmbeddedRunSkillEntriesMock: vi.fn<(...args: unknown[]) => unknown>(() => ({
-    shouldLoadSkillEntries: false,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  })),
+  prepareWorkspaceSkillsMock: vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []),
   resolveSkillsPromptForRunMock: vi.fn<(...args: unknown[]) => unknown>(() => ""),
 }));
 
@@ -23,16 +19,12 @@ vi.mock("../../../skills/loading/workspace-skill-prompt.js", async (importOrigin
   resolveSkillsPrompt: (...args: unknown[]) => skillMocks.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
-    skillMocks.resolveEmbeddedRunSkillEntriesMock(...args),
+vi.mock("../../../skills/loading/workspace-skill-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/loading/workspace-skill-loader.js")>()),
+  prepareWorkspaceSkills: (...args: unknown[]) => skillMocks.prepareWorkspaceSkillsMock(...args),
 }));
 
 export function resetSkillMocks() {
-  skillMocks.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
-    shouldLoadSkillEntries: false,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  });
+  skillMocks.prepareWorkspaceSkillsMock.mockReset().mockResolvedValue([]);
   skillMocks.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
 }

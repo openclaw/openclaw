@@ -1,4 +1,5 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 
 /** Drain admitted transcript writes; speech text never creates execution authority. */
 export function createClientVoiceTranscriptReadiness(params: {
@@ -13,6 +14,7 @@ export function createClientVoiceTranscriptReadiness(params: {
   };
   return {
     fail(error: unknown): void {
+      materializeErrorStack(error);
       failure = { error };
     },
     async wait(signal?: AbortSignal): Promise<void> {

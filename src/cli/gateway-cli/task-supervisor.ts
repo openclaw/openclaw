@@ -1,5 +1,6 @@
 // Windows Task Scheduler bridge: retain the Job Object owner until the Gateway exits.
 import { randomInt } from "node:crypto";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   formatWindowsTaskSupervisorChildArgument,
@@ -12,22 +13,25 @@ import {
 } from "../../daemon/windows-task-supervisor-contract.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getProcessSupervisor, type ManagedRun } from "../../process/supervisor/index.js";
+import type { ManagedRun } from "../../process/supervisor/index.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import {
+  isGatewayRunInvocationArgv,
+  resolveGatewayRunPreBootstrapOptions,
+} from "../gateway-run-argv.js";
 
-const log = createSubsystemLogger("gateway/task-supervisor");
 const STDERR_TAIL_CHARS = 8192;
 
-function renderGatewayTaskCommand(restartExitCode: number): string {
-  const childArgs = [...process.execArgv, ...process.argv.slice(1)].filter(
-    (argument) =>
-      argument !== WINDOWS_TASK_SUPERVISOR_FLAG && !isWindowsTaskSupervisorChildArgument(argument),
-  );
-  if (childArgs.length === 0) {
-    throw new Error("Windows task supervisor could not resolve the Gateway command");
+export async function tryRunWindowsGatewayTaskSupervisor(argv: string[]): Promise<boolean> {
+  if (
+    resolveCliArgvInvocation(argv).hasHelpOrVersion ||
+    !isGatewayRunInvocationArgv(argv) ||
+    !resolveGatewayRunPreBootstrapOptions(argv)?.taskSupervisor
+  ) {
+    return false;
   }
-  return [process.execPath, ...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)]
-    .map((argument) => quoteCmdScriptArg(argument))
-    .join(" ");
+  await runWindowsGatewayTaskSupervisor();
+  return true;
 }
 
 /**
@@ -35,13 +39,17 @@ function renderGatewayTaskCommand(restartExitCode: number): string {
  * The task launcher owns an outer Job containing this supervisor. The
  * command anchor owns the inner Job used for cancellation and extinction joins.
  */
-export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
+async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   if (process.platform !== "win32") {
     throw new Error("--task-supervisor is only available to the Windows Gateway service");
   }
+  // Native process supervision belongs only to the Windows task path, not ordinary CLI startup.
+  const { getProcessSupervisor } = await import("../../process/supervisor/index.js");
+  const log = createSubsystemLogger("gateway/task-supervisor");
   let stderr = "";
   let managed: ManagedRun | null = null;
   let cancelled = false;
+  let crashRestarts = 0;
   let terminalExitCode: number | undefined;
   const cancel = () => {
     cancelled = true;
@@ -58,16 +66,40 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       bindWindowsTaskLauncher(launcher);
     }
     while (true) {
+      const startedAt = performance.now();
       stderr = "";
-      // A fresh high-entropy outcome correlates this child-to-supervisor handoff.
-      // Common dependency exit codes must terminate the task instead of respawning forever.
+      // A private outcome distinguishes planned handoffs from bounded crash recovery.
       const restartExitCode = randomInt(
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
         WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX + 1,
       );
-      managed = await getProcessSupervisor().spawn({
+      const supervisor = getProcessSupervisor();
+      const childArgs = process.argv
+        .slice(2)
+        .filter(
+          (argument) =>
+            argument !== WINDOWS_TASK_SUPERVISOR_FLAG &&
+            !isWindowsTaskSupervisorChildArgument(argument),
+        );
+      if (childArgs.length === 0) {
+        throw new Error("Windows task supervisor could not resolve the Gateway command");
+      }
+      // A Git release install starts each child through its launcher, which counts trial
+      // starts and matches the installed task command.
+      const releaseLauncher: unknown = Reflect.get(
+        globalThis,
+        Symbol.for("openclaw.gitReleaseLauncher"),
+      );
+      const invocation = resolveOpenClawCliInvocation({
+        args: [...childArgs, formatWindowsTaskSupervisorChildArgument(restartExitCode)],
+        entryPath: typeof releaseLauncher === "string" ? releaseLauncher : undefined,
+      });
+      const command = [invocation.command, ...invocation.args]
+        .map((argument) => quoteCmdScriptArg(argument))
+        .join(" ");
+      managed = await supervisor.spawn({
         mode: "anchored-shell",
-        command: renderGatewayTaskCommand(restartExitCode),
+        command,
         scopeKey: `gateway-task-supervisor:${process.pid}`,
         captureOutput: false,
         onStderr: (chunk) => {
@@ -101,6 +133,28 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       }
       await managed.waitForExtinction?.();
       managed = null;
+      // Startup-folder installs have no Task Scheduler retry. Preserve EX_CONFIG
+      // as terminal; all other unexpected outcomes get bounded recovery.
+      const crashed =
+        !restartRequested &&
+        (result.exitSignal != null || (result.exitCode !== 0 && result.exitCode !== 78));
+      if (crashed && !cancelled) {
+        if (performance.now() - startedAt >= 60_000) {
+          crashRestarts = 0;
+        }
+        if (crashRestarts < 3) {
+          terminalExitCode = undefined;
+          const delayMs = 1_000 * 2 ** crashRestarts++;
+          log.info("Restarting crashed Gateway child", { delayMs });
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+          if (cancelled) {
+            return;
+          }
+          continue;
+        }
+      }
       if (restartRequested && !cancelled) {
         // The child has released its Gateway lock and extinguished descendants.
         // Recheck cancellation after the asynchronous extinction join so shutdown

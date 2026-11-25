@@ -1,4 +1,3 @@
-/** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
@@ -17,7 +16,10 @@ import { applyMigrationSelections } from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 /** Creates a verified pre-migration backup, treating absent local state as empty. */
-async function createPreMigrationBackup(output: string | undefined): Promise<string | undefined> {
+async function createPreMigrationBackup(
+  output: string | undefined,
+  preferHomeOutput: boolean | undefined,
+): Promise<string | undefined> {
   try {
     const result = await backupCreateCommand(
       {
@@ -29,6 +31,7 @@ async function createPreMigrationBackup(output: string | undefined): Promise<str
       },
       {
         output,
+        preferHomeOutput,
         verify: true,
       },
     );
@@ -45,7 +48,6 @@ async function createPreMigrationBackup(output: string | undefined): Promise<str
   }
 }
 
-/** Applies the selected migration provider plan and writes the final result. */
 export async function runMigrationApply(params: {
   runtime: RuntimeEnv;
   opts: MigrateApplyOptions;
@@ -97,7 +99,10 @@ export async function runMigrationApply(params: {
           }
           const backupPath = params.opts.noBackup
             ? undefined
-            : await createPreMigrationBackup(params.opts.backupOutput);
+            : await createPreMigrationBackup(
+                params.opts.backupOutput,
+                params.opts.preferHomeBackupOutput,
+              );
           if (!params.opts.noBackup) {
             tick();
           }

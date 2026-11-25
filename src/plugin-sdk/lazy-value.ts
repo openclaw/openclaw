@@ -1,6 +1,3 @@
-/**
- * Public SDK helper for caching a lazily computed value behind a getter.
- */
 type LazyValue<T> = T | (() => T);
 
 /** Returns a getter that resolves the supplied value at most once. */

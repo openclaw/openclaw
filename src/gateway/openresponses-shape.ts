@@ -21,7 +21,6 @@ export function createFunctionCallOutputItem(params: {
   callId: string;
   name: string;
   arguments: string;
-  status?: "in_progress" | "completed";
 }): Extract<OutputItem, { type: "function_call" }> {
   return {
     type: "function_call",
@@ -29,7 +28,6 @@ export function createFunctionCallOutputItem(params: {
     call_id: params.callId,
     name: params.name,
     arguments: params.arguments,
-    status: params.status,
   };
 }
 

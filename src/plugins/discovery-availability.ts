@@ -1,4 +1,3 @@
-import type fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,6 +17,7 @@ import {
   pluginCacheStatSync,
   readPluginCacheDirectory,
 } from "./plugin-cache-files.js";
+import type { PluginStatFacts } from "./plugin-cache-files.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { PLUGIN_AVAILABILITY_POLICY } from "./runtime-degraded-state.js";
 
@@ -109,7 +109,7 @@ export function inspectPluginLoadPath(
   source: string,
   origin: PluginOrigin,
   diagnostics: PluginDiagnostic[],
-): fs.Stats | null {
+): PluginStatFacts | null {
   try {
     const stat = pluginCacheStatSync(source, origin === "config");
     if (!stat && !pluginCacheExistsSync(source)) {

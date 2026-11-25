@@ -7,6 +7,7 @@ import {
   normalizeChannelAccounts,
   type NormalizeLegacyChannelAccountParams,
 } from "./channel-config-normalization.js";
+import { mergeMissing } from "./merge-missing.js";
 
 export { normalizeLegacyDmAliases };
 export { asObjectRecord };
@@ -261,11 +262,11 @@ function seedMaterializedAccountStreaming(params: {
   const rootFlat = params.rootFlat ?? {};
   // Root-first base for the merged-entry slots plus inherited root extras
   // (progress, preview.toolProgress, ...). Account values fill the gaps.
-  const seeded = { ...structuredClone(rootNested) };
-  fillMissingRecordFields(seeded, created);
-  fillMissingRecordFields(seeded, rootFlat);
+  const seeded = structuredClone(rootNested);
   // Root migration can restore mode from scalar aliases; inherit that intent too.
-  fillMissingRecordFields(seeded, params.rootAfter);
+  for (const source of [created, rootFlat, params.rootAfter]) {
+    mergeMissing(seeded, structuredClone(source));
+  }
   // chunkMode: account-entry-first resolver, so the account alias wins.
   if (created.chunkMode !== undefined) {
     seeded.chunkMode = created.chunkMode;
@@ -294,37 +295,6 @@ function seedMaterializedAccountStreaming(params: {
     };
   }
   return seeded;
-}
-
-/** Fills an owned seed; source values are copied before they join it. */
-function fillMissingRecordFields(
-  target: Record<string, unknown>,
-  source: Record<string, unknown>,
-): boolean {
-  let filled = false;
-  for (const [key, sourceValue] of Object.entries(source)) {
-    if (sourceValue === undefined) {
-      continue;
-    }
-    const existing = target[key];
-    if (existing === undefined) {
-      // Copy so later account-level edits never alias the root config object.
-      target[key] = structuredClone(sourceValue);
-      filled = true;
-      continue;
-    }
-    const existingRecord = asObjectRecord(existing);
-    const sourceRecord = asObjectRecord(sourceValue);
-    if (!existingRecord || !sourceRecord) {
-      continue;
-    }
-    const merged = { ...existingRecord };
-    if (fillMissingRecordFields(merged, sourceRecord)) {
-      target[key] = merged;
-      filled = true;
-    }
-  }
-  return filled;
 }
 
 /**

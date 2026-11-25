@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessDeliveryDefaults } from "../../agents/harness/selection-decision.js";
 import {
   buildModelAliasIndex,
@@ -16,6 +17,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -94,14 +97,6 @@ export function createShouldEmitVerboseProgress(params: {
   };
 }
 
-export function resolveTurnModelOverride(
-  replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
-): string | undefined {
-  return replyOptions?.isHeartbeat === true
-    ? normalizeOptionalString(replyOptions.heartbeatModelOverride)
-    : undefined;
-}
-
 /**
  * Resolves the configured visible-replies mode plus the guarded harness
  * default. One owner for dispatch and synthetic-turn binding facts: both must
@@ -117,6 +112,7 @@ export async function resolveVisibleRepliesPolicy(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<{
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
@@ -140,19 +136,29 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<HarnessSourceVisibleRepliesDefault | undefined> {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
     const allowPluginNormalization = params.cfg.plugins?.enabled !== false;
+    const metadataSnapshot = allowPluginNormalization
+      ? (params.metadataSnapshot ??
+        (await resolvePluginMetadataSnapshotAsync({
+          config: params.cfg,
+          allowWorkspaceScopedCurrent: true,
+        })))
+      : null;
     const modelContext = {
       cfg: params.cfg,
       agentId: params.sessionAgentId,
       allowPluginNormalization,
+      manifestPlugins: metadataSnapshot ?? [],
     };
     const defaultModelRef = resolveDefaultModelForAgent(modelContext);
-    const selectionContext = { ...modelContext, defaultProvider: defaultModelRef.provider };
+    const defaultProvider = defaultModelRef?.provider ?? DEFAULT_PROVIDER;
+    const selectionContext = { ...modelContext, defaultProvider };
     const aliasIndex = buildModelAliasIndex(selectionContext);
     const resolveModelCandidate = (raw: string) =>
       resolveModelRefFromString({ ...selectionContext, raw, aliasIndex })?.ref;
@@ -205,11 +211,11 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       parentSessionKey,
-      defaultProvider: defaultModelRef.provider,
+      defaultProvider,
     });
     const storedModelCandidate = storedModelRef
       ? {
-          provider: storedModelRef.provider ?? defaultModelRef.provider,
+          provider: storedModelRef.provider ?? defaultProvider,
           model: storedModelRef.model,
         }
       : undefined;
@@ -247,7 +253,7 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
         return sourceDefault;
       }
     }
-    return resolveCandidateDefault(defaultModelRef);
+    return defaultModelRef && resolveCandidateDefault(defaultModelRef);
   } catch (error) {
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,

@@ -12,17 +12,18 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
-import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../../infra/sqlite-wal.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { assertSupportedAgentSchemaVersion } from "../../state/openclaw-agent-db-schema-read.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
+
+export type AuthProfileReadDatabaseOpener = (
+  pathname: string,
+  options: { timeout: number },
+) => DatabaseSync;
 
 const AUTH_PROFILE_READ_HANDLE_CAP = 64;
 const AUTH_PROFILE_READ_IDLE_MS = 30 * 60_000;
@@ -30,6 +31,7 @@ type AuthProfileReadHandle = {
   db: DatabaseSync;
   identity: string | undefined;
   ready: boolean;
+  schemaVersion?: number;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const authProfileReadDatabases = new Map<string, AuthProfileReadHandle>();
@@ -91,7 +93,7 @@ function armReadHandleIdleClose(pathname: string, entry: AuthProfileReadHandle):
     entry.idleTimer.refresh();
     return;
   }
-  const timer = runInSqliteMaintenanceContext(() =>
+  const timer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       if (authProfileReadDatabases.get(pathname) !== entry || entry.idleTimer !== timer) {
         return;
@@ -122,6 +124,7 @@ export function isMissingDatabasePath(pathname: string): boolean {
 
 export function acquireAuthProfileReadDatabase(
   pathname: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
@@ -130,16 +133,25 @@ export function acquireAuthProfileReadDatabase(
     return { status: "missing" };
   }
   const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
-  if (!inspection && schema && schema.userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    closeAuthProfileReadDatabase(resolvedPath);
-    return { status: "unreadable" };
-  }
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (
     cached?.ready &&
     cached.db.isOpen &&
     (expectedIdentity === undefined || cached.identity === expectedIdentity)
   ) {
+    if (schema && schema.userVersion !== cached.schemaVersion) {
+      try {
+        admitSqliteSchema(cached.db);
+        cached.schemaVersion = assertSupportedAgentSchemaVersion(
+          cached.db,
+          resolvedPath,
+          schema.userVersion,
+        );
+      } catch {
+        closeAuthProfileReadDatabase(resolvedPath);
+        return { status: "unreadable" };
+      }
+    }
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
     armReadHandleIdleClose(resolvedPath, cached);
@@ -157,34 +169,29 @@ export function acquireAuthProfileReadDatabase(
   }
   let db: DatabaseSync;
   try {
-    db = openSqliteReadOnlyDatabase(resolvedPath, {
+    db = openReadOnlyDatabase(resolvedPath, {
       timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
-  // The worker validates this identity around the read; native open also binds its own file.
+  // The worker validates identity before transferring rows; native open also binds its own file.
   const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);
-    unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
+    unregisterReadHandleExitClose ??= registerProcessExitCleanup(closeAuthProfileReadPool);
     armReadHandleIdleClose(resolvedPath, candidate);
   }
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
-    if (inspection) {
-      readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
-    } else if (schema) {
-      readable = true;
-    } else {
-      admitSqliteSchema(db, (version) => {
-        if (version > OPENCLAW_AGENT_SCHEMA_VERSION) {
-          throw new Error("Auth profile database uses a newer agent schema");
-        }
-      });
-      readable = true;
-    }
+    admitSqliteSchema(db);
+    candidate.schemaVersion = assertSupportedAgentSchemaVersion(
+      db,
+      resolvedPath,
+      schema?.userVersion,
+    );
+    readable = true;
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
   }

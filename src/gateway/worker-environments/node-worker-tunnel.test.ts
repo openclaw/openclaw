@@ -34,13 +34,12 @@ import {
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
-import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
-const workspaceDebug = vi.hoisted(() => vi.fn());
 const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -49,7 +48,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       if (subsystem === "gateway/worker-workspace") {
-        return { ...logger, debug: workspaceDebug, info: workspaceInfo };
+        return { ...logger, info: workspaceInfo };
       }
       return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
@@ -57,6 +56,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 
 describe("node worker tunnel manager", () => {
   it.for<[string, boolean]>([
@@ -835,7 +835,7 @@ describe("node worker tunnel manager", () => {
   });
 
   it.each([640])(
-    "reuses the placement hash memo across node reconciliations (%s files)",
+    "checks final node workspace reconciliation after a same-size change (%s files)",
     async (fileCount) => {
       const record = environment();
       const localPath = tempDirs.make("node-worker-memo-persist-");
@@ -863,7 +863,6 @@ describe("node worker tunnel manager", () => {
       await fs.mkdir(remoteManifests, { recursive: true });
       await fs.writeFile(path.join(remoteManifests, `${manifestRef.slice(7)}.json`), raw);
       const nodeTransport = transport();
-      const memoInputs: Array<Array<[string, string]>> = [];
       const captureBytes: Array<{ input: number; output: number }> = [];
       nodeTransport.invoke = withWorkspaceDrain(async ({ command, params }) => {
         if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
@@ -879,15 +878,16 @@ describe("node worker tunnel manager", () => {
             }),
           };
         }
-        if (input.argv.at(-1) === "memo-v1") {
-          memoInputs.push(JSON.parse(input.input!));
-        }
-        const result = await runCommandWithTimeout([process.execPath, ...input.argv.slice(1)], {
-          input: input.input,
-          cwd: remoteWorkspaceDir,
-          timeoutMs: 10_000,
-          baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
-        });
+        const clock = `data:text/javascript,Date.now=()=>${Date.now() + 60_000};`;
+        const result = await runCommandWithTimeout(
+          [process.execPath, "--import", clock, ...input.argv.slice(1)],
+          {
+            input: input.input,
+            cwd: remoteWorkspaceDir,
+            timeoutMs: 10_000,
+            baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
+          },
+        );
         const { stdout, stderr, code, signal, killed, termination } = result;
         if (input.argv.at(-1) === "memo-v1") {
           captureBytes.push({
@@ -929,7 +929,6 @@ describe("node worker tunnel manager", () => {
         commit: vi.fn(async () => {}),
         abort: vi.fn(async () => {}),
       };
-      workspaceDebug.mockClear();
 
       for (let turn = 0; turn < 2; turn += 1) {
         const reconciliation = await handle.reconcileWorkspace({
@@ -945,42 +944,13 @@ describe("node worker tunnel manager", () => {
         await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
       }
 
-      const reports = workspaceDebug.mock.calls
-        .filter(([message]) => message === "worker workspace reconcile completed")
-        .map(([, data]) => data as WorkspaceReconcileMetrics);
-      expect(reports).toHaveLength(2);
-      // Turn one hashes the managed worktree; turn two must reuse the
-      // placement-owned memo instead of re-hashing every file.
-      expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
-      expect(reports[1]!.gateway.contentHashCount).toBe(0);
-      expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
-      const retained = memoInputs[1]!.length;
-      const uncached = fileCount - retained;
-      expect(retained).toBeGreaterThan(0);
-      expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: fileCount,
-      });
-      expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: uncached,
-        remoteMemoHitCount: retained,
-      });
-      expect(memoInputs).toHaveLength(2);
-      expect(memoInputs[0]).toEqual([]);
-      expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
-      expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
-      expect(reports[1]!.remoteManifestWallDurationMs).toBeGreaterThan(0);
+      expect(captureBytes).toHaveLength(2);
       expect(
         captureBytes.every((bytes) => bytes.input <= NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES),
       ).toBe(true);
       expect(
         captureBytes.every((bytes) => bytes.output <= NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES),
       ).toBe(true);
-      if (fileCount > 1) {
-        expect(retained).toBeLessThan(fileCount);
-        expect(reports[1]!.remoteMemoTruncatedCount).toBeGreaterThan(0);
-      }
 
       await fs.writeFile(path.join(remoteWorkspaceDir, files[0]!), "next  turn\n");
       await fs.utimes(

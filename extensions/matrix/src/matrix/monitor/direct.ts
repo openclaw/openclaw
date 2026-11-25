@@ -9,8 +9,8 @@ import { setBoundedMap } from "./bounded-cache.js";
 
 type DirectMessageCheck = {
   roomId: string;
-  senderId?: string;
-  selfUserId?: string;
+  senderId: string;
+  selfUserId: string;
   joinedMembers?: string[];
 };
 
@@ -35,23 +35,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   // Once m.direct has seeded successfully, prefer the explicit cache over
   // re-enabling the broad 2-person fallback after a later transient failure.
   let hasSeededDmCache = false;
-  let cachedSelfUserId: string | null = null;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
   const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
   const recentInviteCandidates = new Map<string, { remoteUserId: string; ts: number }>();
   const locallyPromotedDirectRooms = new Map<string, { remoteUserId: string }>();
-
-  const ensureSelfUserId = async (): Promise<string | null> => {
-    if (cachedSelfUserId) {
-      return cachedSelfUserId;
-    }
-    try {
-      cachedSelfUserId = await client.getUserId();
-    } catch {
-      cachedSelfUserId = null;
-    }
-    return cachedSelfUserId;
-  };
 
   const refreshDmCache = async (): Promise<void> => {
     const now = Date.now();
@@ -174,12 +161,11 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       log(`matrix: remembered invite candidate room=${roomId} sender=${normalizedRemoteUserId}`);
     },
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
-      const { roomId, senderId } = params;
+      const { roomId, senderId, selfUserId } = params;
       if (await checkRoomPolicy("isExplicitlyConfiguredRoom", roomId)) {
         log(`matrix: dm rejected via explicit room config room=${roomId}`);
         return false;
       }
-      const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = params.joinedMembers ?? (await resolveJoinedMembers(roomId));
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,
@@ -232,12 +218,12 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         const promoteDirectRoom = async (source: string): Promise<boolean> => {
           const promotion = await promoteMatrixDirectRoomCandidate({
             client,
-            remoteUserId: senderId ?? "",
+            remoteUserId: senderId,
             roomId,
             selfUserId,
           });
           if (promotion.classifyAsDirect) {
-            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
+            rememberLocallyPromotedDirectRoom(roomId, senderId);
             log(
               `matrix: dm detected via ${source} room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
             );

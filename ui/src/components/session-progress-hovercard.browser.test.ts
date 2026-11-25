@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 import "./session-progress-hovercard.runtime.tsx";
 
@@ -13,11 +14,13 @@ it("settles an empty focused preview without remounting or starving the renderer
   link.textContent = "Empty preview";
   host.append(link);
   let mounts = 0;
+  let notifyMount: (() => void) | undefined;
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
         if (node instanceof Element && node.matches(".session-progress-hovercard")) {
           mounts += 1;
+          notifyMount?.();
         }
       }
     }
@@ -26,8 +29,15 @@ it("settles an empty focused preview without remounting or starving the renderer
   document.body.append(host);
   try {
     await host.updateComplete;
+    flush();
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const mounted = new Promise<void>((resolve) => {
+        notifyMount = resolve;
+      });
       link.focus();
+      // Focus opens on a timer; animation frames alone do not order its completion.
+      await mounted;
+      notifyMount = undefined;
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });

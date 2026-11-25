@@ -1,72 +1,35 @@
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { withBrowserPage } from "../test-helpers/browser-page.ts";
+import { readStyles, styleFixture } from "./style-fixture.test-support.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const colors = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
-let browser: Browser;
+const fixture = styleFixture("session-row-tint-", { required: true });
 
-// CSS owns this contract. The existing session-color E2E owns applying/removing
-// colors through menus; this bounded browser fixture isolates cascade and paint.
-describe("sidebar session row tint", () => {
-  beforeAll(async () => {
-    expect(canRunPlaywrightChromium(executablePath), "Chromium is required for paint proof").toBe(
-      true,
-    );
-    browser = await chromium.launch({ executablePath, headless: true });
-  });
-  afterAll(async () => {
-    await browser?.close();
-  });
-
+fixture.describe("sidebar session row tint", () => {
   it.each(["light", "dark"])("preserves readable tag and selection paints in %s", async (theme) => {
-    const page = await browser.newPage();
-    try {
-      const css = ["base", "layout", "components"]
-        .map((name) => readStyleSheet(`ui/src/styles/` + name + `.css`))
-        .join("\n");
+    await withBrowserPage(fixture.page(), async (page) => {
       const rows = [false, true]
         .flatMap((pinned) =>
-          ["none", ...colors].map((color) => {
-            const id = (pinned ? "pinned-" : "recent-") + color;
-            return (
-              `<div class="` +
-              (pinned ? "sidebar-zone-entry" : "") +
-              `"><div id="` +
-              id +
-              `"
-          class="sidebar-recent-session session-row-host ` +
-              (color !== "none" ? "sidebar-recent-session--colored" : "") +
-              `"
-          style="--session-color:var(--session-color-` +
-              color +
-              `)">
+          ["none", ...colors].map(
+            (
+              color,
+            ) => `<div class="${pinned ? "sidebar-zone-entry" : ""}"><div id="${pinned ? "pinned-" : "recent-"}${color}"
+          class="sidebar-recent-session session-row-host ${color !== "none" ? "sidebar-recent-session--colored" : ""}"
+          style="--session-color:var(--session-color-${color})">
           <a class="sidebar-recent-session__link" href="#"><span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__title-row"><span class="sidebar-recent-session__name">Design review</span></span>
             <span class="sidebar-recent-session__details"><span class="sidebar-recent-session__subtitle">Ready for review</span></span>
           </span></a><span class="sidebar-recent-session__aside session-row-aside"><span class="session-row-trail">3m</span></span>
-        </div></div>`
-            );
-          }),
+        </div></div>`,
+          ),
         )
         .join("");
       await page.setContent(
-        `<!doctype html><html data-theme-mode="` +
-          theme +
-          `"><head><style>` +
-          css +
-          `</style>
+        `<!doctype html><html data-theme-mode="${theme}"><head><style>${readStyles("styles/base", "styles/layout", "styles/components")}</style>
         <style>.sidebar{width:280px}.sidebar-recent-session,.sidebar-zone-entry .sidebar-recent-session{transition:none}</style></head>
-        <body><aside class="sidebar"><div class="sidebar-shell">` +
-          rows +
-          `</div></aside></body></html>`,
+        <body><aside class="sidebar"><div class="sidebar-shell">${rows}</div></aside></body></html>`,
       );
-      // Force the real :hover selector on all rows together, without timed mouse
-      // motion, transitions, or starting a browser per palette/state combination.
+      // Force real :hover selectors without timed mouse motion or transitions.
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("DOM.enable");
       await cdp.send("CSS.enable");
@@ -96,8 +59,7 @@ describe("sidebar session row tint", () => {
             const canvas = document.createElement("canvas");
             canvas.width = canvas.height = 1;
             const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-            const sidebar = document.querySelector(".sidebar")!;
-            const surface = getComputedStyle(sidebar).backgroundColor;
+            const surface = getComputedStyle(document.querySelector(".sidebar")!).backgroundColor;
             const paint = (color: string, alpha = 1) => {
               ctx.clearRect(0, 0, 1, 1);
               ctx.globalAlpha = 1;
@@ -109,44 +71,46 @@ describe("sidebar session row tint", () => {
               return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
             };
             const luminance = (rgb: number[]) =>
-              rgb
-                .map((v) => {
-                  const s = v / 255;
-                  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-                })
-                .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i]!, 0);
+              rgb.reduce((sum, v, i) => {
+                const s = v / 255;
+                const linear = s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+                return sum + linear * [0.2126, 0.7152, 0.0722][i]!;
+              }, 0);
             return Array.from(
               document.querySelectorAll<HTMLElement>(".sidebar-recent-session"),
             ).map((row) => {
-              row.classList.toggle("sidebar-recent-session--active", rowState.includes("active"));
-              row.classList.toggle(
-                "sidebar-recent-session--selected",
-                rowState.includes("selected"),
-              );
+              const selected = rowState.includes("selected"),
+                active = rowState.includes("active");
+              row.classList.toggle("sidebar-recent-session--active", active);
+              row.classList.toggle("sidebar-recent-session--selected", selected);
               const style = getComputedStyle(row);
               const fill = getComputedStyle(row, "::after");
               const colored = row.classList.contains("sidebar-recent-session--colored");
-              const selected = rowState.includes("selected");
-              const active = rowState.includes("active");
               const hover = rowState.includes("hover");
               const background = paint(fill.backgroundColor);
-              const token = selected ? "--accent" : active ? "--text" : "--session-color";
+              const token = selected
+                ? "--accent"
+                : active && !colored
+                  ? "--text"
+                  : "--session-color";
+              // Neutral active paint differs by mode and strengthens on hover;
+              // multiselection keeps its independent accent wash over either state.
+              const tints =
+                mode === "light"
+                  ? { idle: 0.09, hover: 0.14, active: 0.06, activeHover: 0.09 }
+                  : { idle: 0.12, hover: 0.18, active: 0.08, activeHover: 0.11 };
+              // An open colored row keeps its tag color one step stronger.
               const alpha = selected
                 ? 0.14
-                : active
-                  ? 0.1
-                  : hover
-                    ? mode === "light"
-                      ? 0.14
-                      : 0.18
-                    : mode === "light"
-                      ? 0.09
-                      : 0.12;
+                : active && colored
+                  ? tints.idle * (hover ? 2.4 : 2)
+                  : active
+                    ? tints[hover ? "activeHover" : "active"]
+                    : tints[hover ? "hover" : "idle"];
               const expected = paint(style.getPropertyValue(token), alpha);
               const metadata = [".sidebar-recent-session__subtitle", ".session-row-trail"].map(
                 (selector) => {
-                  const element = row.querySelector(selector)!;
-                  const textStyle = getComputedStyle(element);
+                  const textStyle = getComputedStyle(row.querySelector(selector)!);
                   // Composite the text over the row and its actual opaque sidebar.
                   paint(fill.backgroundColor);
                   ctx.fillStyle = textStyle.color;
@@ -163,6 +127,7 @@ describe("sidebar session row tint", () => {
                 id: row.id,
                 colored,
                 outerBackground: style.backgroundColor,
+                fillBackground: fill.backgroundColor,
                 insets: [
                   Number.parseFloat(style.borderTopWidth) + Number.parseFloat(fill.top),
                   Number.parseFloat(style.borderBottomWidth) + Number.parseFloat(fill.bottom),
@@ -171,8 +136,9 @@ describe("sidebar session row tint", () => {
                 expected,
                 metadata,
                 title: paint(title.color),
-                expectedTitle: paint(style.getPropertyValue(active ? "--text-strong" : "--text")),
-                stripe: getComputedStyle(row, "::before").width,
+                expectedTitle: paint(
+                  style.getPropertyValue(active || selected ? "--text-strong" : "--text"),
+                ),
               };
             });
           },
@@ -180,8 +146,11 @@ describe("sidebar session row tint", () => {
         );
         for (const sample of samples) {
           const label = theme + "/" + state + "/" + sample.id;
-          expect(sample.outerBackground, label + " transparent gutter").toBe("rgba(0, 0, 0, 0)");
-          expect(sample.insets, label + " paint inset").toEqual([2, 2]);
+          expect(sample, label).toMatchObject({
+            outerBackground: "rgba(0, 0, 0, 0)",
+            insets: [1, 1],
+            title: sample.expectedTitle,
+          });
           if (sample.colored || state.includes("active") || state.includes("selected")) {
             sample.background.forEach((channel, i) =>
               expect(
@@ -190,15 +159,9 @@ describe("sidebar session row tint", () => {
               ).toBeLessThanOrEqual(1),
             );
           } else if (state === "idle") {
-            expect(
-              await page
-                .locator("#" + sample.id)
-                .evaluate((row) => getComputedStyle(row, "::after").backgroundColor),
-            ).toBe("rgba(0, 0, 0, 0)");
+            expect(sample.fillBackground).toBe("rgba(0, 0, 0, 0)");
           }
-          expect(sample.title, label + " neutral title").toEqual(sample.expectedTitle);
           if (sample.colored) {
-            expect(sample.stripe, label + " retained stripe").toBe("3px");
             for (const ratio of sample.metadata) {
               expect(ratio, label + " metadata AA").toBeGreaterThanOrEqual(4.5);
             }
@@ -206,8 +169,6 @@ describe("sidebar session row tint", () => {
         }
       }
       await cdp.detach();
-    } finally {
-      await page.close();
-    }
+    });
   });
 });

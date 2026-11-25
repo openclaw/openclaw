@@ -1,11 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 import { getHeader } from "./http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
@@ -18,12 +16,24 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import { isOpenClawIdClawOrigin } from "./openclaw-id/claw-origin.js";
 import type {
   GatewayWsBrowserOrigin,
   RemoteControlUiIngressContext,
 } from "./server/client-identity-types.js";
 
-export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
+/**
+ * WebSocket origin policy. A connection relayed by the OpenClaw ID tunnel may also use the linked
+ * claw's own origin (https://<claw hostname>), where the loader serves the Control UI; every other
+ * origin goes through the ordinary allowlist, same-host and local rules.
+ */
+export function checkGatewayWsBrowserOrigin(
+  origin: GatewayWsBrowserOrigin,
+  cfg: OpenClawConfig,
+): OriginCheckResult {
+  if (origin.openclawIdTunnel === true && isOpenClawIdClawOrigin(origin.origin)) {
+    return { ok: true, matchedBy: "openclaw-id-claw" };
+  }
   return checkBrowserOrigin({
     ...origin,
     allowedOrigins: resolveControlUiAllowedOrigins(cfg),
@@ -35,7 +45,12 @@ export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg:
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
+      matchedBy:
+        | "allowlist"
+        | "host-header-fallback"
+        | "private-same-origin"
+        | "local-loopback"
+        | "openclaw-id-claw";
     }
   | { ok: false; reason: string };
 
@@ -128,11 +143,7 @@ export function checkBrowserOrigin(params: {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? [])
-      .map((value) => normalizeOptionalLowercaseString(value))
-      .filter(Boolean),
-  );
+  const allowlist = normalizeLowercaseStringSet((params.allowedOrigins ?? []).values());
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }

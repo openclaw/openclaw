@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteSourceFence } from "../infra/sqlite-source-fence-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -11,15 +12,20 @@ import {
   assertGitHubPublicationSourceFacts,
   readGitHubPublicationSourceFacts,
 } from "./github-publication-source.kernel.js";
+import { openAgentEngineStore } from "./openclaw-agent-db-engine.js";
+import {
+  readExistingAgentSchemaMeta,
+  assertExistingAgentSchemaOwner,
+} from "./openclaw-agent-db-schema-read.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
-const reservations = new WeakMap<DatabaseSync, () => void>();
+const reservations = new WeakMap<EngineConnection, () => void>();
 
 /** The command's durable predicates have been checked while every source is reserved. */
-export function assertGitHubPublicationWorkerSourceCurrent(db: DatabaseSync): void {
+export function assertGitHubPublicationWorkerSourceCurrent(db: EngineConnection): void {
   const assertCurrent = reservations.get(db);
   if (!assertCurrent) {
     throw new Error("GitHub publication requires its reserved source authority.");
@@ -29,20 +35,28 @@ export function assertGitHubPublicationWorkerSourceCurrent(db: DatabaseSync): vo
 
 /** Source handles belong to one command and close only after its reservations settle. */
 export function createGitHubPublicationSourceWorker() {
-  let source: DatabaseSync | undefined;
+  let anchor: DatabaseSync | undefined;
+  let source: EngineConnection | undefined;
   let current: GitHubPublicationSourceRead | undefined;
-  let destination: DatabaseSync | undefined;
+  let destination: EngineConnection | undefined;
   let validated = false;
   const close = () => {
     if (destination) {
       reservations.delete(destination);
     }
-    if (source?.isOpen) {
-      if (source.isTransaction) {
-        throw new Error("GitHub publication source remains reserved.");
-      }
-      source.close();
+    if (source?.isTransaction) {
+      throw new Error("GitHub publication source remains reserved.");
     }
+    try {
+      if (source?.isOpen) {
+        source.close();
+      }
+    } finally {
+      if (anchor?.isOpen) {
+        anchor.close();
+      }
+    }
+    anchor = undefined;
     source = undefined;
     current = undefined;
     destination = undefined;
@@ -55,12 +69,28 @@ export function createGitHubPublicationSourceWorker() {
     return { source: input.memory ?? source!, destination };
   };
   return {
-    prepare(input: GitHubPublicationSourceRead, db: DatabaseSync) {
+    prepare(input: GitHubPublicationSourceRead, db: EngineConnection) {
       close();
       if (input.source) {
         const { physical } = input.source;
         assertExistingDatabaseIdentity(physical.canonicalPath, physical.key, physical.birthtime);
-        source = openNodeSqliteDatabase(resolveExistingSqliteFileUri(physical.canonicalPath));
+        anchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(physical.canonicalPath));
+        try {
+          source = openAgentEngineStore(
+            anchor,
+            input.selector.agentId,
+            physical.canonicalPath,
+            true,
+          );
+          assertExistingAgentSchemaOwner(
+            readExistingAgentSchemaMeta(source),
+            input.selector.agentId,
+            physical.canonicalPath,
+          );
+        } catch (error) {
+          close();
+          throw error;
+        }
       }
       current = input;
       destination = db;
@@ -77,8 +107,11 @@ export function createGitHubPublicationSourceWorker() {
       if (!source) {
         throw new Error("GitHub publication source was not prepared.");
       }
-      let reservedSource: DatabaseSync | undefined;
-      const destinationBinding = { database: handles.destination, identity: input.destination };
+      let reservedSource: EngineConnection | undefined;
+      const destinationBinding = {
+        database: handles.destination,
+        identity: input.destination,
+      };
       const sourceBinding = { database: source, identity: input.source };
       reservations.set(handles.destination, () => {
         if (!validated || !reservedSource?.isTransaction || !handles.destination.isTransaction) {

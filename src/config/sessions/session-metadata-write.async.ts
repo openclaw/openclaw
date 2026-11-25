@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
-import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
+import {
+  publishSessionCollaborationChanges,
+  runSessionCollaborationWrite,
+} from "./session-sharing-store.async.js";
 import type {
   SessionOwnerAssignParams,
   SessionSuggestionAddParams,
@@ -31,23 +31,14 @@ export function assignSessionOwnerInWorker(
     { type: "owner.assign", input: { scope, params: capturedParams } },
     (result, location, database, currentKeys) => {
       if (result.value && (!currentKeys || currentKeys.has(location.sessionKey))) {
-        if (!database) {
-          sessionChanges.emit(
+        publishSessionCollaborationChanges(
+          [
             result.facts
               ? { ...location, facts: result.facts }
               : { ...location, factsInvalidated: true },
-          );
-        } else if (result.facts) {
-          publishSessionEntryCacheInvalidation(
-            { ...database, agentId: location.agentId },
-            { sessionKey: location.sessionKey, facts: result.facts },
-          );
-        } else {
-          sessionChanges.emit(
-            bindSessionEntryPublicationSource({ ...location, factsInvalidated: true }, database),
-            database.db,
-          );
-        }
+          ],
+          database,
+        );
       }
       return result.value;
     },
