@@ -130,6 +130,8 @@ const nodeRequiredFiles = new Set([
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
   "test/scripts/vitest-pair-benchmark.test.ts",
+  // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
+  "test/vitest-performance-config.test.ts",
   // Portable catalog lifecycle plus a separate V8 planner-count proof.
   "src/agents/prepared-model-catalog-worker.integration.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",

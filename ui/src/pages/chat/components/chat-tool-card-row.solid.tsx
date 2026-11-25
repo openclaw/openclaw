@@ -31,6 +31,7 @@ import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
+import { catalogToolIcon, catalogToolLabel } from "./chat-tool-operation-copy.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 import {
@@ -69,12 +70,13 @@ function resolveToolRowText(
   const verb = resolveToolRowVerb(view, outcome);
   return verb && view.target
     ? `${verb} ${view.target}`
-    : resolveToolOperationLabel(
-        card,
-        outcome,
-        addressed,
-        resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
-      );
+    : (catalogToolLabel(card, outcome, addressed) ??
+        resolveToolOperationLabel(
+          card,
+          outcome,
+          addressed,
+          resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
+        ));
 }
 
 function ToolRowLink(props: {
@@ -278,7 +280,7 @@ export function ToolCardRow(props: ToolCardProps) {
             name={
               readSubagentCancellation(card())
                 ? "bot"
-                : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+                : (TOOL_ROW_ICONS[view().kind] ?? catalogToolIcon(display().name) ?? display().icon)
             }
             tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
           />

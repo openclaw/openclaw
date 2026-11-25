@@ -172,6 +172,7 @@ export async function continueSessionQueuedInputs(
             requestFingerprint: row.request_hash.startsWith("request:")
               ? row.request_hash.slice(8)
               : row.request_hash,
+            operatorAuthority: authority,
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,

@@ -5,6 +5,7 @@ import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import {
   buildQualifiedChatModelValue,
@@ -12,13 +13,15 @@ import {
 } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
 import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 export type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
@@ -34,8 +37,6 @@ export type ChatNoticeProps = {
       | "runWorking"
       | "onRetryRun"
       | "onStartNewSession"
-      | "failedMessageEditSource"
-      | "onFocusComposer"
       | "onDismissPendingInput"
     >;
 };

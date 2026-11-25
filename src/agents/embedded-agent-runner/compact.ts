@@ -36,6 +36,7 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { NO_MODEL_CONFIGURED_MESSAGE } from "../model-selection-config.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -72,6 +73,7 @@ export async function compactNativeCliSession(params: {
   replyOperation?: ReplyOperation;
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParams;
+  sourceAuthority?: import("../harness/host-source-authority.js").AgentHarnessCompactionSourceAuthority;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -84,6 +86,10 @@ export async function compactNativeCliSession(params: {
   if (!backend?.ownsNativeCompaction) {
     return undefined;
   }
+  assertParticipationRuntime(
+    params.sourceAuthority?.operatorAuthority?.participationCeiling,
+    "cli",
+  );
   const manualCompaction = backend.manualCompaction;
   if (!manualCompaction) {
     return buildCompactionFailureResult(
@@ -152,6 +158,8 @@ export async function compactNativeCliSession(params: {
     runId,
     sessionAgentId,
     "agents.native-compaction",
+    params.sourceAuthority?.assertActive,
+    params.sourceAuthority?.operatorAuthority,
   );
   let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
@@ -287,8 +295,10 @@ export async function compactEmbeddedAgentSessionDirect(
     ));
   assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
-  const requestedParams: CompactEmbeddedAgentSessionParams = {
+  const requestedParams: CompactEmbeddedAgentSessionRuntimeParams & { sessionFile: string } = {
     ...paramsBase,
+    pluginExecutionAuthority:
+      accountingRecorder?.operatorAuthority ?? paramsBase.pluginExecutionAuthority,
     sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -332,6 +342,10 @@ export async function compactEmbeddedAgentSessionDirect(
     replyOperation:
       resolveSessionControllerOperationForSignal(paramsInput.abortSignal) ??
       getCurrentSessionControllerOwner(),
+    sourceAuthority: {
+      assertActive: assertReadCurrent,
+      operatorAuthority: requestedParams.pluginExecutionAuthority,
+    },
     runtime: runtimeSelection.selectedHarnessRuntime,
     compactParams: {
       ...requestedParams,

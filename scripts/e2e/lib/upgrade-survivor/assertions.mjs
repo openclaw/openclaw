@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { assertCompletedUpdate } from "../../../lib/update-receipt.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
   usesCronOwnerAtBaseline,
@@ -1865,14 +1866,29 @@ function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
   return failures;
 }
 
-function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
+function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot, verifyRestart]) {
   let result;
   let outcome = "failed";
   let message;
   try {
     assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
     result = readUpdateJson(file);
-    assertSuccessfulUpdateResult(result, expectedVersion);
+    const lifecycle = assertSuccessfulUpdateResult(result, expectedVersion);
+    if (lifecycle && verifyRestart === "1") {
+      assertStrict.equal(result.target?.version, expectedVersion);
+      assertStrict.equal(result.verification?.runningVersion, expectedVersion);
+      assertStrict.equal(result.verification?.runningBuildId, result.after?.buildId);
+      assert(result.after?.buildId, "serving Gateway did not report an activated build");
+      assert(
+        result.verification.booted &&
+          result.verification.serviceRunning &&
+          result.verification.coreReady &&
+          result.verification.versionMatch &&
+          result.steps.some(({ step, status }) => step === "activating" && status === "completed"),
+        "update did not verify activation of the serving Gateway",
+      );
+      process.stdout.write("resident");
+    }
     outcome = "passed";
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
@@ -1886,27 +1902,15 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   }
 }
 
-// Published releases print the command result; newer candidates print the lifecycle record.
-// Drop the command-result branch once no tested release prints it. Returns true for a record.
-function requireCompletedUpdate(result) {
-  if (result?.phase === undefined) {
-    assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
-    return false;
-  }
-  assert(
-    result.phase === "finished" && result.status === "succeeded" && result.runId,
-    `update did not finish successfully: ${String(result.phase)}/${String(result.status)}`,
-  );
-  assert(
-    result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
-    "successful update contained an unfinished step",
-  );
-  return true;
-}
-
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  const lifecycle = requireCompletedUpdate(result);
+  const lifecycle = assertCompletedUpdate(result);
+  if (lifecycle) {
+    assert(
+      result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
+      "successful update contained an unfinished step",
+    );
+  }
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1937,7 +1941,7 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     `successful update version changed: ${String(result?.after?.version)}`,
   );
   if (lifecycle) {
-    return;
+    return true;
   }
   const rejectedStepIndex = Array.isArray(result?.steps)
     ? result.steps.findIndex(
@@ -2011,6 +2015,7 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     Array.isArray(result?.steps) && rejectedStepIndex === -1,
     `successful update contained a failed core step${rejectedStepContext}`,
   );
+  return false;
 }
 
 function assertRepairJson([file]) {

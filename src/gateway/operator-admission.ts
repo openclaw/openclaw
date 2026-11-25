@@ -73,7 +73,6 @@ import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.j
 import {
   hasAutomationAdminDelegation,
   type QueuedOperatorRecoverySource,
-  type RestartRecoveryOperatorSource,
 } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
@@ -89,9 +88,7 @@ export type OperatorAdmissionContext = Pick<
 >;
 
 type Facts = (
-  | (Extract<QueuedOperatorRecoverySource, { kind: "gateway" }> & {
-      source?: RestartRecoveryOperatorSource;
-    })
+  | Extract<QueuedOperatorRecoverySource, { kind: "gateway" }>
   | Extract<QueuedOperatorRecoverySource, { kind: "channel" }>
   | {
       kind: "recorded";
@@ -122,7 +119,6 @@ type PreparedOperatorAdmission = {
         };
       }
     | undefined;
-  channelIdentity: UserChannelIdentity | undefined;
   ingressAuth: ResolvedGatewayAuth;
 };
 
@@ -222,7 +218,6 @@ export async function prepareOperatorAdmission(
       ingress,
       paired,
       channel,
-      channelIdentity,
       ingressAuth,
     };
   } catch (error) {
@@ -319,7 +314,7 @@ export function decideOperatorAdmission(
 ): OperatorAdmissionDecision;
 /** Decide once from prepared owners and committed config; the run keeps only frozen facts. */
 export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperatorAdmission) {
-  const { config, identity, ingress, paired, channel, channelIdentity, context } = prepared;
+  const { config, identity, ingress, paired, channel, context } = prepared;
   const live = facts.kind === "live" ? facts.authority : undefined;
   const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
@@ -583,14 +578,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
       }),
     );
-    const requesterOwner =
-      facts.kind === "channel"
-        ? channelIdentity !== undefined &&
-          (isChannelOwner(config, channelIdentity) ||
-            operatorScopeSatisfied("operator.admin", scopes))
-        : facts.kind === "gateway" && facts.source && facts.source.kind !== "gateway"
-          ? principal?.kind !== "member"
-          : operatorScopeSatisfied("operator.admin", scopes);
     const authority = createAdmittedRunOperatorAuthority({
       profileId,
       canonicalIdentity: identity ? { profileId } : null,
@@ -612,7 +599,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
       channelOwner: live?.channelOwner,
-      requesterOwner,
       grant: decideTurnGrant(scopes),
       modelPolicy,
       rolePolicy: role
