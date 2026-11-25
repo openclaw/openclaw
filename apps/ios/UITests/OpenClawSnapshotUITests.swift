@@ -130,17 +130,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-progress-bar-fixture"])
         let app = try XCTUnwrap(self.app)
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Plan, ")).firstMatch
-        XCTAssertTrue(card.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "progress-card-collapsed")
-        card.tap()
+        // Above the phone composer a note without steps is a short pill, never a cut sentence.
+        let pill = app.buttons["chat-activity-pill-progress"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 8))
+        XCTAssertEqual(pill.label, "Task progress")
+        self.attachScreenshot(named: "progress-pill")
+        pill.tap()
         let hasBar = app.progressIndicators.firstMatch.waitForExistence(timeout: 5)
-        self.attachScreenshot(named: "progress-card-expanded")
+        self.attachScreenshot(named: "progress-sheet")
         XCTAssertTrue(hasBar, "Task list has no progress bar")
         XCTAssertTrue(app.staticTexts["Now: reading the sample diff."].exists)
         let rawTag = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "<progress"))
         XCTAssertEqual(rawTag.count, 0, "Task list still displays a raw progress tag")
-        XCTAssertEqual(card.label, "Plan, Now: reading the sample diff.")
     }
 
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {

@@ -284,17 +284,19 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await self.store.history(sessionKey: sessionKey)
+        if let child = try await ActivityPillsFixture.history(sessionKey: sessionKey) { return child }
+        return try await self.store.history(sessionKey: sessionKey)
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
-        guard ScreenshotFixtureMode.progressCardEnabled,
+        guard ScreenshotFixtureMode.progressCardEnabled || ActivityPillsFixture.isEnabled,
               ["progressCard.get", "progressCard.refresh"].contains(method)
         else { return nil }
         return true
     }
 
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        if let card = ActivityPillsFixture.progressCard(sessionKey: sessionKey) { return card }
         guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
@@ -441,6 +443,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
+        ActivityPillsFixture.decorate(sessions: &sessions, parentKey: self.fixture.sessionKey)
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
         if ScreenshotFixtureMode.toolFailuresEnabled {
             sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
@@ -475,6 +478,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        if let children = try await ActivityPillsFixture.childSessions(parentKey: parentKey) { return children }
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else {
             return OpenClawChatChildSessionsResult(rows: [], isComplete: true)
         }
@@ -597,6 +601,7 @@ private actor LocalFixtureChatStore {
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
         let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            || ActivityPillsFixture.isEnabled
             ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         var startupSnapshot: OpenClawChatInFlightRun?
