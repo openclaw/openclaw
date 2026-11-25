@@ -230,8 +230,9 @@ function prepareExecExitWake(
   // the wake names the outcome, not a mid-line fragment. A structured tail (e.g. a JSON blob)
   // keeps the whole tail.
   const tail = session.tail;
+  const retained = tail.trim();
   const output =
-    session.totalOutputChars > tail.length ? selectExecCompletionContent(tail.trim()) : tail.trim();
+    session.totalOutputChars > tail.length ? selectExecCompletionContent(retained) : retained;
   if (
     status === "completed" &&
     session.exitCode === 0 &&
@@ -244,14 +245,16 @@ function prepareExecExitWake(
     formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
   })`;
   const file = session.outputFile;
+  // A selected last line is not the whole retained tail, so the header must not claim it is.
+  const shown = output === retained ? `last ${tail.length}` : "last line";
   const summary = !output
     ? `${header} with no output.`
     : session.totalOutputChars <= tail.length
       ? `${header}:\n${output}`
       : file
-        ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars:\n${output}\n${renderExecOutputFile(file)}`
+        ? `${header}, ${shown} of ${session.totalOutputChars} output chars:\n${output}\n${renderExecOutputFile(file)}`
         : // Sandbox, node and durable commands keep no host output file.
-          `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+          `${header}, ${shown} of ${session.totalOutputChars} output chars (${
             session.totalOutputChars > session.aggregated.length
               ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
               : "process log has the rest"

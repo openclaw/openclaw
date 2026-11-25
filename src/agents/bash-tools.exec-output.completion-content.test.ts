@@ -65,9 +65,25 @@ describe("wake owner completion content", () => {
     appendOutput(process, "stdout", output);
     await maybeNotifyOnExit(process, "completed", true);
     const [wake] = peekSystemEvents(sessionKey);
-    expect(wake).toContain("all done, 3 files");
-    expect(wake).not.toContain("OK:");
-    expect(wake).toContain("last 2000 of 2022 output chars");
+    // The wake shows one line, so it must not claim the whole retained tail.
+    expect(wake).toContain(", last line of 2022 output chars (");
+    expect(wake).toMatch(/\):\nall done, 3 files$/);
+  });
+
+  it("shows a truncated structured tail whole and says how much of it", async () => {
+    const sessionKey = "agent:main:subagent:completion-json";
+    const blob = '{\n  "ok": true\n}';
+    const process = createProcessSessionFixture({
+      id: "wake-json",
+      backgrounded: true,
+      maxOutputChars: 2_000,
+    });
+    Object.assign(process, { sessionKey, exitCode: 0 });
+    appendOutput(process, "stdout", `${"x".repeat(2_000)}\n${blob}`);
+    await maybeNotifyOnExit(process, "completed", true);
+    const [wake] = peekSystemEvents(sessionKey);
+    expect(wake).toContain(", last 2000 of 2017 output chars (");
+    expect(wake).toContain(`):\n${"x".repeat(1_983)}\n${blob}`);
   });
 
   it("keeps the full tail when the output fits the retained window", async () => {
