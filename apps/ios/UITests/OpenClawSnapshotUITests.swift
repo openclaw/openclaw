@@ -410,7 +410,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(add.waitForExistence(timeout: 4))
         XCTAssertFalse(add.isEnabled)
         XCTAssertTrue(app.staticTexts[
-            "Header names cannot include spaces or other characters outside a single HTTP token.",
+            "Header names can’t include spaces or special characters.",
         ].waitForExistence(timeout: 4))
         XCTAssertEqual(name.value as? String, "X Client ID")
         self.saveScreen(named: "invalid-name-kept")
@@ -1085,7 +1085,8 @@ extension OpenClawSnapshotUITests {
             app.swipeUp()
         }
         XCTAssertTrue(systemSettings.isHittable)
-        XCTAssertTrue(app.staticTexts["Precise Location"].exists)
+        // Precise Location shows only once Location is granted; the access row is always there.
+        XCTAssertTrue(app.staticTexts["Location access"].exists)
         self.attachScreenshot(named: "native-settings-permissions")
 
         app.navigationBars["Permissions"].buttons.element(boundBy: 0).tap()
