@@ -49,6 +49,15 @@ enum ScreenshotFixtureMode {
     }
 
     static let chatSwitchSecondSessionKey = "agent:main:launch-plan"
+    /// One unanswered turn whose tool calls failed, recorded the way tool search records them.
+    static var toolFailuresEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-tool-failures-fixture")
+    }
+
+    static let toolFailureChats = [
+        (key: "agent:main:subagent:fixture-toasts", label: "Toasts board"),
+        (key: "agent:main:subagent:fixture-composer", label: "Composer fixes"),
+    ]
 }
 
 struct LocalChatFixture {
@@ -429,6 +438,13 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 hasActiveRun: true))
         }
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
+        if ScreenshotFixtureMode.toolFailuresEnabled {
+            sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
+                var entry = OpenClawChatSessionEntry(key: chat.key, parentSessionKey: self.fixture.sessionKey)
+                entry.label = chat.label
+                return entry
+            }
+        }
         if archived {
             sessions = []
         }
@@ -613,8 +629,9 @@ private actor LocalFixtureChatStore {
         } else {
             self.messages
         }
-        var historyWireMessages = try JSONDecoder().decode(
-            [AnyCodable].self, from: JSONEncoder().encode(historyMessages))
+        var historyWireMessages = try ScreenshotFixtureMode.toolFailuresEnabled
+            ? Self.toolFailuresTurn()
+            : JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages))
         var historyActivity: [OpenClawChatHistoryActivity]?
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
             historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
@@ -700,6 +717,60 @@ private actor LocalFixtureChatStore {
                         text: String(repeating: "Streaming layout response. ", count: 12))
                 } : nil),
             activity: historyActivity)
+    }
+
+    /// The shape of the turn in the Nov 24 report: each call goes through `dispatch_action`, so the
+    /// history holds the envelope call, a nested row with the inner call and its result, and the
+    /// envelope's own result. Five sends to two chats and two launches fail around one success.
+    private static func toolFailuresTurn() throws -> [AnyCodable] {
+        var rows = [#"{"role":"user","timestamp":1,"__openclaw":{"id":"tf-user","runId":"tf-run"},"#
+            + #""content":[{"type":"text","text":"Hand the fixes to their chats."}]}"#]
+        func dispatched(_ index: Int, _ tool: String, _ args: String, failed: Bool, result: String) {
+            let id = "tf-call-\(index)"
+            let nested = "tool_call:\(id):\(tool):\(index)"
+            rows.append(#"{"role":"assistant","stopReason":"toolUse","timestamp":\#(10 + index * 3),"#
+                + #""__openclaw":{"id":"\#(id)-call","runId":"tf-run"},"content":[{"type":"toolCall","id":"\#(id)","#
+                + #""name":"dispatch_action","arguments":{"id":"\#(tool)","args":\#(args)}}]}"#)
+            rows.append(#"{"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"#
+                + #""excludeFromContext":true,"timestamp":\#(11 + index * 3),"#
+                + #""__openclaw":{"id":"\#(id)-nested","runId":"tf-run"},"content":["#
+                + #"{"type":"toolCall","id":"\#(nested)","name":"\#(tool)","arguments":\#(args),"#
+                + #""parentToolCallId":"\#(id)"},{"type":"toolResult","toolCallId":"\#(nested)","#
+                + #""toolName":"\#(tool)","parentToolCallId":"\#(id)","isError":\#(failed),"#
+                + #""content":[{"type":"text","text":"\#(result)"}]}]}"#)
+            rows.append(#"{"role":"toolResult","timestamp":\#(12 + index * 3),"#
+                + #""__openclaw":{"id":"\#(id)-result","runId":"tf-run"},"toolCallId":"\#(id)","#
+                + #""toolName":"dispatch_action","isError":\#(failed),"#
+                + #""content":[{"type":"text","text":"\#(result)"}]}"#)
+        }
+        let custody = "Followup completion requires in-process caller custody."
+        let provenance = #"{\"status\":\"error\",\"error\":\"Requester provenance requires trusted"#
+            + #" in-process Gateway dispatch.\",\"childSessionKey\":\"agent:main:subagent:fixture-unstarted\"}"#
+        let (toasts, composer) = (
+            ScreenshotFixtureMode.toolFailureChats[0].key,
+            ScreenshotFixtureMode.toolFailureChats[1].key)
+        func send(to key: String) -> String {
+            #"{"sessionKey":"\#(key)","message":"Start with the toast copy.","timeoutSeconds":0}"#
+        }
+        dispatched(1, "sessions_send", send(to: toasts), failed: true, result: custody)
+        dispatched(2, "sessions_send", send(to: composer), failed: true, result: custody)
+        dispatched(
+            3,
+            "sessions_spawn",
+            #"{"label":"Reply images","task":"Fix reply images."}"#,
+            failed: true,
+            result: provenance)
+        dispatched(
+            4,
+            "sessions_spawn",
+            #"{"label":"Image viewer","task":"Fix the image viewer."}"#,
+            failed: true,
+            result: provenance)
+        dispatched(5, "session_status", "{}", failed: false, result: "OpenClaw is running.")
+        dispatched(6, "sessions_send", send(to: toasts), failed: true, result: custody)
+        dispatched(7, "sessions_send", send(to: composer), failed: true, result: custody)
+        dispatched(8, "sessions_send", send(to: composer), failed: true, result: custody)
+        return try JSONDecoder().decode([AnyCodable].self, from: Data("[\(rows.joined(separator: ","))]".utf8))
     }
 
     func sendMessage(
