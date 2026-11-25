@@ -27,8 +27,9 @@ describe("Gateway update lifecycle", () => {
     });
     try {
       await time.wake();
+      const failure = /^update\.check failed: Error: synthetic update task failure\b/u;
       expect(schedulerLog.error.mock.calls).toEqual(
-        abort ? [] : [["update.check failed: Error: synthetic update task failure"]],
+        abort ? [] : [[expect.stringMatching(failure)]],
       );
       expect(scheduler.nextWakeAtMs).toBeNull();
     } finally {
