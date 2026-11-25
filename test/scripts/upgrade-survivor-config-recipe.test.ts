@@ -32,6 +32,7 @@ function runRecipeFixture(params: {
   version: string;
   scenario: string;
   failPath?: string;
+  skillLibraryToolSplit?: true;
   updateRestartMode?: "auto-auth";
 }) {
   const root = tempDirs.make("openclaw-upgrade-recipe-");
@@ -39,6 +40,10 @@ function runRecipeFixture(params: {
   const logPath = join(root, "openclaw-argv.jsonl");
   const summaryPath = join(root, "summary.json");
   mkdirSync(binDir);
+  const configPath = join(root, "config.json");
+  writeJson(configPath, {
+    meta: { migrations: { skillLibraryToolSplit: params.skillLibraryToolSplit } },
+  });
   writeFileSync(
     join(binDir, "openclaw-log.js"),
     `
@@ -74,7 +79,7 @@ process.exit(failed ? 17 : 0);
       ...process.env,
       HOME: root,
       OPENCLAW_STATE_DIR: join(root, "state"),
-      OPENCLAW_CONFIG_PATH: join(root, "config.json"),
+      OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: "",
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: params.updateRestartMode ?? "manual",
@@ -368,7 +373,12 @@ esac
 
   it("authors Tool Search through the baseline CLI", () => {
     const version = "2026.9.7";
-    const { result, summary, loggedArgs } = runRecipeFixture({ scenario: "base", version });
+    const { result, summary, loggedArgs } = runRecipeFixture({
+      scenario: "base",
+      version,
+      skillLibraryToolSplit: true,
+    });
+    expect(summary).toHaveProperty("baselineSkillLibraryToolSplit", true);
     expectSuccess(result);
     expect(summary.baselineVersion).toBe(version);
     expect(summary.acceptedIntents).toContain("tool-search");

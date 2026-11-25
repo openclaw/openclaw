@@ -500,7 +500,8 @@ function assertConfigSurvived() {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
     assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
-    const preserve = baseline || mode === "preserve";
+    const alreadySplit = coverage.baselineSkillLibraryToolSplit === true;
+    const preserve = baseline || alreadySplit || mode === "preserve";
     assert(
       JSON.stringify(config.tools?.allow) ===
         JSON.stringify(
@@ -509,10 +510,9 @@ function assertConfigSurvived() {
       "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
     );
     assert(
-      baseline ||
-        (mode === "preserve"
-          ? config.meta?.migrations?.skillLibraryToolSplit === undefined
-          : config.meta?.migrations?.skillLibraryToolSplit === true),
+      (baseline && coverage.baselineSkillLibraryToolSplit === undefined) ||
+        config.meta?.migrations?.skillLibraryToolSplit ===
+          (alreadySplit || (!baseline && mode === "current") ? true : undefined),
       "Skill library split migration marker was not recorded",
     );
   }

@@ -883,6 +883,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 function assertConfig(params: {
   acceptedIntents: string[];
   baselineVersion?: string;
+  baselineSkillLibraryToolSplit?: boolean;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -896,6 +897,7 @@ function assertConfig(params: {
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
       baselineVersion: params.baselineVersion,
+      baselineSkillLibraryToolSplit: params.baselineSkillLibraryToolSplit,
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -1496,6 +1498,26 @@ process.stdout.write(sessionDir + "\\n");
     expect(() => run({ tools: { allow: ["read", "skill_workshop", "skill_library"] } })).toThrow(
       /marker/,
     );
+  });
+
+  it("preserves an already stamped Skill Library policy without granting the new tool", () => {
+    const run = (config: unknown, stage: "baseline" | "survival" = "survival") =>
+      assertConfig({
+        acceptedIntents: ["skill-library-split"],
+        baselineVersion: "2026.11.10",
+        baselineSkillLibraryToolSplit: true,
+        config,
+        scenario: "base",
+        stage,
+      });
+    const meta = { migrations: { skillLibraryToolSplit: true } };
+    const tools = { allow: ["read", "skill_workshop"] };
+    expect(() => run({ meta, tools }, "baseline")).not.toThrow();
+    expect(() => run({ meta, tools })).not.toThrow();
+    expect(() => run({ tools })).toThrow(/marker/);
+    expect(() =>
+      run({ meta, tools: { allow: ["read", "skill_workshop", "skill_library"] } }),
+    ).toThrow(/exactly once/);
   });
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
