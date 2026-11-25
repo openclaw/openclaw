@@ -12,11 +12,16 @@ const adapters = vi.hoisted(() => ({
   readIndex: vi.fn(),
   future: vi.fn(),
 }));
-vi.mock("node:child_process", () => ({ spawn: adapters.spawn, execFileSync: adapters.pack }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: adapters.spawn,
+  execFileSync: adapters.pack,
+}));
 vi.mock("../../scripts/e2e/lib/plugin-update/process-observer.mjs", () => ({
   observePostCoreCommand: adapters.observe,
 }));
-vi.mock("../../scripts/e2e/lib/plugin-update/activation.mjs", () => ({
+vi.mock("../../scripts/e2e/lib/plugin-update/activation.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/e2e/lib/plugin-update/activation.mjs")>()),
   settlePluginUpdate: vi.fn(),
 }));
 vi.mock("../../scripts/e2e/lib/plugin-index-sqlite.mjs", () => ({
