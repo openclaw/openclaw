@@ -13,18 +13,26 @@ export function applyCodexFrozenPrompt(
   >,
   promptText: string,
   promptBuild: { prompt: string; promptInputRange?: CodexProjectedContextRange },
-): { prompt: string; promptInputRange?: CodexProjectedContextRange; promptText: string } {
-  const frozen = params.skipPreparedUserTurnMessage
+): {
+  prompt: string;
+  promptInputRange: CodexProjectedContextRange | undefined;
+  promptText: string;
+} {
+  const projection = params.skipPreparedUserTurnMessage
     ? undefined
     : params.userTurnTranscriptRecorder?.getPersistedMessage?.()?.["__openclaw"]
-        ?.modelPromptProjection?.text;
-  if (frozen === undefined) {
-    return { ...promptBuild, promptText };
+        ?.modelPromptProjection;
+  const frozen =
+    projection && typeof projection === "object" && "text" in projection
+      ? projection.text
+      : undefined;
+  const { prompt, promptInputRange } = promptBuild;
+  if (typeof frozen !== "string") {
+    return { prompt, promptInputRange, promptText };
   }
   // The hook input ends with the projected prompt, which ends with the current request.
   const request = promptText.endsWith(params.prompt) ? params.prompt : params.prompt.trim();
-  const { prompt } = promptBuild;
-  const { start, end } = promptBuild.promptInputRange ?? { start: 0, end: prompt.length };
+  const { start, end } = promptInputRange ?? { start: 0, end: prompt.length };
   const requestStart = end - request.length;
   return {
     prompt: prompt.slice(0, requestStart) + frozen + prompt.slice(end),

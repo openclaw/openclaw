@@ -15,7 +15,10 @@ import {
   tempDir,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { getRequestInputText } from "./run-attempt.context-engine.test-support.js";
+import {
+  createStartedThreadHarness as createInputRecordingHarness,
+  getRequestInputText,
+} from "./run-attempt.context-engine.test-support.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
@@ -108,10 +111,10 @@ it("keeps a projection an earlier embedded fallback attempt froze", async () => 
   params.userTurnTranscriptRecorder = recorder;
   params.prompt = `[Retry after the previous model attempt failed or timed out]\n\n${params.prompt}`;
   await bindProductionHarnessHostCapabilitiesForTest(params);
-  const harness = createStartedThreadHarness();
+  const harness = createInputRecordingHarness();
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
-  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  await harness.completeTurn();
   await run;
   const sentText = getRequestInputText(harness);
   // Codex sends the frozen bytes in place of its retry-marked request; this attempt's hook
