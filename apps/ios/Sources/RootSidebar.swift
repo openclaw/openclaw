@@ -808,6 +808,10 @@ struct RootSidebarPagesEditor: View {
             .tint(.primary)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+            // Below full height iOS draws the sheet as glass and the grouped rows turn a
+            // translucent gray; at full height it switches to the opaque grouped background with
+            // white rows. One opaque grouped background keeps the rows the same at every height.
+            .presentationBackground(Color(uiColor: .systemGroupedBackground))
         } else {
             self.pageList
                 .tint(.primary)
