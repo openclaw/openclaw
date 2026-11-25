@@ -131,8 +131,12 @@ suite.define(() => {
         );
         const positions = await controls.evaluateAll((elements) =>
           elements.map((element) => {
-            const { left, width, right } = element.getBoundingClientRect();
-            return { left, width, fits: left >= 0 && right <= innerWidth };
+            const rect = element.getBoundingClientRect();
+            return {
+              left: rect.left,
+              width: rect.width,
+              fits: rect.left >= 0 && rect.right <= innerWidth,
+            };
           }),
         );
         expect(positions).toHaveLength(6);

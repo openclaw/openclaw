@@ -12,7 +12,6 @@ import {
   listSelectableAgents,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
-  resolveEffectiveModelFallbacks,
 } from "./display.ts";
 import { createAgentModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
 
@@ -133,12 +132,11 @@ it.each([
   { name: "a string primary", model: "openai/gpt-5.4" },
   { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
 ])("does not inherit global fallbacks for $name", ({ model }) => {
-  expect(
-    resolveEffectiveModelFallbacks(model, {
-      primary: "openai/gpt-5.4",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    }),
-  ).toStrictEqual([]);
+  const config = agentConfig(
+    { model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+    { model },
+  );
+  expect(buildAgentContext({ id: "main" }, config, null, "main").model).toBe("openai/gpt-5.4");
 });
 it("rejects unsafe invisible controls in assistant text avatars", () => {
   expect(resolveAssistantTextAvatar("VC")).toBe("VC");

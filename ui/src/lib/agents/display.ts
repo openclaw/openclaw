@@ -231,7 +231,7 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return fallbacks ? fallbacks.filter((entry): entry is string => typeof entry === "string") : null;
 }
 
-export function resolveEffectiveModelFallbacks(
+function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
