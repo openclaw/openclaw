@@ -1080,6 +1080,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         `runs on account ${claudeProfile}, which was removed or signed out`,
       );
       expect(result.error).toContain("list accounts: openclaw gateway call models.authStatus");
+      expect(result.error).toContain(
+        "To use a key in the environment or provider config instead: openclaw automations edit test-job --model <provider/model>.",
+      );
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();
     },

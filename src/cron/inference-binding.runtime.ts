@@ -328,7 +328,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus).`,
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus). To use a key in the environment or provider config instead: openclaw automations edit ${jobId} --model <provider/model>.`,
         { cause: error },
       );
     }
