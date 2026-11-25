@@ -233,3 +233,69 @@ it.each([
   expect(client.conversations.history).not.toHaveBeenCalled();
   expect(client.conversations.replies).not.toHaveBeenCalled();
 });
+
+it("adds author profile names with one lookup per distinct author and keeps failed authors unchanged", async () => {
+  const client = createClient();
+  const users = {
+    U1: {
+      name: "ada",
+      real_name: "Ada L",
+      profile: { display_name: "Ada", real_name: "Ada Lovelace" },
+    },
+    U3: { name: "grace", profile: { display_name: "", real_name: "" } },
+  };
+  const info = vi.fn(async ({ user }: { user: string }) => {
+    if (user === "U2") {
+      throw new Error("missing_scope");
+    }
+    return { user: users[user as keyof typeof users] };
+  });
+  Object.assign(client, { users: { info } });
+  const ownProfile = { display_name: "Slack Supplied" };
+  client.conversations.history.mockResolvedValueOnce({
+    messages: [
+      { ts: "1", user: "U1", text: "one" },
+      { ts: "2", user: "U2", text: "two" },
+      { ts: "3", user: "U1", text: "three" },
+      { ts: "4", user: "U3", text: "four" },
+      { ts: "5", user: "U4", user_profile: ownProfile, text: "five" },
+      { ts: "6", bot_id: "B1", text: "six" },
+    ],
+    has_more: false,
+  });
+  const { messages } = await readSlackMessages("C1", { client, includeAuthorProfiles: true });
+  expect(info.mock.calls.map(([args]) => args.user)).toEqual(["U1", "U2", "U3"]);
+  expect(messages).toEqual([
+    {
+      ts: "1",
+      user: "U1",
+      text: "one",
+      user_profile: { display_name: "Ada", real_name: "Ada Lovelace", name: "ada" },
+    },
+    { ts: "2", user: "U2", text: "two" },
+    {
+      ts: "3",
+      user: "U1",
+      text: "three",
+      user_profile: { display_name: "Ada", real_name: "Ada Lovelace", name: "ada" },
+    },
+    { ts: "4", user: "U3", text: "four", user_profile: { name: "grace" } },
+    { ts: "5", user: "U4", user_profile: ownProfile, text: "five" },
+    { ts: "6", bot_id: "B1", text: "six" },
+  ]);
+});
+
+it("skips author lookups unless requested", async () => {
+  const client = createClient();
+  const info = vi.fn();
+  Object.assign(client, { users: { info } });
+  client.conversations.history.mockResolvedValueOnce({
+    messages: [{ ts: "1", user: "U1", text: "one" }],
+    has_more: false,
+  });
+  await expect(readSlackMessages("C1", { client })).resolves.toEqual({
+    messages: [{ ts: "1", user: "U1", text: "one" }],
+    hasMore: false,
+  });
+  expect(info).not.toHaveBeenCalled();
+});

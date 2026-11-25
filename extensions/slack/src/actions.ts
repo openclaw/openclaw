@@ -53,6 +53,7 @@ export type SlackMessageSummary = {
   ts?: string;
   text?: string;
   user?: string;
+  user_profile?: SlackMessageUserProfile;
   thread_ts?: string;
   blocks?: unknown[];
   attachments?: SlackAttachment[];
@@ -68,6 +69,47 @@ export type SlackMessageSummary = {
     mimetype?: string;
   }>;
 };
+
+type SlackMessageUserProfile = {
+  display_name?: string;
+  real_name?: string;
+  name?: string;
+};
+
+async function addSlackAuthorProfiles(
+  client: WebClient,
+  messages: SlackMessageSummary[],
+): Promise<SlackMessageSummary[]> {
+  const userIds = new Set(
+    messages.flatMap((message) => (message.user && !message.user_profile ? [message.user] : [])),
+  );
+  if (userIds.size === 0) {
+    return messages;
+  }
+  const profiles = new Map(
+    await Promise.all(
+      [...userIds].map(async (userId) => {
+        try {
+          const { user } = await client.users.info({ user: userId });
+          const profile: SlackMessageUserProfile = {
+            display_name: normalizeOptionalString(user?.profile?.display_name),
+            real_name: normalizeOptionalString(user?.profile?.real_name ?? user?.real_name),
+            name: normalizeOptionalString(user?.name),
+          };
+          const named = profile.display_name || profile.real_name || profile.name;
+          return [userId, named ? profile : undefined] as const;
+        } catch (error) {
+          logVerbose(`slack read: users.info failed for ${userId}: ${String(error)}`);
+          return [userId, undefined] as const;
+        }
+      }),
+    ),
+  );
+  return messages.map((message) => {
+    const profile = message.user && !message.user_profile ? profiles.get(message.user) : undefined;
+    return profile ? { ...message, user_profile: profile } : message;
+  });
+}
 
 function renderSlackReadMessageText(message: SlackMessageSummary): SlackMessageSummary {
   if (!hasSlackMessageTableBlock(message)) {
@@ -524,6 +566,8 @@ export async function readSlackMessages(
     after?: string;
     threadId?: string;
     messageId?: string;
+    /** Adds each author's Slack profile names as `user_profile`, one `users.info` per distinct author. */
+    includeAuthorProfiles?: boolean;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
   const exactMessageId = opts.messageId?.trim();
@@ -565,7 +609,9 @@ export async function readSlackMessages(
     )
     .map(renderSlackReadMessageText);
   return {
-    messages,
+    messages: opts.includeAuthorProfiles
+      ? await addSlackAuthorProfiles(client, messages)
+      : messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
 }
