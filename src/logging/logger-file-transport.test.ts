@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import * as fileLogIO from "./logger-file-io.js";
 import { fileLogTransport } from "./logger-file-transport.js";
-import * as fileLogWorker from "./logger-file-worker.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -150,8 +150,8 @@ it.each(["async", "sync"])(
 it("rescues the unissued tail without replaying an in-flight batch", async () => {
   const [issued, release] = [createDeferred(), createDeferred()] as const;
   let issuedRecords = 0;
-  const write = fileLogWorker.runFileLogIOInWorker;
-  vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request) => {
+  const write = fileLogIO.executeFileLogIO;
+  vi.spyOn(fileLogIO, "executeFileLogIO").mockImplementation(async (request) => {
     const result = await write(request);
     if (request.type === "append" && request.file === logPath) {
       issuedRecords = request.payload.trim().split("\n").length;
