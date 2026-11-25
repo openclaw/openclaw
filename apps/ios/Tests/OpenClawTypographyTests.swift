@@ -98,6 +98,24 @@ struct OpenClawTypographyTests {
         #expect(font.pointSize == 22)
     }
 
+    @Test func `Settings roles resolve to branded fonts`() throws {
+        // `SettingsType` is the only font alias the scanner trusts by name, so audit its producer:
+        // every role must return an `OpenClawType` font and nothing else.
+        let source = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent("Sources/Design/SettingsProTabSupport.swift"),
+            encoding: .utf8)
+        let body = try Self.extract(source, from: "enum SettingsType {", to: "\n}\n")
+        let roles = body.components(separatedBy: "static var ").dropFirst()
+        #expect(roles.count == 5)
+        for role in roles {
+            let returned = role
+                .components(separatedBy: "{").dropFirst().first?
+                .components(separatedBy: "}").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            #expect(returned.hasPrefix("OpenClawType."), Comment(rawValue: "SettingsType role returns \(returned)"))
+        }
+    }
+
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
         let offenders = try Self.unbrandedTextCallOffenders()
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
@@ -275,6 +293,8 @@ struct OpenClawTypographyTests {
             "OpenClawActivityType",
             "OpenClawChatTypography",
             "WatchClawType",
+            // Settings roles; `Settings roles resolve to branded fonts` audits their producer.
+            "SettingsType.",
             "typography.",
         ]
         let sourceBytes = Array(source.utf8)

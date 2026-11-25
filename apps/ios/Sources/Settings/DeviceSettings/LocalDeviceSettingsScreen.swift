@@ -45,10 +45,12 @@ struct LocalDeviceSettingsScreen: View {
             case .voiceAndTalk:
                 self.voiceSection(snapshot)
                 Section {
-                    Text("Start live voice with OpenClaw")
-                        .font(OpenClawType.body)
+                    // Read-only: the phrase Siri answers to. A bare label read as a dead action row.
+                    SettingsDescriptionRow(
+                        "Live voice",
+                        description: "Say “Start live voice with OpenClaw” to Siri.") {}
                 } header: {
-                    Text("Siri").font(OpenClawType.captionSemiBold)
+                    SettingsSectionTitle("Siri")
                 }
             case .permissions:
                 Section {
@@ -62,14 +64,18 @@ struct LocalDeviceSettingsScreen: View {
                             key: .healthSummaryEnabled,
                             value: snapshot.capabilities?.healthSummaryEnabled)
                     }
+                } header: {
+                    SettingsSectionTitle("Agent access")
                 }
                 self.permissionsSection(snapshot)
             }
             if let errorText {
-                Text(errorText)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("LocalDeviceSettings.Error")
+                Section {
+                    EmptyView()
+                } footer: {
+                    SettingsFootnote(verbatim: errorText)
+                        .accessibilityIdentifier("LocalDeviceSettings.Error")
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -101,10 +107,9 @@ struct LocalDeviceSettingsScreen: View {
                 Text("Light").font(OpenClawType.body).tag("light")
                 Text("Dark").font(OpenClawType.body).tag("dark")
             } label: {
-                Text("Appearance").font(OpenClawType.body)
+                Text("Appearance").font(SettingsType.label)
             }
-            .pickerStyle(.menu)
-            .tint(.primary)
+            .settingsMenuPicker()
             .accessibilityIdentifier("LocalDeviceSettings.Appearance")
         }
     }
@@ -121,7 +126,7 @@ struct LocalDeviceSettingsScreen: View {
                     value: snapshot.capabilities?.healthSummaryEnabled)
             }
         } header: {
-            Text("Device").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Device")
         }
     }
 
@@ -136,18 +141,21 @@ struct LocalDeviceSettingsScreen: View {
                 value: snapshot.voice.talkBackgroundEnabled)
             self.toggle("Speakerphone", key: .speakerphoneEnabled, value: snapshot.voice.speakerphoneEnabled)
         } header: {
-            Text("Voice & Talk").font(OpenClawType.captionSemiBold)
+            SettingsSectionTitle("Voice")
         } footer: {
             Text(
                 """
                 Voice requires a supported device and microphone access. \
                 Provider, voice, and speech language remain configured on the Gateway.
                 """)
-                .font(OpenClawType.footnote)
+                .font(SettingsType.footnote)
         }
         .disabled(!snapshot.voice.supported)
     }
 
+    /// Each permission is a short row: its iOS status as the value, or Request in the value's
+    /// place while iOS has not asked yet. Opening iOS Settings is the page's action row.
+    @ViewBuilder
     private func permissionsSection(_ snapshot: DeviceSettingsSnapshot) -> some View {
         Section {
             Picker(selection: Binding(
@@ -158,8 +166,9 @@ struct LocalDeviceSettingsScreen: View {
                 Text("While using").font(OpenClawType.body).tag("whileUsing")
                 Text("Always").font(OpenClawType.body).tag("always")
             } label: {
-                Text("Location access").font(OpenClawType.body)
+                Text("Location access").font(SettingsType.label)
             }
+            .settingsMenuPicker()
             SettingsDetailRow(
                 "Precise Location",
                 value: .verbatim(snapshot.permissions.location
@@ -167,35 +176,37 @@ struct LocalDeviceSettingsScreen: View {
             ForEach(snapshot.permissions.entries.filter {
                 self.layout == .device || $0.id != .notifications
             }, id: \.id) { entry in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(Self.permissionTitle(entry.id)).font(OpenClawType.body)
-                        Text(Self.statusTitle(entry.status))
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if entry.status == .notDetermined || entry.status == .limited {
+                if entry.status == .notDetermined || entry.status == .limited {
+                    LabeledContent {
                         Button {
                             self.perform(.requestPermission(entry.id))
                         } label: {
-                            Text("Request").font(OpenClawType.subheadSemiBold)
+                            Text("Request").font(SettingsType.value)
                         }
                         .buttonStyle(.borderless)
+                        .tint(.primary)
                         .accessibilityLabel(String(localized: "Request") + " " + Self.permissionTitle(entry.id))
+                    } label: {
+                        Text(Self.permissionTitle(entry.id)).font(SettingsType.label)
                     }
+                } else {
+                    SettingsDetailRow(
+                        .verbatim(Self.permissionTitle(entry.id)),
+                        value: .verbatim(Self.statusTitle(entry.status)))
                 }
             }
+        } header: {
+            SettingsSectionTitle("iOS permissions")
+        } footer: {
+            SettingsFootnote(
+                "iOS controls permission grants and Precise Location. Change denied permissions in iOS Settings.")
+        }
+        Section {
             Button {
                 self.perform(.openSystemSettings(.location))
             } label: {
-                Text("Open iOS Settings").font(OpenClawType.body)
+                Text("Open iOS Settings").font(SettingsType.label)
             }
-        } header: {
-            Text("Permissions").font(OpenClawType.captionSemiBold)
-        } footer: {
-            Text("iOS controls permission grants and Precise Location. Change denied permissions in iOS Settings.")
-                .font(OpenClawType.footnote)
         }
     }
 
@@ -204,7 +215,7 @@ struct LocalDeviceSettingsScreen: View {
             get: { value ?? false },
             set: { self.perform(.set(key, .boolean($0))) }))
         {
-            Text(title).font(OpenClawType.body)
+            Text(title).font(SettingsType.label)
         }
         .tint(OpenClawBrand.ok)
         .accessibilityIdentifier("LocalDeviceSettings." + key.rawValue)

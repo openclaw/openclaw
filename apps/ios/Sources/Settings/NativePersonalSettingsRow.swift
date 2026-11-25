@@ -22,7 +22,7 @@ struct NativePersonalSettingsRow: View {
                 } label: {
                     Label {
                         Text("Personal instructions")
-                            .font(OpenClawType.body)
+                            .font(SettingsType.label)
                     } icon: {
                         NativeSettingsRowIcon(systemName: "person.text.rectangle")
                     }
@@ -87,23 +87,20 @@ private struct NativePersonalInstructionsScreen: View {
         Form {
             if self.current {
                 Section {
-                    Text(self.agentName)
-                        .font(OpenClawType.body)
-                    Text("Instructions that this agent uses for you on this shared Gateway.")
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
+                    SettingsDescriptionRow(
+                        .verbatim(self.agentName),
+                        description: "Instructions that this agent uses for you on this shared Gateway.") {}
                 }
                 if self.file != nil {
                     Section {
                         TextEditor(text: self.$draft)
-                            .font(OpenClawType.body)
+                            .font(SettingsType.label)
                             .frame(minHeight: 220)
                             .accessibilityLabel("Personal instructions")
                             .disabled(self.busy)
                             .onChange(of: self.draft) { _, _ in self.saved = false }
                     } footer: {
-                        Text(verbatim: "\(self.draft.utf16.count.formatted())/\(4000.formatted())")
-                            .font(OpenClawType.caption)
+                        SettingsFootnote(verbatim: "\(self.draft.utf16.count.formatted())/\(4000.formatted())")
                     }
                 }
                 if self.busy {
@@ -112,25 +109,25 @@ private struct NativePersonalInstructionsScreen: View {
                 if let error = self.error {
                     Section {
                         Text(error)
-                            .font(OpenClawType.footnote)
+                            .font(SettingsType.description)
                             .foregroundStyle(OpenClawBrand.danger)
                         Button {
                             Task { await self.load() }
                         } label: {
                             Text("Reload")
-                                .font(OpenClawType.body)
+                                .font(SettingsType.label)
                         }
                         .disabled(self.busy)
                     }
                 }
                 if self.saved {
                     Text("Saved")
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(SettingsType.description)
+                        .foregroundStyle(SettingsInk.secondary)
                 }
             } else {
                 Text("Your connection changed. Return to Settings to reopen personal instructions.")
-                    .font(OpenClawType.body)
+                    .font(SettingsType.label)
             }
         }
         .navigationTitle("Personal instructions")

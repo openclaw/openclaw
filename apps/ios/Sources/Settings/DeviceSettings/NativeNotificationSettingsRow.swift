@@ -14,6 +14,7 @@ struct NativeNotificationSettingsRow: View {
     @State private var errorText: String?
     @State private var consent = IOSDeviceSettingsConsentPresenter()
     @State private var consentAnchor = UIView(frame: .zero)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var enrollmentEnabled: Bool {
         self.servingEnabled &&
@@ -51,6 +52,36 @@ struct NativeNotificationSettingsRow: View {
         return nil
     }
 
+    private var rowLabel: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Notifications").font(SettingsType.label)
+                if let statusText = self.statusText {
+                    Text(verbatim: statusText)
+                        .font(SettingsType.description)
+                        .foregroundStyle(SettingsInk.secondary)
+                }
+            }
+        } icon: {
+            NativeSettingsRowIcon(systemName: "bell")
+        }
+    }
+
+    @ViewBuilder private var rowTrailing: some View {
+        if self.actionTask != nil {
+            ProgressView().controlSize(.small)
+        } else {
+            // Same value style as every other row; the arrow says the row leaves the app.
+            HStack(spacing: 6) {
+                SettingsValueText(.localized(self.actionTitle))
+                Image(systemName: self.hasSystemDestination ? "arrow.up.right" : "chevron.right")
+                    .font(OpenClawType.footnoteSemiBold)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
     var body: some View {
         Button {
             if self.registrationComplete {
@@ -59,31 +90,21 @@ struct NativeNotificationSettingsRow: View {
                 self.activate(openSettingsIfDenied: true)
             }
         } label: {
-            HStack(spacing: 10) {
-                Label {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Notifications").font(OpenClawType.body)
-                        if let statusText = self.statusText {
-                            Text(verbatim: statusText)
-                                .font(OpenClawType.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+            Group {
+                // Accessibility sizes stack the value under the label, like the system rows,
+                // instead of breaking the label mid-word beside it.
+                if self.dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 4) {
+                        self.rowLabel
+                        self.rowTrailing
                     }
-                } icon: {
-                    NativeSettingsRowIcon(systemName: "bell")
-                }
-                Spacer(minLength: 0)
-                if self.actionTask != nil {
-                    ProgressView().controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    HStack(spacing: 5) {
-                        Text(self.actionTitle)
-                            .font(OpenClawType.subhead)
-                        Image(systemName: self.hasSystemDestination ? "arrow.up.right" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .accessibilityHidden(true)
+                    HStack(spacing: 10) {
+                        self.rowLabel
+                        Spacer(minLength: 0)
+                        self.rowTrailing
                     }
-                    .foregroundStyle(.secondary)
                 }
             }
             .contentShape(Rectangle())

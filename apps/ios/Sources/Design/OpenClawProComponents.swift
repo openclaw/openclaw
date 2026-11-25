@@ -479,13 +479,15 @@ struct OpenClawToggleIndicator: View {
     let isOn: Bool
 
     var body: some View {
+        // The native switch's footprint (63x28 on iOS 26), so a Settings row with this indicator
+        // is as tall as one with a system Toggle.
         Capsule()
             .fill(self.isOn ? OpenClawBrand.ok : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
+            .frame(width: 63, height: 28)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 24)
                     .padding(2)
                     .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
             }

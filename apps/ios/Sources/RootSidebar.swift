@@ -847,7 +847,7 @@ struct RootSidebarPagesEditor: View {
             } label: {
                 Label {
                     Text(destination.sidebarTitle)
-                        .font(OpenClawType.subheadSemiBold)
+                        .font(SettingsType.label)
                 } icon: {
                     NativeSettingsRowIcon(systemName: RootSidebarIcon.symbolName(for: destination))
                 }
@@ -860,7 +860,7 @@ struct RootSidebarPagesEditor: View {
                 self.togglePinnedPage(destination)
             } label: {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(OpenClawType.subheadSemiBold)
+                    .font(SettingsType.label)
                     .foregroundStyle(isPinned ? OpenClawSidebarPalette.text : OpenClawSidebarPalette.muted)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())

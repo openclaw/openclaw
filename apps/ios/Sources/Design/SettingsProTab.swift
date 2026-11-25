@@ -56,7 +56,7 @@ struct SettingsProTab: View {
     @State var watchDirectSetupStatusText: String?
     @State var isSendingWatchDirectSetup = false
     @State var notificationStatus: SettingsNotificationStatus = .checking
-    @State var diagnosticsLastRunText = "Not run"
+    @State var diagnosticsLastRunText: String?
     @State var diagnosticsIssueCount: Int?
     let directRoute: SettingsRoute?
     let registersNavigationDestinations: Bool

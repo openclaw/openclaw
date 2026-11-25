@@ -46,18 +46,18 @@ struct NativeChatSettingsScreen: View {
             Section {
                 Toggle(isOn: self.$showsAssistantTrace) {
                     Text("Show reasoning & tool activity")
-                        .font(OpenClawType.body)
+                        .font(SettingsType.label)
                 }
                 .tint(OpenClawBrand.ok)
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
                 Toggle(isOn: self.$wrapsCodeLines) {
                     Text("Wrap code lines")
-                        .font(OpenClawType.body)
+                        .font(SettingsType.label)
                 }
                 .tint(OpenClawBrand.ok)
                 .accessibilityIdentifier("chat-wrap-code-lines")
             } header: {
-                Text("Display").font(OpenClawType.captionSemiBold)
+                SettingsSectionTitle("Display")
             }
 
             Section {
@@ -66,9 +66,12 @@ struct NativeChatSettingsScreen: View {
                     Text("Wait for reply").font(OpenClawType.body).tag("followup")
                     Text("Send now").font(OpenClawType.body).tag("steer")
                 } label: {
-                    Text("Follow-ups").font(OpenClawType.body)
+                    Text("Follow-ups").font(SettingsType.label)
                 }
+                .settingsMenuPicker()
                 .accessibilityIdentifier("chat-follow-up-mode")
+            } header: {
+                SettingsSectionTitle("Messages")
             }
 
             Section {
@@ -78,20 +81,19 @@ struct NativeChatSettingsScreen: View {
                         Text("On").font(OpenClawType.body).tag("on")
                         Text("Full").font(OpenClawType.body).tag("full")
                     } label: {
-                        Text("Verbosity").font(OpenClawType.body)
+                        Text("Verbosity").font(SettingsType.label)
                     }
+                    .settingsMenuPicker()
                     .disabled(self.isWorking || !self.appModel.hasOperatorAdminScope)
                 } else {
                     LabeledContent {
                         if self.isWorking {
                             ProgressView()
                         } else {
-                            Text("Unavailable")
-                                .font(OpenClawType.subhead)
-                                .foregroundStyle(.secondary)
+                            SettingsValueText("Unavailable")
                         }
                     } label: {
-                        Text("Verbosity").font(OpenClawType.body)
+                        Text("Verbosity").font(SettingsType.label)
                     }
                 }
 
@@ -99,7 +101,7 @@ struct NativeChatSettingsScreen: View {
                     Button {
                         Task { await self.saveVerbosity() }
                     } label: {
-                        Text("Save").font(OpenClawType.body)
+                        Text("Save").font(SettingsType.label)
                     }
                     .disabled(self.snapshot == nil || self.isWorking || self.snapshot?.value == self.verbosity)
 
@@ -107,17 +109,16 @@ struct NativeChatSettingsScreen: View {
                         Button {
                             Task { await self.loadVerbosity() }
                         } label: {
-                            Text("Retry").font(OpenClawType.body)
+                            Text("Retry").font(SettingsType.label)
                         }
                     }
                 }
-                if let status {
-                    Text(status)
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                }
             } header: {
-                Text("Gateway default").font(OpenClawType.captionSemiBold)
+                SettingsSectionTitle("Gateway default")
+            } footer: {
+                if let status {
+                    SettingsFootnote(verbatim: status)
+                }
             }
         }
         .navigationTitle("Chat")

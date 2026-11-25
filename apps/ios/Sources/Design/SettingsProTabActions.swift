@@ -3,118 +3,60 @@ import SwiftUI
 import UserNotifications
 
 extension SettingsProTab {
+    /// A status row (label, description, current value) heading a detail page.
     func detailStatusCard(
-        icon: String,
         title: OpenClawTextValue,
         detail: OpenClawTextValue,
         value: OpenClawTextValue,
-        color: Color,
-        actionTitle: LocalizedStringKey? = nil,
-        actionSystemImage: String = "arrow.right",
-        action: (() -> Void)? = nil) -> some View
+        header: LocalizedStringKey) -> some View
     {
         Section {
-            HStack(spacing: 12) {
-                NativeSettingsRowIcon(systemName: icon)
-                VStack(alignment: .leading, spacing: 2) {
-                    title.text
-                        .font(OpenClawType.headline)
-                    detail.text
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                value.text
-                    .font(OpenClawType.subheadMedium)
-                    .foregroundStyle(color)
-            }
-            if let action, let actionTitle {
-                Button(action: action) {
-                    Label(actionTitle, systemImage: actionSystemImage)
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .openClawProminentButton()
-            }
+            SettingsDescriptionRow(title, description: detail, value: value)
+        } header: {
+            SettingsSectionTitle(header)
         }
     }
 
     var diagnosticChecksCard: some View {
-        Section("Checks") {
+        Section {
             let run = self.diagnosticsRunPresentation
-            self.diagnosticCheckRow(
-                icon: "stethoscope",
-                title: "Last Run",
-                detail: .verbatim(self.diagnosticsLastRunText),
-                value: .verbatim(run.value),
-                color: run.color)
-            let gateway = self.gatewayStatusPresentation
-            self.diagnosticCheckRow(
-                icon: "antenna.radiowaves.left.and.right",
-                title: "Gateway Link",
-                detail: .verbatim(gateway.detail),
-                value: .verbatim(gateway.value),
-                color: gateway.color)
-            self.diagnosticCheckRow(
-                icon: "dot.radiowaves.left.and.right",
-                title: "Discovery",
-                detail: .verbatim(self.gatewayController.discoveryStatusText),
-                value: .verbatim(self.gatewayController.gateways.count.formatted()),
-                color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
-            let talkConfig = self.gatewayTalkConfigPresentation
-            self.diagnosticCheckRow(
-                icon: "waveform",
-                title: "Talk Config",
-                detail: .verbatim(talkConfig.detail),
-                value: .verbatim(talkConfig.value),
-                color: talkConfig.color)
-            self.diagnosticCheckRow(
-                icon: "bell",
-                title: "Notifications",
-                detail: "Approval and event alert channel",
-                value: .verbatim(self.notificationPresentation.text),
-                color: self.notificationPresentation.color)
-            self.diagnosticCheckRow(
-                icon: "rectangle.on.rectangle",
-                title: "Screen Capture",
-                detail: "Live foreground capture state",
-                value: .verbatim(self.appModel.screenRecordActive
-                    ? String(localized: "live")
-                    : String(localized: "idle")),
-                color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
-            self.diagnosticCheckRow(
-                icon: "mic",
-                title: "Voice Wake",
-                detail: .verbatim(self.appModel.voiceWake.statusText),
-                value: .verbatim(self.voiceWakeEnabled
-                    ? String(localized: "on")
-                    : String(localized: "off")),
-                color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-        }
-    }
-
-    func diagnosticCheckRow(
-        icon: String,
-        title: OpenClawTextValue,
-        detail: OpenClawTextValue,
-        value: OpenClawTextValue,
-        color: Color) -> some View
-    {
-        HStack(spacing: 12) {
-            NativeSettingsRowIcon(systemName: icon)
-            VStack(alignment: .leading, spacing: 2) {
-                title.text
-                    .font(OpenClawType.subheadSemiBold)
-                detail.text
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            if let lastRun = self.diagnosticsLastRunText {
+                SettingsDescriptionRow("Last run", description: .verbatim(lastRun), value: .verbatim(run))
+            } else {
+                SettingsDetailRow("Last run", value: .verbatim(run))
             }
-            Spacer(minLength: 8)
-            value.text
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.secondary)
+            let gateway = self.gatewayStatusPresentation
+            SettingsDescriptionRow(
+                "Gateway link",
+                description: .verbatim(gateway.detail),
+                value: .verbatim(gateway.value))
+            SettingsDescriptionRow(
+                "Discovery",
+                description: .verbatim(self.gatewayController.discoveryStatusText),
+                value: .verbatim(self.gatewayController.gateways.count.formatted()))
+            let talkConfig = self.gatewayTalkConfigPresentation
+            SettingsDescriptionRow(
+                "Talk config",
+                description: .verbatim(talkConfig.detail),
+                value: .verbatim(talkConfig.value))
+            SettingsDescriptionRow(
+                "Notifications",
+                description: "Approval and event alert channel",
+                value: .verbatim(self.notificationPresentation.text))
+            SettingsDescriptionRow(
+                "Screen capture",
+                description: "Live foreground capture state",
+                value: .verbatim(self.appModel.screenRecordActive
+                    ? String(localized: "Live")
+                    : String(localized: "Idle")))
+            SettingsDescriptionRow(
+                "Voice Wake",
+                description: .verbatim(self.appModel.voiceWake.statusText),
+                value: .verbatim(self.voiceWakeEnabled
+                    ? String(localized: "On")
+                    : String(localized: "Off")))
+        } header: {
+            SettingsSectionTitle("Checks")
         }
     }
 
@@ -857,15 +799,14 @@ extension SettingsProTab {
         self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
-    var gatewayStatusPresentation: (detail: String, value: String, color: Color) {
+    var gatewayStatusPresentation: (detail: String, value: String) {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return (String(localized: "Apple Review demo mode"), String(localized: "demo"), OpenClawBrand.accent)
+            return (String(localized: "Apple Review demo mode"), String(localized: "Demo"))
         }
         let connected = self.gatewayConnected
         return (
             self.appModel.gatewayDisplayStatusText,
-            connected ? String(localized: "online") : String(localized: "offline"),
-            connected ? OpenClawBrand.ok : .secondary)
+            connected ? String(localized: "Online") : String(localized: "Offline"))
     }
 
     var gatewayDiagnosticConnected: Bool {
@@ -889,15 +830,14 @@ extension SettingsProTab {
             : String(localized: "Connect to the gateway.")
     }
 
-    var gatewayTalkConfigPresentation: (detail: String, value: String, color: Color) {
+    var gatewayTalkConfigPresentation: (detail: String, value: String) {
         if self.appModel.isAppleReviewDemoModeEnabled {
-            return (String(localized: "Demo mode only"), String(localized: "demo"), .secondary)
+            return (String(localized: "Demo mode only"), String(localized: "Demo"))
         }
         let loaded = self.appModel.talkMode.gatewayTalkConfigLoaded
         return (
             self.appModel.talkMode.gatewayTalkTransportLabel,
-            loaded ? String(localized: "loaded") : String(localized: "missing"),
-            loaded ? OpenClawBrand.ok : .secondary)
+            loaded ? String(localized: "Loaded") : String(localized: "Missing"))
     }
 
     var gatewayAddress: String {
@@ -948,18 +888,13 @@ extension SettingsProTab {
         ]
     }
 
-    var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return String(localized: "demo") }
-        if self.gatewayConnected { return String(localized: "ready") }
-        if self.gatewayController.gateways.isEmpty { return String(localized: "check") }
-        return String(localized: "partial")
-    }
-
-    var diagnosticsRunPresentation: (value: String, color: Color) {
-        guard let diagnosticsIssueCount else { return (String(localized: "pending"), .secondary) }
-        return (
-            diagnosticsIssueCount == 0 ? String(localized: "pass") : diagnosticsIssueCount.formatted(),
-            diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn)
+    var diagnosticsRunPresentation: String {
+        guard let diagnosticsIssueCount else { return String(localized: "Not run") }
+        if diagnosticsIssueCount == 0 { return String(localized: "Passed") }
+        if diagnosticsIssueCount == 1 { return String(localized: "1 issue") }
+        return String(
+            format: String(localized: "%lld issues"),
+            Int64(diagnosticsIssueCount))
     }
 
     var notificationDisclosureAccepted: Bool {

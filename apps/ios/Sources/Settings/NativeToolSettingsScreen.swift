@@ -70,13 +70,10 @@ struct NativeToolSettingsScreen: View {
                     ProgressView()
                 }
                 NativeToolSettingsFeedback(inventory: self.inventory)
-                if self.inventory.hasLoaded, !self.inventory.canEdit {
-                    Text("Read-only access").font(OpenClawType.footnote).foregroundStyle(.secondary)
-                }
                 if self.inventory.hasLoaded, visibleSkills.isEmpty, visiblePlugins.isEmpty {
                     Text(self.emptyLabel)
-                        .font(OpenClawType.body)
-                        .foregroundStyle(.secondary)
+                        .font(SettingsType.label)
+                        .foregroundStyle(SettingsInk.secondary)
                 }
                 if self.kind == .skills {
                     ForEach(visibleSkills) { skill in
@@ -103,7 +100,11 @@ struct NativeToolSettingsScreen: View {
                 if let name = self.kind == .skills ? self.agentName.trimmedNonEmpty : self.gatewayName?
                     .trimmedNonEmpty
                 {
-                    Text(verbatim: name).font(OpenClawType.footnote)
+                    SettingsSectionTitle(verbatim: name)
+                }
+            } footer: {
+                if self.inventory.hasLoaded, !self.inventory.canEdit {
+                    SettingsFootnote("Read-only access")
                 }
             }
         }
@@ -139,15 +140,9 @@ struct NativeToolSettingsScreen: View {
     @ViewBuilder
     private func inventoryRow(name: String, status: String?) -> some View {
         if let status {
-            LabeledContent {
-                Text(verbatim: status)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-            } label: {
-                Text(verbatim: name).font(OpenClawType.body)
-            }
+            SettingsDetailRow(.verbatim(name), value: .verbatim(status))
         } else {
-            Text(verbatim: name).font(OpenClawType.body)
+            Text(verbatim: name).font(SettingsType.label)
         }
     }
 
@@ -353,10 +348,10 @@ private struct NativeToolSettingsFeedback: View {
 
     var body: some View {
         if let failure = self.inventory.failure {
-            Text(verbatim: failure).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.danger)
+            Text(verbatim: failure).font(SettingsType.description).foregroundStyle(OpenClawBrand.danger)
         }
         if let notice = self.inventory.notice {
-            Text(verbatim: notice).font(OpenClawType.footnote).foregroundStyle(.secondary)
+            Text(verbatim: notice).font(SettingsType.description).foregroundStyle(SettingsInk.secondary)
         }
     }
 }
@@ -376,25 +371,22 @@ private struct NativeToolSettingsDetail: View {
         }
     }
 
-    private func detailHeader(name: String, description: String?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: name)
-                .font(OpenClawType.title2SemiBold)
-                .foregroundStyle(OpenClawBrand.textStrong)
-                .accessibilityAddTraits(.isHeader)
+    /// The name is the page title; the description explains the rows above it, as a footer.
+    private func detailFooter(description: String?, problem: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             if let description = description?.trimmedNonEmpty {
-                Text(verbatim: description)
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(OpenClawBrand.textSecondary)
+                SettingsFootnote(verbatim: description)
+            }
+            if let problem = problem?.trimmedNonEmpty {
+                SettingsFootnote(verbatim: problem)
             }
         }
-        .textCase(nil)
-        .padding(.bottom, 4)
     }
 
     private func skillDetail(id: String) -> some View {
-        List {
-            if let skill = self.inventory.skills.first(where: { $0.id == id }) {
+        let skill = self.inventory.skills.first(where: { $0.id == id })
+        return List {
+            if let skill {
                 let unavailableReason = NativeToolSettingsScreen.unavailableReason(skill)
                 Section {
                     let status = NativeToolSettingsScreen.attentionStatus(skill) ?? String(localized: "Available")
@@ -408,55 +400,41 @@ private struct NativeToolSettingsDetail: View {
                                 String(localized: "Use the %@ skill."),
                                 skill.name))
                         } label: {
-                            HStack {
-                                Text("Try in chat").font(OpenClawType.body)
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityHidden(true)
-                            }
+                            Text("Try in chat").font(SettingsType.label)
                         }
                         .disabled(self.inventory.pendingID != nil || self.inventory.isLoading)
                     }
                     if self.inventory.canEdit, unavailableReason == nil {
                         self.enableButton(id: id, enabled: !skill.disabled)
                     }
-                } header: {
-                    self.detailHeader(name: skill.name, description: skill.description)
                 } footer: {
-                    if let unavailableReason {
-                        Text(verbatim: unavailableReason).font(OpenClawType.footnote)
-                    }
+                    self.detailFooter(description: skill.description, problem: unavailableReason)
                 }
             }
             NativeToolSettingsFeedback(inventory: self.inventory)
         }
         .listStyle(.insetGrouped)
-        .navigationTitle(self.kind.detailTitle)
+        .navigationTitle(skill?.name ?? self.kind.detailTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 
     private func pluginDetail(id: String) -> some View {
-        List {
-            if let plugin = self.inventory.plugins.first(where: { $0.id == id }) {
+        let plugin = self.inventory.plugins.first(where: { $0.id == id })
+        return List {
+            if let plugin {
                 Section {
                     SettingsDetailRow("Status", value: .verbatim(plugin.status))
                     if self.inventory.canEdit {
                         self.enableButton(id: id, enabled: plugin.enabled)
                     }
-                } header: {
-                    self.detailHeader(name: plugin.name, description: plugin.description)
                 } footer: {
-                    if let problem = plugin.runtime?.error ?? plugin.error {
-                        Text(verbatim: problem).font(OpenClawType.footnote)
-                    }
+                    self.detailFooter(description: plugin.description, problem: plugin.runtime?.error ?? plugin.error)
                 }
             }
             NativeToolSettingsFeedback(inventory: self.inventory)
         }
         .listStyle(.insetGrouped)
-        .navigationTitle(self.kind.detailTitle)
+        .navigationTitle(plugin?.name ?? self.kind.detailTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -466,7 +444,7 @@ private struct NativeToolSettingsDetail: View {
         } label: {
             HStack {
                 Text(enabled ? String(localized: "Disable") : String(localized: "Enable"))
-                    .font(OpenClawType.body)
+                    .font(SettingsType.label)
                 Spacer()
                 if self.inventory.pendingID == id {
                     ProgressView()

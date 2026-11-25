@@ -305,7 +305,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         // act on its route or credentials stay hidden down to the last row of the screen.
         let savedGatewayControls = [
             app.textFields["Host"],
-            app.buttons["Connect Manual"],
+            app.buttons["SettingsHub.ManualConnect"],
             app.secureTextFields["Gateway Auth Token"],
             app.secureTextFields["Gateway Password"],
         ]

@@ -55,15 +55,14 @@ struct SettingsHubScreen: View {
                         HStack {
                             self.label("Approvals", icon: "checkmark.circle")
                             Spacer()
-                            Text(self.appModel.pendingExecApprovalCount.formatted())
-                                .font(OpenClawType.body)
-                                .foregroundStyle(.secondary)
+                            SettingsValueText(.verbatim(self.appModel.pendingExecApprovalCount.formatted()))
                         }
                     }
                     .accessibilityIdentifier("SettingsHub.Approvals")
                 }
+                self.link("Advanced", icon: "slider.horizontal.3", route: .advanced)
             } header: {
-                self.sectionHeader("Gateway")
+                SettingsSectionTitle("OpenClaw")
             }
 
             Section {
@@ -80,23 +79,23 @@ struct SettingsHubScreen: View {
                 self.link("Storage", icon: "internaldrive", route: .storage)
                     .accessibilityIdentifier("SettingsHub.Storage")
             } header: {
-                self.sectionHeader(UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone")
+                SettingsSectionTitle(UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone")
+            }
+
+            Section {
+                self.link("Skills", icon: "book", route: .skills)
+                self.link("Plugins", icon: "shippingbox", route: .plugins)
+            } header: {
+                SettingsSectionTitle("Tools")
             }
 
             Section {
                 NativePersonalSettingsRow(agentID: self.agentID, agentName: self.appModel.chatAgentName)
                 self.link("Chat", icon: "bubble.left", route: .chatPreferences)
                 self.link("Sidebar", icon: "sidebar.left", route: .sidebarPages)
-            }
-            Section {
-                self.link("Skills", icon: "book", route: .skills)
-                self.link("Plugins", icon: "shippingbox", route: .plugins)
-            } header: {
-                self.sectionHeader("Tools")
-            }
-            Section {
-                self.link("Advanced", icon: "slider.horizontal.3", route: .advanced)
                 self.link("About", icon: "info.circle", route: .about)
+            } header: {
+                SettingsSectionTitle("App")
             }
         }
         .listStyle(.insetGrouped)
@@ -120,37 +119,42 @@ struct SettingsHubScreen: View {
         self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
     }
 
+    /// The connection row names the host and stays quiet while everything works; only an
+    /// exception (offline, limited access) shows as its value.
     private var gatewayRow: some View {
         NavigationLink(value: SettingsRoute.gateway) {
-            Label {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let name = self.appModel.gatewayServerName?.trimmedNonEmpty {
-                        Text(name).font(OpenClawType.body)
-                    } else {
-                        Text("Connection").font(OpenClawType.body)
+            HStack {
+                Label {
+                    Group {
+                        if let name = self.appModel.gatewayServerName?.trimmedNonEmpty {
+                            Text(verbatim: name)
+                        } else {
+                            Text("Connection")
+                        }
                     }
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(self.appModel.isOperatorGatewayConnected ? OpenClawBrand.ok : Color.secondary)
-                            .frame(width: 6, height: 6)
-                            .accessibilityHidden(true)
-                        Text(self.gatewayStatus)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .font(SettingsType.label)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                } icon: {
+                    NativeSettingsRowIcon(systemName: "dot.radiowaves.left.and.right")
                 }
-            } icon: {
-                NativeSettingsRowIcon(systemName: "dot.radiowaves.left.and.right")
+                if let exception = self.gatewayException {
+                    Spacer(minLength: 8)
+                    SettingsValueText(.verbatim(exception))
+                }
             }
         }
         .accessibilityIdentifier("SettingsHub.Gateway")
     }
 
-    private var gatewayStatus: LocalizedStringKey {
+    private var gatewayException: String? {
         if !self.appModel.isOperatorGatewayConnected {
-            return "Offline"
+            return String(localized: "Offline")
         }
-        return self.appModel.hasOperatorAdminScope ? "Connected" : "Limited access"
+        if !self.appModel.hasOperatorAdminScope {
+            return String(localized: "Limited access")
+        }
+        return nil
     }
 
     private var appearance: some View {
@@ -164,18 +168,13 @@ struct SettingsHubScreen: View {
         } label: {
             self.label("Appearance", icon: "sun.max")
         }
-        .pickerStyle(.menu)
-        .tint(.primary)
+        .settingsMenuPicker()
         .accessibilityIdentifier("SettingsHub.Appearance")
-    }
-
-    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
-        Text(title).font(OpenClawType.captionSemiBold)
     }
 
     private func label(_ title: LocalizedStringKey, icon: String) -> some View {
         Label {
-            Text(title).font(OpenClawType.body)
+            Text(title).font(SettingsType.label)
         } icon: {
             NativeSettingsRowIcon(systemName: icon)
         }
@@ -197,11 +196,17 @@ struct SettingsHubScreen: View {
                 .navigationTitle("Permissions")
                 .navigationBarTitleDisplayMode(.inline)
         case .accessories:
+            // Icons mark the Settings root only; pages below it are plain rows.
             List {
-                self.link("Apple Watch", icon: "applewatch", route: .appleWatch)
-                    .accessibilityIdentifier("settings-watch-row")
-                self.link("ESP device setup", icon: "cpu", route: .espSetup)
+                NavigationLink(value: SettingsRoute.appleWatch) {
+                    Text("Apple Watch").font(SettingsType.label)
+                }
+                .accessibilityIdentifier("settings-watch-row")
+                NavigationLink(value: SettingsRoute.espSetup) {
+                    Text("ESP device setup").font(SettingsType.label)
+                }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Accessories")
             .navigationBarTitleDisplayMode(.inline)
         case .chatPreferences:
@@ -263,7 +268,7 @@ struct SettingsHubScreen: View {
                         self.gatewayRow
                     } footer: {
                         if self.appModel.isOperatorGatewayConnected, !self.appModel.hasOperatorAdminScope {
-                            Text("Advanced settings require full access.").font(OpenClawType.footnote)
+                            SettingsFootnote("Advanced settings require full access.")
                         }
                     }
                 }
@@ -535,12 +540,14 @@ private struct NativeStorageSettingsScreen: View {
                         "Cache size",
                         value: .verbatim(ByteCountFormatter.string(fromByteCount: usage.bytes, countStyle: .file)))
                     SettingsDetailRow("Cached conversations", value: .verbatim(usage.conversations.formatted()))
+                } header: {
+                    SettingsSectionTitle("Chat cache")
                 }
                 Section {
                     Button(role: .destructive) {
                         self.confirmsClear = true
                     } label: {
-                        Text("Clear Cache").font(OpenClawType.body)
+                        Text("Clear Cache").font(SettingsType.label)
                     }
                     .disabled(self.updating || !usage.hasCachedData)
                     .accessibilityIdentifier("Storage.ClearCache")
@@ -548,7 +555,7 @@ private struct NativeStorageSettingsScreen: View {
             }
             if let failure {
                 Section {
-                    Text(failure).font(OpenClawType.body).foregroundStyle(.secondary)
+                    Text(failure).font(SettingsType.label).foregroundStyle(SettingsInk.secondary)
                     if self.usage == nil {
                         Button { Task { await self.update() } } label: {
                             Text("Retry").font(OpenClawType.body)
