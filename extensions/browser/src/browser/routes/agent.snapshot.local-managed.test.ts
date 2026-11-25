@@ -35,7 +35,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
-  assertCdpTargetResponsive: vi.fn(async () => {}),
+  assertCdpTargetResponsive: vi.fn(async () => true),
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
@@ -184,7 +184,7 @@ describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pwMocks.screenshot = false;
-    cdp.assertCdpTargetResponsive.mockReset().mockResolvedValue(undefined);
+    cdp.assertCdpTargetResponsive.mockReset().mockResolvedValue(true);
     cdp.getDocumentIdentitiesViaCdp.mockReset();
     cdp.snapshotRoleViaCdp.mockReset();
     playwright.module = null;
@@ -225,6 +225,17 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.statusCode).toBe(200);
     expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
     expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(false);
+  });
+
+  it("keeps an earlier crash observation when the probe is inconclusive", async () => {
+    markBrowserTargetCrashed("http://127.0.0.1:18800", "7");
+    cdp.assertCdpTargetResponsive.mockResolvedValueOnce(false);
+
+    const response = await snapshot(roleQuery);
+
+    expect(response.statusCode).toBe(200);
+    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
+    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(true);
   });
 
   it("reports a crashed target on navigate before the navigation budget", async () => {

@@ -24,16 +24,16 @@ describe("assertCdpTargetResponsive", () => {
       "Page.getFrameTree": cdpResult({ frameTree: { frame: { id: "root" } } }),
     });
 
-    await expect(assertCdpTargetResponsive({ wsUrl, timeoutMs: 1_000 })).resolves.toBeUndefined();
+    await expect(assertCdpTargetResponsive({ wsUrl, timeoutMs: 1_000 })).resolves.toBe(true);
   });
 
-  it("leaves a non-timeout connection failure to the action itself", async () => {
+  it("reports an inconclusive probe when the handshake itself fails", async () => {
     await expect(
       assertCdpTargetResponsive({
         wsUrl: "ws://127.0.0.1:1/devtools/page/missing",
         timeoutMs: 250,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 
   it("reports a crashed target without waiting for the action budget", async () => {

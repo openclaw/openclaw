@@ -21,12 +21,15 @@ export async function assertRouteTabResponsive(opts: {
     return;
   }
   try {
-    await assertCdpTargetResponsive({
+    const responsive = await assertCdpTargetResponsive({
       wsUrl: opts.tab.wsUrl,
       ...(opts.tab.wsLookup ? { lookup: opts.tab.wsLookup } : {}),
       signal: opts.signal,
     });
-    clearBrowserTargetCrashed(opts.profileCtx.profile.cdpUrl, opts.tab.targetId);
+    // An inconclusive probe says nothing about the renderer, so keep its crash observation.
+    if (responsive) {
+      clearBrowserTargetCrashed(opts.profileCtx.profile.cdpUrl, opts.tab.targetId);
+    }
   } catch (err) {
     if (err instanceof BrowserTargetCrashedError) {
       markBrowserTargetCrashed(opts.profileCtx.profile.cdpUrl, opts.tab.targetId);

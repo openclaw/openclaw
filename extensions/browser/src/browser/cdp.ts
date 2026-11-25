@@ -53,7 +53,7 @@ export async function assertCdpTargetResponsive(opts: {
   lookup?: typeof dnsLookupCb;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<boolean> {
   const timeoutMs = opts.timeoutMs ?? PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS;
   try {
     await withCdpSocket(
@@ -69,12 +69,15 @@ export async function assertCdpTargetResponsive(opts: {
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
     );
+    return true;
   } catch (err) {
     opts.signal?.throwIfAborted();
     if (err instanceof CdpSocketError && err.kind === "timeout") {
       throw new BrowserTargetCrashedError();
     }
     // A failed handshake is not crash evidence; let the action report its own error.
+    // The page never answered, so callers must keep any earlier crash observation.
+    return false;
   }
 }
 

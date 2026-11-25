@@ -572,7 +572,7 @@ vi.mock("./chrome.js", () => ({
 // mock-isolation: Synthetic CDP fixtures replace real browser state; the liveness probe must not dial fake ws URLs.
 vi.mock("./cdp.js", () => ({
   // Fake ws URLs cannot answer a liveness probe; keep the boundary mocked like the rest.
-  assertCdpTargetResponsive: vi.fn(async () => {}),
+  assertCdpTargetResponsive: vi.fn(async () => true),
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
