@@ -17,7 +17,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.CompletableDeferred
@@ -45,6 +45,11 @@ import java.util.concurrent.atomic.AtomicInteger
 @Config(sdk = [34])
 class SessionBrowserRefreshTest {
   @get:Rule val compose = createComposeRule()
+
+  // Reads settle off the UI thread; wait for the rendered state instead of racing it.
+  private fun shows(text: String) {
+    compose.waitUntil(5_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+  }
 
   @Test
   fun archivedQueryRetainsOnlyItsOwnAcceptedPageAndReadsOncePerChange() {
@@ -110,7 +115,7 @@ class SessionBrowserRefreshTest {
           BasicText("${state.entries.joinToString { it.key }}:${state.loading}")
         }
       }
-      compose.onNodeWithText("ledger:false").assertExists()
+      shows("ledger:false")
 
       drainWithMainLooper { assertTrue(runtime.chat.loadMoreSessions()) }
       drainWithMainLooper { model.chatSessions.first { rows -> rows.any { it.key == "second" } } }
@@ -131,30 +136,30 @@ class SessionBrowserRefreshTest {
       preferenceChange()
       drainWithMainLooper { withTimeout(5_000) { widenedRead.await() } }
       assertEquals(2, scopedReads.get())
-      compose.onNodeWithText("ledger:true").assertExists()
+      shows("ledger:true")
       // Release only the changed ACTIVE page. A second archive request would overtake the first.
       activeResponse.complete("""{"sessions":[{"key":"new-pin","pinned":true}]}""")
       drainWithMainLooper { withTimeout(5_000) { model.chatSessions.first { rows -> rows.any { it.key == "new-pin" } } } }
       compose.waitForIdle()
       assertEquals(2, scopedReads.get())
       compose.runOnIdle { failedResponse.completeExceptionally(GatewayRequestOutcomeUnknown("request timeout")) }
-      compose.onNodeWithText("ledger:false").assertExists()
+      shows("ledger:false")
       // An ordinary row event starts a real read; an off-window delete supersedes it while held.
       event("sessions.changed", """{"agentId":"main","session":{"key":"new-pin","label":"Changed"}}""")
       assertEquals(3, scopedReads.get())
       event("sessions.changed", """{"agentId":"main","sessionKey":"ledger","reason":"delete"}""")
       assertEquals(4, scopedReads.get())
       compose.runOnIdle { supersededResponse.complete("""{"sessions":[{"key":"stale","archived":true}]}""") }
-      compose.onNodeWithText("ledger:true").assertExists()
+      shows("ledger:true")
       compose.runOnIdle { emptyResponse.complete("""{"sessions":[]}""") }
-      compose.onNodeWithText(":false").assertExists()
+      shows(":false")
       preferenceChange()
-      compose.onNodeWithText("ledger:false").assertExists()
+      shows("ledger:false")
       compose.runOnIdle { query.value = "different scope" }
-      compose.onNodeWithText(":true").assertExists()
+      shows(":true")
       shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250))
       compose.mainClock.advanceTimeBy(250)
-      compose.onNodeWithText(":false").assertExists()
+      shows(":false")
       assertEquals(6, scopedReads.get())
     } finally {
       activeResponse.complete("""{"sessions":[]}""")
