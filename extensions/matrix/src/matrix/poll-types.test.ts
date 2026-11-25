@@ -61,6 +61,7 @@ it("keeps well-formed answers when other entries are malformed", () => {
       answers: [
         null,
         { id: "a1", "m.text": "Yes" },
+        { id: "", "m.text": "dropped" },
         { id: 42, "m.text": "dropped" },
         { id: "bad-text", "m.text": 42 },
       ],
@@ -133,6 +134,20 @@ it.each([
   });
 
   expect(summary.entries.map((answer) => answer.votes)).toEqual([0, 1]);
+  expect(summary.totalVotes).toBe(1);
+});
+
+it("validates the whole ballot before capping and deduplicating choices", () => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: { ...parsedPoll, maxSelections: 2 },
+    relationEvents: [
+      vote("@bob:example.org", 1, ["a1", "a1", "a2"]),
+      vote("@carol:example.org", 2, ["a2", "a2", "missing"]),
+    ],
+  });
+
+  expect(summary.entries.map((entry) => entry.votes)).toEqual([1, 0]);
   expect(summary.totalVotes).toBe(1);
 });
 
