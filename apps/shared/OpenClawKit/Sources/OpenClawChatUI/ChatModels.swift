@@ -152,6 +152,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let isError: Bool?
     /// Exec outcome from the block's own `exitCode`/`exit_code`, else its `details` (web `tool-cards.ts:132-141`).
     public internal(set) var exitCode: Int?
+    /// The dispatcher call a nested tool row carries (`openclaw.nested-tool.v1`): both record one invocation.
+    public internal(set) var parentToolCallId: String?
 
     var isToolCall: Bool {
         ["toolcall", "tool_call", "tooluse", "tool_use"].contains(self.type?.lowercased() ?? "") ||
@@ -283,6 +285,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case is_error
         case exitCode
         case exit_code
+        case parentToolCallId
     }
 
     public init(from decoder: Decoder) throws {
@@ -328,6 +331,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             ?? (try? container.decode(AnyCodable.self, forKey: .exit_code))?.intValue
             ?? Self.exitCode(in: self.details)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
+        self.parentToolCallId = ChatPayloadDecoding.trimmedNonEmptyString(
+            try? container.decode(String.self, forKey: .parentToolCallId))
 
         self.content = try container.decodeIfPresent(AnyCodable.self, forKey: .content)
     }

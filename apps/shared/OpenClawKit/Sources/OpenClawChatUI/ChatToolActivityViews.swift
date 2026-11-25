@@ -383,6 +383,14 @@ extension OpenClawChatMessage {
 }
 
 enum ChatToolActivity {
+    /// Tool search dispatchers carry another tool's call; they are never the work itself
+    /// (src/agents/tool-display-call.ts isToolCallDispatcherName).
+    static func isDispatcher(_ name: String?) -> Bool {
+        var key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if key.hasPrefix("mcp__openclaw__") { key.removeFirst("mcp__openclaw__".count) }
+        return key == "dispatch_action" || key == "tool_call"
+    }
+
     static func items(
         message: OpenClawChatMessage,
         liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]

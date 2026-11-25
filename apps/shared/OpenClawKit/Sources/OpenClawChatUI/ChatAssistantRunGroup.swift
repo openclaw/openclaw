@@ -71,8 +71,11 @@ struct ChatAssistantRunGroup: Identifiable {
             default: []
             }
             return messages.flatMap { message in
-                message.content.filter(\.isToolCall).compactMap { block in
-                    message.workRunID.map { "\($0):\(block.id ?? "")" }
+                // A nested call also stands for its retired dispatcher envelope.
+                message.content.filter(\.isToolCall).flatMap { block in
+                    [block.id ?? "", block.parentToolCallId].compactMap { id in
+                        id.flatMap { id in message.workRunID.map { "\($0):\(id)" } }
+                    }
                 }
             }
         })

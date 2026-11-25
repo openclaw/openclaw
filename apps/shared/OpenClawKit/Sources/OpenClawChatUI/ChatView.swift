@@ -1153,7 +1153,8 @@ extension OpenClawChatView {
         } else {
             base = messages
         }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
+        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.retiringDispatchEnvelopes(
+            in: ChatTranscriptRow.mergeToolResults(in: base)))
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // One duration map serves the reply footers and the "Worked for" summaries.
