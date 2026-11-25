@@ -44,6 +44,7 @@ import {
 } from "./provider-results.js";
 import {
   MAX_AUDIO_BASE64_BYTES,
+  RELAY_SESSION_TTL_MS,
   broadcastRelaySessionClosed,
   broadcastToOwner,
   cancelRelayTurn,
@@ -191,8 +192,6 @@ async function rejectRelaySessionClose(
 ): Promise<never> {
   closing.reason = "error";
   closing.runTranscript = () => false;
-  // The durable close never ran; a later close attempt is the recovery owner.
-  closing.voiceCloseRetryable = true;
   session.voiceTranscriptQueue.seal();
   // The flush below is local to this failure branch. Do NOT latch it into
   // `session.voiceSessionClose`: the durable voice-session record is still
@@ -204,9 +203,27 @@ async function rejectRelaySessionClose(
   // once settlement authority is available; reuse a real close that was
   // already latched elsewhere.
   const accepted = session.voiceSessionClose ?? session.voiceTranscriptQueue.flush();
+  let cleanupError: unknown;
   try {
     await finish(() => accepted);
-  } catch (cleanupError) {
+  } catch (error) {
+    cleanupError = error;
+  }
+  // The teardown (bridge.close + flush) has settled. Only now may a later
+  // close attempt retry the durable close: provider teardown callbacks that
+  // re-enter closeRelaySession during bridge.close() must join this close,
+  // not consume the recovery attempt while the same refusal still holds
+  // (#204615).
+  closing.voiceCloseRetryable = true;
+  // Re-arm the expiry timer so a retained failure always gets another
+  // bounded pass through the same close owner, including when the expiry
+  // timer itself initiated this close (#204615).
+  const cleanupTimer = setTimeout(() => {
+    void closeRelaySession(session, "completed");
+  }, RELAY_SESSION_TTL_MS);
+  cleanupTimer.unref();
+  session.cleanupTimer = cleanupTimer;
+  if (cleanupError !== undefined) {
     throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
       cause: cleanupError,
     });
