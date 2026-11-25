@@ -4,17 +4,26 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-function runLogs(args: string[]) {
+function runLogs(args: string[], logError = "", jobStatus?: string) {
   const root = mkdtempSync(join(tmpdir(), "frv-logs-"));
   const gh = join(root, "gh");
   writeFileSync(
     gh,
     `#!${process.execPath}
 const args = process.argv.slice(2);
-const expected = "repos/openclaw/openclaw/actions/jobs/123/logs";
+const jobPath = "repos/openclaw/openclaw/actions/jobs/123";
+const expected = jobPath + "/logs";
+if (args[0] === "api" && args.includes(jobPath) && ${JSON.stringify(jobStatus ?? null)}) {
+  process.stdout.write(JSON.stringify({id: 123, name: "tests", status: ${JSON.stringify(jobStatus ?? null)}}));
+  process.exit(0);
+}
 if (args[0] !== "api" || !args.includes(expected) || !args.includes("--allow-escape-sequences")) {
   console.error("unexpected gh call: " + JSON.stringify(args));
   process.exit(17);
+}
+if (${JSON.stringify(logError)}) {
+  console.error(${JSON.stringify(logError)});
+  process.exit(1);
 }
 process.stdout.write("\\u001b[31mFAIL first\\u001b[0m\\npass second\\nFAIL third\\n");
 `,
@@ -42,6 +51,22 @@ describe("frv logs", () => {
     const result = runLogs(["--grep", "FAIL"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("FAIL first\nFAIL third\n");
+  });
+
+  it.each([
+    [
+      "gh: HTTP 404",
+      "in_progress",
+      'Job 123 "tests" is in_progress. Retry the log request after the job completes.',
+    ],
+    ["gh: HTTP 404", "completed", "gh: HTTP 404"],
+    ["gh: HTTP 403", undefined, "gh: HTTP 403"],
+  ] as const)("reports unavailable logs for %s (%s)", (error, status, expected) => {
+    const result = runLogs(["--grep", "FAIL"], error, status);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(expected);
+    expect(result.stderr).not.toContain("unexpected gh call");
   });
 
   it("requires a positive job id and rejects a parent run selector", () => {

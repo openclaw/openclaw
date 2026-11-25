@@ -4025,7 +4025,9 @@ function print(value, json) {
     );
     console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
     if (value.decision) {
-      console.log(formatReleaseStateOutcome(value.decision));
+      console.log(
+        formatReleaseStateOutcome(value.decision, { observedDrainStatus: value.drain.status }),
+      );
     }
     for (const error of value.observationErrors) {
       console.log(`observation: ${error}`);
@@ -4193,9 +4195,27 @@ async function main() {
   }
   const client = createClient(options.repository);
   if (options.command === "logs") {
-    const log = stripVTControlCharacters(
-      await client.getJobLog(positiveInteger(options.job, "--job")),
-    );
+    const jobId = positiveInteger(options.job, "--job");
+    let log;
+    try {
+      log = stripVTControlCharacters(await client.getJobLog(jobId));
+    } catch (error) {
+      if (!/HTTP 404\b/u.test(String(error?.stderr ?? ""))) {
+        throw error;
+      }
+      // The archive can be missing while the job runs. A 404 alone cannot distinguish this
+      // from a missing job or expired logs, so only offer a retry for a confirmed active job.
+      const job = await ghJson(options.repository, `actions/jobs/${jobId}`, {}, true);
+      if (
+        job.id !== jobId ||
+        !["queued", "waiting", "pending", "requested", "in_progress"].includes(job.status)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Job ${jobId} ${JSON.stringify(job.name)} is ${job.status}. Retry the log request after the job completes.`,
+      );
+    }
     const output = options.grep
       ? log
           .split("\n")
