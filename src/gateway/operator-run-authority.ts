@@ -306,7 +306,10 @@ export async function prepareGatewayOperatorRunAuthority(
     !client.internal.agentRuntimeIdentity
   ) {
     // An authless local socket is the local-host principal: the owner, with its own scopes.
-    return admitOwnerCredential(client, params.context);
+    return retainGatewayOperatorInvocation(
+      await admitOwnerCredential(client, params.context),
+      params.invocationAuthority,
+    );
   }
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;

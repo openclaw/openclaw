@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -9,6 +9,8 @@ import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   consumeCronCreatorAuthorityGrant,
@@ -20,6 +22,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { decideTurnGrant } from "../operator-admission.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   isDirectGatewayChatUserTurn,
@@ -299,3 +302,35 @@ it.each(["setup", "ordinary internal", "non-admin", "synthetic"] as const)(
     }
   },
 );
+
+it("keeps the request's invocation lifetime when it admits an authless local socket", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    await ensureCanonicalGatewayOwnerProfile("Owner");
+    const invocation = new AbortController();
+    const release = vi.fn();
+    const admitted = expectDefined(
+      await prepareGatewayOperatorRunAuthority({
+        client: {
+          connect: { role: "operator", scopes: ["operator.admin"] },
+          authPolicy: { authMethod: "none" },
+          internal: { isLocalClient: true },
+        } as never,
+        context: { getRuntimeConfig: () => ({}) },
+        invocationAuthority: {
+          assertCurrent: () => invocation.signal.throwIfAborted(),
+          signal: invocation.signal,
+          release,
+        },
+      }),
+      "local-host admission",
+    );
+    expect(admitted.authority).toMatchObject({
+      profileId: "gateway-owner",
+      grant: { automations: "manage" },
+    });
+    invocation.abort();
+    expect(admitted.authority.signal?.aborted).toBe(true);
+    admitted.release();
+    expect(release).toHaveBeenCalledOnce();
+  });
+});

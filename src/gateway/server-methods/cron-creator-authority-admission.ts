@@ -32,7 +32,6 @@ type DirectOperatorAuthorityParams = {
   client?: GatewayClient | null;
   inputProvenance?: InputProvenance;
   grant?: TurnGrant;
-  /** A subagent child: its own re-admitted grant decides; it has no local socket of its own. */
   child?: true;
   disallowed: boolean;
 };
@@ -113,7 +112,6 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
     }
   }
   if (request.lane === "subagent" && !params.isOneShotModelRun) {
-    // A child gets its parent's re-admitted automations right, like any other turn.
     return resolveDirectOperatorAuthority({ ...params, disallowed: true, child: true });
   }
   return resolveDirectOperatorAuthority({
