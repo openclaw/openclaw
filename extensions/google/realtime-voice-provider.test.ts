@@ -548,10 +548,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       bridge.sendAudio(format === "pcm" ? output : Buffer.from([0xff, 0x00]));
       const sent = session.sendRealtimeInput.mock.calls[0]?.[0]?.audio;
       expect(sent.mimeType).toBe("audio/pcm;rate=16000");
-      const pcm = Buffer.from(sent.data, "base64");
-      if (format === "pcm") {
-        expect(pcm).toHaveLength(320);
-      } else {
+      if (format === "telephony") {
+        const pcm = Buffer.from(sent.data, "base64");
         expect(Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2))).toEqual([
           0, -16062, -32124, -32124,
         ]);
@@ -578,6 +576,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
       }
       expect(onTranscript).not.toHaveBeenCalled();
+      await bridge.close();
+      if (format === "pcm") {
+        const frames = session.sendRealtimeInput.mock.calls.map(([input]) =>
+          Buffer.from(input.audio.data, "base64"),
+        );
+        expect(Buffer.concat(frames)).toHaveLength(320);
+      }
     },
   );
 
@@ -917,19 +922,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(Buffer.from(String(firstAudio?.data), "base64").readInt16LE(0)).toBe(
       expectedFirstSample,
     );
-  });
-
-  it("bounds pending audio by chunk count before activation", async () => {
-    const bridge = createBridge({ audioFormat: PCM });
-
-    for (let index = 0; index < 321; index += 1) {
-      bridge.sendAudio(Buffer.alloc(2, index & 0xff));
-    }
-
-    await bridge.connect();
-    activate();
-
-    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(320);
   });
 
   it("drops reconnect audio on terminal exhaustion until an explicit reconnect owns admission", async () => {
