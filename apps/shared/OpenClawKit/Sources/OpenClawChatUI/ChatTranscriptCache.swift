@@ -380,6 +380,65 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         }
     }
 
+    /// Synchronous so the first frame after a cold start can draw the last known agent.
+    public nonisolated func loadAgentIdentities() -> [OpenClawChatCachedAgentIdentity] {
+        do {
+            return try self.databases.cacheQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT agent_id, roster_name, identity_name, emoji, is_default, avatar
+                    FROM cached_agent_identities WHERE gateway_id = ? ORDER BY position
+                    """,
+                    arguments: [self.gatewayID]).map { row in
+                    OpenClawChatCachedAgentIdentity(
+                        agentID: row["agent_id"],
+                        rosterName: row["roster_name"],
+                        identityName: row["identity_name"],
+                        emoji: row["emoji"],
+                        isDefault: row["is_default"],
+                        avatar: row["avatar"])
+                }
+            }
+        } catch {
+            cacheLogger.error("agent identity cache read failed: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    /// Replaces this Gateway's agent snapshot with the latest complete answer.
+    public func storeAgentIdentities(_ identities: [OpenClawChatCachedAgentIdentity]) async {
+        guard !self.isRetired else { return }
+        let gatewayID = self.gatewayID
+        do {
+            try await self.databases.cacheQueue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM cached_agent_identities WHERE gateway_id = ?",
+                    arguments: [gatewayID])
+                for (position, identity) in identities.enumerated() {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO cached_agent_identities(
+                            gateway_id, agent_id, position, roster_name, identity_name, emoji, is_default, avatar
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            gatewayID,
+                            identity.agentID,
+                            position,
+                            identity.rosterName,
+                            identity.identityName,
+                            identity.emoji,
+                            identity.isDefault,
+                            identity.avatar,
+                        ])
+                }
+            }
+        } catch {
+            cacheLogger.error("agent identity cache write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     public func retire() async {
         self.isRetired = true
         self.storeChangeRelay.cancel()

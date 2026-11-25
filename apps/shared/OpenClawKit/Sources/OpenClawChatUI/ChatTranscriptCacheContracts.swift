@@ -426,6 +426,33 @@ extension OpenClawChatCommandOutbox {
     }
 }
 
+/// The last known look of one agent on one Gateway, so a cold start can draw the agent's name
+/// and avatar before `agents.list` and `agent.identity.get` answer.
+public struct OpenClawChatCachedAgentIdentity: Equatable, Sendable {
+    public let agentID: String
+    public let rosterName: String?
+    public let identityName: String?
+    public let emoji: String?
+    public let isDefault: Bool
+    public let avatar: Data?
+
+    public init(
+        agentID: String,
+        rosterName: String?,
+        identityName: String?,
+        emoji: String?,
+        isDefault: Bool,
+        avatar: Data?)
+    {
+        self.agentID = agentID
+        self.rosterName = rosterName
+        self.identityName = identityName
+        self.emoji = emoji
+        self.isDefault = isDefault
+        self.avatar = avatar
+    }
+}
+
 public struct OpenClawChatSessionRoutingIdentity: Equatable, Sendable {
     public let scope: String
     public let mainSessionKey: String

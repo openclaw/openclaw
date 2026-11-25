@@ -854,6 +854,8 @@ final class NodeAppModel {
     /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
     var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
     var agentIdentitiesOwnerID: String?
+    /// Last known agents for `chatViewModelOwnerID`, read once per owner from the Gateway cache.
+    @ObservationIgnored var cachedAgentIdentitiesMemo: IOSCachedAgentIdentities?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -3486,14 +3488,11 @@ extension NodeAppModel {
     }
 
     func chatAgentDisplayName(for agentID: String) -> String {
+        // A cold start can draw the main chat before its routing identity has restored.
+        let agentID = agentID.trimmedNonEmpty ?? self.cachedAgentIdentities.defaultAgentID ?? agentID
         if let identityName = self.agentIdentityName(for: agentID) { return identityName }
-        if let rosterName = self.gatewayAgents.first(where: { $0.id == agentID })?.name?.trimmedNonEmpty {
+        if let rosterName = self.displayAgents.first(where: { $0.id == agentID })?.name?.trimmedNonEmpty {
             return rosterName
-        }
-        if let gatewayID = self.chatTranscriptCacheGatewayID,
-           let cachedName = GatewaySettingsStore.cachedChatAgentName(stableID: gatewayID, agentID: agentID)
-        {
-            return cachedName
         }
         return self.agentDisplayName(for: agentID)
     }

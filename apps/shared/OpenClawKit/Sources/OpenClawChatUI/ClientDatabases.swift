@@ -83,6 +83,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 DELETE FROM cached_sessions;
                 DELETE FROM cached_session_rosters;
                 DELETE FROM cached_transcripts;
+                DELETE FROM cached_agent_identities;
                 """)
                 return .commit
             }
@@ -253,6 +254,9 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM cached_sessions WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM cached_transcripts WHERE gateway_id = ?", arguments: [gatewayID])
+            try db.execute(
+                sql: "DELETE FROM cached_agent_identities WHERE gateway_id = ?",
+                arguments: [gatewayID])
         }
         try self.removeLegacyGatewayDatabaseFiles(gatewayID: gatewayID)
         // secure_delete scrubs deleted cells; truncating both WALs removes
@@ -602,6 +606,17 @@ extension OpenClawClientDatabases {
         );
         CREATE INDEX IF NOT EXISTS cached_agent_sessions_order
             ON cached_agent_sessions(gateway_id, agent_id, position);
+        CREATE TABLE IF NOT EXISTS cached_agent_identities(
+            gateway_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            roster_name TEXT,
+            identity_name TEXT,
+            emoji TEXT,
+            is_default INTEGER NOT NULL,
+            avatar BLOB,
+            PRIMARY KEY(gateway_id, agent_id)
+        );
         """)
     }
 }

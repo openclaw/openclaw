@@ -97,13 +97,10 @@ struct RootSidebar: View {
 
     private var agentHeader: some View {
         HStack(spacing: 8) {
+            // Until the first roster answer there is no agent to name; a placeholder word would swap.
             if let selectedAgent = self.selectedAgent {
                 self.agentIdentity(selectedAgent)
                 self.attentionBadges(for: self.model.sessions, targetID: "agent:\(selectedAgent.id)")
-            } else {
-                Text(String(localized: "Agent"))
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
             }
             Spacer(minLength: 0)
             self.headerIconButton(
@@ -163,7 +160,7 @@ struct RootSidebar: View {
     }
 
     private var selectableAgents: [AgentSummary] {
-        self.appModel.gatewayAgents.filter(\.isSelectableAgent)
+        self.appModel.displayAgents
     }
 
     private var selectedAgent: AgentSummary? {
@@ -246,7 +243,9 @@ struct RootSidebar: View {
         if !selected.isEmpty {
             return selected
         }
-        return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A cold start draws the sidebar before the routing identity restores the default agent.
+        return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? self.appModel.cachedAgentIdentities.defaultAgentID ?? ""
     }
 
     static func agentDisplayName(_ agent: AgentSummary) -> String {
@@ -270,11 +269,14 @@ struct RootSidebar: View {
                 Circle()
                     .fill(OpenClawSidebarPalette.elevated)
                     .overlay(Circle().strokeBorder(OpenClawSidebarPalette.hairline, lineWidth: 1))
-                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
-                    .font(OpenClawType.caption2Bold)
-                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                    .minimumScaleFactor(0.65)
-                    .lineLimit(1)
+                // Initials only once the portrait is known to be missing, so they never flash before it.
+                if self.appModel.knowsAgentAvatar(for: agent.id) {
+                    Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                        .font(OpenClawType.caption2Bold)
+                        .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                        .minimumScaleFactor(0.65)
+                        .lineLimit(1)
+                }
             }
         }
         .frame(width: size, height: size)

@@ -242,7 +242,7 @@ struct ChatProTab: View {
     private func headerIdentityBadge(size: CGFloat = ChatProTab.headerAvatarSize) -> some View {
         let image = self.agentAvatarImage
         let showsInitials = self.viewModel != nil &&
-            (self.isAttachmentOwnerPinned || self.appModel.hasResolvedAgentAvatar(for: self.currentAgentID))
+            (self.isAttachmentOwnerPinned || self.appModel.knowsAgentAvatar(for: self.currentAgentID))
         return ChatVoiceAvatar(talkMode: self.appModel.talkMode, avatarSize: size) {
             Group {
                 if let image {
@@ -278,7 +278,7 @@ struct ChatProTab: View {
 
     @ViewBuilder
     private func newChatIdentity(viewModel: OpenClawChatViewModel) -> some View {
-        let agents = self.appModel.gatewayAgents.filter(\.isSelectableAgent)
+        let agents = self.appModel.displayAgents
         let selectedAgent = agents.first { $0.id == self.currentAgentID }
         VStack(spacing: 10) {
             self.headerIdentityBadge(size: 80)
@@ -602,7 +602,7 @@ struct ChatProTab: View {
     }
 
     private var currentActiveAgent: AgentSummary? {
-        self.appModel.gatewayAgents.first { $0.id == self.currentAgentID }
+        self.appModel.displayAgents.first { $0.id == self.currentAgentID }
     }
 
     /// Identity name first (`NodeAppModel.chatAgentName`), then the roster name or id.

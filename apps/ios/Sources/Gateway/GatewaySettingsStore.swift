@@ -831,18 +831,6 @@ extension GatewaySettingsStore {
     private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
     private static let focusedChatSessionDefaultsPrefix = "gateway.focusedChatSessionKey."
 
-    static func cachedChatAgentName(stableID: String, agentID: String) -> String? {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
-        let key = self.gatewayDefaultsKey(prefix: "gateway.chatAgentNames.", stableID: stableID)
-        return UserDefaults.standard.dictionary(forKey: key)?[agentID] as? String
-    }
-
-    static func cacheChatAgentNames(stableID: String, names: [String: String]) {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.gatewayDefaultsKey(prefix: "gateway.chatAgentNames.", stableID: stableID)
-        UserDefaults.standard.set(names, forKey: key)
-    }
-
     static func loadGatewaySelectedAgentId(stableID: String) -> String? {
         self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
     }

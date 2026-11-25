@@ -367,6 +367,37 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         ])
     }
 
+    @Test func `agent identity snapshot survives a relaunch and leaves with its gateway`() async throws {
+        let molty = OpenClawChatCachedAgentIdentity(
+            agentID: "main",
+            rosterName: "main",
+            identityName: "Molty",
+            emoji: nil,
+            isDefault: true,
+            avatar: Data([0x89, 0x50, 0x4E, 0x47]))
+        let ops = OpenClawChatCachedAgentIdentity(
+            agentID: "ops",
+            rosterName: "Operations",
+            identityName: nil,
+            emoji: "🦞",
+            isDefault: false,
+            avatar: nil)
+        await store.storeAgentIdentities([molty, ops])
+        await databases.store(gatewayID: "gw-b").storeAgentIdentities([ops])
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        #expect(reopened.store(gatewayID: "gw-a").loadAgentIdentities() == [molty, ops])
+
+        try reopened.removeGatewayData(gatewayID: "gw-a")
+        #expect(reopened.store(gatewayID: "gw-a").loadAgentIdentities().isEmpty)
+        #expect(reopened.store(gatewayID: "gw-b").loadAgentIdentities() == [ops])
+
+        _ = try await reopened.clearGatewayCache()
+        #expect(reopened.store(gatewayID: "gw-b").loadAgentIdentities().isEmpty)
+    }
+
     @Test func `empty or rejected agent snapshot cannot erase another roster`() async {
         await store.storeSessions([
             cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
