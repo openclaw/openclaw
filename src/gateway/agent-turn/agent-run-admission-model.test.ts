@@ -7,10 +7,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import * as storeLookup from "../session-utils-store-lookup.js";
 import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
 
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await state?.cleanup();
 });
 
@@ -77,7 +79,10 @@ it("admits an agent run on the model the session inherits from its parent", asyn
   expect(admission?.providerFacts.providerId).toBe("anthropic");
 });
 
-it("keeps an explicit request model ahead of the inherited pick", async () => {
+it("admits a request naming provider and model without reading the parent session", async () => {
+  vi.spyOn(storeLookup, "resolveGatewaySessionStoreTargetWithStoreAsync").mockRejectedValue(
+    new Error("parent session database unavailable"),
+  );
   const admission = await admit({ provider: "clawrouter", model: "openai/gpt-6-astra" });
 
   expect(admission?.resolvedRuntime).toMatchObject({

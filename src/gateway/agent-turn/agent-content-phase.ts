@@ -198,13 +198,16 @@ export async function prepareAgentContentPhase(params: {
       });
       params.assertAdmissionCurrent?.();
       catalogAgentId = target.agentId;
-      baseModel = await resolveGatewaySessionTurnModelRef({
-        cfg: session?.cfg ?? params.cfg,
-        agentId: target.agentId,
-        sessionKey: target.canonicalKey,
-        entry: session?.entry,
-      });
-      params.assertAdmissionCurrent?.();
+      // A request naming both provider and model never consults the session's selection.
+      if (!params.providerOverride || !params.modelOverride) {
+        baseModel = await resolveGatewaySessionTurnModelRef({
+          cfg: session?.cfg ?? params.cfg,
+          agentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          entry: session?.entry,
+        });
+        params.assertAdmissionCurrent?.();
+      }
     }
     const model = params.modelOverride
       ? (resolvePersistedOverrideModelRef({
