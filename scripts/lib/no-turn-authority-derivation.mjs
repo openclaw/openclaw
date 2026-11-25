@@ -53,7 +53,6 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
-  "src/gateway/talk/client-tool-authority.ts", // Talk caller: admin scope + `ownerAllowFrom` match
   // Scheduled and requester-owner continuations (cron creator authority).
   "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",
