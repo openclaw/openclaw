@@ -57,34 +57,6 @@ function renderMessageAttachments(message: QaBusMessage): string {
   return `<div class="msg-attachments">${items}</div>`;
 }
 
-function deriveSelectedConversation(state: UiState): string | null {
-  const first = state.snapshot?.conversations[0];
-  return state.selectedConversationKey ?? (first ? conversationSelectionKey(first) : null);
-}
-
-function filteredMessages(state: UiState) {
-  const messages = state.snapshot?.messages ?? [];
-  const selectedConversationThreadIds = new Set(
-    (state.snapshot?.threads ?? [])
-      .filter((thread) => threadConversationSelectionKey(thread) === state.selectedConversationKey)
-      .map((thread) => thread.id),
-  );
-  return messages.filter((message) => {
-    if (
-      state.selectedConversationKey &&
-      messageConversationSelectionKey(message) !== state.selectedConversationKey
-    ) {
-      return false;
-    }
-    if (state.selectedThreadId) {
-      return message.threadId === state.selectedThreadId;
-    }
-    // External thread ids have no sidebar record, even when the conversation
-    // also owns navigable threads, so keep their messages in the root view.
-    return !message.threadId || !selectedConversationThreadIds.has(message.threadId);
-  });
-}
-
 function formatConversationLabel(
   conversation: QaBusSnapshotConversation,
   conversations: QaBusSnapshotConversation[],
@@ -118,13 +90,26 @@ export function renderChatView(state: UiState): string {
       !state.selectedConversationKey ||
       threadConversationSelectionKey(thread) === state.selectedConversationKey,
   );
-  const selectedConv = deriveSelectedConversation(state);
+  const selectedConv =
+    state.selectedConversationKey ??
+    (conversations[0] ? conversationSelectionKey(conversations[0]) : null);
   const selectedThread = state.selectedThreadId;
   const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
-  const messages = filteredMessages({
-    ...state,
-    selectedConversationKey: selectedConv,
-    selectedThreadId: selectedThread,
+  const selectedConversationThreadIds = new Set(
+    (state.snapshot?.threads ?? [])
+      .filter((thread) => threadConversationSelectionKey(thread) === selectedConv)
+      .map((thread) => thread.id),
+  );
+  const messages = (state.snapshot?.messages ?? []).filter((message) => {
+    if (selectedConv && messageConversationSelectionKey(message) !== selectedConv) {
+      return false;
+    }
+    if (selectedThread) {
+      return message.threadId === selectedThread;
+    }
+    // External thread ids have no sidebar record, even when the conversation
+    // also owns navigable threads, so keep their messages in the root view.
+    return !message.threadId || !selectedConversationThreadIds.has(message.threadId);
   });
 
   return `
@@ -268,10 +253,6 @@ function renderMessage(m: QaBusMessage): string {
     </div>`;
 }
 
-function recentInspectorMessages(state: UiState, limit = 18) {
-  return (state.snapshot?.messages ?? []).slice(-limit).toReversed();
-}
-
 function renderInspectorLiveMessage(message: QaBusMessage): string {
   const avatar = messageAvatar(message);
   const conversationLabel = message.conversation.title || message.conversation.id;
@@ -295,7 +276,7 @@ function renderInspectorLiveMessage(message: QaBusMessage): string {
 }
 
 function renderInspectorLiveTranscript(state: UiState): string {
-  const messages = recentInspectorMessages(state);
+  const messages = (state.snapshot?.messages ?? []).slice(-18).toReversed();
   const isLive = state.bootstrap?.runner.status === "running";
 
   return `
@@ -318,8 +299,6 @@ function renderInspectorLiveTranscript(state: UiState): string {
       </div>
     </aside>`;
 }
-
-/* ===== Render: Results tab ===== */
 
 export function renderResultsView(state: UiState): string {
   const scenarios = state.bootstrap?.scenarios ?? [];
@@ -413,28 +392,25 @@ function renderInspector(state: UiState, scenario: SeedScenario): string {
           }
         </div>
 
-        ${
-          scenario.docsRefs?.length
-            ? `<div class="inspector-section">
-                <div class="inspector-section-title">Docs</div>
-                <div class="ref-list">${scenario.docsRefs.map((r) => `<span class="ref-tag">${esc(r)}</span>`).join("")}</div>
+        ${(
+          [
+            ["Docs", scenario.docsRefs],
+            ["Code", scenario.codeRefs],
+          ] as const
+        )
+          .map(([title, refs]) =>
+            refs?.length
+              ? `<div class="inspector-section">
+                <div class="inspector-section-title">${title}</div>
+                <div class="ref-list">${refs.map((ref) => `<span class="ref-tag">${esc(ref)}</span>`).join("")}</div>
               </div>`
-            : ""
-        }
-        ${
-          scenario.codeRefs?.length
-            ? `<div class="inspector-section">
-                <div class="inspector-section-title">Code</div>
-                <div class="ref-list">${scenario.codeRefs.map((r) => `<span class="ref-tag">${esc(r)}</span>`).join("")}</div>
-              </div>`
-            : ""
-        }
+              : "",
+          )
+          .join("\n        ")}
       </div>
       ${renderInspectorLiveTranscript(state)}
     </div>`;
 }
-
-/* ===== Render: Report tab ===== */
 
 export function renderReportView(state: UiState): string {
   return `

@@ -451,23 +451,17 @@ function validateCandidateWorkflowJobs(workflowJobs, binding) {
     job.head_sha === binding.producer.workflowSha &&
     job.status === "completed" &&
     job.conclusion === "success";
-  const producerJobs = jobs.filter(
-    (job) =>
-      matchesExpectedAttempt(job) &&
-      String(job.id) === binding.producer.jobId &&
-      job.name === binding.producer.jobName,
-  );
-  if (producerJobs.length !== 1) {
-    fail("full release candidate producer job did not complete successfully");
-  }
-  const publisherJobs = jobs.filter(
-    (job) =>
-      matchesExpectedAttempt(job) &&
-      String(job.id) === binding.publisher.jobId &&
-      job.name === binding.publisher.jobName,
-  );
-  if (publisherJobs.length !== 1) {
-    fail("full release candidate publisher job did not complete successfully");
+  for (const role of ["producer", "publisher"]) {
+    const expected = binding[role];
+    const matching = jobs.filter(
+      (job) =>
+        matchesExpectedAttempt(job) &&
+        String(job.id) === expected.jobId &&
+        job.name === expected.jobName,
+    );
+    if (matching.length !== 1) {
+      fail(`full release candidate ${role} job did not complete successfully`);
+    }
   }
 }
 

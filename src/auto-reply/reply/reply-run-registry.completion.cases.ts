@@ -1,12 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  isReplyRunActiveForSessionId,
-  replyRunRegistry,
+  getSessionControllerOperation,
+  resolveActiveReplyOperationForSessionId,
   runAfterReplyOperationClear,
   waitForReplyOperationOwnerSettlement,
-} from "./reply-run-registry.js";
-import { expireStaleReplyOperation } from "./reply-run-registry.state.js";
+} from "../../sessions/session-controller.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 
 export function registerReplyOperationCompletionCases(): void {
@@ -15,8 +14,8 @@ export function registerReplyOperationCompletionCases(): void {
       sessionId: "session-complete",
     });
     const afterClear = vi.fn(() => {
-      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
+      expect(getSessionControllerOperation("agent:main:main")).toBeUndefined();
+      expect(resolveActiveReplyOperationForSessionId("session-complete")).toBeUndefined();
     });
 
     runAfterReplyOperationClear(operation, afterClear);
@@ -30,8 +29,8 @@ export function registerReplyOperationCompletionCases(): void {
     const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
     operation.setPhase("running");
 
-    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
+    expect(operation.abortForStall()).toBe(true);
+    expect(getSessionControllerOperation("agent:main:main")).toBe(operation);
 
     const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
     let settled = false;

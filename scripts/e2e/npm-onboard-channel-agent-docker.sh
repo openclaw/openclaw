@@ -9,7 +9,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
@@ -40,15 +39,7 @@ STATUS_TEXT_MAX_BYTES="$(
 )"
 run_log=""
 
-cleanup() {
-  if [ -n "${PACKAGE_TGZ:-}" ]; then
-    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
-  fi
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 case "$CHANNEL" in
 telegram | discord | slack) ;;
@@ -60,26 +51,18 @@ esac
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-onboard-channel-agent "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent "$PACKAGE_TGZ")"
-    return 0
-  fi
-  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    echo "OPENCLAW_NPM_ONBOARD_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
-    exit 1
-  fi
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent)"
-}
-
-prepare_package_tgz
+if [ -z "$PACKAGE_TGZ" ] && [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+  echo "OPENCLAW_NPM_ONBOARD_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+  exit 1
+fi
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent "$PACKAGE_TGZ")"
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
-if ! docker_e2e_run_with_harness \
+if docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
   -e OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE="$USE_SOURCE_PLUGIN_PACKAGE" \
@@ -106,7 +89,7 @@ export OPENCLAW_GATEWAY_TOKEN="npm-onboard-channel-agent-token"
 
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
 PORT="18789"
-MOCK_PORT="44080"
+MOCK_PORT="0"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
 MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
@@ -172,7 +155,7 @@ dump_debug_logs() {
     "$OPENCLAW_HOME/.openclaw/openclaw.json" \
     "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 required_plugins='["@openclaw/codex"]'
 if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
@@ -216,7 +199,7 @@ if [ -n "$fixture_consent" ]; then
 fi
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+MOCK_PORT="$(openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "" "$mock_pid" /tmp/openclaw-mock-openai.log)"
 
 echo "Running non-interactive onboarding..."
 openclaw onboard --non-interactive --accept-risk \
@@ -306,8 +289,9 @@ echo "Installed CLI execution identity survived Gateway restart with private fix
 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
+  echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"
+else
+  status=$?
   docker_e2e_print_log "$run_log"
-  exit 1
+  exit "$status"
 fi
-
-echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"

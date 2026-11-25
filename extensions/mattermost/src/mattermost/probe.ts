@@ -4,7 +4,6 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
-  type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
@@ -16,18 +15,11 @@ type MattermostProbe = BaseProbeResult & {
   bot?: MattermostUser;
 };
 
-/** Optional test hooks so probe can exercise the real guarded-fetch owner. */
-type ProbeMattermostDeps = {
-  fetchImpl?: typeof fetch;
-  lookupFn?: LookupFn;
-};
-
 export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
   allowPrivateNetwork = false,
-  deps?: ProbeMattermostDeps,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -48,8 +40,6 @@ export async function probeMattermost(
         auditContext: "mattermost-probe",
         policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
         ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
-        ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-        ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
       });
       const requestElapsedMs = elapsedMs();
       try {
@@ -64,7 +54,7 @@ export async function probeMattermost(
         }
         const bot = await readProviderJsonResponse<MattermostUser>(
           res,
-          "Mattermost probe /users/me",
+          "Mattermost check /users/me",
         );
         return {
           ok: true,

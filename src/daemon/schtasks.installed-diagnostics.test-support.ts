@@ -11,13 +11,22 @@ import { redactSupportString } from "../logging/diagnostic-support-redaction.js"
 import { sleep } from "../utils/sleep.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
+  assertAbsent,
   packageRoot,
   type parseInstalledPreview,
   type readInput,
   recordCapacityBoundary,
   requiredCellSpace,
+  writeJson,
 } from "./schtasks.installed-package.test-support.js";
-import { readRelatedProcessDiagnostics } from "./schtasks.integration-observation.test-support.js";
+import {
+  assertInteractiveLeastPrivilegeTask,
+  assertUnattendedLeastPrivilegeTask,
+  disableScheduledTaskXmlForFixture,
+  readRelatedProcessDiagnostics,
+  readTaskPrincipal,
+  readTaskXml,
+} from "./schtasks.integration-observation.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -42,6 +51,20 @@ export type InstalledTask = {
   entry: string;
   env: NodeJS.ProcessEnv;
 };
+
+export async function assertInstalledTaskDefinition(
+  task: Pick<InstalledTask, "taskName" | "scriptPath">,
+  definition: "published" | "candidate",
+) {
+  const taskXml = await readTaskXml(task.taskName);
+  assert.ok(taskXml);
+  const principal = readTaskPrincipal(task.taskName);
+  if (definition === "published") {
+    assertInteractiveLeastPrivilegeTask({ taskXml, principal });
+  } else {
+    assertUnattendedLeastPrivilegeTask({ taskXml, principal, scriptPath: task.scriptPath });
+  }
+}
 
 export async function readInstalledUpdateProgress({
   env,
@@ -150,7 +173,7 @@ export function parseInstalledUpdateResult(value: unknown) {
 
 export async function runInstalledPublishedUpdate(params: {
   task: InstalledTask;
-  input: Awaited<ReturnType<typeof readInput>>;
+  input: Pick<Awaited<ReturnType<typeof readInput>>, "tarball" | "installRoot" | "stateRoot">;
   inputPath: string;
   key: "2026.9.3" | "2026.9.4";
   commands: CommandRecord[];
@@ -329,30 +352,15 @@ export async function inspectDisabledDiscoveryTasks(params: {
   admissionPath: string;
   recordProgress: (phase: string, error?: Error) => Promise<void>;
 }) {
-  const {
-    selected,
-    preview,
-    doctor,
-    cleanupTask,
-    owners,
-    id,
-    cellIndex,
-    key,
-    rootDir,
-    installRoot,
-    admissions,
-    admissionPath,
-    recordProgress,
-  } = params;
+  const { selected, owners, recordProgress } = params;
   const { resolveGatewayWindowsTaskName } = await import("./constants.js");
   const { execSchtasks } = await import("./schtasks-exec.js");
-  const { resolveTaskScriptPath } = await import("./schtasks.js");
   const { quoteCmdScriptArg } = await import("./cmd-argv.js");
-  const { buildTaskScript } = await import("./schtasks-layout.js");
+  const { buildTaskScript, resolveTaskScriptPath } = await import("./schtasks-layout.js");
   const { encodeWindowsLauncherScript } = await import("../infra/windows-launcher-encoding.js");
+  const writeCmd = (filename: string, content: string) =>
+    fs.writeFile(filename, encodeWindowsLauncherScript({ format: "cmd", content }));
   const { probeScheduledTaskExists } = await import("./schtasks-state-probe.js");
-  const { disableScheduledTaskXmlForFixture, readTaskXml, readTaskPrincipal } =
-    await import("./schtasks.integration-observation.test-support.js");
   const { readGatewayServiceState, resolveGatewayService } = await import("./service.js");
   const selectedXml = await readTaskXml(selected.taskName);
   assert.ok(selectedXml);
@@ -376,39 +384,36 @@ export async function inspectDisabledDiscoveryTasks(params: {
   try {
     for (const role of ["non-gateway", "missing", "direct", "extra"] as const) {
       await recordProgress(`disabled-discovery:${role}`);
-      const profile: string = ["schtasks-int", id, cellIndex, role].join("-");
+      const profile: string = ["schtasks-int", params.id, params.cellIndex, role].join("-");
       const taskName: string =
         role === "non-gateway"
           ? `OpenClaw Helper (${profile})`
           : role === "extra"
-            ? `NativeExtra-${id}-${cellIndex}`
+            ? `NativeExtra-${params.id}-${params.cellIndex}`
             : resolveGatewayWindowsTaskName(profile);
       const stateDir = path.join(os.userInfo().homedir, `.openclaw-${profile}`);
-      const fixtureRoot = path.join(rootDir, role);
+      const fixtureRoot = path.join(params.rootDir, role);
       const scriptPath = path.join(fixtureRoot, `${role}.cmd`);
       assert.equal(probeScheduledTaskExists(taskName), false);
       await fs.mkdir(stateDir);
       await fs.mkdir(fixtureRoot);
       if (role === "non-gateway") {
-        await fs.writeFile(
+        await writeCmd(
           scriptPath,
-          encodeWindowsLauncherScript({
-            format: "cmd",
-            content: `@echo off\r\n${quoteCmdScriptArg(process.execPath)} --version\r\n`,
-          }),
+          `@echo off\r\n${quoteCmdScriptArg(process.execPath)} --version\r\n`,
         );
         nonGatewayScriptHash = await hashFile(scriptPath);
       } else {
-        await assert.rejects(fs.access(scriptPath), { code: "ENOENT" });
+        await assertAbsent(scriptPath);
       }
-      const fixture: (typeof fixtures)[number] = {
-        role,
+      const identity = {
         profile,
         taskName,
         stateDir,
         rootDir: fixtureRoot,
         scriptPath,
       };
+      const fixture: (typeof fixtures)[number] = { ...identity, role };
       if (role === "direct" || role === "extra") {
         const gatewayPort = await owners.reserveLoopbackPort();
         const configPath = path.join(stateDir, "openclaw.json");
@@ -425,23 +430,19 @@ export async function inspectDisabledDiscoveryTasks(params: {
         config.gateway.port = gatewayPort;
         await fs.writeFile(configPath, JSON.stringify(config));
         fixture.configBefore = await fs.readFile(configPath);
-        await assert.rejects(fs.access(resolveTaskScriptPath(env)), { code: "ENOENT" });
+        await assertAbsent(resolveTaskScriptPath(env));
       }
       fixtures.push(fixture);
-      admissions.push({
+      params.admissions.push({
+        ...identity,
         taskInitiallyAbsent: true,
-        cell: key,
+        cell: params.key,
         role,
-        profile,
-        taskName,
-        stateDir,
-        rootDir: fixtureRoot,
-        installRoot,
+        installRoot: params.installRoot,
         entry: selected.entry,
-        scriptPath,
         ...(fixture.gateway ? { cleanupNeedle: profile } : {}),
       });
-      await fs.writeFile(admissionPath, JSON.stringify(admissions, null, 2));
+      await writeJson(params.admissionPath, params.admissions);
       const escapeXml = (value: string) =>
         value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
       const argv = fixture.gateway
@@ -456,15 +457,12 @@ export async function inspectDisabledDiscoveryTasks(params: {
           ]
         : undefined;
       if (role === "extra" && fixture.gateway && argv) {
-        await fs.writeFile(
+        await writeCmd(
           scriptPath,
-          encodeWindowsLauncherScript({
-            format: "cmd",
-            content: buildTaskScript({
-              programArguments: argv,
-              workingDirectory: fixtureRoot,
-              environment: fixture.gateway.env,
-            }),
+          buildTaskScript({
+            programArguments: argv,
+            workingDirectory: fixtureRoot,
+            environment: fixture.gateway.env,
           }),
         );
         fixture.scriptHash = await hashFile(scriptPath);
@@ -514,7 +512,7 @@ export async function inspectDisabledDiscoveryTasks(params: {
         assert.equal(state.runtime?.pid, undefined);
         assert.equal(await owners.canBindLoopbackPort(direct.gatewayPort), true);
         await recordProgress("disabled-discovery:direct-preview");
-        const directPreview = await preview(direct);
+        const directPreview = await params.preview(direct);
         assert.ok(
           directPreview.notes.some((note) =>
             note.includes("Gateway service inspection is unavailable"),
@@ -529,41 +527,35 @@ export async function inspectDisabledDiscoveryTasks(params: {
         };
       }
     }
-    report = await doctor(selected);
+    report = await params.doctor(selected);
     assert.equal(report.checksRun, 1);
     const nonGateway = fixtures.find((fixture) => fixture.role === "non-gateway");
     assert.ok(nonGateway);
     const missing = fixtures.find((fixture) => fixture.role === "missing");
     assert.ok(missing);
-    assert.equal(
-      report.findings.some((finding) => finding.target === "\\" + nonGateway.taskName),
-      false,
-    );
-    const missingFindings = report.findings.filter(
-      (finding) => finding.target === "\\" + missing.taskName,
-    );
+    const findings = report.findings;
+    const findingsFor = (taskName: string) =>
+      findings.filter((finding) => finding.target === "\\" + taskName);
+    for (const task of [nonGateway, selected]) {
+      assert.equal(findingsFor(task.taskName).length, 0);
+    }
+    const missingFindings = findingsFor(missing.taskName);
     assert.equal(missingFindings.length, 1);
     const missingFinding = missingFindings[0];
     assert.ok(missingFinding);
     assert.equal(missingFinding.checkId, "core/doctor/gateway-services/extra");
     assert.equal(missingFinding.severity, "warning");
     assert.match(missingFinding.message, /inspection incomplete/i);
-    assert.equal(
-      report.findings.some((finding) => finding.target === "\\" + selected.taskName),
-      false,
-    );
     const extra = fixtures.find((fixture) => fixture.role === "extra");
     assert.ok(extra);
     assert.ok(
-      report.findings.some(
+      findingsFor(extra.taskName).some(
         (finding) =>
-          finding.target === "\\" + extra.taskName &&
-          finding.severity === "info" &&
-          finding.checkId === "core/doctor/gateway-services/extra",
+          finding.severity === "info" && finding.checkId === "core/doctor/gateway-services/extra",
       ),
     );
     assert.equal(await hashFile(nonGateway.scriptPath), nonGatewayScriptHash);
-    await assert.rejects(fs.access(missing.scriptPath), { code: "ENOENT" });
+    await assertAbsent(missing.scriptPath);
     for (const fixture of fixtures) {
       if (fixture.gateway) {
         assert.deepEqual(await fs.readFile(fixture.gateway.configPath), fixture.configBefore);
@@ -590,7 +582,7 @@ export async function inspectDisabledDiscoveryTasks(params: {
   }
   for (const fixture of fixtures.toReversed()) {
     try {
-      await cleanupTask(
+      await params.cleanupTask(
         fixture,
         fixture.gateway ? fixture.profile : fixture.scriptPath,
         path.join(fixture.rootDir, "unused-events"),

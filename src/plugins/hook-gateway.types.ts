@@ -1,3 +1,4 @@
+import type { AgentTerminalSnapshot } from "../agents/agent-terminal-snapshot.js";
 /** Gateway lifecycle and cron hook contracts shared by plugin hosts and consumers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -70,6 +71,11 @@ export type PluginHookGatewayCronJob = {
   enabled?: boolean;
   schedule?:
     | {
+        kind: "event";
+        source: string;
+        options: Record<string, unknown>;
+      }
+    | {
         kind: "cron";
         expr?: string;
         tz?: string;
@@ -110,6 +116,8 @@ export type PluginHookGatewayCronJob = {
 };
 
 export type PluginHookCronChangedEvent = {
+  /** Versioned content-free facts, present only for the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   jobId: string;
   job?: PluginHookGatewayCronJob;

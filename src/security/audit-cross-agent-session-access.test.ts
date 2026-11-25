@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectCrossAgentSessionAccessFindings } from "./audit-extra.summary.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
@@ -50,7 +51,12 @@ describe("security audit cross-agent session access", () => {
 
   it.each([
     { name: "default entries roster", cfg: { agents } },
-    { name: "list roster", cfg: { agents: { list: [{ id: "home" }, { id: "work" }] } } },
+    {
+      name: "migrated list roster",
+      cfg: createCanonicalAgentConfigFixture({
+        agents: { list: [{ id: "home" }, { id: "work" }] },
+      }).config,
+    },
     {
       name: "explicit all visibility and empty allow list",
       cfg: {
@@ -148,7 +154,7 @@ describe("security audit cross-agent session access", () => {
       cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
       detail: [
         `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
+          "- work: sandboxed sessions clamped to their spawn tree; its chat history remains readable by the agents above.",
         'work: sandbox.mode="all"',
         "different trust levels",
       ],
@@ -185,7 +191,7 @@ describe("security audit cross-agent session access", () => {
       },
       detail: [
         `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- work: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+          "- work: session tools removed by agent tool policy; its chat history remains readable by the agents above.",
       ],
       absent: "- work: unsandboxed",
     },
@@ -207,7 +213,7 @@ describe("security audit cross-agent session access", () => {
       detail: [
         "Agents: home, work",
         `- work: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- home: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+          "- home: session tools removed by agent tool policy; its chat history remains readable by the agents above.",
       ],
     },
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[]; absent?: string }>)(

@@ -121,14 +121,13 @@ internal class GatewayNodeApproval {
   }
 
   suspend fun approve(expectedRequestId: String) {
-    val claimed =
+    val (context, epoch) =
       synchronized(lock) {
         val context = pendingContext ?: return
         if (mutableState.value.approving || mutableState.value.pending?.requestId != expectedRequestId) return
         mutableState.value = mutableState.value.copy(approving = true, errorText = null, verified = false)
         context to ++generation
       }
-    val (context, epoch) = claimed
     try {
       val pending = readPending(context, epoch)
       if (pending == null || pending.summary.requestId != expectedRequestId) {
@@ -203,10 +202,7 @@ internal class GatewayNodeApproval {
   ): Pending? {
     if (!canManage(context)) return null
     val root = request(context, epoch, "node.pair.list")
-    val pending =
-      (root["pending"] as? JsonArray)
-        ?.mapNotNull { it.asObjectOrNull() }
-        ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId } ?: return null
+    val pending = selfNode(root, context, listKey = "pending") ?: return null
     val requestId = normalizeGatewayApprovalRequestId(pending["requestId"].asStringOrNull()) ?: return null
     val surface = parseSurface(pending) ?: return null
     val requiredScopes = (pending["requiredApproveScopes"] as? JsonArray)?.mapNotNull { it.asStringOrNull() }
@@ -245,8 +241,9 @@ internal class GatewayNodeApproval {
   private fun selfNode(
     nodes: JsonObject,
     context: GatewayNodeApprovalContext,
+    listKey: String = "nodes",
   ): JsonObject? =
-    (nodes["nodes"] as? JsonArray)
+    (nodes[listKey] as? JsonArray)
       ?.mapNotNull { it.asObjectOrNull() }
       ?.singleOrNull { it["nodeId"].asStringOrNull() == context.selfNodeId }
 

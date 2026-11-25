@@ -54,22 +54,16 @@ function normalizeSignalUuidEntry(entry: string): string | null {
   return looksLikeUuid(signalStripped) ? signalStripped : null;
 }
 
-function normalizeSignalPhoneEntry(entry: string): string | null {
-  const parsed = strippedSignalEntry(entry);
-  if (!parsed) {
-    return null;
-  }
-  return normalizeSignalAllowRecipient(parsed.trimmed) ?? null;
-}
-
 const signalIngressIdentity = defineStableChannelIngressIdentity({
   key: "stable",
+  // signal-cli reports the sender from the decrypted, sender-certified envelope.
+  authentication: "verified",
   normalizeEntry: () => null,
   aliases: [
     {
       key: "phone",
       kind: "phone",
-      normalizeEntry: normalizeSignalPhoneEntry,
+      normalizeEntry: (entry) => normalizeSignalAllowRecipient(entry) ?? null,
       normalizeSubject: (value: string) => value,
       sensitivity: "pii",
     },

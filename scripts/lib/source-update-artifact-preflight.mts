@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { acquireDistArtifactOwnership } from "./dist-artifact-lock.mts";
 import { isRecord } from "./record-shared.mjs";
 import type { PrepareBundledPluginRuntime } from "./runtime-artifact-contract.js";
@@ -49,23 +48,6 @@ export async function inspectOwnedSourceUpdateArtifacts(
   return !prepared?.changed;
 }
 
-export async function inspectSourceUpdateArtifacts(rootDir: string): Promise<{
-  sourceRuntimePrepared: boolean;
-  lock: FileLockHandle | undefined;
-}> {
-  if (!fs.existsSync(path.join(rootDir, ".git"))) {
-    return { sourceRuntimePrepared: true, lock: undefined };
-  }
-  const root = fs.realpathSync(rootDir);
-  const lock = await acquireDistArtifactOwnership(root);
-  try {
-    return { sourceRuntimePrepared: await inspectOwnedSourceUpdateArtifacts(root), lock };
-  } catch (error) {
-    await lock.release();
-    throw error;
-  }
-}
-
 /** Published drivers already expose the installed checkout through this cache path. */
 export async function preflightInstalledSourceArtifacts(env: NodeJS.ProcessEnv) {
   const cacheRoot = env.BUILD_ALL_CACHE_ROOT?.trim();
@@ -84,7 +66,14 @@ export async function preflightInstalledSourceArtifacts(env: NodeJS.ProcessEnv) 
   if (!fs.existsSync(path.join(root, ".git"))) {
     return;
   }
-  if (fs.realpathSync(root) !== fs.realpathSync(process.cwd())) {
-    await (await inspectSourceUpdateArtifacts(root)).lock?.release();
+  const real = fs.realpathSync(root);
+  if (real === fs.realpathSync(process.cwd())) {
+    return;
+  }
+  const lock = await acquireDistArtifactOwnership(real);
+  try {
+    await inspectOwnedSourceUpdateArtifacts(real);
+  } finally {
+    await lock.release();
   }
 }

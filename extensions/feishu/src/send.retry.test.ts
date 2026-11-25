@@ -7,39 +7,6 @@ function axiosError(code?: number, status = 400) {
   });
 }
 
-const rateLimits = [
-  {
-    name: "per-chat rejection",
-    fail: () => Promise.reject(axiosError(230020)),
-    diagnostic: '"feishu_code":230020',
-  },
-  {
-    name: "tenant rejection",
-    fail: () => Promise.reject(axiosError(11232)),
-    diagnostic: '"feishu_code":11232',
-  },
-  {
-    name: "gateway rejection",
-    fail: () => Promise.reject(axiosError(undefined, 429)),
-    diagnostic: '"http_status":429',
-  },
-  {
-    name: "gateway rejection with a non-retryable body",
-    fail: () => Promise.reject(axiosError(230001, 429)),
-    diagnostic: '"http_status":429',
-  },
-  {
-    name: "fulfilled per-chat rate limit",
-    fail: () => Promise.resolve({ code: 230020, msg: "rate limit" }),
-    diagnostic: '"feishu_code":230020',
-  },
-  {
-    name: "fulfilled tenant rate limit",
-    fail: () => Promise.resolve({ code: 11232, msg: "rate limit" }),
-    diagnostic: '"feishu_code":11232',
-  },
-];
-
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -50,43 +17,67 @@ afterEach(() => {
 
 describe("requestFeishuApi", () => {
   it.each([
-    null,
-    { code: 0, data: { message_id: "om_first" } },
-    { code: 230001, msg: "permission error" },
-  ])("returns a non-rate-limited response unchanged: %j", async (response) => {
-    const request = vi.fn().mockResolvedValue(response);
-    await expect(requestFeishuApi(request, "Feishu send failed")).resolves.toBe(response);
+    Object.assign(new Error("connection lost"), { code: "ECONNRESET" }),
+    Object.assign(new Error("connection lost"), { code: "EPROTO" }),
+    Object.assign(new Error("connection lost"), { code: "UND_ERR_BODY_TIMEOUT" }),
+    Object.assign(new Error("connection lost"), { code: "ERR_NETWORK" }),
+    ...[408, 425, 500, 503, 599].map((status) => axiosError(undefined, status)),
+    axiosError(230049, 200),
+    { code: 230049, msg: "message is being sent" },
+  ])("retries transient failures only for deduplicated requests: %j", async (failure) => {
+    const fail = () =>
+      "response" in failure || failure instanceof Error
+        ? Promise.reject(failure)
+        : Promise.resolve(failure);
+    const request = vi
+      .fn<() => Promise<unknown>>()
+      .mockImplementationOnce(fail)
+      .mockResolvedValue({ code: 0 });
+    const result = requestFeishuApi(request, "Send failed", { retryTransient: true });
+    const outcome = expect(result).resolves.toEqual({ code: 0 });
+    await vi.runAllTimersAsync();
+    await outcome;
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockReset().mockImplementation(fail);
+    await requestFeishuApi(request, "Upload failed").catch(() => undefined);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    axiosError(230001, 400),
+    { code: 230001, msg: "invalid request" },
+    Object.assign(new Error("retired sender"), { code: "ECONNRESET", retryable: false }),
+  ])("does not replay permanent failures: %j", async (failure) => {
+    const request = vi.fn(async () => {
+      if (failure instanceof Error) {
+        throw failure;
+      }
+      return failure;
+    });
+    await requestFeishuApi(request, "Send failed", { retryTransient: true }).catch(() => undefined);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a null rejection", async () => {
+    const request = vi.fn().mockRejectedValue(null);
+    const result = requestFeishuApi(request, "Feishu send failed");
+    await expect(result).rejects.toThrow("Feishu send failed");
+    await expect(result).rejects.toThrow("Retry failed");
     expect(request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    { error: axiosError(230006), diagnostic: "230006" },
-    { error: new Error("network failure"), diagnostic: "network failure" },
-    { error: null, diagnostic: "Retry failed" },
-  ])("does not retry a non-rate-limit rejection: $diagnostic", async ({ error, diagnostic }) => {
-    const request = vi.fn().mockRejectedValue(error);
-    const result = requestFeishuApi(request, "Feishu send failed");
-    await expect(result).rejects.toThrow("Feishu send failed");
-    await expect(result).rejects.toThrow(diagnostic);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries after the default backoff and returns the successful response", async () => {
-    const response = { code: 0, data: { message_id: "om_retry" } };
-    const request = vi
-      .fn<() => Promise<unknown>>()
-      .mockResolvedValue(response)
-      .mockRejectedValueOnce(axiosError(230020));
-    const result = requestFeishuApi(request, "Feishu send failed");
-
-    await vi.advanceTimersByTimeAsync(499);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(result).resolves.toBe(response);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(rateLimits)("exhausts the retry budget and wraps $name", async ({ fail, diagnostic }) => {
+    {
+      name: "gateway rejection",
+      fail: () => Promise.reject(axiosError(undefined, 429)),
+      diagnostic: '"http_status":429',
+    },
+    {
+      name: "fulfilled tenant rate limit",
+      fail: () => Promise.resolve({ code: 11232, msg: "rate limit" }),
+      diagnostic: '"feishu_code":11232',
+    },
+  ])("exhausts the retry budget and wraps $name", async ({ fail, diagnostic }) => {
     const request = vi.fn(fail);
     // Fulfilled rate-limit bodies must also reject on exhaustion, never escape as success.
     const result = requestFeishuApi(request, "Feishu send failed").catch((error: unknown) => error);
@@ -98,20 +89,6 @@ describe("requestFeishuApi", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).toHaveProperty("message", expect.stringContaining("Feishu send failed"));
     expect(error).toHaveProperty("message", expect.stringContaining(diagnostic));
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("recovers on the third attempt after rejected then fulfilled rate limits", async () => {
-    const response = { code: 0, data: { message_id: "om_recovered" } };
-    const request = vi
-      .fn<() => Promise<unknown>>()
-      .mockRejectedValueOnce(axiosError(230020))
-      .mockResolvedValueOnce({ code: 11232, msg: "rate limit" })
-      .mockResolvedValueOnce(response);
-    const result = requestFeishuApi(request, "Feishu send failed");
-
-    await vi.runAllTimersAsync();
-    await expect(result).resolves.toBe(response);
     expect(request).toHaveBeenCalledTimes(3);
   });
 });

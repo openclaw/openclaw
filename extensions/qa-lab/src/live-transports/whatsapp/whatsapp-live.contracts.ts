@@ -3,8 +3,8 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { QaGatewayChild } from "../../gateway-child.js";
-export { toQaError as toWhatsAppQaError } from "../../errors.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -14,9 +14,8 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
-export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
+type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
-type WhatsAppQaScenarioPosture = "direct-gateway" | "native-approval" | "user-path";
 
 type WhatsAppQaMessageSendMode =
   | {
@@ -29,23 +28,13 @@ type WhatsAppQaMessageSendMode =
       mediaType: string;
     };
 
-export type WhatsAppQaGateway = QaGatewayChild;
-export type WhatsAppQaGatewayRuntime = Pick<
-  WhatsAppQaGateway,
-  "call" | "restart" | "workspaceDir"
-> &
-  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
+export type WhatsAppQaGatewayRuntime = Pick<QaGatewayChild, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<QaGatewayChild, "logs" | "token" | "wsUrl">>;
 export type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
   scenarioId: string;
   sutAccountId: string;
-};
-export type WhatsAppQaObservedMessagesContext = {
-  driver: Pick<WhatsAppQaDriverSession, "getObservedMessages">;
-  sutPhoneE164: string;
-  target: string;
-  targetKind: "dm" | "group";
 };
 export type WhatsAppQaDriverQuotedMessageKey = NonNullable<
   NonNullable<Parameters<WhatsAppQaDriverSession["sendText"]>[2]>["quotedMessageKey"]
@@ -57,10 +46,8 @@ export type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGatewayRuntime;
   gatewayTarget: string;
   gatewayWorkspaceDir: string;
-  recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
   scenarioId: string;
-  scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
   sutPhoneE164: string;
@@ -68,7 +55,7 @@ export type WhatsAppQaMessageScenarioContext = {
   targetKind: "dm" | "group";
 };
 
-type WhatsAppQaResolvedScenarioTarget =
+export type WhatsAppQaResolvedScenarioTarget =
   | {
       target: "dm";
     }
@@ -129,7 +116,6 @@ export type WhatsAppQaMessageScenarioRun = {
   expectReply: boolean;
   expectedJoinedSutTextIncludes?: string[];
   expectedSutMessageCount?: number;
-  expectedSutMessageCountRange?: readonly [number, number];
   input: string;
   kind?: "message";
   matchText: string | RegExp;
@@ -172,54 +158,12 @@ export type WhatsAppQaConfigOverrides = {
   groupHistoryLimit?: number;
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
-  replyToMode?: "all" | "batched" | "first" | "off";
+  replyToMode?: ReplyToMode;
   statusReactions?: boolean;
 };
 
 export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  posture: WhatsAppQaScenarioPosture;
   requiresGroupJid?: boolean;
 };
-
-export type WhatsAppQaScenarioMetadata = {
-  id: string;
-  timeoutMs: number;
-  title: string;
-};
-
-export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage {
-  approvalState?: "pending" | "resolved";
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-}
-
-export type WhatsAppQaScenarioResult = {
-  details: string;
-  id: string;
-  posture: WhatsAppQaScenarioPosture;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "approval-request-to-resolution" | "request-to-observed-message";
-  };
-  status: "fail" | "pass" | "skip";
-  title: string;
-};
-
-export function buildWhatsAppQaScenarioResultBase(
-  scenario: WhatsAppQaScenarioMetadata,
-  implementation: WhatsAppQaScenarioImplementation,
-) {
-  return {
-    id: scenario.id,
-    title: scenario.title,
-    posture: implementation.posture,
-  };
-}

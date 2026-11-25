@@ -1,48 +1,31 @@
 # Telegram Plugin Guide
 
-Read this before any change under `extensions/telegram/`. These are intentional
-maintainer decisions and review-binding invariants, not incidental
-implementation details. Also read `extensions/AGENTS.md` for the plugin
-boundary rules.
-
-Verified against Telegram Bot API 10.3, August 24 2026.
-
 ## Reliability Invariants
 
 ### Core drain contracts (do not re-implement in Telegram)
 
-Owned by `src/channels/message/ingress-drain.ts` (+ claim-owner, retry-policy).
-Proof: `src/channels/message/ingress-drain.test.ts`,
-`ingress-claim-owner.test.ts`, `ingress-retry-policy.test.ts`.
-
-- Completed rows tombstone via `complete()`, never `delete`.
-- Complete at turn adoption, not settle. Deferred holds the claim; watchdog
-  stays armed through deferral; watchdog timeouts use the shared retry disposition.
-- One retry policy: attempt floor **and** age gate (defaults 8 / 24h).
-- Claim refresh heartbeat while dispatching/deferred (`claimLeaseMs / 3`).
-- Never silently complete on transient failure — release/fail via disposition.
-- Pre-adoption supersede tombstones; post-adoption interruption is core-owned
-  (reply-run registry / queue interrupt).
+- Claim, complete, retry, supersede: core drain
+  (`src/channels/AGENTS.md#durable-ingress`); never re-implement.
 
 ### Telegram-owned (transport + channel policy)
 
+- Album and forward buffers hold flushes while the same-lane backlog contains a matching member; quiet windows stay sized for Telegram delivery, not local load.
 - Durable-before-ack on both transports. Polling: ingress worker advances its
   offset only after the parent's committed spool enqueue
   (`writeTelegramSpooledUpdate`). Webhook: respond 200 only after the spool
   write; non-200 on write failure is the redelivery contract.
 - `update_id`↔event-id encoding and per-chat/topic lane derivation stay in
   `telegram-ingress-spool.ts` / sequential-key.
-- Polling and webhook both: enqueue then pump
-  `createTelegramTransportIngressDrain(...).drainOnce()` — no private claim
-  loops.
+- Polling and webhook both: enqueue, then wake the monitor from
+  `telegram-ingress-drain-factory.ts`. No private claim loops.
 - Stall timeout: `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS` →
   `adoptionStallTimeoutMs` (default 5 min) via
   `resolveTelegramAdoptionStallTimeoutMs`.
 - Non-retryable classifier: `telegram-ingress-non-retryable.ts`
   (missing harness, dispatch-dedupe rollback).
-- Supersede predicate: `telegram-ingress-supersede.ts` — only abort text /
-  authorized-looking explicit commands (and ambient room_event pending) may
-  supersede pre-adoption work. Normal messages never supersede.
+- Supersede predicate: `telegram-ingress-supersede.ts` — authorized abort text
+  and `/new` or `/reset` may supersede pre-adoption user work. Settings and
+  other commands queue behind pending input; command entities alone do not cancel it.
 - room_event ambient work shares the sequential lane so a later user turn can
   supersede it pre-adoption; adopted user turns are never touched (core drain
   supersede is pre-adoption only).
@@ -60,8 +43,9 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   400 falls back to a legacy reply. New recoveries go into the shared
   predicates (`send-error-predicates.ts`, `reply-parameters.ts`), never into
   one funnel only.
-- Outbound flood waits have one owner: the per-token account limiter in
-  `account-throttler.ts`. A 429 pauses every call for that bot token until
+- Outbound flood waits have one owner: `getOrCreateAccountThrottler` in
+  `account-throttler.ts` (wraps grammY `apiThrottler`); every client for a
+  token goes through it. A 429 pauses every call for that bot token until
   `retry_after` (one fixed 1 s pause when it is missing; a shorter concurrent
   429 never shortens an active pause).
   Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
@@ -94,7 +78,17 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   behavior directly. Avoid custom Bot API wrappers for behavior grammY already
   owns.
 - Throttling is bot-token scoped. All Telegram API clients for the same token
-  share one grammY `apiThrottler()` instance.
+  share one limiter owned by `account-throttler.ts`. The limiter mirrors
+  grammY `apiThrottler()` defaults (upstream does not expose its Bottleneck
+  instances for disposal). Retirement runs in the Gateway process: the
+  account lifecycle hooks (config change, removal, `stopAccount`) release the
+  throttler once its token is no longer configured, settling queued group
+  sends and chat actions that have not started transport I/O — including
+  pacing and authorization-backoff waits — before disconnecting limiters
+  while in-flight requests finish; the final dispatch boundary re-checks
+  retirement for DM and group actions alike. A token still configured
+  (unchanged reloads, manual stops) keeps its limiter. The CLI lifecycle
+  hooks release in the mutating process as well.
 - Do not silently retry failed topic sends without topic metadata. A
   wrong-surface success is worse than a loud Telegram error.
 - DM topics and forum topics are distinct. `direct_messages_topic_id` and
@@ -132,18 +126,7 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
 
 ## Review Standard
 
-- Telegram behavior PRs need real Telegram proof when they touch transport,
-  streaming, topics, callbacks, authorization, or reply context. Prefer the
-  bot-to-bot QA lane or an equivalent live Telegram probe over synthetic-only
-  validation.
 - Reliability PRs (spool, drain, retry, ack, offset paths) need crash-window
   or restart-replay test proof, not just happy-path tests.
-- Give each contract one primary test owner; another layer needs a distinct
-  Telegram transport or lifecycle risk. Extend a stronger existing case instead
-  of replaying shared retry policy or registering the same helper suite twice.
-- Require independent expected outcomes: do not derive them with the tested
-  helper, or let a mock implement the behavior being asserted. Capability proofs
-  must exercise delivery or acknowledgement rather than repeat declared flags.
-- Make negative controls discriminate their named guard; an unrelated denial
-  must not make them pass. Keep test access private when no production caller
-  needs it.
+- Test ownership, independent expected outcomes and discriminating negative
+  controls: follow [test-audit](../../.agents/skills/test-audit/SKILL.md).

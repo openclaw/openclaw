@@ -39,11 +39,15 @@ For the full key index and the other top-level config domains, see [Configuratio
     // Optional person-level access policy for team Gateway deployments.
     roles: {
       default: "guest",
+      assignments: {
+        byGithubLogin: { octocat: "maintainer" },
+      },
       definitions: {
         maintainer: {
           sessions: { others: "write" }, // none | view | suggest | write
           agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
+          workerProfiles: ["development"], // optional: explicit dispatch of own sessions only
         },
         guest: {
           sessions: { others: "view" },
@@ -59,9 +63,9 @@ For the full key index and the other top-level config domains, see [Configuratio
     controlUi: {
       enabled: true,
       basePath: "/openclaw",
-      // experimental: { customPlugins: false }, // Labs: native UI from user-installed plugins
+      // experimental: { customPlugins: false }, // Advanced opt-out: native UI from user-installed plugins
       // environment: { label: "edge", color: "amber" },
-      // communityInvite: true, // show the sidebar Discord invitation unless dismissed
+      // communityInvite: true, // show the dismissible sidebar Community card
       // root: "dist/control-ui",
       // github: { token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" } },
       // embedSandbox: "scripts", // strict | scripts | trusted
@@ -129,7 +133,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 <Accordion title="Gateway field details">
 
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
-- `port`: local Gateway bind port, multiplexing WS + HTTP. It does not select the macOS SSH tunnel port. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `port`: local Gateway bind port, multiplexing WS + HTTP. It does not select the macOS SSH tunnel port. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > named-profile default (`19001` for `dev`, otherwise derived from the profile name) > `18789`. When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 - `publicOrigin`: optional externally reachable HTTPS origin of the Gateway,
   without a path, query, or credentials. HTTP is accepted only for literal
   loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.
@@ -139,18 +143,34 @@ For the full key index and the other top-level config domains, see [Configuratio
   into the Control UI also use this origin. It supplies the browser-origin
   allowlist when `gateway.controlUi.allowedOrigins` is omitted. Set `gateway.controlUi.basePath`
   separately when the Control UI is served below a reverse-proxy path prefix.
-- `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
+- `bind`: `auto`, `loopback` (default on regular hosts), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). With `gateway.bind` unset, a detected container defaults to `auto`, which resolves to `0.0.0.0`; Tailscale Serve/Funnel still forces loopback. A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
-- **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.
+- **Docker note**: with Tailscale off, the standalone image leaves `gateway.bind` unset, so detected-container startup uses `auto` and listens on `0.0.0.0`; Tailscale Serve/Funnel instead forces loopback. Non-loopback startup still requires configured auth. The image defines no host port publication; actual reachability depends on the runtime and network topology. Peers on the same container network and hosts with a route to the container address can reach the wildcard listener. Set `bind: "loopback"` explicitly for a loopback-only listener; host networking changes what that interface represents.
 - **Auth**: required by default. Non-loopback binds require gateway auth. In practice that means a shared token/password or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`. Onboarding wizard generates a token by default.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs), set `gateway.auth.mode` explicitly to `token` or `password`. Startup and service install/repair flows fail when both are configured and mode is unset.
 - `gateway.auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
 - `gateway.auth.mode: "trusted-proxy"`: delegate browser/user auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)). This mode expects a **non-loopback** proxy source by default; same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`. Internal same-host callers can use `gateway.auth.password` as a local direct fallback; `gateway.auth.token` remains mutually exclusive with trusted-proxy mode.
 - `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`). HTTP API endpoints do **not** use that Tailscale header auth; they follow the gateway's normal HTTP auth mode instead. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
 - `gateway.auth.identityScopes`: maps a verified trusted-proxy user or Tailscale WhoIs login to connection-only operator scopes. Email keys match case-insensitively; other identities match exactly. For trusted-proxy Control UI connections, `x-openclaw-scopes` caps device enrollment or upgrade requests and the final device-plus-identity session scopes. Grants do not create or modify pairing records. Token, password, and no-auth connections have no verified identity and receive no grant.
-- `gateway.roles`: optional named operator roles for authenticated user profiles on team Gateways. Every definition specifies `sessions.others` (`none`, `view`, `suggest`, or `write`), allowed session-creation and agent-run `agents` (`"*"` or an array of agent IDs), and a closed `scopes` ceiling that also applies to identity-authenticated HTTP requests and signed Control UI plugin grants. Optional `sandbox` is `"inherit"` by default or `"required"` to sandbox sessions created under that role even when the agent's sandbox mode is `"off"`. This requirement is recorded once from the authenticated creator, cannot be changed through role updates or session mutation, and does not affect existing sessions. A sandbox-required person cannot start a host-execution session, including through an invitation; unavailable sandbox backends fail closed, and elevated or host-target overrides cannot escape. The administrator-scoped `users.setRole` Gateway method assigns or clears a profile's role and immediately disconnects its active clients so they reconnect with current authority. Identity-authenticated operator sessions do not receive reusable, person-unbound device/bootstrap tokens while roles are configured, and identity-less device-token or bootstrap-token operator authentication is rejected; reconnect through trusted-proxy or other supported verified identity instead. `default` is required, must name a configured definition, and applies to unassigned profiles. `sessions.others: "none"` also denies Gateway-wide `usage.cost`; audit diagnostics and other `operator.write` control-plane capabilities remain shared-domain surfaces, not hostile-tenant isolation. Omitting `roles` leaves existing solo and shared-secret deployments unchanged. See [Operator scopes](/gateway/operator-scopes#named-operator-roles).
+- `gateway.roles`: a catalog of named operator roles. Setting `default` enables named-role enforcement for authenticated user profiles on team Gateways. Every definition specifies `sessions.others` (`none`, `view`, `suggest`, or `write`), allowed session-creation and agent-run `agents` (`"*"` or an array of agent IDs), and a closed `scopes` ceiling that also applies to identity-authenticated HTTP requests and signed Control UI plugin grants. Optional `sandbox` is `"inherit"` by default or `"required"` to sandbox the exec and file tools of sessions created under that role even when the agent's sandbox mode is `"off"`. This requirement is recorded once from the authenticated creator, cannot be changed through role updates or session mutation, and does not affect existing sessions. A sandbox-required person cannot start a host-execution session, including through an invitation; unavailable sandbox backends block session execution, and elevated or host-target exec overrides cannot escape that tool policy. This is not whole-host isolation; review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions). The administrator-scoped `users.setRole` Gateway method assigns or clears a profile's role and immediately disconnects its active clients so they reconnect with current authority. Identity-authenticated operator sessions do not receive reusable, person-unbound device/bootstrap tokens when their profile is role-enforced, and setting `gateway.roles.default` rejects identity-less device-token or bootstrap-token operator authentication; reconnect through trusted-proxy or other supported verified identity instead. `assignments.byGithubLogin` maps case-insensitive GitHub logins to defined roles before a person first signs in; a valid explicit profile assignment wins, then a matching cached GitHub identity, then `default`. Invalid or duplicate normalized logins and unknown role names are rejected; profiles without a cached GitHub identity do not match. `default` is optional and must name a configured definition when set. `assignments.byGithubLogin` requires a default, even for an empty mapping. Without a default, definitions enforce roles only for current OpenClaw ID members through their canonical linked profile, including ordinary trusted-proxy, HTTP, channel, and background access by that same person. A stored identity link without current membership is insufficient. Nonmembers retain device-token and setup-code sign-in, browser-code pairing, owner ingress, identity scopes, profile requirements, and session access as if `gateway.roles` were absent. In that state `users.setRole` accepts named member assignments but rejects named nonmember assignments; clearing with `role: null` remains allowed. Nonmembers have no effective role. `users.list` preserves the explicit `role` and adds `effectiveRole` and `roleSource` (`assigned`, `githubLogin`, or `default`). `sessions.others: "none"` also denies Gateway-wide `usage.cost`; audit diagnostics and other `operator.write` control-plane capabilities remain shared-domain surfaces, not hostile-tenant isolation. Omitting `roles` leaves existing solo and shared-secret deployments unchanged. See [Operator scopes](/gateway/operator-scopes#named-operator-roles).
+- OpenClaw ID members use their canonical linked profile's effective role from `gateway.roles.definitions` with or without `default`, independently of sign-in transport. Invite approval assigns that profile role; the membership role is a display label, not a separate grant. Enabling OpenClaw ID installs missing `operator`, `viewer`, and sandbox-required `guest` presets without changing existing definitions, `default`, or `assignments`. Manage membership roles on **Access**; definitions are config-only. Missing definitions block member connections. See [Member roles](/gateway/operator-scopes#openclaw-id-member-roles) for preset scopes and Doctor checks.
+- `gateway.roles.definitions.<role>.projects`: optional registry project IDs, or `"*"` for every registered project, that a role without `operator.write` may discover and open in addition to public GitHub repositories. Sessions and spawns reach a project granted only this way through an isolated managed worktree. Unknown IDs are ignored; omitting the field leaves project access unchanged. Grant edits apply to the next request without reconnecting clients or stopping runs. See [Project grants](/gateway/operator-scopes#project-grants).
 - `gateway.roles.definitions.<role>.accessPolicyPlugin`: optional exact plugin ID whose registered Gateway access policy must authorize people governed by this role. For example, a default visitor role can require `"visitor-access"`, while an independently assigned staff role omits the field. The Gateway denies this role's access when the plugin is missing or disabled, its manifest is missing or malformed, loading fails, or the policy supplies no current authority. The reference remains valid configuration while the plugin is unavailable, so independent staff and the Gateway owner can repair it. Omitting the field adds no plugin dependency.
-- `gateway.roles.definitions.<name>.modelPolicy`: optional model ceiling for a role's requests, queued work, and children. With `{}`, permitted models follow the designated source agent's primary and fallbacks. `sourceAgent` chooses that agent; `allow` replaces membership and `deny` excludes resolved model references, aliases, or trailing family patterns such as `provider/restricted-*`. An empty `allow` denies all models. With config reload enabled, edits confined to existing roles' model policies apply when committed without restarting the Gateway: requests using removed models are canceled while permitted models and unrelated work continue. Other role changes hot-apply and reconnect clients with current authority, including when combined with a model-policy edit. Existing manual model rules still apply; omitted role model policy and System access are unchanged. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+
+Access denials include a bounded `accessCause` in handshake error details and an
+`[access-cause=...]` marker in post-connect WebSocket 4001 reasons and logs.
+The Control UI displays the denial and pauses automatic reconnect for inactive
+records, revoked grants, invalidated profiles, and unclassified check failures.
+Use **Connect** after an administrator restores access. Known policy transitions
+(`policy-unavailable`, `policy-set-changed`, and `plugin-lifetime-retired`)
+allow fresh admission retries after at least 30 seconds, with backoff and jitter.
+No retry preserves a revoked run's authority or bypasses admission.
+Ingress and unknown-owner failures remain fail closed; the non-Gateway owner
+isolation rules in [Secrets runtime model](/gateway/secrets/runtime-model) do
+not grant access during a policy failure.
+
+- `gateway.roles.definitions.<name>.modelPolicy`: optional model ceiling for a role's requests, queued work, and children. With `{}`, permitted models follow the designated source agent's primary and fallbacks. `sourceAgent` chooses that agent; `allow` replaces membership and `deny` excludes resolved model references, aliases, or trailing family patterns such as `provider/restricted-*`. An empty `allow` denies all models. With config reload enabled, edits confined to existing roles' model policies or project grants apply when committed without restarting the Gateway: requests using removed models are canceled while permitted models and unrelated work continue. Other role changes hot-apply and reconnect clients with current authority, including when combined with a model-policy edit. Existing manual model rules still apply; omitted role model policy and System access are unchanged. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+- `gateway.roles.definitions.<name>.accessPrograms.cyber`: optional Access ceiling: `"daybreak_blue"`, `"daybreak_red"`, both, or `[]` for Standard only. An explicit list binds every operator, including administrators. When omitted, admitted `operator.admin` authority includes all eligible programs; restricted operators receive Standard only. Model wildcards and retired model aliases do not grant programs. The selected model must independently be permitted, and the account/runtime must advertise the program. Changes retire current source authority and require fresh admission, including queued work and restart recovery. System/shared-secret use and Gateways without named-role enforcement keep their existing behavior. See [Access program grants](/gateway/operator-scopes#access-program-grants).
 - Role definitions, proxy trust, identity scopes, Tailscale authentication, and trusted-proxy policy hot-apply. Changes beyond model policy reconnect existing clients with current authority, except that verified WebSocket logins retain their connections and accepted runs when only another login’s identity grants change or their own scope set is merely reordered. Changes to their own resolved grants revoke retained and delegated work; restoring a grant does not revive that authority. Pending handshakes and writes cannot keep revoked access. Auth mode changes still require a Gateway restart.
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`. Changes hot-apply to the existing limiters: recorded failures, earned lockout deadlines, and pending loopback delays survive. New limits and exemptions apply to subsequent attempts; deleting the section restores defaults.
   - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, clientIp}` are serialized before the failure write. Concurrent bad attempts from the same client can therefore trip the limiter on the second request instead of both racing through as plain mismatches.
@@ -172,20 +192,23 @@ For the full key index and the other top-level config domains, see [Configuratio
   provenance. OpenClaw leaves the external route unchanged and warns. The
   route can use generic proxy attribution only through an explicitly configured
   `gateway.trustedProxies` source with a valid forwarded client address;
-  Gateway-protected routes then require configured auth, while aggregate probes
+  Gateway-protected routes then require configured auth, while aggregate checks
   and plugin-authenticated webhooks retain their own response and authentication
   policies. First configure `gateway.auth.password` (prefer a SecretRef) or
   `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
-- `controlUi.experimental.customPlugins`: allow native browser UI from user-installed plugins, including local development plugins. Default: `false`. Enable through **Settings → Labs → Custom plugin UI** or set this boolean to `true`. Native UI runs with the signed-in operator's Gateway authority, so enable it only for trusted plugins. Native UI from enabled bundled plugins remains available with the setting off; backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and MCP Apps are unaffected. Changes hot-apply and refresh plugin views in connected browser tabs. After disabling it, reload tabs to clear plugin JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
+- `controlUi.experimental.customPlugins`: allow native browser UI from enabled user-installed plugins, including local development plugins. Default: `true`, with no Labs switch. This existing key remains an advanced opt-out: explicit `false` values stay off on upgrade; omission and `true` allow native UI. Native UI runs with each signed-in viewer’s Gateway authority, so install only trusted plugins. Enabled bundled views, backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected by the opt-out. Changes hot-apply and refresh connected browser tabs. After disabling, reload tabs to clear JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
+- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `true`, with no Labs or replacement settings switch. This historical key remains an advanced opt-out: explicit `false` stays off on upgrade, and unset or `true` permits discovery and Add. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Setting it to `false` blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway browser connections. When omitted, defaults to `gateway.publicOrigin` if configured. An explicit list, including `[]`, replaces this default. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.newSessionModelDefaults`: `"last-used"` (default) restores remembered new-session model, runtime, and reasoning choices. Set `"configured"` to start fresh drafts with the selected agent’s configured defaults instead. Applies to `/new` and the command palette in the UI served by this Gateway, after browser refresh or reconnect. Explicit choices remain editable and survive reload with the current unsent draft; submitting that draft retires its choices so the next fresh draft uses configured defaults. Existing conversations are untouched. Workspace, placement, and Fast Mode preferences are preserved; stored preferences are not deleted. Configure the desired model and `thinkingDefault` on the agent (or `agents.defaults`); this setting does not force a particular model or reasoning level.
-- `controlUi.communityInvite`: show the Discord community invitation in the sidebar. Default: `true`. Set `false` on the Gateway serving the UI to hide it for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Re-enabling preserves browser-local dismissals.
-- `controlUi.github.token`: optional SecretRef-backed service credential for GitHub-backed profile verification, Control UI project discovery, and GitHub hover previews without a managed agent identity. Profile verification uses the service credential only for public account metadata; the sign-in provider owns the person's identity. Metadata caching and quota cooldowns are automatic; see [Gateway profile and GitHub credit](/concepts/user-model#gateway-profile-and-github-credit). Hover previews prefer the selected agent's effective `tools.github` identity, including an inherited system identity, and remain restricted to public repositories. Prefer this explicit setting when the Gateway should own service access independently of its shared process environment. When omitted, service access retains the shipped `GH_TOKEN` then `GITHUB_TOKEN` process-environment fallback. An explicitly configured but unavailable credential fails closed instead of using an unrelated credential. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
+- `controlUi.communityInvite`: show a dismissible **Community** card at the bottom of the expanded sidebar, with links to Discord, Reddit, and X. On phones, the card uses a compact layout in the navigation drawer. Default: `true`. Set `false` on the Gateway serving the UI to hide the card for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Browser-local dismissals remain honored when this setting is re-enabled.
+- `controlUi.github.token`: optional SecretRef-backed service credential for GitHub-backed profile verification, Control UI project discovery, and GitHub hover previews without a managed agent identity. Set `controlUi.github.host` to the selected `gateway.github.host` for Enterprise repository service access. An omitted credential host means `github.com`; a mismatched host is rejected before a request. Public profile metadata verification stays on the public issuer and uses only an eligible public credential; the sign-in provider owns the person's identity. Metadata caching and quota cooldowns are automatic; see [Gateway profile and GitHub credit](/concepts/user-model#gateway-profile-and-github-credit). Hover previews prefer the selected agent's effective `tools.github` identity, including an inherited system identity, and remain restricted to public repositories. Prefer this explicit setting when the Gateway should own service access independently of its shared process environment. When omitted, the shared `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`, so Enterprise service access needs an explicit host-bound credential. An explicitly configured but unavailable credential blocks the request instead of allowing an unrelated credential. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
+  Session PR summaries and CI details use the host recorded by the repository or checkout. Public GitHub sessions stay on the public API and use anonymous access while an Enterprise host is selected; Enterprise credentials and cached private results never cross into those sessions.
+
 - Tool activity descriptions appear automatically when supplied by the acting agent; viewing tool calls does not request utility-model completions. The former `controlUi.toolTitles` setting is retired. Run `openclaw doctor --fix` to remove it from existing configs.
-- `controlUi.automaticallyFetchFavicons`: link favicons and browser-tab social previews in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. For inline link favicons, the Gateway requests `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Browser-tab cards additionally request the public page title, declared favicon, and Open Graph or Twitter image through the Gateway, with the same public-network restrictions and bounded HTML/image processing. No browser cookies or site credentials are forwarded. These previews disclose the page URL and the Gateway’s network address to the destination and its declared image hosts. Set `false` to disable both automatic favicon and page-preview fetches; existing live browser screenshot previews are unaffected.
+- `controlUi.automaticallyFetchFavicons`: link favicons and external-link page previews in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. For inline link favicons, the Gateway requests `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. External-link page previews additionally request the public page title, declared favicon, and Open Graph or Twitter image through the Gateway, with the same public-network restrictions and bounded HTML/image processing. No browser cookies or site credentials are forwarded. These previews disclose the page URL and the Gateway’s network address to the destination and its declared image hosts. Set `false` to disable both automatic favicon and page-preview fetches; existing live browser screenshot previews are unaffected.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `cliAgents.enabled`: show the **CLI agents** group in the Control UI new-session model picker. Default: `true`; set `false` to disable CLI agents and native CLI session creation. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
 
@@ -196,6 +219,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Changes hot-apply: disabling closes attached, detached, and conversation-owned sessions and cancels pending opens; re-enabling allows fresh sessions. Reload open Control UI pages to pick up the updated content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
+- `openclawId`: experimental [OpenClaw ID remote access](/concepts/experimental-features#openclaw-id-remote-access). `enabled` is the Labs switch (default `false`); `relayUrl` is the only iroh relay the tunnel uses; `issuerUrl`, `discoveryUrl` and `loaderDomain` are needed to turn on remote access for a claw; `clientId` (a public PKCE client) enables Sign in with OpenClaw ID in the Control UI account menu; `ownerDeviceInactivityDays` (default 90) and `memberDeviceInactivityDays` (default 30) set how long an owner device or a member's browser may go unused before the claw removes it. Off means inert: no tunnel child, no tunnel sockets and no calls to OpenClaw ID, Discovery or relays. Changes hot-apply.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.url`: remote client endpoint. In macOS SSH mode, its loopback port selects the local tunnel port independently of `gateway.port`.
 - `remote.remotePort`: Gateway port on the remote SSH host. The macOS tunnel falls back to the port in `remote.url`, then `18789`; set this explicitly when the tunnel and destination ports differ.
@@ -211,12 +235,12 @@ For the full key index and the other top-level config domains, see [Configuratio
 - `channels.<provider>.healthMonitor.enabled`: per-channel opt-out for health-monitor restarts while keeping the global monitor enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: per-account override for multi-account channels. When set, it takes precedence over the channel-level override.
 - Local gateway call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
-- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution stops with an error instead of falling back to remote credentials.
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
-- `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false`: ignore `X-Real-IP`.
 - `gateway.nodes.pairing.autoApproveLocal`: silently approves pairing, role upgrades, and scope upgrades from trusted local connections (default: `true`). Scope upgrades additionally require the connection itself to prove local-grade credentials (auth mode `none`, or the shared token/password); Tailscale, trusted-proxy, and device-token connects keep their paired scopes as a durable cap. Set `false` to require explicit approval for every device; metadata-only reconnect refreshes remain automatic.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
-- `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
+- `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; checks are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. `commands.allow` is the persistent enable for classified commands such as `camera.snap`, `camera.clip`, `codex.exec-server.stdio.v1`, `screen.record`, `health.summary`, `sms.search`, and `sms.send`; `commands.deny` removes a command even if a platform default or explicit allow would otherwise include it. Codex remote execution on a paired device or enrolled cloud node additionally requires a separate critical allow-once approval for every exec-server attempt; persistent allowlisting never grants that approval. Desktop sharing (`desktop.stream`), Computer Control, and mobile UI control instead rely on node-local enablement plus pairing. Desktop sharing starts enabled on desktop nodes and remains subject to explicit deny entries. iOS Health permission, Android SMS permission, and Gateway command authorization are independent. Gateway command-policy changes hot-apply to connected nodes under the default reload mode, without granting additional pairing approval. When a node changes its declared command list, reconnect it and approve the new command request so the Gateway stores the widened surface.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
@@ -278,11 +302,11 @@ Use the corresponding tool, terminal, channel, and plugin policies for those.
     Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
     and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
-  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health probes. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
+  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health checks. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 
 ### Multi-instance isolation
 
-Run multiple gateways on one host with unique ports and state dirs:
+Run multiple gateways on one host with unique ports and state dirs. Keep base ports at least 120 apart for the normal derived-port ranges. Explicit sandbox/browser/CDP port overrides and high-base-port fallbacks can still overlap, so check those ports separately:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
@@ -331,10 +355,10 @@ operator-controlled: update them before reconnecting with a renewed certificate.
 
 Client commands such as `triage`, `gateway status`, and `gateway probe` only read the public certificate to determine a local TLS pin. They never generate or repair TLS files and do not need the server private key or CA bundle. Without `certPath`, they inspect `gateway/tls/gateway-cert.pem` under the state directory. A missing or unreadable certificate supplies no implicit pin; normal connection trust checks still apply. Start the Gateway to generate a missing pair, or provide the configured certificate files before connecting.
 
-Long-lived local health probes remember the last verified certificate for their
+Long-lived local health checks remember the last verified certificate for their
 endpoint, preserving health checks while replacement files are incomplete or
 reload is paused. They adopt a replacement only after verifying a connection.
-A new probe, or one that missed an intermediate renewal, cannot trust a serving
+A new check, or one that missed an intermediate renewal, cannot trust a serving
 certificate that is no longer in the configured file and was never verified.
 Complete or re-enable renewal so the listener and configured certificate agree.
 
@@ -359,3 +383,117 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+## `gateway.resources.profile`
+
+```json5
+{ gateway: { resources: { profile: "auto" } } }
+```
+
+- `auto` (default): choose `lean` when effective memory is **below 8 GiB**;
+  exactly 8 GiB or more selects `standard`. Automatic selection is enabled by default
+  and depends only on memory, not CPU count.
+- `standard` or `lean`: explicitly override automatic selection.
+- Memory is the smallest visible cgroup v2 `memory.max` across the process's cgroup
+  and ancestors, bounded by total host RAM. Without a finite readable limit,
+  total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
+  `memory.high`, swap and current free memory do not select
+  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+- Changing the setting requires a Gateway restart.
+
+`standard` keeps the existing worker layout. `lean` runs the first worker of each core
+kind (SQLite store per carrier class, session transcript, state reader and plugin model
+catalog reader) as a logical endpoint inside one shared host worker. The endpoints load
+their common code once but keep their own ports, queues and task state; extra workers of
+the same kind, CPU-heavy kinds, external databases, Postgres-engine installs and plugins
+such as Knowledge keep their own workers. Runtimes where closing a SQLite database is not
+qualified to release its native resources (such as Bun on Windows) also keep dedicated
+workers, because their cleanup relies on worker exit. A failed, cancelled or timed-out hosted task
+replaces the whole shared host: every hosted endpoint's in-flight work fails with an
+explicit error, and the next request starts a new host. Neither profile is a memory cap or
+OOM guarantee.
+
+### Lean startup
+
+Lean also lowers memory use while the Gateway starts:
+
+- **Post-ready work waits for a quiet Gateway.** Standard starts post-ready maintenance
+  500 ms after startup settles. That covers session reconcile, disk-budget and archive
+  sweeps, worktree maintenance, the skills refresh, cron start, prewarming and the
+  restart-sentinel wake. Lean first checks 2 seconds after startup settles. If requests
+  are still running, such as a first agent turn, it checks again every second until
+  they finish. After 60 seconds it starts the work anyway, so a busy Gateway can't
+  postpone maintenance indefinitely. Requests never wait for this work.
+- **Command children spawn directly.** Lean doesn't start the Linux spawn broker, the
+  same as hosts with 1 GiB or less. Commands and SQLite readers spawn from the
+  Gateway, trading some fork latency for the broker's memory. The plugin
+  native-resource broker still starts when plugins first need it.
+
+### Lean worker memory admission
+
+In `lean`, the Gateway admits extra workers only while they fit a memory budget.
+Lean trades latency for staying inside it; work waits rather than starting a worker
+that would exceed the budget.
+
+```json5
+{ gateway: { resources: { profile: "lean", memoryBudgetMiB: 1024 } } }
+```
+
+| Limit source                  | Default budget   | Memory use compared with it                      |
+| ----------------------------- | ---------------- | ------------------------------------------------ |
+| cgroup v2 `memory.max`        | 85% of the limit | The limiting cgroup's working set                |
+| Host RAM (no container limit) | 40% of host RAM  | The Gateway process RSS, not its child processes |
+| `memoryBudgetMiB` set         | That many MiB    | As above, by limit source                        |
+
+A container limit is usually sized for OpenClaw alone, so the budget keeps a 15%
+margin. Without one, the Gateway shares the machine with everything else and keeps
+to 40%. `memoryBudgetMiB` (positive integer, lean only, ignored by `standard`)
+overrides both. The shares are provisional. Changing the budget requires a Gateway
+restart.
+
+- **Floors always run.** Each worker pool has a floor of one worker (two for
+  shared-state reads, so a held settlement read cannot block a fresh one), plus a
+  point-read lane once a pool uses point reads. Fixed direct workers (native lifecycle
+  supervisor, state heartbeats, SQLite broker carriers, Knowledge registry and
+  storage, PostgreSQL bridges, the shared core host) keep their normal counts. Floors
+  are reserved and never refused, so admission cannot deadlock.
+- **Growth waits.** A pool worker beyond its floor starts only if current memory use,
+  plus reservations not yet running, plus that worker's estimated cost stays under the
+  budget. Otherwise the task waits in the same pool queue for an existing worker. It
+  is never dropped; existing deadlines and cancellation still apply.
+- **Nested pools** created inside worker threads stay at their floor in lean.
+- **Measurement.** Inside a cgroup v2 limit, memory use is the limiting cgroup's
+  `memory.current` minus `inactive_file`. Active file cache still counts, so this can
+  overstate process memory. Without a cgroup limit, it is the Gateway process RSS,
+  which includes its worker threads but not subprocesses. Either is read at each
+  admission decision, not continuously.
+- **Estimates** are per worker kind heap measurements, not marginal RSS.
+- **Not covered:** memory already admitted (including floors, the main thread and
+  growth inside running workers), subprocesses, and plugin workers created directly
+  rather than through a worker pool. These are measured once running but not refused.
+
+The floor estimate is the memory measured when the lean budget starts (the main
+thread and any workers already running) plus every floor's estimate. The Gateway logs
+a warning once if that estimate exceeds the budget, and once if measured memory
+exceeds the budget while only floor workers run. In either case, mandatory workers
+still run and no growth is admitted.
+
+`openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
+report the active profile, selection reason, effective memory limit/source and CPU
+count. Their live census reports direct worker kind, count, retained idle floor,
+normal cap, point-read cap, idle policy and sampled heap usage. Floors are retained
+after first use, not eager startup counts. A zero idle timeout means until-close;
+warm-worker grace can extend configured timeouts. Workers remain counted until
+native exit, including pending retirement.
+
+Heap samples reuse the existing diagnostic sampler; unavailable or partial samples
+are labeled rather than reported as zero. Workers outside task pools have unknown
+policy fields. The census covers directly registered workers, not subprocesses or
+nested workers; it is not a process RSS breakdown. In lean, the shared host is one
+worker whose row also reports its live hosted endpoints. Offline status does not substitute
+the CLI's own resource profile for the Gateway's.
+
+In `lean`, status and `diagnostics.lanes` also report `memoryBudget`: the budget, its
+basis (`cgroup-85`, `host-40` or `configured`), the limit and its source, last measured use, the startup baseline and estimated floor bytes, reservations not yet running, growth
+admissions and refusals, and waits (count, currently waiting, total and longest
+wait), in total and per worker kind.

@@ -1,21 +1,34 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
+import {
+  type LoadPreparedModelCatalogParams,
+  readPreparedModelCatalog,
+} from "../../agents/prepared-model-catalog.js";
 import { DEFAULT_PROVIDER } from "./shared.js";
 
-export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
+export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string> {
+  const map = new Map<string, string>();
   for (const raw of modelCandidates) {
     const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
+    if (parsed && !map.has(parsed.provider)) {
+      map.set(parsed.provider, parsed.model);
     }
-    const list = map.get(parsed.provider) ?? [];
-    if (!list.includes(parsed.model)) {
-      list.push(parsed.model);
-    }
-    map.set(parsed.provider, list);
   }
   return map;
+}
+
+export async function loadProbeModelCatalog(
+  scope: Pick<LoadPreparedModelCatalogParams, "config" | "agentId" | "agentDir" | "workspaceDir">,
+  providerDiscoveryProviderIds: string[],
+): Promise<ModelCatalogEntry[]> {
+  return providerDiscoveryProviderIds.length
+    ? readPreparedModelCatalog({
+        ...scope,
+        readOnly: true,
+        scopedLiveProviderDiscovery: true,
+        providerDiscoveryProviderIds,
+      })
+    : [];
 }
 
 function probePriority(provider: string, modelId: string): number {
@@ -47,11 +60,11 @@ function probePriority(provider: string, modelId: string): number {
 /** Selects a requested-provider candidate before falling back to its catalog rows. */
 export function selectProbeModel(params: {
   provider: string;
-  candidates: Map<string, string[]>;
+  candidates: ReadonlyMap<string, string>;
   catalog: Array<Pick<ModelCatalogEntry, "provider" | "id" | "status">>;
 }): { provider: string; model: string } | null {
   const { provider, candidates, catalog } = params;
-  const direct = candidates.get(provider)?.[0];
+  const direct = candidates.get(provider);
   if (direct) {
     return { provider, model: direct };
   }

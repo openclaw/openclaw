@@ -164,7 +164,10 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     private mutating func restoreRecall(_ marker: RecallMarker) {
-        self.cursor = Self.index(ofOccurrence: marker.occurrence, value: marker.value, in: self.entries)
+        let entries = self.entries
+        self.cursor = entries.indices.reversed().lazy
+            .filter { entries[$0] == marker.value }
+            .dropFirst(marker.occurrence - 1).first
         if self.cursor == nil {
             self.resetNavigation()
         }
@@ -213,15 +216,6 @@ struct ChatInputHistory: Equatable, Sendable {
             where haystack[start..<(start + needle.count)].elementsEqual(needle)
         {
             return start..<(start + needle.count)
-        }
-        return nil
-    }
-
-    private static func index(ofOccurrence occurrence: Int, value: String, in entries: [String]) -> Int? {
-        var seen = 0
-        for (index, entry) in entries.enumerated().reversed() where entry == value {
-            seen += 1
-            if seen == occurrence { return index }
         }
         return nil
     }
@@ -288,7 +282,7 @@ extension OpenClawChatViewModel {
     }
 
     private func recallInput(_ navigate: (inout ChatInputHistory) -> String?) -> Bool {
-        let key = self.composerSessionKey(for: self.sessionKey)
+        let key = self.visibleComposerKey
         var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
         guard let draft = navigate(&history) else { return false }
         self.inputHistoriesBySession[key] = history
@@ -319,31 +313,47 @@ extension OpenClawChatViewModel {
             let text = ChatMessageVisibleText.visibleText(in: message)
             return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
         }
-        let key = self.composerSessionKey(for: self.sessionKey)
+        let key = self.visibleComposerKey
         self.inputHistoriesBySession[key, default: ChatInputHistory()].seed(transcriptInputs: transcriptInputs)
     }
 
     func noteComposerInputChanged() {
         guard !self.isApplyingRecalledInput else { return }
-        let key = self.composerSessionKey(for: self.sessionKey)
+        let key = self.visibleComposerKey
         self.composerRevisionsBySession[key, default: 0] &+= 1
+        self.clearComposerNotice()
         self.inputHistoriesBySession[key, default: ChatInputHistory()].draftChanged(to: self.input)
+        self.scheduleComposerDraftSave()
     }
 
     func prepareComposerForSessionSwitch(to nextSessionKey: String, agentID: String? = nil) {
-        let currentKey = self.composerSessionKey(for: self.sessionKey)
+        let currentKey = self.visibleComposerKey
         let nextKey = self.composerSessionKey(for: nextSessionKey, agentID: agentID)
-        let currentHistory = self.inputHistoriesBySession[currentKey] ?? ChatInputHistory()
-        let draft = currentHistory.draftForSessionSwitch(currentDraft: self.input)
-        if draft.isEmpty {
-            self.draftsBySession.removeValue(forKey: currentKey)
-            self.savedDraftRevisionsBySession.removeValue(forKey: currentKey)
+        if self.composerDraftKey != nil {
+            self.unbindComposerDraft()
         } else {
-            self.draftsBySession[currentKey] = draft
-            self.savedDraftRevisionsBySession[currentKey] = self.composerRevisionsBySession[
-                currentKey,
-                default: 0,
-            ]
+            // Text with no stored draft yet stays in memory for this launch.
+            self.cancelComposerDraftLoad()
+            if self.composerDraftSync.replacesStoredDraftKey == currentKey {
+                // Restored after a failed save and not yet stored; it still replaces the row.
+                self.composerDraftSync.replacesStoredDraftKey = nil
+                self.composerDraftSync.unsavedDraftRevisions[currentKey] = self.composerRevisionsBySession[
+                    currentKey,
+                    default: 0,
+                ]
+            }
+            let currentHistory = self.inputHistoriesBySession[currentKey] ?? ChatInputHistory()
+            let draft = currentHistory.draftForSessionSwitch(currentDraft: self.input)
+            if draft.isEmpty {
+                self.draftsBySession.removeValue(forKey: currentKey)
+                self.savedDraftRevisionsBySession.removeValue(forKey: currentKey)
+            } else {
+                self.draftsBySession[currentKey] = draft
+                self.savedDraftRevisionsBySession[currentKey] = self.composerRevisionsBySession[
+                    currentKey,
+                    default: 0,
+                ]
+            }
         }
         self.inputHistoriesBySession[currentKey, default: ChatInputHistory()].resetNavigation()
         self.inputHistoriesBySession[nextKey, default: ChatInputHistory()].resetNavigation()
@@ -352,11 +362,22 @@ extension OpenClawChatViewModel {
 
     func restoreComposerAfterSessionSwitch() {
         let key = self.composerSessionKey(for: self.sessionKey)
-        self.applyRecalledInput(self.draftsBySession[key] ?? "", advancesRevision: false)
+        guard self.composerDraftStore != nil else {
+            self.applyRecalledInput(self.draftsBySession[key] ?? "", advancesRevision: false)
+            return
+        }
+        // The load gate appends text kept in memory before this key had a stored
+        // draft; text from an unsaved switch-away replaces the stored row.
+        if self.composerDraftSync.unsavedDraftRevisions.removeValue(forKey: key) != nil {
+            self.composerDraftSync.replacesStoredDraftKey = key
+        }
+        self.applyRecalledInput(self.draftsBySession.removeValue(forKey: key) ?? "", advancesRevision: false)
+        self.syncComposerDraftKey()
     }
 
     func composerRevision(for sessionKey: String) -> UInt64 {
-        self.composerRevisionsBySession[self.composerSessionKey(for: sessionKey), default: 0]
+        let key = sessionKey == self.sessionKey ? self.visibleComposerKey : self.composerSessionKey(for: sessionKey)
+        return self.composerRevisionsBySession[key, default: 0]
     }
 
     private func applyRecalledInput(_ value: String, advancesRevision: Bool) {
@@ -364,7 +385,7 @@ extension OpenClawChatViewModel {
         self.input = value
         self.isApplyingRecalledInput = false
         if advancesRevision {
-            self.composerRevisionsBySession[self.composerSessionKey(for: self.sessionKey), default: 0] &+= 1
+            self.composerRevisionsBySession[self.visibleComposerKey, default: 0] &+= 1
         }
     }
 }

@@ -1,3 +1,8 @@
+import {
+  hasLegacyRuntimeContextEnvelope,
+  RUNTIME_CONTEXT_FOOTER,
+  RUNTIME_CONTEXT_HEADER,
+} from "../../../packages/llm-core/src/types.ts";
 import { isRecord } from "../../../packages/normalization-core/src/record-coerce.ts";
 
 export type MockInferenceFacts = {
@@ -25,9 +30,9 @@ export function readMockUserText(message: unknown): string | undefined {
     return undefined;
   }
   const text = contentText(message.content);
-  // Responses places this complete runtime carrier after the user request it belongs to.
-  return text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n") &&
-    text.endsWith("\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
+  // Provider projections can place runtime context after the current turn's tool output.
+  return hasLegacyRuntimeContextEnvelope(text) ||
+    (text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) && text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`))
     ? undefined
     : text;
 }

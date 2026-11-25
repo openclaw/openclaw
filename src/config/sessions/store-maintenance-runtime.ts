@@ -27,7 +27,6 @@ export function captureMaintenanceConfigAsyncReader(assertCallerCurrent: () => v
         maintenance = (await read()).session?.maintenance;
       } catch {
         // Match the native maintenance owner's unavailable-config default, never a retired source.
-        read.assertCurrent();
       }
       read.assertCurrent();
       return resolveMaintenanceConfigFromInput(maintenance);

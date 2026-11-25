@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  onDiagnosticEvent,
-  type DiagnosticPayloadLargeEvent,
-} from "../../infra/diagnostic-events.js";
-import { reportOmittedChatHistory } from "./chat-history-budget.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
+import { reportOmittedChatHistory } from "../chat-history-budget.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 
 function runHistoryBudgetPipeline(messages: unknown[], maxHistoryBytes: number) {
-  const events: DiagnosticPayloadLargeEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "payload.large") {
       events.push(event);
@@ -41,7 +38,6 @@ describe("chat.history truncation logging (real diagnostic bus)", () => {
       action: "truncated",
       reason: "chat_history_budget",
       count: 1,
-      bytes: Buffer.byteLength(JSON.stringify(messages)),
       limitBytes: 2_000,
     });
   });

@@ -1,4 +1,3 @@
-// Defines provider config context types for plugin-owned providers.
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

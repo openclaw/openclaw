@@ -9,6 +9,7 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { syncDirectoryBestEffort } from "../infra/directory-durability.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   type captureChannelReadScope,
@@ -21,7 +22,7 @@ type ReadScope = NonNullable<ReturnType<typeof captureChannelReadScope>>;
 
 const exitCleanups = resolveGlobalSingleton(Symbol.for("openclaw.readMediaExitCleanup"), () => {
   const callbacks = new Set<() => void>();
-  process.once("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of callbacks) {
       try {
         cleanup();
@@ -90,7 +91,6 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       );
     }
   }
-  assertCurrent();
   // Own one sibling file; cleanup must never recurse into substituted staging contents.
   const temporaryPath = buildRandomTempFilePath({
     rootDir: mediaRoot.rootReal,
@@ -183,7 +183,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     handle = await fs.open(temporaryPath, "wx", MEDIA_FILE_MODE);
     const retained = handle;
     const expected = fsSync.fstatSync(retained.fd, { bigint: true });
-    assertOwnedFile = (filePath) => {
+    const assertCreatedFile = (filePath: string) => {
       const opened = fsSync.fstatSync(retained.fd, { bigint: true });
       const current = fsSync.lstatSync(filePath, { bigint: true });
       if (
@@ -200,6 +200,13 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       ) {
         throw new FsSafeError("path-mismatch", "Media output no longer names the created file");
       }
+    };
+    assertOwnedFile = assertCreatedFile;
+    const assertPublicationAllowed = () => {
+      assertCurrent();
+      assertRequestedDirectory();
+      assertMediaDirectory();
+      assertCreatedFile(temporaryPath);
     };
     cleanupAtExit = () => {
       for (const name of [finalId, temporaryName]) {
@@ -221,10 +228,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     exitCleanups.add(cleanupAtExit);
     assertCurrent();
     const result = await params.write(retained);
-    assertCurrent();
-    assertRequestedDirectory();
-    assertMediaDirectory();
-    assertOwnedFile(temporaryPath);
+    assertPublicationAllowed();
     // Match sibling publication's mode finalization, including restrictive caller umasks.
     try {
       await retained.chmod(MEDIA_FILE_MODE);
@@ -234,35 +238,14 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       }
     }
     if (params.durable) {
-      assertCurrent();
-      assertRequestedDirectory();
-      assertMediaDirectory();
-      assertOwnedFile(temporaryPath);
+      assertPublicationAllowed();
       await retained.sync();
     }
-    assertCurrent();
-    assertRequestedDirectory();
-    assertMediaDirectory();
-    assertOwnedFile(temporaryPath);
+    assertPublicationAllowed();
     finalId = result.id;
     await mediaRoot.move(temporaryName, finalId, {
       overwrite: false,
-      assertBeforeMutation: () => {
-        assertCurrent();
-        assertRequestedDirectory();
-        assertMediaDirectory();
-        assertOwnedFile?.(temporaryPath);
-        // Repeat the move owner's collision check after its awaited preparation.
-        try {
-          fsSync.lstatSync(path.join(mediaRoot.rootReal, result.id));
-        } catch (error) {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-            return;
-          }
-          throw error;
-        }
-        throw new FsSafeError("already-exists", "Media output already exists");
-      },
+      assertBeforeMutation: assertPublicationAllowed,
     });
     resource.assertCurrent();
     if (params.durable) {
@@ -279,11 +262,6 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     }
     handedOff = true;
     return result;
-  } catch (error) {
-    // Also covers publication that completed before a failed post-check, and
-    // an already-issued move settling after its enclosing scope closed.
-    await settleChannelReadResource(resource, false);
-    throw error;
   } finally {
     if (!handedOff) {
       await settleChannelReadResource(resource, false);

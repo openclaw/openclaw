@@ -36,33 +36,6 @@ export function prepareExecApprovalStandingGrant<TPayload>(params: {
   return { standingGrantSpec, standingGrant };
 }
 
-export function prepareExecApprovalStorageFailure(recordId: string, nowMs: number) {
-  return {
-    recordId,
-    decision: "deny",
-    resolvedAtMs: nowMs,
-    resolvedBy: "storage-error",
-    resolverKind: "system",
-    status: "denied",
-    terminalReason: "storage-corrupt",
-    retainForManagerLifetime: true,
-  } as const;
-}
-
-export function projectClosedApprovalResolution<TPayload>(
-  closed: ExecApprovalForceDenyResult<TPayload>,
-): ExecApprovalResolveResult<TPayload> {
-  if (closed.outcome === "not-found" || closed.outcome === "corrupt") {
-    return closed;
-  }
-  return {
-    outcome: "already-resolved",
-    retry: "conflict",
-    record: closed.record,
-    ...(closed.liveRecord ? { liveRecord: closed.liveRecord } : {}),
-  };
-}
-
 export function projectRepairedApprovalResolution<TPayload>(
   repaired: ExecApprovalForceDenyResult<TPayload>,
   decision: ExecApprovalDecision,

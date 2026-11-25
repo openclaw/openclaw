@@ -12,7 +12,7 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 async function configurePerAgentSessionStore(dir: string) {
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
   testState.sessionStorePath = storeTemplate;
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   return storeTemplate;
 }
 
@@ -48,6 +48,7 @@ test("agent RPC rejects archived session keys before dispatch", async () => {
       code: ErrorCodes.INVALID_REQUEST,
       message:
         'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
+      retryable: false,
     });
     expect(agentCommandMock).not.toHaveBeenCalled();
   } finally {

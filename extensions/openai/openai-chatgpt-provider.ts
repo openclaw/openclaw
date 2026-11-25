@@ -1,7 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
-  ProviderAuthMethod,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -17,6 +15,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   readStringValue,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,7 +26,10 @@ import {
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
   OPENAI_CHATGPT_MODERN_MODEL_IDS,
+  OPENAI_DUAL_ROUTE_MODEL_IDS,
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
   OPENAI_GPT_54_LEGACY_MODEL_ID as OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
   OPENAI_GPT_54_MINI_MODEL_ID as OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
@@ -37,9 +39,9 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
+  OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -111,26 +113,9 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
-const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
-  ...OPENAI_GPT_6_MODEL_IDS,
-  ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-] as const;
-
 function isOpenAIProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === PROVIDER_ID;
-}
-
-function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  return (
-    trimmed !== undefined && /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/iu.test(trimmed)
-  );
 }
 
 function normalizeCodexTransportFields(params: {
@@ -141,10 +126,7 @@ function normalizeCodexTransportFields(params: {
   baseUrl?: string;
 } {
   const useCodexTransport =
-    !params.baseUrl ||
-    isOpenAIApiBaseUrl(params.baseUrl) ||
-    isOpenAICodexBaseUrl(params.baseUrl) ||
-    isLegacyCodexCompatBaseUrl(params.baseUrl);
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
   const api =
     useCodexTransport &&
     (!params.api || params.api === "openai-responses" || params.api === "openai-completions")
@@ -155,29 +137,6 @@ function normalizeCodexTransportFields(params: {
       ? OPENAI_CODEX_RESPONSES_BASE_URL
       : params.baseUrl;
   return { api, baseUrl };
-}
-
-function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
-  return [modelId, modelName]
-    .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
-}
-
-// Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
-function applyOpenAICodexImageInputCapability(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (Array.isArray(params.model.input) && params.model.input.includes("image")) {
-    return undefined;
-  }
-  if (!matchesOpenAICodexImageCapableModel(params.modelId, params.model.name)) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    input: ["text", "image"],
-  };
 }
 
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
@@ -224,13 +183,26 @@ function resolveCodexForwardCompatModel(
     if (!catalogModel || catalogModel.contextWindow === undefined) {
       return undefined;
     }
+    const registeredModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
     return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
       input: catalogModel.input.filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
-      ...ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId),
+      ...registeredModel,
+      // Startup borrows Platform manifest rows; their API budget is not a subscription limit.
+      // Same-route registry rows retain authored and account-reported budgets, including 272k.
+      ...(lower === OPENAI_GPT_61_SOL_MODEL_ID
+        ? {
+            contextTokens:
+              registeredModel &&
+              (registeredModel.api === "openai-chatgpt-responses" ||
+                isOpenAICodexBaseUrl(registeredModel.baseUrl))
+                ? (registeredModel.contextTokens ?? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS)
+                : OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+          }
+        : {}),
       id: trimmedModelId,
       provider: PROVIDER_ID,
       api: "openai-chatgpt-responses",
@@ -353,9 +325,9 @@ function withDefaultCodexContextMetadata(params: {
     return undefined;
   }
   const contextTokens =
-    typeof params.model.contextTokens === "number"
+    params.model.contextTokens !== undefined
       ? params.model.contextTokens
-      : typeof params.model.contextWindow === "number" && params.model.contextWindow > 0
+      : params.model.contextWindow !== undefined && params.model.contextWindow > 0
         ? Math.min(params.contextTokens, params.model.contextWindow)
         : params.contextTokens;
   const input = params.model.input?.includes("image")
@@ -383,33 +355,21 @@ function buildCodexCredentialExtra(identity: {
 }
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
-  try {
-    const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
-    const refreshed = await refreshOpenAICodexToken(cred.refresh);
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: refreshed.access,
-      email: cred.email,
-    });
-    return {
-      ...cred,
-      ...refreshed,
-      type: "oauth" as const,
-      provider: PROVIDER_ID,
-      email: identity.email ?? cred.email,
-      displayName: cred.displayName,
-      ...buildCodexCredentialExtra(identity),
-    };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (
-      /extract\s+accountid\s+from\s+token/i.test(message) &&
-      typeof cred.access === "string" &&
-      cred.access.trim().length > 0
-    ) {
-      return cred;
-    }
-    throw error;
-  }
+  const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
+  const refreshed = await refreshOpenAICodexToken(cred.refresh);
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: refreshed.access,
+    email: cred.email,
+  });
+  return {
+    ...cred,
+    ...refreshed,
+    type: "oauth" as const,
+    provider: PROVIDER_ID,
+    email: identity.email ?? cred.email,
+    displayName: cred.displayName,
+    ...buildCodexCredentialExtra(identity),
+  };
 }
 
 type OpenAICodexOAuthContext = ProviderAuthContext & {
@@ -419,12 +379,13 @@ type OpenAICodexOAuthContext = ProviderAuthContext & {
 function buildOpenAICodexAuthResult(
   buildResult: typeof import("openclaw/plugin-sdk/provider-auth-result").buildOauthProviderAuthResult,
   creds: { access: string; refresh: string; expires: number; email?: unknown },
+  existingProfiles: ProviderAuthContext["existingProfiles"],
 ) {
   const identity = resolveOpenAICodexAuthIdentity({
     access: creds.access,
     email: readStringValue(creds.email),
   });
-  return buildResult({
+  const result = buildResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     configPatch: { agents: { defaults: { models: { [OPENAI_CODEX_DEFAULT_MODEL]: {} } } } },
@@ -435,6 +396,28 @@ function buildOpenAICodexAuthResult(
     profileName: identity.profileName,
     credentialExtra: buildCodexCredentialExtra(identity),
   });
+  // One ChatGPT login can own several workspaces (personal and Business share
+  // an email). A second workspace gets its own slot instead of replacing the
+  // profile that already holds the email-named one.
+  const profile = result.profiles[0];
+  const occupant = existingProfiles?.find(
+    (existing) => existing.profileId === profile?.profileId,
+  )?.credential;
+  const occupantAccountId =
+    occupant?.type === "oauth"
+      ? (resolveOpenAICodexAuthIdentity({ access: occupant.access }).accountId ??
+        normalizeOptionalString(occupant.accountId))
+      : undefined;
+  // Without both workspace IDs, keep the existing profile naming behavior.
+  if (
+    profile &&
+    identity.accountId &&
+    occupantAccountId &&
+    occupantAccountId !== identity.accountId
+  ) {
+    profile.profileId = `${profile.profileId}:${identity.accountId}`;
+  }
+  return result;
 }
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
@@ -451,23 +434,25 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
     signal: ctx.signal,
     assertCurrent: ctx.assertCurrent,
     onManualCodeInput: ctx.onManualCodeInput,
-    localBrowserMessage: "Complete sign-in in browser…",
+    localBrowserMessage: "Sign in to ChatGPT in your browser…",
   });
   if (!creds) {
     return { profiles: [] };
   }
 
-  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
-async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
+/** Codex login: device code first, browser sign-in only when the server has device code disabled. */
+export async function runOpenAICodexLogin(ctx: OpenAICodexOAuthContext) {
+  const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
+    import("./openai-chatgpt-device-code.js"),
+    import("openclaw/plugin-sdk/provider-auth-result"),
+  ]);
   const spin = ctx.prompter.progress("Starting device code flow…");
+  let creds: Awaited<ReturnType<typeof loginOpenAICodexDeviceCode>>;
   try {
-    const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
-      import("./openai-chatgpt-device-code.js"),
-      import("openclaw/plugin-sdk/provider-auth-result"),
-    ]);
-    const creds = await loginOpenAICodexDeviceCode({
+    creds = await loginOpenAICodexDeviceCode({
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       assertCurrent: ctx.assertCurrent,
       onProgress: (message) => spin.update(message),
@@ -515,27 +500,18 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
         }
       },
     });
-    spin.stop("OpenAI device code complete");
-
-    return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
   } catch (error) {
-    spin.stop("OpenAI device code failed");
-    ctx.runtime.error(formatErrorMessage(error));
-    await ctx.prompter.note(
-      "Trouble with device code login? See https://docs.openclaw.ai/start/faq",
-      "OAuth help",
-    );
+    spin.stop();
     throw error;
   }
-}
-
-export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
-  Record<"oauth" | "device-code", ProviderAuthMethod["run"]>
-> {
-  return {
-    oauth: runOpenAICodexOAuth,
-    "device-code": runOpenAICodexDeviceCode,
-  };
+  if (!creds) {
+    // Mirrors Codex `run_login_with_device_code_fallback_to_browser`: only a disabled
+    // device-code endpoint falls back; every other device-code failure ends this sign-in.
+    spin.stop("Device code login is not enabled; falling back to browser login.");
+    return await runOpenAICodexOAuth(ctx);
+  }
+  spin.stop("OpenAI device code complete");
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
 export function buildOpenAICodexProviderHooks(): Required<
@@ -563,13 +539,19 @@ export function buildOpenAICodexProviderHooks(): Required<
       if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
-      const transportNormalized = normalizeCodexTransport(ctx.model);
-      const imageCapable =
-        applyOpenAICodexImageInputCapability({
-          modelId: ctx.modelId,
-          model: transportNormalized,
-        }) ?? transportNormalized;
-      return imageCapable === ctx.model ? undefined : imageCapable;
+      let model = normalizeCodexTransport(ctx.model);
+      // Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
+      if (
+        !(Array.isArray(model.input) && model.input.includes("image")) &&
+        [ctx.modelId, model.name].some(
+          (candidate) =>
+            typeof candidate === "string" &&
+            matchesExactOrPrefix(candidate, OPENAI_DUAL_ROUTE_MODEL_IDS),
+        )
+      ) {
+        model = { ...model, input: ["text", "image"] };
+      }
+      return model === ctx.model ? undefined : model;
     },
     normalizeTransport: ({ provider, api, baseUrl }) => {
       if (!isOpenAIProvider(provider)) {

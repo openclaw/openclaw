@@ -88,15 +88,10 @@ final class DashboardBrowserSessionStore {
     private var cookieRuleSource: String?
     private var publishedRevision: UInt64?
     private let embedSignIn: CloudflareAccessEmbedLogin
-    private final class PreparedController {
-        weak var controller: WKUserContentController?
-
-        init(_ controller: WKUserContentController) {
-            self.controller = controller
-        }
-    }
-
-    private var preparedControllers: [PreparedController] = []
+    private let preparedControllers = NSHashTable<WKUserContentController>(options: [
+        .weakMemory,
+        .objectPointerPersonality,
+    ])
 
     convenience init(
         dataStore: WKWebsiteDataStore,
@@ -320,10 +315,9 @@ final class DashboardBrowserSessionStore {
     }
 
     private func prepareController(_ controller: WKUserContentController) {
-        self.preparedControllers.removeAll { $0.controller == nil }
-        guard !self.preparedControllers.contains(where: { $0.controller === controller }) else { return }
+        guard !self.preparedControllers.contains(controller) else { return }
         if let rule = self.cookieRule { controller.add(rule) }
-        self.preparedControllers.append(PreparedController(controller))
+        self.preparedControllers.add(controller)
     }
 
     private func refreshCookieRule(
@@ -356,12 +350,11 @@ final class DashboardBrowserSessionStore {
         }
         guard self.revision == revision else { throw GatewayBrowserSessionError.superseded }
         self.cookieRule = rule
-        self.preparedControllers.removeAll { $0.controller == nil }
         if let rule {
             // WebKit replaces lists by identifier. Removing first would briefly
             // disable cookie blocking; no-session controllers retain their old list.
-            for prepared in self.preparedControllers {
-                prepared.controller?.add(rule)
+            for controller in self.preparedControllers.allObjects {
+                controller.add(rule)
             }
         }
     }
@@ -436,8 +429,6 @@ final class DashboardBrowserSessionStore {
         ] + patterns.map { pattern in
             ["trigger": ["url-filter": pattern], "action": ["type": "ignore-previous-rules"]]
         }
-        guard let encoded = try String(data: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)
-        else { throw GatewayBrowserSessionError.invalidSession }
-        return encoded
+        return try String(bytes: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)!
     }
 }

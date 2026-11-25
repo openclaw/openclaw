@@ -6,6 +6,15 @@ import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from ".
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 type CliSessionBindingEntry = Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds">;
 
+export function normalizeCliTranscriptCursor(value: CliSessionBinding["transcriptCursor"]) {
+  const localSessionId = normalizeOptionalString(value?.localSessionId);
+  const runId = normalizeOptionalString(value?.runId);
+  const entryId = value?.entryId === null ? null : normalizeOptionalString(value?.entryId);
+  return localSessionId && runId && entryId !== undefined
+    ? { localSessionId, entryId, runId, userEntryId: normalizeOptionalString(value?.userEntryId) }
+    : undefined;
+}
+
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
 ): CliSessionReseedReceipt | undefined {
@@ -88,6 +97,7 @@ export function getCliSessionBinding(
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
       reseedReceipt: normalizeCliSessionReseedReceipt(fromBindings?.reseedReceipt),
+      transcriptCursor: normalizeCliTranscriptCursor(fromBindings?.transcriptCursor),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -98,10 +108,40 @@ export function getCliSessionBinding(
   return undefined;
 }
 
+// A copied binding must branch at the recorded checkpoint even if the parent advances.
+// Retain account/environment validation; force-reuse and reseed receipts belong to the parent.
+export function forkCliSessionBindings(
+  parent: CliSessionBindingEntry | undefined,
+  supportsFork: (provider: string) => boolean,
+): Record<string, CliSessionBinding> | undefined {
+  const providers = new Set([
+    ...Object.keys(parent?.cliSessionBindings ?? {}),
+    ...Object.keys(parent?.cliSessionIds ?? {}),
+  ]);
+  const forked: Record<string, CliSessionBinding> = {};
+  for (const provider of providers) {
+    const binding = getCliSessionBinding(parent, provider);
+    if (binding?.resumeCheckpointId && supportsFork(provider)) {
+      const {
+        reseedReceipt: _reseedReceipt,
+        transcriptCursor: _transcriptCursor,
+        forceReuse: _forceReuse,
+        ...inherited
+      } = binding;
+      forked[normalizeProviderId(provider)] = { ...inherited, forkNextResume: true };
+    }
+  }
+  return Object.keys(forked).length > 0 ? forked : undefined;
+}
+
 export function clearAllCliSessions(
   entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
 ): void {
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
+}
+
+export function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
+  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }

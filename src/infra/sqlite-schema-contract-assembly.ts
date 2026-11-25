@@ -1,3 +1,11 @@
+import type {
+  SqliteColumnCatalog,
+  SqliteForeignKeyCatalog,
+  SqliteIndexListRow,
+  SqliteIndexTermRow,
+  SqliteSchemaRow,
+  SqliteTableListRow,
+} from "./sqlite-schema-catalog-types.js";
 import {
   findSqlCharacter,
   findSqlClosingParenthesis,
@@ -9,36 +17,8 @@ import {
   splitSqlList,
 } from "./sqlite-schema-sql.js";
 
-export type SqliteIndexListRow = {
-  name: string;
-  origin: string;
-  partial: number;
-  unique: number;
-};
-
-export type SqliteIndexTermRow = {
-  cid: number;
-  coll: string;
-  desc: number;
-  key: number;
-  name: string | null;
-  seqno: number;
-};
-
 type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
   kind: "column" | "expression" | "rowid";
-};
-
-export type SqliteSchemaRow = {
-  name: string;
-  sql: string | null;
-  tbl_name?: string;
-};
-
-export type SqliteTableListRow = {
-  name: string;
-  strict: number;
-  wr: number;
 };
 
 export type SqliteIndexContract = {
@@ -57,6 +37,8 @@ export type SqliteTableDefinition = {
 
 export type SqliteTableContract = {
   definition: SqliteTableDefinition | null;
+  columns: readonly SqliteColumnCatalog[];
+  foreignKeys: readonly SqliteForeignKeyCatalog[];
   indexes: SqliteIndexContract[];
   strict: number;
   triggers: Array<{ name: string; sql: string | null }>;
@@ -69,7 +51,9 @@ export function createSqliteTableContract(
   table: SqliteSchemaRow,
   tableList: SqliteTableListRow,
   indexes: SqliteIndexContract[],
-  triggers: SqliteSchemaRow[],
+  triggers: readonly SqliteSchemaRow[],
+  columns: readonly SqliteColumnCatalog[],
+  foreignKeys: readonly SqliteForeignKeyCatalog[],
 ): SqliteTableContract {
   const normalizedTriggers = triggers.map((trigger) => ({
     name: trigger.name,
@@ -85,6 +69,8 @@ export function createSqliteTableContract(
   return {
     definition: isVirtualTable ? null : parseSqliteTableDefinition(table.sql, tableName),
     indexes,
+    columns,
+    foreignKeys,
     strict: tableList.strict,
     triggers: normalizedTriggers,
     virtualTableSql: isVirtualTable ? normalizedTableSql : null,
@@ -95,13 +81,13 @@ export function createSqliteTableContract(
 export function createSqliteIndexContract(
   index: SqliteIndexListRow,
   schemaSql: string | null,
-  rows: SqliteIndexTermRow[],
+  rows: readonly SqliteIndexTermRow[],
 ): SqliteIndexContract {
-  const terms = rows.map(({ cid, coll, desc, key, name, seqno }) => ({
+  const terms = rows.map<SqliteIndexTermContract>(({ cid, coll, desc, key, name, seqno }) => ({
     coll,
     desc,
     key,
-    kind: sqliteIndexTermKind(cid),
+    kind: cid === -2 ? "expression" : cid === -1 ? "rowid" : "column",
     name,
     seqno,
   }));
@@ -113,10 +99,6 @@ export function createSqliteIndexContract(
     terms,
     unique: index.unique,
   };
-}
-
-function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
-  return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
 }
 
 export function parseSqliteTableDefinition(

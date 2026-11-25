@@ -9,6 +9,7 @@ import { listChatCommands, listChatCommandsForConfig } from "./commands-registry
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
 import { isAbortTrigger } from "./reply/abort-trigger-text.js";
+import { isBangCommandInput } from "./reply/bash-command-input.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 function normalizeControlCommandBody(text?: string, options?: CommandNormalizeOptions): string {
@@ -21,24 +22,18 @@ function hasNormalizedControlCommand(normalizedBody: string, cfg?: OpenClawConfi
   }
   const lowered = normalizeLowercaseStringOrEmpty(normalizedBody);
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
-  for (const command of commands) {
-    for (const alias of command.textAliases) {
+  return commands.some((command) =>
+    command.textAliases.some((alias) => {
       const normalized = normalizeOptionalLowercaseString(alias);
-      if (!normalized) {
-        continue;
-      }
-      if (lowered === normalized) {
-        return true;
-      }
-      if (command.acceptsArgs && lowered.startsWith(normalized)) {
-        const nextChar = normalizedBody.charAt(normalized.length);
-        if (nextChar && /\s/.test(nextChar)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
+      return Boolean(
+        normalized &&
+        (lowered === normalized ||
+          (command.acceptsArgs &&
+            lowered.startsWith(normalized) &&
+            /\s/.test(normalizedBody.charAt(normalized.length)))),
+      );
+    }),
+  );
 }
 
 /** Returns true when text starts with a configured control command alias. */
@@ -57,10 +52,7 @@ export function isControlCommandMessage(
   options?: CommandNormalizeOptions,
 ): boolean {
   const normalizedBody = normalizeControlCommandBody(text, options);
-  return (
-    hasNormalizedControlCommand(normalizedBody, cfg) ||
-    isAbortTrigger(normalizeLowercaseStringOrEmpty(normalizedBody))
-  );
+  return hasNormalizedControlCommand(normalizedBody, cfg) || isAbortTrigger(normalizedBody);
 }
 
 /** Returns true when a command starts a new transcript rather than resetting in place. */
@@ -82,14 +74,22 @@ export function isSessionBoundaryCommandText(
  * command/directive execution, not normal chat replies.
  */
 export function hasInlineCommandTokens(text?: string): boolean {
-  const body = text ?? "";
-  if (!body.trim()) {
-    return false;
-  }
-  return /(?:^|\s)[/!][a-z]/i.test(body);
+  return /(?:^|\s)[/!][a-z]/i.test(text ?? "");
 }
 
-function hasSpacedPluginCommand(text?: string): boolean {
+/** Detects command syntax without broadening it for channel authorization metadata. */
+function hasCommandSyntax(
+  text?: string,
+  cfg?: OpenClawConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  if (
+    isBangCommandInput(text) ||
+    isControlCommandMessage(text, cfg, options) ||
+    hasInlineCommandTokens(text)
+  ) {
+    return true;
+  }
   const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
   // Only active registered commands affect ingress authorization and mention gating.
   // This keeps spaced syntax aligned with canonical `/name` command ownership.
@@ -102,9 +102,7 @@ export function shouldComputeCommandAuthorized(
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return (
-    isControlCommandMessage(text, cfg, options) ||
-    hasInlineCommandTokens(text) ||
-    hasSpacedPluginCommand(text)
-  );
+  // A required group mention can precede the bang; execution strips that mention later.
+  const bangCandidate = text?.match(/(?:^|\s)(![\s\S]*)/)?.[1];
+  return hasCommandSyntax(text, cfg, options) || isBangCommandInput(bangCandidate);
 }

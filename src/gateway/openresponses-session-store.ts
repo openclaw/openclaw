@@ -1,27 +1,27 @@
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { validateKey } from "../plugin-state/plugin-state-store.validation.js";
-import {
-  isIncognitoResponseSession,
-  MAX_RESPONSE_SESSION_ENTRIES,
-  RESPONSE_SESSION_RETENTION_MS,
-  type ResponseSessionLookup,
-  type ResponseSessionScope,
-  type ResponseSessionWrite,
-} from "./openresponses-session-store.types.js";
+import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+
+type ResponseSessionScope = {
+  authSubject: string;
+  agentId: string;
+  requestedSessionKey?: string;
+};
 
 function openStore(env?: NodeJS.ProcessEnv) {
   return createCorePluginStateKeyedStore<ResponseSessionScope & { sessionKey: string }>({
     ownerId: "core:openresponses",
     namespace: "response-sessions",
-    defaultTtlMs: RESPONSE_SESSION_RETENTION_MS,
-    maxEntries: MAX_RESPONSE_SESSION_ENTRIES,
+    // Match the default session maintenance age and count; response metadata stays bounded too.
+    defaultTtlMs: 30 * 24 * 60 * 60_000,
+    maxEntries: 5_000,
     overflowPolicy: "evict-oldest",
     env,
   });
 }
 
 export async function lookupResponseSession(
-  input: ResponseSessionLookup,
+  input: ResponseSessionScope & { responseId: string },
   env?: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   try {
@@ -40,23 +40,21 @@ export async function lookupResponseSession(
 }
 
 export async function rememberResponseSession(
-  input: ResponseSessionWrite,
-  assertCurrent: () => void,
+  input: ResponseSessionScope & { responseId: string; sessionKey: string },
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
-  if (isIncognitoResponseSession(input)) {
+  if (
+    [input.sessionKey, input.requestedSessionKey].some((requestKey) =>
+      isIncognitoSessionKey(toAgentStoreSessionKey({ agentId: input.agentId, requestKey })),
+    )
+  ) {
     return;
   }
   const { responseId, sessionKey, authSubject, agentId, requestedSessionKey } = input;
-  await openStore(env).register(
-    responseId,
-    {
-      sessionKey,
-      authSubject,
-      agentId,
-      ...(requestedSessionKey === undefined ? {} : { requestedSessionKey }),
-    },
-    { assertCurrent },
-  );
-  assertCurrent();
+  await openStore(env).register(responseId, {
+    sessionKey,
+    authSubject,
+    agentId,
+    ...(requestedSessionKey === undefined ? {} : { requestedSessionKey }),
+  });
 }

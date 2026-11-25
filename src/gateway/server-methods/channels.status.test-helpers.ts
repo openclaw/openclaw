@@ -1,128 +1,43 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
-import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
-import { requireGatewayRecord } from "../test-helpers.assertions.js";
-import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 
-type ChannelTestPlugin = {
-  id: string;
-  config: {
-    listAccountIds: () => string[];
-    resolveAccount: () => Record<string, never>;
-    isEnabled: () => boolean;
-    isConfigured: () => boolean;
+export function createRecordedAccountSnapshots() {
+  const common = { enabled: true, configured: true };
+  const recoveredFacts: ChannelAccountSnapshot = {
+    ...common,
+    accountId: "recovered",
+    running: true,
+    lifecycle: "starting",
+    tokenSource: "config",
+    tokenStatus: "available",
+    stateReason: "admitted before configuration changed",
+    lastStartAt: 1200,
+    lastError: null,
   };
-  status?: {
-    probeAccount?: (params?: unknown) => unknown;
-    buildChannelSummary?: () => unknown;
-    collectStatusIssues?: () => ChannelStatusIssue[];
+  const recovered: ChannelAccountSnapshot = {
+    ...recoveredFacts,
+    baseUrl: "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
+    channelSecret: "private-channel-secret",
+    channelAccessToken: "private-channel-token",
+    webhookUrl: "https://private-webhook.example.test/secret",
+    publicKey: "private-provider-key",
+    probe: { credential: "private-probe" },
+    audit: { credential: "private-audit" },
+    application: { credential: "private-application" },
+    bot: { credential: "private-bot" },
+    profile: { credential: "private-profile" },
   };
-};
-
-export function createChannelPlugin(
-  params: {
-    id?: string;
-    probeAccount?: (params?: unknown) => unknown;
-    buildChannelSummary?: () => unknown;
-    collectStatusIssues?: () => ChannelStatusIssue[];
-  } = {},
-): ChannelTestPlugin {
-  return {
-    id: params.id ?? "whatsapp",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      isEnabled: () => true,
-      isConfigured: () => true,
-    },
-    ...(params.probeAccount || params.buildChannelSummary || params.collectStatusIssues
-      ? {
-          status: {
-            ...(params.probeAccount ? { probeAccount: params.probeAccount } : {}),
-            ...(params.buildChannelSummary
-              ? { buildChannelSummary: params.buildChannelSummary }
-              : {}),
-            ...(params.collectStatusIssues
-              ? { collectStatusIssues: params.collectStatusIssues }
-              : {}),
-          },
-        }
-      : {}),
+  const retrying: ChannelAccountSnapshot = {
+    ...common,
+    accountId: "retrying",
+    running: false,
+    connected: false,
+    lifecycle: "recovering",
+    restartPending: true,
+    reconnectAttempts: 3,
+    terminalDisconnect: false,
+    lastStopAt: 2300,
+    lastDisconnect: { at: 2200, error: "transport closed" },
+    lastError: "waiting for restart",
   };
-}
-
-export function channelAccounts(
-  payload: Record<string, unknown>,
-  channel: string,
-): Record<string, unknown>[] {
-  const accounts = requireGatewayRecord(payload.channelAccounts, "channel accounts")[
-    channel
-  ] as unknown[];
-  expect(Array.isArray(accounts)).toBe(true);
-  return accounts.map((account) => requireGatewayRecord(account, "channel account"));
-}
-
-export function firstChannelAccount(
-  payload: Record<string, unknown>,
-  channel: string,
-): Record<string, unknown> {
-  return expectDefined(
-    channelAccounts(payload, channel)[0],
-    "channelAccounts(payload, channel)[0] test invariant",
-  );
-}
-
-export function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
-}
-
-function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = respond.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected respond call");
-  }
-  expect(call[0]).toBe(true);
-  expect(call[2]).toBeUndefined();
-  return requireGatewayRecord(call[1], "respond payload");
-}
-
-export function createChannelsStatusHarness(options: {
-  handler: GatewayRequestHandler;
-  getRuntimeConfig: GatewayRequestHandlerOptions["context"]["getRuntimeConfig"];
-}) {
-  function createOptions(
-    params: Record<string, unknown>,
-    overrides?: Partial<GatewayRequestHandlerOptions>,
-  ): GatewayRequestHandlerOptions {
-    return {
-      req: { type: "req", id: "req-1", method: "channels.status", params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond: vi.fn(),
-      context: {
-        getRuntimeConfig: options.getRuntimeConfig,
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {},
-        }),
-      },
-      ...overrides,
-    } as unknown as GatewayRequestHandlerOptions;
-  }
-
-  async function runChannelsStatus(
-    params: Record<string, unknown>,
-    overrides?: Partial<GatewayRequestHandlerOptions>,
-  ) {
-    const respond = vi.fn();
-    await options.handler(createOptions(params, { respond, ...overrides }));
-    return requireRespondPayload(respond);
-  }
-
-  return { createOptions, runChannelsStatus };
+  return { recovered, recoveredFacts, retrying };
 }

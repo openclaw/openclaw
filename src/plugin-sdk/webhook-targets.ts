@@ -1,4 +1,3 @@
-// Webhook target helpers resolve and validate plugin webhook destinations.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { canonicalizePathVariant } from "../gateway/security-path.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";

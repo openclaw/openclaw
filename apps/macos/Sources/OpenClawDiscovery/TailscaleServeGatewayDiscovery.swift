@@ -34,7 +34,7 @@ enum TailscaleServeGatewayDiscovery {
     {
         guard timeoutSeconds > 0 else { return [] }
         guard let statusJson = await context.tailscaleStatus(),
-              let status = parseStatus(statusJson)
+              let status = try? JSONDecoder().decode(TailscaleStatus.self, from: Data(statusJson.utf8))
         else {
             return []
         }
@@ -45,7 +45,7 @@ enum TailscaleServeGatewayDiscovery {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         let perProbeTimeout = min(self.defaultProbeTimeoutSeconds, max(0.5, timeoutSeconds * 0.45))
 
-        var byHost: [String: TailscaleServeGatewayBeacon] = [:]
+        var beacons: [TailscaleServeGatewayBeacon] = []
         await withTaskGroup(of: TailscaleServeGatewayBeacon?.self) { group in
             var index = 0
             let workerCount = min(self.probeConcurrency, candidates.count)
@@ -56,19 +56,9 @@ enum TailscaleServeGatewayDiscovery {
                 index += 1
                 group.addTask {
                     let remaining = deadline.timeIntervalSinceNow
-                    if remaining <= 0 {
-                        return nil
-                    }
+                    guard remaining > 0 else { return nil }
                     let timeout = min(perProbeTimeout, remaining)
-                    let reachable = await context.probeHost(candidate.dnsName, timeout)
-                    if !reachable {
-                        return nil
-                    }
-                    return TailscaleServeGatewayBeacon(
-                        displayName: candidate.displayName,
-                        tailnetDns: candidate.dnsName,
-                        host: candidate.dnsName,
-                        port: 443)
+                    return await context.probeHost(candidate.host, timeout) ? candidate : nil
                 }
             }
 
@@ -78,25 +68,20 @@ enum TailscaleServeGatewayDiscovery {
 
             while let beacon = await group.next() {
                 if let beacon {
-                    byHost[beacon.host.lowercased()] = beacon
+                    beacons.append(beacon)
                 }
                 submitOne()
             }
         }
 
-        return byHost.values.sorted {
+        return beacons.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
     }
 
-    private struct Candidate {
-        var dnsName: String
-        var displayName: String
-    }
-
-    private static func collectCandidates(status: TailscaleStatus) -> [Candidate] {
+    private static func collectCandidates(status: TailscaleStatus) -> [TailscaleServeGatewayBeacon] {
         let selfDns = self.normalizeDnsName(status.selfNode?.dnsName)
-        var out: [Candidate] = []
+        var out: [TailscaleServeGatewayBeacon] = []
         var seen = Set<String>()
 
         for node in status.peer.values {
@@ -106,9 +91,11 @@ enum TailscaleServeGatewayDiscovery {
                   seen.insert(dnsName).inserted
             else { continue }
 
-            out.append(Candidate(
-                dnsName: dnsName,
-                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName)))
+            out.append(TailscaleServeGatewayBeacon(
+                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName),
+                tailnetDns: dnsName,
+                host: dnsName,
+                port: 443))
 
             if out.count >= self.maxCandidates {
                 break
@@ -119,14 +106,7 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func displayName(hostName: String?, dnsName: String) -> String {
-        if let hostName {
-            let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return dnsName
-            .split(separator: ".")
-            .first
-            .map(String.init) ?? dnsName
+        hostName?.trimmedNonEmpty ?? dnsName.split(separator: ".").first.map(String.init) ?? dnsName
     }
 
     private static func normalizeDnsName(_ raw: String?) -> String? {
@@ -139,26 +119,14 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func readTailscaleStatus() async -> String? {
-        let candidates = [
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "tailscale",
-        ]
-
-        for candidate in candidates {
-            guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await BoundedCommand.run(
+        await BoundedCommand.tailscaleStatus { candidate in
+            guard let executable = self.resolveExecutablePath(candidate) else { return nil }
+            return await BoundedCommand.run(
                 path: executable,
                 arguments: ["status", "--json"],
                 environment: self.commandEnvironment(),
                 timeout: 1.0)
-            {
-                return stdout
-            }
         }
-
-        return nil
     }
 
     static func resolveExecutablePath(
@@ -169,14 +137,11 @@ enum TailscaleServeGatewayDiscovery {
         guard !trimmed.isEmpty else { return nil }
 
         let fileManager = FileManager.default
-        let hasPathSeparator = trimmed.contains("/")
-        if hasPathSeparator {
+        if trimmed.contains("/") {
             return fileManager.isExecutableFile(atPath: trimmed) ? trimmed : nil
         }
 
-        let pathRaw = env["PATH"] ?? ""
-        let entries = pathRaw.split(separator: ":").map(String.init)
-        for entry in entries {
+        for entry in (env["PATH"] ?? "").split(separator: ":") {
             let dir = entry.trimmingCharacters(in: .whitespacesAndNewlines)
             if dir.isEmpty { continue }
             let fullPath = URL(fileURLWithPath: dir)
@@ -201,11 +166,6 @@ enum TailscaleServeGatewayDiscovery {
             env["TERM"] = "dumb"
         }
         return env
-    }
-
-    private static func parseStatus(_ raw: String) -> TailscaleStatus? {
-        guard let data = raw.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
     }
 }
 
@@ -296,22 +256,19 @@ final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked 
         case let .data(value):
             data = value
         case let .string(value):
-            guard let encoded = value.data(using: .utf8) else { return false }
-            data = encoded
+            data = Data(value.utf8)
         @unknown default:
             return false
         }
 
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any],
-              let type = dict["type"] as? String,
-              type == "event",
-              let event = dict["event"] as? String
+              dict["type"] as? String == "event"
         else {
             return false
         }
 
-        return event == "connect.challenge"
+        return dict["event"] as? String == "connect.challenge"
     }
 }
 

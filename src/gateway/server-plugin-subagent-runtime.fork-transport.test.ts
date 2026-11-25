@@ -1,0 +1,373 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { createServer } from "node:http";
+import path from "node:path";
+import { expect, it } from "vitest";
+import "../agents/ai-transport-runtime-host.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
+import { registerSandboxBackend } from "../agents/sandbox/backend.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { requireGit } from "../agents/worktrees/git.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  initializeManagedWorktreeTestRepository,
+  makeWorktreeRecord,
+} from "../agents/worktrees/service.test-support.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createColdPluginFixture,
+  createColdPluginHermeticEnv,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  disposeSessionReadContexts,
+  identifiedClient,
+  initializeSessionReadContext,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
+import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+import { readLocalWorkspaceProjection } from "./worker-environments/local-workspace-store.test-support.js";
+
+const PLUGIN_ID = "test-session-fork-transport";
+const SESSION_ID = "fork-transport-parent";
+const SESSION_KEY = "agent:research:telegram:direct:fork-transport-parent";
+const API_KEY = "synthetic-fork-transport-key";
+
+type RecordedRequest = {
+  url: string | undefined;
+  apiKey: string | string[] | undefined;
+  body: unknown;
+};
+
+it.each([false, true])("forks a managed worktree with sandbox=%s", async (required) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const providerDir = state.path("provider");
+    fs.mkdirSync(providerDir);
+    const fixture = createColdPluginFixture({
+      rootDir: providerDir,
+      pluginId: "isolated-fork-fixture",
+      providerId: "isolated-fork-provider",
+    });
+    fs.writeFileSync(
+      fixture.runtimeSource,
+      `module.exports = { id: ${JSON.stringify(fixture.pluginId)}, register(api) {
+          api.registerProvider({
+            id: ${JSON.stringify(fixture.providerId)}, label: "Isolated fork transport", auth: [],
+          });
+        } };`,
+    );
+    const requests: RecordedRequest[] = [];
+    const { claim, listener, releaseListener } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          // Host services probe new loopback listeners (for example `GET /` from a local Go
+          // daemon); only provider-route traffic is a request this test observes.
+          if (request.method !== "POST" || !request.url?.startsWith("/v1/")) {
+            request.resume();
+            response.writeHead(404).end();
+            return;
+          }
+          const recorded: RecordedRequest = {
+            url: request.url,
+            apiKey: request.headers["x-api-key"],
+            body: undefined,
+          };
+          requests.push(recorded);
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            recorded.body = JSON.parse(body);
+            const { response: wire } = providerResponse({
+              api: "anthropic-messages",
+              model: "fork-model",
+              id: "msg_fork",
+              messageId: "msg_fork",
+              text: "fork-ok",
+              calls: [],
+            });
+            const sse = { "content-type": "text/event-stream" };
+            void wire.text().then((text) => response.writeHead(200, sse).end(text));
+          });
+        }),
+    });
+    // The fork runs the parent's turn setup, which acquires the session MCP runtime the
+    // Gateway would bind.
+    await bindSessionMcpRuntimeTestScheduler();
+    const lifetime = new AbortController();
+    try {
+      await withEnvAsync(
+        {
+          ...createColdPluginHermeticEnv(state.root, {
+            bundledPluginsDir: state.path("bundled-plugins"),
+          }),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          HTTP_PROXY: undefined,
+          HTTPS_PROXY: undefined,
+          http_proxy: undefined,
+          https_proxy: undefined,
+          ALL_PROXY: undefined,
+          all_proxy: undefined,
+          NO_PROXY: "127.0.0.1,localhost,::1",
+        },
+        async () => {
+          // Keep Vitest's lazy module transformation outside the fork's request deadline.
+          await import("../agents/btw.js");
+          const baseUrl = `http://127.0.0.1:${claim.port}`;
+          const model = makeProviderModelFixture<"anthropic-messages">({
+            provider: fixture.providerId,
+            id: "fork-model",
+            name: "Fork model",
+            api: "anthropic-messages",
+            baseUrl,
+            reasoning: true,
+            // The fork runs the parent's full turn setup, so it needs a real turn's window.
+            contextWindow: 200_000,
+            maxTokens: 4096,
+          });
+          const config: OpenClawConfig = {
+            channels: { telegram: { enabled: false, dmHistoryLimit: 1 } },
+            agents: {
+              defaults: {
+                workspace: state.workspaceDir,
+                userTimezone: "UTC",
+                thinkingDefault: "high",
+                sandbox: {
+                  mode: "off",
+                  docker: { user: "1000:1000" },
+                  browser: { enabled: false },
+                  prune: { idleHours: 0, maxAgeDays: 0 },
+                },
+                models: {
+                  [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
+                },
+              },
+              entries: { research: { model: `${fixture.providerId}/fork-model` } },
+            },
+            models: {
+              providers: {
+                [fixture.providerId]: {
+                  api: "anthropic-messages",
+                  apiKey: API_KEY,
+                  baseUrl,
+                  request: { allowPrivateNetwork: true },
+                  models: [model],
+                },
+              },
+            },
+            plugins: {
+              load: { paths: [fixture.rootDir] },
+              slots: { memory: "none" },
+              entries: {
+                [fixture.pluginId]: { enabled: true },
+                [PLUGIN_ID]: { hooks: { allowConversationAccess: true } },
+              },
+            },
+            gateway: {
+              roles: {
+                default: "limited",
+                definitions: {
+                  limited: {
+                    agents: ["research"],
+                    scopes: ["operator.read", "operator.write"],
+                    sessions: { others: "none" },
+                  },
+                },
+              },
+            },
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
+          const owner = ensureProfileForEmail("fork-owner@example.test");
+          const stranger = ensureProfileForEmail("fork-stranger@example.test");
+          const repoRoot = await initializeManagedWorktreeTestRepository(state.root);
+          const checkout = state.path("managed-checkout");
+          await requireGit(repoRoot, ["worktree", "add", "-b", "openclaw/fork", checkout]);
+          const worktree = makeWorktreeRecord(repoRoot, randomUUID(), {
+            path: checkout,
+            branch: "openclaw/fork",
+            ownerId: SESSION_KEY,
+          });
+          await insertRegistryWorktree(process.env, worktree, { provisionedPaths: [] });
+          const restoreBackend = registerSandboxBackend("docker", async ({ scopeKey }) => ({
+            id: "docker",
+            runtimeId: scopeKey,
+            runtimeLabel: "Synthetic fork sandbox",
+            workdir: "/workspace",
+            buildExecSpec: async () => {
+              throw new Error("unexpected exec");
+            },
+            runShellCommand: async () => {
+              throw new Error("unexpected shell");
+            },
+          }));
+          await upsertSessionEntryCore(
+            { agentId: "research", sessionKey: SESSION_KEY },
+            {
+              sessionId: SESSION_ID,
+              updatedAt: 1,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: owner.id },
+              ...(required ? { sandbox: "required" as const } : {}),
+              spawnedCwd: checkout,
+              sessionRoot: checkout,
+              worktree: {
+                id: worktree.id,
+                branch: worktree.branch,
+                repoRoot,
+                canonicalWorkspaceDir: repoRoot,
+              },
+            },
+          );
+          const context = requestContext(config);
+          await initializeSessionReadContext(context);
+          const runtime = createGatewaySubagentRuntime(() => context, {}, lifetime.signal);
+          try {
+            // A persisted conversation remains forkable without any process-local parent request.
+            const transcript = await SessionManager.openAsync(
+              {
+                agentId: "research",
+                sessionId: SESSION_ID,
+                sessionKey: SESSION_KEY,
+                storePath: path.join(state.agentDir("research"), "openclaw-agent.sqlite"),
+              },
+              state.workspaceDir,
+            );
+            const appendUser = (content: string, timestamp: number) =>
+              transcript.appendMessageAsync({ role: "user", content, timestamp });
+            await appendUser("DISCARDED_PRE_COMPACTION_1672", 0);
+            const retainedId = await appendUser("Parent question", 1);
+            if (!retainedId) {
+              throw new Error("Retained question was not persisted");
+            }
+            const compactionId = await transcript.appendCompactionAsync(
+              "Earlier request summarized for review",
+              retainedId,
+              100,
+            );
+            await appendUser("OUTSIDE_HISTORY_WINDOW_1672", 2);
+            // A completed parent turn: the run appends its user message, then its prompt
+            // checkpoint, then the reply. A running parent is replayed from its live request.
+            await appendUser("Parent question", 3);
+            await transcript.appendCustomEntryAsync("openclaw.system-prompt", {
+              prefix: "Stable parent instructions",
+              renderedPrefix: "Stable parent instructions",
+              routeKey: JSON.stringify([
+                model.provider,
+                model.id,
+                model.api,
+                model.baseUrl,
+                true,
+                null,
+              ]),
+              historyId: compactionId,
+              tools: [],
+            });
+            await transcript.appendMessageAsync(
+              makeAgentAssistantMessage({
+                api: "anthropic-messages",
+                provider: model.provider,
+                model: model.id,
+                content: [{ type: "text", text: "Parent answer" }],
+                timestamp: 4,
+              }),
+            );
+
+            const forkAs = (profileId: string) =>
+              withPluginRuntimeGatewayRequestScope(
+                {
+                  pluginId: PLUGIN_ID,
+                  client: identifiedClient(profileId),
+                  isWebchatConnect: () => false,
+                },
+                () =>
+                  runtime.forkSession({ sessionKey: SESSION_KEY, message: "Review the parent" }),
+              );
+            await expect(forkAs(stranger.id)).rejects.toThrow(
+              `Session "${SESSION_KEY}" was not found`,
+            );
+            expect(requests).toHaveLength(0);
+
+            await expect(forkAs(owner.id)).resolves.toMatchObject({ text: "fork-ok" });
+            const projection = await readLocalWorkspaceProjection(worktree.id);
+            expect(Boolean(projection)).toBe(required);
+            expect(requests).toHaveLength(1);
+            const sent = JSON.stringify(requests[0]?.body);
+            expect(sent).not.toContain("DISCARDED_PRE_COMPACTION_1672");
+            expect(sent).not.toContain("OUTSIDE_HISTORY_WINDOW_1672");
+            const user = (text: unknown) => ({ role: "user", content: [{ type: "text", text }] });
+            expect(requests[0]).toMatchObject({
+              url: "/v1/messages",
+              apiKey: API_KEY,
+              body: {
+                model: "fork-model",
+                thinking: { type: "enabled" },
+                // The session's pinned prefix, not a prompt rebuilt for the fork.
+                system: [expect.objectContaining({ text: "Stable parent instructions" })],
+                messages: [
+                  user(
+                    "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
+                  ),
+                  { role: "user", content: "[Thu 1970-01-01 00:00 UTC] Parent question" },
+                  { role: "assistant", content: [{ type: "text", text: "Parent answer" }] },
+                  // The question is a real turn on that prefix, sent like the parent's turns.
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringMatching(/\] Review the parent$/),
+                      }),
+                    ],
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringContaining("OpenClaw runtime context"),
+                      }),
+                    ],
+                  },
+                ],
+              },
+            });
+          } finally {
+            restoreBackend();
+            lifetime.abort();
+            await disposeSessionReadContexts();
+            await resetPreparedModelRuntimeSnapshotsForTest();
+            await closeProviderTransportDispatcherPool();
+            resetCommandQueueStateForTest();
+            resetConfigRuntimeState();
+            clearPluginMetadataLifecycleCaches();
+            resetPluginLoaderTestStateForTest();
+          }
+        },
+      );
+    } finally {
+      lifetime.abort();
+      listener.closeAllConnections();
+      try {
+        await releaseListener();
+      } finally {
+        await claim.release();
+      }
+    }
+  });
+});

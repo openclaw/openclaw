@@ -4,7 +4,7 @@ import OpenClawKit
 enum NativeConversationTrace {
     private static let enabled = ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_CONVERSATION_BRIDGE"] == "1"
     private static let messageTypes: Set<String> = [
-        "ready", "state", "route-changed", "open-dashboard", "command-result",
+        "ready", "state", "route-changed", "open-dashboard", "command-result", "session-facts",
     ]
 
     static func receive(_ body: Any) {
@@ -53,6 +53,7 @@ enum NativeConversationTrace {
         case .navigate: "navigate"
         case .presentation: "presentation"
         case .focusComposer: "focus-composer"
+        case .openSessionActions: "open-session-actions"
         }
     }
 }

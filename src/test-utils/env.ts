@@ -1,6 +1,16 @@
 // Test helpers for environment variable setup and restoration.
 import path from "node:path";
 
+// Read the active environment: a worker may replace the object captured by node:os.
+export function resolveTestTempRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32"
+    ? env.TEMP || env.TMP || `${env.SystemRoot || env.windir}\\temp`
+    : env.TMPDIR || env.TMP || env.TEMP || "/tmp";
+}
+
 /** Sets a test-owned env key; callers must capture/restore the key scope. */
 export function setTestEnvValue(key: string, value: string): void {
   Reflect.set(process.env, key, value);

@@ -3,6 +3,18 @@ import type {
   PluginListResult,
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
+import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
+
+export const pluginMethods = [
+  "config.get",
+  "config.patch",
+  "config.schema",
+  "config.set",
+  "plugins.inspect",
+  "plugins.list",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+];
 
 export const workboard = {
   id: "workboard",
@@ -61,18 +73,7 @@ export const inspection = {
     enabled: true,
   },
   source: { kind: "npm", packageName: workboard.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: ["workboard_list"],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
+  declared: { ...createPluginDeclaredSurface(), tools: ["workboard_list"] },
   components: {
     mapped: ["skills", "mcpServers"],
     skills: ["Weekly planning"],
@@ -141,7 +142,7 @@ export const config = {
     entries: {
       workboard: {
         enabled: true,
-        hooks: { allowPromptInjection: false },
+        hooks: { allowPromptModification: false },
         config: {
           workspaceLabel: "Planning",
           refreshMinutes: 15,
@@ -205,7 +206,7 @@ export const configMocks = {
                       type: "object",
                       additionalProperties: false,
                       properties: {
-                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                        allowPromptModification: { type: "boolean", title: "Allow prompt changes" },
                         allowConversationAccess: {
                           type: "boolean",
                           title: "Read conversation context",

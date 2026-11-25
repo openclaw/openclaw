@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+# Selecting Node must not shadow a prepared pnpm launcher and its cache environment.
+pnpm_bin="$(command -v pnpm || true)"
 export PATH="$NODE_BIN:$PATH"
+pnpm_bin="${pnpm_bin:-$(command -v pnpm)}"
 which node
 node -v
-pnpm -v
 case "$FROZEN_LOCKFILE" in
-  true) LOCKFILE_FLAG="--frozen-lockfile" ;;
+  true)
+    # Version probes and lifecycle commands also sync pnpm's package-manager lock.
+    export PNPM_CONFIG_FROZEN_LOCKFILE=true
+    LOCKFILE_FLAG="--frozen-lockfile"
+    ;;
   false) LOCKFILE_FLAG="" ;;
   *)
     echo "::error::Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
     exit 2
     ;;
 esac
+"$pnpm_bin" -v
 
 install_args=(
   install
@@ -51,7 +58,7 @@ append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
 append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
 run_pnpm_install() {
   local fetch_mode="$1"
-  pnpm "${install_args[@]}" "$fetch_mode"
+  "$pnpm_bin" "${install_args[@]}" "$fetch_mode"
 }
 clear_dependency_modules() {
   rm -rf "$GITHUB_WORKSPACE/node_modules"

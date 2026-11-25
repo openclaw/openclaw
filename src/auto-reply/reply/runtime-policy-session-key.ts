@@ -64,19 +64,11 @@ function isMainSessionAlias(params: {
   }
   const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
-  const agentMainSessionKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey,
-  });
-  const agentMainAliasKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey: "main",
-  });
   return (
     raw === "main" ||
     raw === mainKey ||
-    raw === agentMainSessionKey ||
-    raw === agentMainAliasKey ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey }) ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey: "main" }) ||
     raw === buildAgentMainSessionKey({ agentId: "main", mainKey }) ||
     raw === buildAgentMainSessionKey({ agentId: "main", mainKey: "main" }) ||
     (params.cfg?.session?.scope === "global" && raw === "global")

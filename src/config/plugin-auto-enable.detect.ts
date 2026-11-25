@@ -1,4 +1,3 @@
-// Detects plugin auto-enable candidates from config and discovery results.
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";

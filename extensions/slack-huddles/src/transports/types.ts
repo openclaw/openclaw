@@ -1,7 +1,12 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import type { SlackHuddlesConfig, SlackHuddlesMode, SlackHuddlesTransport } from "../config.js";
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-type SlackHuddlesManualActionReason =
+type SlackHuddlesConfig = ReturnType<
+  ReturnType<typeof MeetingPlatformAdapter.createPluginConfigSchema>["resolveConfig"]
+>;
+export type SlackHuddlesMode = SlackHuddlesConfig["defaultMode"];
+type SlackHuddlesTransport = "chrome" | "chrome-node";
+
+export type SlackHuddlesManualActionReason =
   | "slack-login-required"
   | "slack-admission-required"
   | "slack-permission-required"
@@ -13,7 +18,7 @@ type SlackHuddlesManualActionReason =
   | "slack-session-conflict"
   | "browser-control-unavailable";
 
-type SlackHuddlesSpeechBlockedReason =
+export type SlackHuddlesSpeechBlockedReason =
   | SlackHuddlesManualActionReason
   | "not-in-call"
   | "browser-unverified"
@@ -30,6 +35,4 @@ type SlackHuddlesPluginTypes = ReturnType<
   >
 >;
 export type SlackHuddlesTranscriptSnapshot = SlackHuddlesPluginTypes["TranscriptSnapshot"];
-export type SlackHuddlesJoinRequest = SlackHuddlesPluginTypes["JoinRequest"];
 export type SlackHuddlesChromeHealth = SlackHuddlesPluginTypes["ChromeHealth"];
-export type SlackHuddlesSession = SlackHuddlesPluginTypes["Session"];

@@ -2,24 +2,6 @@
 type HtmlTagMode = "render" | "visibility";
 export const RAW_TEXT_TAGS = new Set(["script", "style", "noscript"]);
 
-type HtmlTagToken = {
-  closing: boolean;
-  name: string;
-  raw: string;
-  attrs: string;
-  selfClosing: boolean;
-};
-
-type ReadTagResult = {
-  token: HtmlTagToken | null;
-  next: number;
-};
-
-type TagEndResult = {
-  end: number;
-  rawTextStart?: number;
-};
-
 export function isAsciiWhitespace(value: string): boolean {
   return value === " " || value === "\n" || value === "\r" || value === "\t" || value === "\f";
 }
@@ -98,7 +80,7 @@ export function startsLikeHtmlTag(html: string, start: number): boolean {
   return next === "!" || next === "?" || next === "/" || isTagNameStartChar(next ?? "");
 }
 
-function findTagEnd(html: string, start: number, mode: HtmlTagMode = "render"): TagEndResult {
+function findTagEnd(html: string, start: number, mode: HtmlTagMode = "render") {
   const rendering = mode === "render";
   let afterEquals = false;
   let rawTextStartInQuote: number | undefined;
@@ -171,11 +153,7 @@ export function skipHtmlComment(html: string, start: number): number {
   return html.length;
 }
 
-export function readTagToken(
-  html: string,
-  start: number,
-  mode: HtmlTagMode = "render",
-): ReadTagResult | null {
+export function readTagToken(html: string, start: number, mode: HtmlTagMode = "render") {
   const rendering = mode === "render";
   if (rendering && html.startsWith("<!--", start)) {
     return { token: null, next: skipHtmlComment(html, start) };
@@ -188,31 +166,30 @@ export function readTagToken(
   }
 
   const raw = html.slice(start + 1, end);
-  const body = raw;
   let pos = 0;
-  const closing = body[pos] === "/";
+  const closing = raw[pos] === "/";
   if (closing) {
     pos += 1;
   }
-  if (!isTagNameStartChar(body[pos] ?? "")) {
+  if (!isTagNameStartChar(raw[pos] ?? "")) {
     return { token: null, next: end + 1 };
   }
 
   const nameStart = pos;
   while (
-    pos < body.length &&
-    !isAsciiWhitespace(body.charAt(pos)) &&
-    body[pos] !== "/" &&
-    body[pos] !== ">"
+    pos < raw.length &&
+    !isAsciiWhitespace(raw.charAt(pos)) &&
+    raw[pos] !== "/" &&
+    raw[pos] !== ">"
   ) {
     pos += 1;
   }
 
-  const attrs = closing ? "" : body.slice(pos);
+  const attrs = closing ? "" : raw.slice(pos);
   return {
     token: {
       closing,
-      name: body
+      name: raw
         .slice(nameStart, pos)
         .replace(/\0|[A-Z]/g, (ch) => (ch === "\0" ? "\uFFFD" : asciiLower(ch))),
       raw,
@@ -228,7 +205,7 @@ export function readRawTextBounds(
   tagName: string,
   contentStart: number,
   mode: HtmlTagMode = "render",
-): { contentEnd: number; end: number } {
+) {
   if (tagName === "script") {
     // In double-escaped script data, </script> is text that returns to the escaped state.
     let state: "data" | "escaped" | "double-escaped" = "data";

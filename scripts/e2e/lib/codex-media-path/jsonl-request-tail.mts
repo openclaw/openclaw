@@ -1,4 +1,3 @@
-// Tails JSONL request logs for Codex media-path E2E assertions.
 import {
   createIncrementalLineReader,
   resolvePositiveInteger,

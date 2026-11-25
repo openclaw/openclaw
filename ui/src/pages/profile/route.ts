@@ -1,17 +1,16 @@
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { configTargetIdFromHash } from "../config/route-data.ts";
 
-export const page = definePage({
-  ...routePageSpec("profile"),
-  loader: (context: ApplicationContext) => {
-    // Warm the agents list so the hero identity renders without a flash.
-    void context.agents.ensureList();
+export const page = defineSolidPage<"profile", ApplicationContext, string | null>(
+  "profile",
+  () => import("./profile-page.tsx").then((module) => module.ProfilePage),
+  {
+    loaderDeps: (_context, location) => location.hash,
+    loader: (context, { location }) => {
+      // Warm the agents list so the hero identity renders without a flash.
+      void context.agents.ensureList();
+      return configTargetIdFromHash(location.hash);
+    },
   },
-  component: () =>
-    import("./profile-page.ts").then(() => ({
-      header: true,
-      render: () => html`<openclaw-profile-page></openclaw-profile-page>`,
-    })),
-});
+);

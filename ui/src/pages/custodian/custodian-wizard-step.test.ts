@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
-import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
+import { initialWizardValue } from "../model-setup/state.ts";
+import { custodianWizardSubmission } from "./custodian-wizard-step.ts";
 
 const options = [
   { label: "Discord", value: "discord" },
@@ -47,9 +48,7 @@ describe("Custodian rich wizard answers", () => {
 
   it("copies multiselect defaults and rejects values outside the step", () => {
     const initialValue = ["discord"];
-    const value = initialCustodianWizardValue(
-      step({ type: "multiselect", initialValue }),
-    ) as unknown[];
+    const value = initialWizardValue(step({ type: "multiselect", initialValue })) as unknown[];
     value.push("twitch");
 
     expect(initialValue).toEqual(["discord"]);

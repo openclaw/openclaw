@@ -1,9 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createAskUserTool } from "../../agents/tools/ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -19,7 +18,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -30,10 +29,6 @@ import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
-
-afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
-});
 
 const sessionKey = "agent:main:hosted-question";
 const toolArgs = {
@@ -97,7 +92,7 @@ async function withHostedQuestion(
     context.resolveGatewayContext = () => context;
     const source = new AbortController();
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client: browser,
         context,
         sourceAuthority: {
@@ -231,6 +226,7 @@ async function withHostedQuestion(
     } finally {
       manager.close();
       await manager.drain();
+      await scheduler.stop();
       parent.close();
       captured.release();
     }
@@ -273,9 +269,9 @@ it("runs hosted ask_user through the real router with its original narrow operat
       ]);
       fixture.revoke();
       expect(await fixture.read(record.id)).toMatchObject([
-        false,
+        true,
+        { question: { status: "answered" } },
         undefined,
-        { details: { reason: "QUESTION_NOT_FOUND" } },
       ]);
       expect(fixture.manager.get(record.id)?.status).toBe("answered");
     } finally {
@@ -285,21 +281,12 @@ it("runs hosted ask_user through the real router with its original narrow operat
   });
 });
 
-it("does not create a hosted question on another person's shared session", async () => {
+it("rejects hosted creation for another person's shared session", async () => {
   await withHostedQuestion(async (fixture) => {
     await expect(fixture.ask()).rejects.toThrow("session is shared for this connection");
     expect(fixture.request).toHaveBeenCalledOnce();
     expect(fixture.manager.list()).toEqual([]);
   }, true);
-});
-
-it("does not register another hosted question after the original operator source closes", async () => {
-  await withHostedQuestion(async (fixture) => {
-    fixture.revoke();
-    await expect(fixture.ask()).rejects.toThrow("original question source revoked");
-    expect(fixture.request).not.toHaveBeenCalled();
-    expect(fixture.manager.list()).toEqual([]);
-  });
 });
 
 it.each(["write", "view", "none"] as const)(

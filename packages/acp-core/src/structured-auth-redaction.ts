@@ -9,9 +9,10 @@ export const HTTP_AUTH_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_-]|\\
 // Each JSON encoding doubles delimiter slashes and adds one. The cap covers six nested
 // encodings while keeping credential redaction regex work bounded on hostile diagnostics.
 export const HTTP_AUTH_SERIALIZED_QUOTE_PATTERN = String.raw`(?:\\{1,64}["']|["']|)`;
-export const CREDENTIAL_STYLE_HEADER_REDACT_PATTERN = String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)`;
-const STRUCTURED_AUTH_HEADER_RE = new RegExp(
-  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
+// Browser consumers need the fragments above, not these composed matchers.
+export const CREDENTIAL_STYLE_HEADER_REDACT_PATTERN = `${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \\t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\\s\\\\"',;]+)`;
+const STRUCTURED_AUTH_HEADER_RE = /* @__PURE__ */ new RegExp(
+  `${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \\t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
   "giu",
 );
 const AUTH_PARAM_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
@@ -89,16 +90,8 @@ function readAuthParamName(value: string, start: number): { name: string; end: n
 
 function isAuthHeaderStart(value: string, index: number): boolean {
   const previous = value[index - 1];
-  let serializedLineBoundary = false;
-  if (previous === "n" || previous === "r") {
-    let slashCursor = index - 2;
-    let slashCount = 0;
-    while (slashCount < 64 && value[slashCursor] === "\\") {
-      slashCount += 1;
-      slashCursor -= 1;
-    }
-    serializedLineBoundary = slashCount > 0;
-  }
+  const serializedLineBoundary =
+    (previous === "n" || previous === "r") && value[index - 2] === "\\";
   if (!serializedLineBoundary && previous !== undefined && /[A-Za-z0-9_-]/u.test(previous)) {
     return false;
   }

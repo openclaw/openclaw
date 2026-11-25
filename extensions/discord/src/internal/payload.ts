@@ -34,6 +34,13 @@ export type TopLevelComponents = {
   serialize: () => unknown;
 };
 
+export function asSerializableComponent<T extends { type: ComponentType }>(component: T) {
+  return {
+    isV2: component.type !== ComponentType.ActionRow,
+    serialize: () => component,
+  };
+}
+
 export function hasDiscordV2Components(components?: MessagePayloadObject["components"]): boolean {
   return Boolean(
     components?.some(

@@ -1,53 +1,75 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { Type } from "typebox";
-import { SLACK_HUDDLES_CLI_METADATA } from "./src/cli-output-mode.js";
-import { slackHuddlesConfig } from "./src/config.js";
-import { SlackHuddlesInvalidRequestError, slackHuddlesInvalidRequest } from "./src/errors.js";
-import { handleSlackHuddlesNodeHostCommand } from "./src/node-host.js";
-import { createSlackHuddlesNodeInvokePolicy } from "./src/node-invoke-policy.js";
-import { SlackHuddlesRuntime } from "./src/runtime.js";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
+import { SLACK_HUDDLES_CLI_METADATA } from "./cli-metadata.js";
+import { SlackHuddlesInvalidRequestError } from "./src/errors.js";
 import { SLACK_HUDDLES_PLATFORM_ADAPTER } from "./src/transports/slack-huddles-platform-adapter.js";
+import type {
+  SlackHuddlesManualActionReason,
+  SlackHuddlesSpeechBlockedReason,
+} from "./src/transports/types.js";
 
-export default MeetingPlatformAdapter.createPluginShellEntry({
+export const slackHuddlesPlugin = MeetingPlatformAdapter.defineBrowserMeetingPlugin<
+  SlackHuddlesManualActionReason,
+  SlackHuddlesSpeechBlockedReason
+>({
   platform: SLACK_HUDDLES_PLATFORM_ADAPTER,
-  browserGuestLabel: "Slack huddle",
-  configSchema: slackHuddlesConfig.configSchema,
-  invalidRequest: slackHuddlesInvalidRequest,
-  isInvalidRequest: (error) => error instanceof SlackHuddlesInvalidRequestError,
-  toolParameters: Type.Object({
-    action: Type.String({ enum: ["join", "leave", "status", "transcript", "speak"] }),
-    url: Type.Optional(
-      Type.String({
-        description:
-          "Slack huddle link (Copy huddle link), or an uppercase Slack channel id such as C0123ABCD / channel:C0123ABCD for the huddle in that channel. Workspace-qualified team:T0123ABCD:channel:C0123ABCD (also with a slack: prefix) gives a team-qualified huddle link. In Slack conversations the Conversation info chat_id carries the channel reference.",
-      }),
-    ),
-    transport: Type.Optional(Type.String({ enum: ["chrome", "chrome-node"] })),
-    mode: Type.Optional(Type.String({ enum: ["agent", "bidi", "transcribe"] })),
-    sessionId: Type.Optional(Type.String({ description: "Slack huddle session ID" })),
-    sinceIndex: Type.Optional(
-      Type.Integer({ minimum: 0, description: "Resume transcript from this index" }),
-    ),
-    message: Type.Optional(Type.String({ description: "Instructions to speak" })),
-  }),
-  resolveGatewayTimeoutMs: slackHuddlesConfig.resolveGatewayOperationTimeoutMs,
-  normalizeRequesterSessionKey: (value, trustedOwner) =>
-    trustedOwner && typeof value === "string" && value.trim() ? value.trim() : undefined,
-  normalizeToolAgentId: (agentId) => normalizeAgentId(agentId),
-  resolveToolRuntime: async (api) => {
-    if (!(await api.runtime.gateway.isAvailable())) {
-      throw new Error("Slack huddle tools require a Gateway-hosted agent run.");
-    }
-    return api.runtime;
+  labels: {
+    meeting: "Slack huddle",
+    participant: "Slack user",
+    brand: "Slack",
+    microphone: "Slack",
+    browserPage: "Slack huddle",
   },
-  transcriptSource: { id: "slack-huddle", aliases: ["slack-huddles"] },
-  runtime: SlackHuddlesRuntime,
-  nodeHandler: handleSlackHuddlesNodeHostCommand,
-  createNodePolicy: createSlackHuddlesNodeInvokePolicy,
-  registerNodeWhen: (config) => config.enabled,
+  config: {
+    defaultRealtimeInstructions: `You are joining a private Slack huddle as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} for deeper reasoning, current information, or tools.`,
+    resolveGatewayOperationTimeoutMs: (config) =>
+      Math.max(
+        60_000,
+        addTimerTimeoutGraceMs(
+          config.chrome.joinTimeoutMs,
+          config.chrome.waitForInCallMs + config.chrome.joinTimeoutMs + 30_000,
+        ) ?? 1,
+      ),
+  },
+  InvalidRequestError: SlackHuddlesInvalidRequestError,
+  toolUrlDescription:
+    "Slack huddle link (Copy huddle link), or an uppercase Slack channel id such as C0123ABCD / channel:C0123ABCD for the huddle in that channel. Workspace-qualified team:T0123ABCD:channel:C0123ABCD (also with a slack: prefix) gives a team-qualified huddle link. In Slack conversations the Conversation info chat_id carries the channel reference.",
+  transcriptSource: {
+    id: "slack-huddle",
+    aliases: ["slack-huddles"],
+    providerName: "Slack huddle",
+  },
+  hooks: {
+    isAwaitingAdmission: (session) =>
+      session.chrome?.health?.manualAction?.reason === "slack-admission-required",
+  },
+  notInCallMessage: "Slack has not reported that the Slack user is in the huddle.",
+  microphoneMutedReason: "slack-microphone-muted",
+  setup: {
+    captionsMessage: () =>
+      "Slack captions depend on the account preference to turn on captions by default when joining huddles",
+    connectedNodeMessage: (node) => `Connected Slack huddles node ready: ${node}`,
+    guestJoinCheck: (config) => {
+      const ok = config.chrome.autoJoin && (config.chrome.launch || config.chrome.reuseExistingTab);
+      return {
+        ok,
+        message: ok
+          ? "Auto-join and Chrome launch or reuse are configured; sign this profile into the dedicated Slack user account"
+          : "Set chrome.autoJoin and either chrome.launch or chrome.reuseExistingTab, then sign the Chrome profile into Slack",
+      };
+    },
+    missingNodeIdMessage: "Connected Slack huddles node did not include a node id.",
+  },
+  defaultSpeechMessage: "Say exactly: Slack huddle speech test complete.",
+  shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
+  sharePrerequisiteDeadline: true,
+  preserveTrackedBrowserOnEngineFailure: true,
+  nodePolicyDeniedCode: "SLACK_HUDDLES_NODE_POLICY_DENIED",
   cli: {
     descriptor: SLACK_HUDDLES_CLI_METADATA.descriptor,
-    load: async () => (await import("./src/cli.js")).registerSlackHuddlesCli,
+    joinDescription: "join a Slack huddle as the claw’s Slack user",
   },
 });
+
+export default slackHuddlesPlugin.plugin;

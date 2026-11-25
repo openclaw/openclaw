@@ -21,6 +21,20 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import type { NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 
+const receiptDefaults = {
+  resultJson: null,
+  errorText: null,
+  completedAtMs: null,
+  createdAtMs: 1,
+  updatedAtMs: 1,
+};
+const engine = { id: "docker", command: "synthetic-container", target: "b".repeat(64) } as const;
+const containerIdentity = (id: string) => ({
+  engine: engine.id,
+  containerId: id.repeat(64),
+  engineTarget: engine.target,
+});
+
 export async function fixture(
   unknownOutcome = false,
   admission?: { entered: () => void; ready: Promise<void> },
@@ -35,7 +49,6 @@ export async function fixture(
   const firstRemoval = createDeferred();
   const removalEntered = createDeferred();
   const retryRemoval = createDeferred();
-  const retryEntered = createDeferred();
   const snapshots: number[] = [];
   const onPersist: { call?: () => void } = {};
   let launch: NodeWorkerLaunchReceipt | undefined;
@@ -76,11 +89,7 @@ export async function fixture(
       workerCleanupMode: null,
       workerLineageSettled: false,
       state: "pending",
-      resultJson: null,
-      errorText: null,
-      completedAtMs: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
+      ...receiptDefaults,
     };
     return { action: "start", receipt: launch, nonterminalCount: 1 };
   });
@@ -91,16 +100,16 @@ export async function fixture(
     launch && (launch.state === "pending" || launch.state === "running") ? 1 : 0,
   );
   mocks.launchPrune.mockResolvedValue(0);
-  mocks.launchRunning.mockImplementation(async (params) => {
-    launch = {
-      ...currentLaunch(),
-      state: "running",
-      worker: params.worker,
-      workerCleanupMode: params.cleanupMode,
-      container: params.container,
-    };
-    return launch;
-  });
+  mocks.launchRunning.mockImplementation(
+    async (params) =>
+      (launch = {
+        ...currentLaunch(),
+        state: "running",
+        worker: params.worker,
+        workerCleanupMode: params.cleanupMode,
+        container: params.container,
+      }),
+  );
   mocks.launchFinish.mockImplementation(async (params) => {
     launch = { ...currentLaunch(), state: params.state };
     if (turn?.state === "running") {
@@ -140,8 +149,7 @@ export async function fixture(
     if (!receipt) {
       throw new Error("Synthetic turn disappeared");
     }
-    turn = { ...receipt, state: params.state, resultJson: params.resultJson ?? null };
-    return turn;
+    return (turn = { ...receipt, state: params.state, resultJson: params.resultJson ?? null });
   });
   mocks.drain.mockImplementation(async () => {
     if (refusal) {
@@ -153,7 +161,6 @@ export async function fixture(
       removalEntered.resolve();
       await firstRemoval.promise;
     } else {
-      retryEntered.resolve();
       await retryRemoval.promise;
     }
   });
@@ -187,7 +194,7 @@ export async function fixture(
     kind: "started",
     adapter,
     cleanupMode: null,
-    container: { engine: "docker", containerId: "a".repeat(64), engineTarget: "b".repeat(64) },
+    container: containerIdentity("a"),
   });
   mocks.send
     .mockRejectedValue(new Error("Synthetic child input is closed"))
@@ -215,7 +222,7 @@ export async function fixture(
     bundleRoot: "/synthetic/bundles",
     env: { OPENCLAW_STATE_DIR: "/synthetic/state", NODE_DISABLE_COMPILE_CACHE: "1" },
     capacity: 1,
-    containerEngine: { id: "docker", command: "synthetic-container", target: "b".repeat(64) },
+    containerEngine: engine,
     onCapacityChanged: (snapshot) => snapshots.push(snapshot.available),
   });
   const launching = supervisor
@@ -240,18 +247,15 @@ export async function fixture(
     firstRemoval,
     removalEntered,
     retryRemoval,
-    retryEntered,
     snapshots,
     onPersist,
     readTurn: () => turn,
     turnSettled: () => turnSettled,
     readReceipt: currentTurn,
     async dispose() {
-      persistence.resolve();
-      emitResult.resolve();
-      exited.resolve();
-      firstRemoval.resolve();
-      retryRemoval.resolve();
+      for (const gate of [persistence, emitResult, exited, firstRemoval, retryRemoval]) {
+        gate.resolve();
+      }
       try {
         await supervisor.close();
       } catch (error) {
@@ -265,7 +269,6 @@ export async function fixture(
 
 export function recoveryFixture(container = false) {
   const input = testWorkerLaunchInput("/synthetic/workspace", "recovery-turn");
-  const engine = { id: "docker", command: "synthetic-container", target: "b".repeat(64) } as const;
   const original: NodeWorkerLaunchReceipt = {
     ...testNodeWorkerLaunchIdentity(input),
     gatewayNamespace: input.gatewayNamespace,
@@ -274,20 +277,8 @@ export function recoveryFixture(container = false) {
     worker: { pid: 404, startTime: 2 },
     workerCleanupMode: container ? null : "owned-anchor",
     workerLineageSettled: !container,
-    ...(container
-      ? {
-          container: {
-            engine: engine.id,
-            containerId: "c".repeat(64),
-            engineTarget: engine.target,
-          },
-        }
-      : {}),
-    resultJson: null,
-    errorText: null,
-    completedAtMs: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
+    ...(container ? { container: containerIdentity("c") } : {}),
+    ...receiptDefaults,
   };
   let receipt = original;
   let active = true;
@@ -296,14 +287,8 @@ export function recoveryFixture(container = false) {
   mocks.launchGet.mockImplementation(async () => receipt);
   mocks.launchMatching.mockImplementation(async () => receipt);
   mocks.launchCount.mockImplementation(async () => (receipt.state === "running" ? 1 : 0));
-  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (
-    params,
-    authority,
-  ) => {
-    authority?.assertCurrent();
-    receipt = { ...receipt, state: params.state };
-    return receipt;
-  };
+  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (params) =>
+    (receipt = { ...receipt, state: params.state });
   mocks.launchFinish.mockImplementation(finish);
   mocks.remove.mockResolvedValue(undefined);
   const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({}));

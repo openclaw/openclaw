@@ -14,6 +14,8 @@ import {
 
 const SESSION_WATCH_PROVENANCE_SCHEMA_VERSION = 4;
 const LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX = "ambient-group-watch:";
+// The legacy writer used this exact lowercase prefix; binary bounds use the cursor primary key.
+const LEGACY_AMBIENT_GROUP_WATCH_MARKER_END = "ambient-group-watch;";
 const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
   `provenance TEXT NOT NULL DEFAULT '${SESSION_WATCH_PROVENANCE_EXPLICIT}' ` +
   `CHECK (provenance IN ('${SESSION_WATCH_PROVENANCE_EXPLICIT}', '${SESSION_WATCH_PROVENANCE_AMBIENT_GROUP}'))`;
@@ -21,7 +23,6 @@ const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
 type SessionWatchCursorDatabase = Pick<OpenClawStateKyselyDatabase, "session_watch_cursors">;
 
 type SessionWatchCursorProvenanceMigrationResult = {
-  addedColumn: boolean;
   migratedAmbientWatches: number;
   removedLegacySentinels: number;
 };
@@ -37,7 +38,8 @@ function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
       getSessionWatchCursorKysely(db)
         .selectFrom("session_watch_cursors")
         .select("watcher_session_key")
-        .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`)
+        .where("watcher_session_key", ">=", LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX)
+        .where("watcher_session_key", "<", LEGACY_AMBIENT_GROUP_WATCH_MARKER_END)
         .limit(1),
     ) !== undefined
   );
@@ -75,21 +77,18 @@ export function migrateSessionWatchCursorProvenance(
   db: DatabaseSync,
 ): SessionWatchCursorProvenanceMigrationResult {
   if (!tableExists(db, "session_watch_cursors")) {
-    return { addedColumn: false, migratedAmbientWatches: 0, removedLegacySentinels: 0 };
+    return { migratedAmbientWatches: 0, removedLegacySentinels: 0 };
   }
 
-  const addedColumn = ensureColumn(
-    db,
-    "session_watch_cursors",
-    SESSION_WATCH_PROVENANCE_COLUMN_SQL,
-  );
+  ensureColumn(db, "session_watch_cursors", SESSION_WATCH_PROVENANCE_COLUMN_SQL);
   const kysely = getSessionWatchCursorKysely(db);
   const legacyMarkers = executeSqliteQuerySync(
     db,
     kysely
       .selectFrom("session_watch_cursors")
       .select(["watcher_session_key", "target_session_key", "updated_at"])
-      .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
+      .where("watcher_session_key", ">=", LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX)
+      .where("watcher_session_key", "<", LEGACY_AMBIENT_GROUP_WATCH_MARKER_END),
   ).rows;
   let migratedAmbientWatches = 0;
   for (const marker of legacyMarkers) {
@@ -129,7 +128,6 @@ export function migrateSessionWatchCursorProvenance(
     );
   }
   return {
-    addedColumn,
     migratedAmbientWatches,
     removedLegacySentinels: legacyMarkers.length,
   };

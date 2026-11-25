@@ -3,6 +3,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import {
@@ -30,7 +31,6 @@ const PLUGIN_CRON_NAME_PREFIX = "plugin:";
 const PLUGIN_CRON_TAG_MARKER = ":tag:";
 const PLUGIN_CRON_CLEANUP_PAGE_SIZE = 200;
 const PLUGIN_CRON_CLEANUP_MAX_PAGES = 50;
-const PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS = 3;
 
 type ResolvedSessionTurnSchedule = Extract<CronJob["schedule"], { kind: "cron" | "at" }>;
 
@@ -71,17 +71,9 @@ function formatScheduleLogContext(params: {
   name?: string;
   jobId?: string;
 }): string {
-  const parts = [`pluginId=${params.pluginId}`];
-  if (params.sessionKey) {
-    parts.push(`sessionKey=${params.sessionKey}`);
-  }
-  if (params.name) {
-    parts.push(`name=${params.name}`);
-  }
-  if (params.jobId) {
-    parts.push(`jobId=${params.jobId}`);
-  }
-  return parts.join(" ");
+  return (["pluginId", "sessionKey", "name", "jobId"] as const)
+    .flatMap((key) => (key === "pluginId" || params[key] ? [`${key}=${params[key]}`] : []))
+    .join(" ");
 }
 
 async function removeScheduledSessionTurn(params: {
@@ -142,66 +134,36 @@ function buildPluginSchedulerTagPrefix(params: {
 function isCronRemoveResult(
   value: unknown,
 ): value is Awaited<ReturnType<CronServiceContract["remove"]>> {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof (value as { ok?: unknown }).ok === "boolean" &&
-    typeof (value as { removed?: unknown }).removed === "boolean"
-  );
+  return isRecord(value) && typeof value.ok === "boolean" && typeof value.removed === "boolean";
 }
 
 async function listAllCronJobsForPluginTagCleanup(
   cron: CronServiceContract,
   query: string,
 ): Promise<CronJob[]> {
-  for (let restart = 0; restart <= PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS; restart += 1) {
-    const jobs: CronJob[] = [];
-    let offset = 0;
-    let snapshotRevision: string | undefined;
-    let total: number | undefined;
-    let snapshotChanged = false;
-
-    for (let pageNumber = 0; pageNumber < PLUGIN_CRON_CLEANUP_MAX_PAGES; pageNumber += 1) {
-      const page = readCanonicalCronListPage<CronJob>(
-        await cron.listPage({
-          includeDisabled: true,
-          limit: PLUGIN_CRON_CLEANUP_PAGE_SIZE,
-          offset,
-          query,
-          sortBy: "name",
-          sortDir: "asc",
-        }),
-        PLUGIN_CRON_CLEANUP_PAGE_SIZE,
-      );
-      if (
-        (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
-        (total !== undefined && page.total !== total)
-      ) {
-        // Offset pages are independent snapshots. Never carry cleanup targets
-        // across a revision change because the boundary rows may have moved.
-        snapshotChanged = true;
-        break;
-      }
-      snapshotRevision ??= page.snapshotRevision;
-      total ??= page.total;
-      const nextOffset = resolveCronListPageNextOffset(page, offset);
-      jobs.push(...page.jobs);
-      if (nextOffset === null) {
-        return jobs;
-      }
-      offset = nextOffset;
+  const jobs: CronJob[] = [];
+  let offset = 0;
+  // Concurrent inventory churn is best effort; a later cleanup can catch moved jobs.
+  for (let pageNumber = 0; pageNumber < PLUGIN_CRON_CLEANUP_MAX_PAGES; pageNumber += 1) {
+    const page = readCanonicalCronListPage<CronJob>(
+      await cron.listPage({
+        includeDisabled: true,
+        limit: PLUGIN_CRON_CLEANUP_PAGE_SIZE,
+        offset,
+        query,
+        sortBy: "name",
+        sortDir: "asc",
+      }),
+      PLUGIN_CRON_CLEANUP_PAGE_SIZE,
+    );
+    const nextOffset = resolveCronListPageNextOffset(page, offset);
+    jobs.push(...page.jobs);
+    if (nextOffset === null) {
+      return jobs;
     }
-
-    if (!snapshotChanged) {
-      throw new Error("cron.list pagination exceeded maximum pages");
-    }
-    if (restart === PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly during cleanup");
-    }
+    offset = nextOffset;
   }
-
-  throw new Error("cron.list inventory changed repeatedly during cleanup");
+  throw new Error("cron.list pagination exceeded maximum pages");
 }
 
 export async function schedulePluginSessionTurn(params: {

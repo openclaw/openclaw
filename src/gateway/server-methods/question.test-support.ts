@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -14,6 +18,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
@@ -31,6 +36,7 @@ export let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
 
 export function installQuestionTestHooks() {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     // Keep projection metadata alive independently of the exact admitted authority.
     registerAgentRunContext(requestParams.runId, {
       sessionKey: requestParams.sessionKey,
@@ -45,7 +51,7 @@ export function installQuestionTestHooks() {
       runId: requestParams.runId,
     });
     adminRequestClient = {
-      connect: { scopes: ["operator.admin"] },
+      connect: gatewayConnect(["operator.admin"]),
       internal: {
         agentRuntimeIdentity: {
           kind: "agentRuntime",
@@ -71,6 +77,7 @@ export function installQuestionTestHooks() {
     clearAgentRunContext(requestParams.runId);
     manager.close();
     await manager.drain();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -79,10 +86,12 @@ export function installQuestionTestHooks() {
 export async function callQuestionRpc(
   method: string,
   params: Record<string, unknown>,
-  options?: { client?: GatewayClient; cfg?: OpenClawConfig; registered?: true } & Pick<
-    GatewayRequestOptions,
-    "hasCurrentClientAuthority"
-  >,
+  options?: {
+    client?: GatewayClient;
+    clients?: readonly GatewayClient[];
+    cfg?: OpenClawConfig;
+    registered?: true;
+  } & Pick<GatewayRequestOptions, "hasCurrentClientAuthority">,
 ) {
   const calls: Parameters<RespondFn>[] = [];
   const respond: RespondFn = (...args) => calls.push(args);
@@ -97,6 +106,12 @@ export async function callQuestionRpc(
     context: createDirectChatContext({
       broadcast,
       questionManager: manager,
+      getClientConnIds: (predicate = () => true) =>
+        new Set(
+          (options?.clients ?? [])
+            .filter(predicate)
+            .flatMap((client) => (client.connId ? [client.connId] : [])),
+        ),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       getRuntimeConfig: () => cfg,
     }),

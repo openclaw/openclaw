@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { scheduleAbsoluteDeadline } from "../../utils/absolute-deadline.js";
@@ -14,9 +15,13 @@ export type GatewayRestartDeadline = ReturnType<typeof createGatewayRestartDeadl
 export type GatewayRestartCleanup = "pending" | "confirmed" | "unknown";
 
 /** One monotonic deadline covers setup, health, and reconciliation reads. */
-export function createGatewayRestartDeadline(params: { timeoutMs: number; signal?: AbortSignal }) {
+export function createGatewayRestartDeadline(params: {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  timeoutError?: Error;
+}) {
   const startedAtMs = performance.now();
-  const deadlineMs = startedAtMs + params.timeoutMs;
+  let deadlineMs = startedAtMs + params.timeoutMs;
   const controller = new AbortController();
   let activePhase: string | undefined;
   let lastPhase = "setup";
@@ -24,32 +29,43 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
   let expiredElapsedMs: number | undefined;
   let cleanupStatus: GatewayRestartCleanup | undefined;
   let cleanup: Promise<Exclude<GatewayRestartCleanup, "pending">> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    controller.signal.addEventListener(
-      "abort",
-      () =>
-        reject(toErrorObject(controller.signal.reason, "Gateway restart observation canceled.")),
-      { once: true },
-    );
-  });
-  // Expiry can happen between reads; the next read still observes the same rejection.
-  void expired.catch(() => undefined);
   const expire = () => {
     if (!controller.signal.aborted) {
       expiredPhase = activePhase ?? lastPhase;
       expiredElapsedMs = Math.round(Math.max(0, performance.now() - startedAtMs));
-      controller.abort(new GatewayRestartDeadlineError(expiredPhase));
+      controller.abort(params.timeoutError ?? new GatewayRestartDeadlineError(expiredPhase));
     }
   };
-  const cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
+  let cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
   const cancelFromCaller = () => controller.abort(params.signal?.reason);
   params.signal?.addEventListener("abort", cancelFromCaller, { once: true });
   if (params.signal?.aborted) {
     cancelFromCaller();
   }
   return {
-    deadlineMs,
+    get deadlineMs() {
+      return deadlineMs;
+    },
     signal: controller.signal,
+    /**
+     * Runs work that the operator's budget does not cover (it has its own bound): the
+     * deadline stops while it runs and then moves by its duration. An expired budget stays
+     * expired.
+     */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      if (performance.now() >= deadlineMs) {
+        expire();
+      }
+      controller.signal.throwIfAborted();
+      cancelTimer();
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        deadlineMs += performance.now() - pausedAtMs;
+        cancelTimer = scheduleAbsoluteDeadline(deadlineMs, expire, () => performance.now());
+      }
+    },
     get phase() {
       return activePhase ?? lastPhase;
     },
@@ -68,7 +84,12 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
       return cleanup;
     },
     elapsedMs: () => Math.max(0, performance.now() - startedAtMs),
-    remainingMs: () => Math.max(0, deadlineMs - performance.now()),
+    remainingMs: () => {
+      if (performance.now() >= deadlineMs) {
+        expire();
+      }
+      return Math.max(0, deadlineMs - performance.now());
+    },
     async run<T>(operation: () => Promise<T>): Promise<T> {
       return await this.read("settlement", () => {
         cleanupStatus = "pending";
@@ -90,7 +111,9 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
           expire();
         }
         controller.signal.throwIfAborted();
-        const result = await Promise.race([expired, operation()]);
+        const result = await racePromiseWithAbortSignal(operation(), controller.signal, (signal) =>
+          toErrorObject(signal.reason, "Gateway restart observation canceled."),
+        );
         if (performance.now() >= deadlineMs) {
           expire();
         }

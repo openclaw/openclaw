@@ -1,13 +1,11 @@
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { googleApiError } from "./google-api-errors.js";
+import { requestGoogleApi } from "./google-api.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
-const GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS = 30_000;
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -41,30 +39,9 @@ type GoogleMeetCalendarEvent = {
   };
 };
 
-export type GoogleMeetCalendarLookupResult = {
-  calendarId: string;
-  event: GoogleMeetCalendarEvent;
-  meetingUri: string;
-};
-
-type GoogleMeetCalendarEventsResult = {
-  calendarId: string;
-  events: Array<{
-    event: GoogleMeetCalendarEvent;
-    meetingUri: string;
-    selected: boolean;
-  }>;
-};
-
-function appendQuery(url: string, query: Record<string, string | number | boolean | undefined>) {
-  const parsed = new URL(url);
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) {
-      parsed.searchParams.set(key, String(value));
-    }
-  }
-  return parsed.toString();
-}
+export type GoogleMeetCalendarLookupResult = Awaited<
+  ReturnType<typeof findGoogleMeetCalendarEvent>
+>;
 
 function normalizeGoogleMeetCalendarUri(value: string | undefined): string | undefined {
   if (!value?.trim()) {
@@ -125,39 +102,65 @@ function extractGoogleMeetUriFromCalendarEvent(event: GoogleMeetCalendarEvent): 
     return hangoutLink;
   }
   const entryPoints = event.conferenceData?.entryPoints ?? [];
-  const videoEntryUri = findFirstGoogleMeetCalendarUri(
-    entryPoints,
-    (entry) => entry.entryPointType === "video",
-  );
-  if (videoEntryUri) {
-    return videoEntryUri;
-  }
-  const meetEntryUri = findFirstGoogleMeetCalendarUri(entryPoints);
-  if (meetEntryUri) {
-    return meetEntryUri;
-  }
   return (
-    extractGoogleMeetUriFromText(event.location) ?? extractGoogleMeetUriFromText(event.description)
+    findFirstGoogleMeetCalendarUri(entryPoints, (entry) => entry.entryPointType === "video") ??
+    findFirstGoogleMeetCalendarUri(entryPoints) ??
+    extractGoogleMeetUriFromText(event.location) ??
+    extractGoogleMeetUriFromText(event.description)
   );
 }
 
-export function buildGoogleMeetCalendarDayWindow(now = new Date()): {
-  timeMin: string;
-  timeMax: string;
-} {
+export function buildGoogleMeetCalendarDayWindow(now = new Date()) {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
-  end.setDate(start.getDate() + 1);
+  end.setHours(24, 0, 0, 0);
   return { timeMin: start.toISOString(), timeMax: end.toISOString() };
 }
 
-function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): number {
-  const startMs =
-    parseDateStringTimestampMs(event.start?.dateTime ?? event.start?.date) ??
-    Number.POSITIVE_INFINITY;
-  const endMs = parseDateStringTimestampMs(event.end?.dateTime ?? event.end?.date) ?? startMs;
-  if (startMs <= nowMs && endMs >= nowMs) {
+function createCalendarTimestampParser(timeZone?: string) {
+  let formatter: Intl.DateTimeFormat | undefined;
+  function offsetAt(ms: number) {
+    formatter ??= new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" });
+    const zone = formatter.formatToParts(ms).find((part) => part.type === "timeZoneName")?.value;
+    const [hours = 0, minutes = 0, seconds = 0] = (zone ?? "GMT").slice(4).split(":").map(Number);
+    return (zone?.startsWith("GMT-") ? -1000 : 1000) * (hours * 3600 + minutes * 60 + seconds);
+  }
+  return (value?: GoogleCalendarEventDate) => {
+    const ms = parseDateStringTimestampMs(value?.dateTime ?? value?.date);
+    if (ms === undefined || value?.dateTime !== undefined || !timeZone || timeZone === "UTC") {
+      return ms;
+    }
+    // Start with the earlier offset so a repeated midnight uses its first occurrence.
+    const first = ms - offsetAt(ms - 86_400_000);
+    const offset = offsetAt(first);
+    const midnight = ms - offset;
+    if (midnight === first || offsetAt(midnight) === offset) {
+      return midnight;
+    }
+    // A forward jump skipped midnight. The date begins at the transition itself.
+    let low = midnight;
+    let high = first;
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2);
+      if (offsetAt(mid) === offset) {
+        high = mid;
+      } else {
+        low = mid;
+      }
+    }
+    return high;
+  };
+}
+
+function rankCalendarEvent(
+  event: GoogleMeetCalendarEvent,
+  nowMs: number,
+  parseTimestamp: ReturnType<typeof createCalendarTimestampParser>,
+): number {
+  const startMs = parseTimestamp(event.start) ?? Number.POSITIVE_INFINITY;
+  const endMs = parseTimestamp(event.end) ?? startMs;
+  if (startMs <= nowMs && endMs > nowMs) {
     return 0;
   }
   if (startMs > nowMs) {
@@ -166,106 +169,87 @@ function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): numbe
   return nowMs - startMs + 30 * 24 * 60 * 60 * 1000;
 }
 
-function chooseBestMeetCalendarEvent(
-  events: GoogleMeetCalendarEvent[],
-  now: Date,
-): GoogleMeetCalendarLookupResult["event"] | undefined {
-  const nowMs = now.getTime();
-  let selected: GoogleMeetCalendarEvent | undefined;
-  let selectedRank = Number.POSITIVE_INFINITY;
-  for (const event of events) {
-    if (event.status === "cancelled" || !extractGoogleMeetUriFromCalendarEvent(event)) {
-      continue;
-    }
-    const rank = rankCalendarEvent(event, nowMs);
-    if (!selected || rank < selectedRank) {
-      selected = event;
-      selectedRank = rank;
-    }
-  }
-  return selected;
-}
-
 type GoogleMeetCalendarQuery = {
   accessToken: string;
   calendarId?: string;
   eventQuery?: string;
   timeMin?: string;
   timeMax?: string;
-  maxResults?: number;
-  now?: Date;
 };
 
-async function fetchGoogleCalendarEvents(
-  params: GoogleMeetCalendarQuery,
-): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
+async function fetchGoogleCalendarEvents(params: GoogleMeetCalendarQuery) {
   const calendarId = params.calendarId?.trim() || "primary";
-  const now = params.now ?? new Date();
+  const now = new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: appendQuery(
-      `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
+  const events: GoogleMeetCalendarEvent[] = [];
+  let timeZone: string | undefined;
+  let pageToken: string | undefined;
+  do {
+    pageToken = await requestGoogleApi(
       {
-        maxResults: params.maxResults ?? 50,
-        orderBy: "startTime",
-        q: params.eventQuery?.trim() || undefined,
-        showDeleted: false,
-        singleEvents: true,
-        timeMin: params.timeMin ?? now.toISOString(),
-        timeMax: params.timeMax ?? defaultTimeMax.toISOString(),
-      },
-    ),
-    init: {
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-      },
-    },
-    policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
-    auditContext: "google-meet.calendar.events.list",
-    timeoutMs: GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS,
-  });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
-        response,
+        url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
+        query: {
+          maxResults: 50,
+          orderBy: "startTime",
+          q: params.eventQuery?.trim() || undefined,
+          showDeleted: false,
+          singleEvents: true,
+          timeMin: params.timeMin ?? now.toISOString(),
+          timeMax: params.timeMax ?? defaultTimeMax.toISOString(),
+          pageToken,
+        },
+        accessToken: params.accessToken,
+        allowedHostname: GOOGLE_CALENDAR_API_HOST,
+        auditContext: "google-meet.calendar.events.list",
         prefix: "Google Calendar events.list",
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
-      });
-    }
-    const payload = await readProviderJsonResponse<{ items?: unknown }>(
-      response,
-      "Google Calendar events.list",
+      },
+      async (response) => {
+        const payload = await readProviderJsonResponse<{
+          items?: unknown;
+          nextPageToken?: string;
+          timeZone?: string;
+        }>(response, "Google Calendar events.list");
+        if (payload.items !== undefined && !Array.isArray(payload.items)) {
+          throw new Error("Google Calendar events.list response had non-array items");
+        }
+        events.push(...((payload.items ?? []) as GoogleMeetCalendarEvent[]));
+        timeZone ??= payload.timeZone;
+        return payload.nextPageToken;
+      },
     );
-    if (payload.items !== undefined && !Array.isArray(payload.items)) {
-      throw new Error("Google Calendar events.list response had non-array items");
+  } while (pageToken);
+  return { calendarId, events, now, timeZone };
+}
+
+export async function listGoogleMeetCalendarEvents(params: GoogleMeetCalendarQuery) {
+  const { calendarId, events, now, timeZone } = await fetchGoogleCalendarEvents(params);
+  const parseTimestamp = createCalendarTimestampParser(timeZone);
+  const meetEvents = [];
+  let best: GoogleMeetCalendarEvent | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const event of events) {
+    const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
+    if (!meetingUri) {
+      continue;
     }
-    return { calendarId, events: (payload.items ?? []) as GoogleMeetCalendarEvent[], now };
-  } finally {
-    await release();
+    meetEvents.push({ event, meetingUri, selected: false });
+    if (event.status !== "cancelled") {
+      const rank = rankCalendarEvent(event, now.getTime(), parseTimestamp);
+      if (!best || rank < bestRank) {
+        best = event;
+        bestRank = rank;
+      }
+    }
   }
+  for (const entry of meetEvents) {
+    entry.selected = entry.event === best;
+  }
+  return { calendarId, events: meetEvents };
 }
 
-export async function listGoogleMeetCalendarEvents(
-  params: GoogleMeetCalendarQuery,
-): Promise<GoogleMeetCalendarEventsResult> {
-  const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
-  const best = chooseBestMeetCalendarEvent(events, now);
-  return {
-    calendarId,
-    events: events
-      .map((event) => {
-        const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
-        return meetingUri ? { event, meetingUri, selected: event === best } : undefined;
-      })
-      .filter((event): event is GoogleMeetCalendarEventsResult["events"][number] => Boolean(event)),
-  };
-}
-
-export async function findGoogleMeetCalendarEvent(
-  params: GoogleMeetCalendarQuery,
-): Promise<GoogleMeetCalendarLookupResult> {
+export async function findGoogleMeetCalendarEvent(params: GoogleMeetCalendarQuery) {
   const result = await listGoogleMeetCalendarEvents(params);
   const selected = result.events.find((event) => event.selected) ?? result.events[0];
   if (!selected) {

@@ -65,6 +65,12 @@ temporary capture state is removed, then removes only owned fixtures before
 releasing the lease. Private `<scenario-id>-slack-e2e.json` receipts distinguish
 accepted writes, stored state, and incomplete cleanup.
 
+With `agentE2e: true`, message scenarios in the leased channel also record their
+driver roots through the native receipt owner. Cleanup includes those roots and
+their captured SUT replies and standalone progress messages even when a scenario
+assertion fails. Capture reads acquire current database admission so Gateway
+restarts do not invalidate final cleanup.
+
 ### Direct credential setup
 
 Required env when `--credential-source env`:
@@ -82,7 +88,7 @@ Optional:
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
 
-Canonical YAML scenarios exposed through the Slack live adapter:
+Shared YAML scenarios exposed through the Slack live adapter:
 
 - `thread-follow-up`
 - `thread-isolation`
@@ -95,17 +101,17 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   exactly one SUT reply after message/app-mention twin delivery, confirms a
   native threaded follow-up can recall that bot reply, then closes the MPIM.
 - `slack-allowlist-block`
-- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+- `slack-channel-disabled-warning` - opt-in real-Slack check that confirms a
   configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,
   `slack-progress-commentary-omitted`, and
-  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
+  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack checks for
   independent commentary/tool-progress controls, the omitted-key legacy
   default, and single-delivery behavior for durable verbose progress. The `on`
-  probe requires a safe Exec summary without command text or output; the `full`
-  probe requires the exact stdout marker in a separate tool-output message.
+  check requires a safe Exec summary without command text or output; the `full`
+  check requires the exact stdout marker in a separate tool-output message.
   Both use the same command and require one commentary identity separate from
   the final answer. Full verbosity allows the runtime's command metadata and
   one separate start summary, while requiring a unique completed-output identity.
@@ -241,7 +247,7 @@ reaction handling yet.
 {
   "display_information": {
     "name": "OpenClaw QA SUT",
-    "description": "OpenClaw QA SUT connector for OpenClaw"
+    "description": "OpenClaw QA SUT app for OpenClaw"
   },
   "features": {
     "bot_user": {

@@ -6,6 +6,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import { bindNormalizeReplyTransformOwner } from "../../auto-reply/reply/normalize-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { ChannelMessagingAdapter } from "../plugins/types.public.js";
 
 const channelReplyTransformOwners = new WeakMap<object, Map<string, object>>();
@@ -14,11 +15,7 @@ function resolveChannelReplyTransformOwner(
   messaging: ChannelMessagingAdapter,
   accountId?: string | null,
 ): object {
-  let owners = channelReplyTransformOwners.get(messaging);
-  if (!owners) {
-    owners = new Map();
-    channelReplyTransformOwners.set(messaging, owners);
-  }
+  const owners = getOrCreateWeakOwnerMap(channelReplyTransformOwners, messaging);
   const key = accountId?.trim() ?? "";
   let owner = owners.get(key);
   if (!owner) {

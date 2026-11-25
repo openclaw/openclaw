@@ -1,26 +1,23 @@
 import type { Command } from "commander";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { defaultRuntime } from "../runtime.js";
+import { runApprovalsAction } from "./exec-approvals-cli.shared.js";
 
 type ReconcileOptions = { json?: boolean; keepCurrent?: boolean };
 
-export function registerExecApprovalsReconcileCli(
-  approvals: Command,
-  fail: (error: unknown, opts: ReconcileOptions) => void,
-): void {
+export function registerExecApprovalsReconcileCli(approvals: Command): void {
   approvals
     .command("reconcile")
     .description("Inspect retired local approvals or archive them while keeping current policy")
     .option("--keep-current", "Archive legacy JSON and preserve the current SQLite policy", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: ReconcileOptions) => {
-      try {
+      await runApprovalsAction(opts, async () => {
         const { resolveStateDir } = await import("../config/paths.js");
-        const {
-          inspectLegacyExecApprovals,
-          detectLegacyExecApprovals,
-          migrateLegacyExecApprovals,
-        } = await import("../infra/state-migrations.exec-approvals.js");
+        const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
+          await import("../infra/state-migrations.exec-approvals.js");
+        const { inspectLegacyExecApprovals } =
+          await import("../infra/state-migrations.exec-approvals-inspection.js");
         const stateDir = resolveStateDir();
         if (!opts.keepCurrent) {
           const inspection = await inspectLegacyExecApprovals({ stateDir });
@@ -59,8 +56,6 @@ export function registerExecApprovalsReconcileCli(
         if (result.warnings.length > 0) {
           defaultRuntime.exit(1);
         }
-      } catch (err) {
-        fail(err, opts);
-      }
+      });
     });
 }

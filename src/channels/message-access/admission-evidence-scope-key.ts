@@ -234,7 +234,7 @@ export function snapshotContextBinding(
   ) {
     return undefined;
   }
-  return Object.freeze({ agentId, sessionKey, messageId, nativeChannelId, inboundEventKind });
+  return { agentId, sessionKey, messageId, nativeChannelId, inboundEventKind };
 }
 
 export function normalizeScopeId(value: unknown): string | undefined | typeof INVALID_SCOPE_VALUE {

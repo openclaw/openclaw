@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -16,7 +17,6 @@ import {
   type MatrixQaE2eeScenarioId,
 } from "./scenario-contract.js";
 import {
-  isMatrixQaPlainRecord,
   patchMatrixQaGatewayMatrixAccount,
   readMatrixQaGatewayMatrixAccount,
 } from "./scenario-runtime-config.js";
@@ -31,7 +31,6 @@ import {
   MATRIX_QA_SYNC_STATE_AFTER_PARAM,
   createMatrixQaE2eeAccountClient,
   createMatrixQaE2eeActorClient,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaGatewayConfigPath,
   registerMatrixQaE2eeScenarioAccount,
   resolveMatrixQaE2eeScenarioGroupRoom,
@@ -98,30 +97,23 @@ function buildOwnerSignatureUploadBlockedFaultRule(accessToken: string): MatrixQ
 }
 
 function removeMatrixQaSyncStateAfterEncryptionEvents(payload: unknown) {
-  if (!isMatrixQaPlainRecord(payload)) {
-    return 0;
+  if (!isRecord(payload)) {
+    return;
   }
-  const rooms = isMatrixQaPlainRecord(payload.rooms) ? payload.rooms : {};
-  const join = isMatrixQaPlainRecord(rooms.join) ? rooms.join : {};
-  let removed = 0;
+  const rooms = isRecord(payload.rooms) ? payload.rooms : {};
+  const join = isRecord(rooms.join) ? rooms.join : {};
   for (const room of Object.values(join)) {
-    if (!isMatrixQaPlainRecord(room)) {
+    if (!isRecord(room)) {
       continue;
     }
     const stateAfter = room[MATRIX_QA_SYNC_STATE_AFTER_KEY];
-    if (!isMatrixQaPlainRecord(stateAfter) || !Array.isArray(stateAfter.events)) {
+    if (!isRecord(stateAfter) || !Array.isArray(stateAfter.events)) {
       continue;
     }
-    const filtered = stateAfter.events.filter((event) => {
-      if (isMatrixQaPlainRecord(event) && event.type === "m.room.encryption") {
-        removed += 1;
-        return false;
-      }
-      return true;
-    });
-    stateAfter.events = filtered;
+    stateAfter.events = stateAfter.events.filter(
+      (event) => !isRecord(event) || event.type !== "m.room.encryption",
+    );
   }
-  return removed;
 }
 
 export function buildSyncStateAfterMissingEncryptionFaultRule(
@@ -164,7 +156,7 @@ export async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioC
       actorId: "driver",
       baseUrl: proxy.baseUrl,
       deviceId: context.driverDeviceId,
-      outputDir: requireMatrixQaE2eeOutputDir(context),
+      outputDir: context.outputDir,
       ...(context.driverPassword ? { password: context.driverPassword } : {}),
       scenarioId: "matrix-e2ee-key-bootstrap-failure",
       timeoutMs: context.timeoutMs,
@@ -195,18 +187,19 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
     ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
-  const recoveryClient = await createMatrixQaE2eeScenarioClient({
-    accessToken: params.accessToken,
-    actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
-    baseUrl: proxy.baseUrl,
-    deviceId: params.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    scenarioId: "matrix-e2ee-recovery-owner-verification-required",
-    timeoutMs: params.context.timeoutMs,
-    userId: params.userId,
-  });
+  let recoveryClient: MatrixQaE2eeScenarioClient | undefined;
   try {
+    recoveryClient = await createMatrixQaE2eeScenarioClient({
+      accessToken: params.accessToken,
+      actorId: `driver-recovery-${randomUUID().slice(0, 8)}`,
+      baseUrl: proxy.baseUrl,
+      deviceId: params.deviceId,
+      observedEvents: params.context.observedEvents,
+      outputDir: params.context.outputDir,
+      scenarioId: "matrix-e2ee-recovery-owner-verification-required",
+      timeoutMs: params.context.timeoutMs,
+      userId: params.userId,
+    });
     const verification = await recoveryClient.verifyWithRecoveryKey(params.encodedRecoveryKey);
     const restore = await waitForMatrixQaNonEmptyRoomKeyRestore({
       client: recoveryClient,
@@ -219,7 +212,7 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
       verification,
     };
   } finally {
-    await recoveryClient.stop().catch(() => undefined);
+    await recoveryClient?.stop().catch(() => undefined);
     await proxy.stop();
   }
 }
@@ -274,9 +267,8 @@ export async function withMatrixQaE2eeDriver<T>(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
   run: (client: MatrixQaE2eeScenarioClient) => Promise<T>,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver", opts);
+  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver");
   try {
     return await run(client);
   } finally {
@@ -294,18 +286,13 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     roomKey: string;
   }) => Promise<T>,
 ) {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error(
-      "Matrix E2EE isolated driver room scenario requires hard gateway restart support",
-    );
-  }
   const accountId = context.sutAccountId ?? "sut";
   const configPath = requireMatrixQaGatewayConfigPath(context);
   const accountConfig = await readMatrixQaGatewayMatrixAccount({
     accountId,
     configPath,
   });
-  const originalGroups = isMatrixQaPlainRecord(accountConfig.groups) ? accountConfig.groups : {};
+  const originalGroups = isRecord(accountConfig.groups) ? accountConfig.groups : {};
   const originalGroupAllowFrom = Array.isArray(accountConfig.groupAllowFrom)
     ? accountConfig.groupAllowFrom
     : undefined;
@@ -313,7 +300,7 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
   const driverAccount = await registerMatrixQaE2eeScenarioAccount({
     context,
     deviceName: "OpenClaw Matrix QA Isolated E2EE Driver",
-    localpartPrefix: "qa-e2ee-driver",
+    kind: "isolated-driver",
     scenarioId,
   });
   const driverApi = createMatrixQaClient({
@@ -344,7 +331,7 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     },
   };
   const applyPatch = async (accountPatch: Record<string, unknown>) => {
-    await context.restartGatewayAfterStateMutation?.(
+    await context.restartGatewayAfterStateMutation(
       async () => {
         await patchMatrixQaGatewayMatrixAccount({
           accountId,

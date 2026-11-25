@@ -1,8 +1,8 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
-import type { SessionGateway } from "./session-capability.ts";
+import { mapSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type { SessionGateway } from "./session-types.ts";
 
 type PermissionFields = Pick<GatewaySessionRow, "sessionId" | "permissionMode" | "updatedAt">;
 export type SessionPermissionClaim = {
@@ -18,6 +18,17 @@ type PermissionProjectionRoster = {
   >;
 };
 
+function withPermissionMode(
+  row: GatewaySessionRow,
+  permissionMode: PermissionFields["permissionMode"],
+) {
+  const next = { ...row, permissionMode };
+  if (permissionMode === undefined) {
+    delete next.permissionMode;
+  }
+  return next;
+}
+
 // Claims and confirmed fields share one conversation owner. A row event may
 // supersede its permission choice, but never owns an unrelated roster load.
 export function createSessionPermissionProjection(
@@ -32,7 +43,7 @@ export function createSessionPermissionProjection(
     }
   >();
   const permissionIdentity = (key: string, agentId?: string | null) => {
-    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId ?? undefined);
+    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId);
     return `${identity.sessionKey}\0${identity.agentId ?? ""}`;
   };
   const createProjection = (identity: string, sessionId?: string) => {
@@ -124,6 +135,13 @@ export function createSessionPermissionProjection(
       }
       return row;
     }
+    // These list projections omit permissions; absence cannot supersede a known choice.
+    if (
+      (row.rowMode === "sidebar" || row.rowMode === "dashboard") &&
+      !Object.hasOwn(row, "permissionMode")
+    ) {
+      return row;
+    }
     const revision = readRevision(row);
     const fact = projection.fact;
     const older =
@@ -153,12 +171,7 @@ export function createSessionPermissionProjection(
     if (row.permissionMode === fact.permissionMode) {
       return row;
     }
-    const next = { ...row };
-    if (fact.permissionMode === undefined) {
-      delete next.permissionMode;
-    } else {
-      next.permissionMode = fact.permissionMode;
-    }
+    const next = withPermissionMode(row, fact.permissionMode);
     return getRoster().observations.inheritRow(next, row);
   };
   const projectPermissionList = (
@@ -170,9 +183,8 @@ export function createSessionPermissionProjection(
     if (!result || permissionProjections.size === 0) {
       return result;
     }
-    return projectSessionResultRows(
-      result,
-      result.sessions.map((row) => projectPermissionRow(row, readRevision, agentId, observe)),
+    return mapSessionResultRows(result, (row) =>
+      projectPermissionRow(row, readRevision, agentId, observe),
     );
   };
   const observeEventRow = (
@@ -197,14 +209,7 @@ export function createSessionPermissionProjection(
       row.updatedAt < projection.fact.updatedAt
     ) {
       // Another held list may have accepted a newer field than this roster has seen.
-      const corrected = {
-        ...row,
-        permissionMode: projection.fact.permissionMode,
-      };
-      if (corrected.permissionMode === undefined) {
-        delete corrected.permissionMode;
-      }
-      return corrected;
+      return withPermissionMode(row, projection.fact.permissionMode);
     }
     if (row.sessionId) {
       // Events supersede confirmed outcomes; a pending local choice still arbitrates its acknowledgment.

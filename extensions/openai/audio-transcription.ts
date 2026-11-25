@@ -1,4 +1,5 @@
 import type {
+  AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
   MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -19,17 +20,18 @@ import { classifyOpenAIBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
 export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
+  const model = params.model?.trim() || OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL;
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     provider: "openai",
     defaultBaseUrl: OPENAI_API_BASE_URL,
     defaultModel: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+    // gpt-transcribe replaces the single `language` hint with a `languages` list.
+    languageField: /^gpt-transcribe(?:-|$)/.test(model) ? "languages[]" : "language",
   });
 }
 
-export const transcribeOpenAiAudioWithContext: NonNullable<
-  MediaUnderstandingProvider["transcribeAudioWithContext"]
-> = async (context) => {
+async function resolveOpenAiAudioAuth(context: AudioTranscriptionConfigContext) {
   const providerConfig = findNormalizedProviderValue(context.cfg.models?.providers, "openai");
   const hasConfiguredKey = hasConfiguredSecretInput(
     providerConfig?.apiKey,
@@ -100,8 +102,23 @@ export const transcribeOpenAiAudioWithContext: NonNullable<
   } catch (error) {
     // This result is exclusively a rejection before uploading audio. HTTP failures
     // below must throw so automatic selection cannot send the file to another provider.
-    return { ok: false, error };
+    return { ok: false as const, error };
   }
+  return { ok: true as const, value: { auth, credential, nativeEndpoint } };
+}
+
+export const isOpenAiAudioConfigured: NonNullable<
+  MediaUnderstandingProvider["isAudioConfigured"]
+> = async (context) => (await resolveOpenAiAudioAuth(context)).ok;
+
+export const transcribeOpenAiAudioWithContext: NonNullable<
+  MediaUnderstandingProvider["transcribeAudioWithContext"]
+> = async (context) => {
+  const prepared = await resolveOpenAiAudioAuth(context);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const { auth, credential, nativeEndpoint } = prepared.value;
   const transcribe = (apiKey: string) =>
     transcribeOpenAiAudio({
       ...context,

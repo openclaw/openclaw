@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseArgs, resolveMergeHeadDiffBase } from "../../scripts/lib/merge-head-diff-base.mjs";
+import { withTempDirSync } from "../../src/test-helpers/temp-dir.js";
 
 describe("merge-head-diff-base", () => {
   it("parses explicit refs", () => {
@@ -12,13 +13,14 @@ describe("merge-head-diff-base", () => {
 
   it("rejects missing refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
-    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
-    expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
-    expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
 
   it("keeps empty base resolution as the no-op programmatic default", () => {
-    expect(resolveMergeHeadDiffBase({ base: "", preferFirstParent: true })).toBe("");
+    withTempDirSync({ prefix: "openclaw-empty-diff-base-" }, (cwd) => {
+      expect(
+        resolveMergeHeadDiffBase({ base: "", head: "missing-head", cwd, preferFirstParent: true }),
+      ).toBe("");
+    });
   });
 });

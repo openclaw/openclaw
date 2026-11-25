@@ -1,4 +1,3 @@
-/** Gateway runtime for core-owned Canvas document HTTP responses. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -41,7 +40,6 @@ async function resolveDocumentSandbox(
   }
 }
 
-/** Serves one managed Canvas document request. */
 export async function handleCanvasDocumentHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

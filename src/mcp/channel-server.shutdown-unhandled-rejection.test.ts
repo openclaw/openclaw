@@ -1,149 +1,77 @@
-// Channel MCP shutdown tests cover unhandled rejection behavior during shutdown.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, expect, it, vi } from "vitest";
 
-const transportState = vi.hoisted(() => ({
-  lastTransport: null as { onclose?: (() => void) | undefined } | null,
-}));
-const serverState = vi.hoisted(() => ({
-  connect: vi.fn(async (_transport: unknown) => {}),
-  close: vi.fn(async () => {}),
-}));
-const bridgeState = vi.hoisted(() => ({
-  start: vi.fn(async () => {}),
-  close: vi.fn(async () => {
+const state = vi.hoisted(() => ({
+  transport: { onclose: undefined as (() => void) | undefined },
+  serverClose: vi.fn(async () => {}),
+  bridgeClose: vi.fn(async () => {
     throw new Error("close boom");
   }),
-  setServer: vi.fn(),
-  handleClaudePermissionRequest: vi.fn(async (_payload: unknown) => {}),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-  StdioServerTransport: class MockStdioServerTransport {
-    onclose?: () => void;
-
-    constructor() {
-      transportState.lastTransport = this;
-    }
-  },
+vi.mock("@modelcontextprotocol/server/stdio", () => ({
+  StdioServerTransport: vi.fn(function () {
+    return state.transport;
+  }),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
+vi.mock("@modelcontextprotocol/server", () => ({
   McpServer: class MockMcpServer {
-    server = {
-      setNotificationHandler: vi.fn(),
-    };
+    registerTool() {}
 
-    async connect(transport: unknown) {
-      return serverState.connect(transport);
-    }
-
-    async close() {
-      return serverState.close();
-    }
+    server = { setNotificationHandler: vi.fn() };
+    async connect() {}
+    close = state.serverClose;
   },
 }));
 
+// mock-isolation: Shutdown fixtures use empty config without starting a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
-vi.mock("../version.js", async () => ({
-  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
-  VERSION: "test",
-}));
-
+// mock-isolation: Inject a bridge-close failure without starting a real Gateway bridge.
 vi.mock("./channel-bridge.js", () => ({
   OpenClawChannelBridge: class MockOpenClawChannelBridge {
-    setServer(server: unknown) {
-      bridgeState.setServer(server);
-    }
-
-    async start() {
-      return bridgeState.start();
-    }
-
-    async close() {
-      return bridgeState.close();
-    }
-
-    async handleClaudePermissionRequest(payload: unknown) {
-      return bridgeState.handleClaudePermissionRequest(payload);
-    }
+    setServer() {}
+    async start() {}
+    close = state.bridgeClose;
+    async handleClaudePermissionRequest() {}
   },
 }));
 
-vi.mock("./channel-shared.js", () => ({
-  ClaudePermissionRequestSchema: {},
-}));
+const onUnhandledRejection = vi.fn<(reason: unknown) => void>();
 
-vi.mock("./channel-tools.js", () => ({
-  getChannelMcpCapabilities: vi.fn(() => undefined),
-  registerChannelMcpTools: vi.fn(),
-}));
+afterEach(() => {
+  process.off("unhandledRejection", onUnhandledRejection);
+  onUnhandledRejection.mockClear();
+  state.transport = { onclose: undefined };
+  state.serverClose.mockClear();
+  state.bridgeClose.mockClear();
+});
 
-async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
-  await vi.waitFor(() => {
-    if (transportState.lastTransport === null) {
-      throw new Error("MCP stdio transport was not created");
-    }
-  });
-  if (!transportState.lastTransport) {
-    throw new Error("MCP stdio transport was not created");
+it.each([false, true])("settles channel shutdown (aggregate=%s)", async (aggregate) => {
+  if (aggregate) {
+    state.serverClose.mockRejectedValueOnce(new Error("server close boom"));
   }
-  return transportState.lastTransport;
-}
-
-describe("serveOpenClawChannelMcp shutdown", () => {
-  const unhandledRejections: unknown[] = [];
-  const onUnhandledRejection = (reason: unknown) => {
-    unhandledRejections.push(reason);
-  };
-
-  afterEach(() => {
-    process.off("unhandledRejection", onUnhandledRejection);
-    unhandledRejections.length = 0;
-    transportState.lastTransport = null;
-    serverState.connect.mockClear();
-    serverState.close.mockClear();
-    bridgeState.start.mockClear();
-    bridgeState.close.mockClear();
-    bridgeState.setServer.mockClear();
-    bridgeState.handleClaudePermissionRequest.mockClear();
-  });
-
-  it("rejects without leaking unhandled rejections and attempts every cleanup owner", async () => {
-    process.on("unhandledRejection", onUnhandledRejection);
-    const { serveOpenClawChannelMcp } = await import("./channel-server.js");
-
-    const servePromise = serveOpenClawChannelMcp({ verbose: false });
-    const transport = await waitForTransport();
-
-    transport.onclose?.();
-    await expect(servePromise).rejects.toThrow("close boom");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(unhandledRejections).toStrictEqual([]);
-    expect(bridgeState.close).toHaveBeenCalledTimes(1);
-    expect(serverState.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("aggregates bridge and MCP server close failures", async () => {
-    serverState.close.mockRejectedValueOnce(new Error("server close boom"));
-    const { serveOpenClawChannelMcp } = await import("./channel-server.js");
-
-    const servePromise = serveOpenClawChannelMcp({ verbose: false });
-    const transport = await waitForTransport();
-    transport.onclose?.();
-
+  process.on("unhandledRejection", onUnhandledRejection);
+  const { serveOpenClawChannelMcp } = await import("./channel-server.js");
+  const servePromise = serveOpenClawChannelMcp({ verbose: false });
+  await vi.waitFor(() => expect(state.transport.onclose).toBeTypeOf("function"));
+  state.transport.onclose?.();
+  if (aggregate) {
     const error = await servePromise.catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).errors).toEqual([
       expect.objectContaining({ message: "close boom" }),
       expect.objectContaining({ message: "server close boom" }),
     ]);
-    expect(bridgeState.close).toHaveBeenCalledTimes(1);
-    expect(serverState.close).toHaveBeenCalledTimes(1);
-  });
+  } else {
+    await expect(servePromise).rejects.toThrow("close boom");
+  }
+  await setImmediate();
+  expect(onUnhandledRejection).not.toHaveBeenCalled();
+  expect(state.bridgeClose).toHaveBeenCalledTimes(1);
+  expect(state.serverClose).toHaveBeenCalledTimes(1);
 });

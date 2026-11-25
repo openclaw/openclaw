@@ -1,5 +1,25 @@
 import fs from "node:fs";
-import { matchRootFileOpenFailure, openRootFileSync } from "@openclaw/fs-safe/advanced";
+import path from "node:path";
+import {
+  matchRootFileOpenFailure,
+  openRootFileSync,
+  readFileWindowFullySync,
+} from "@openclaw/fs-safe/advanced";
+
+const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function isControlUiCompressibleAsset(filePath: string): boolean {
+  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
 
 export type ControlUiFileRead = {
   rootPath: string;
@@ -58,18 +78,7 @@ export function readControlUiFile(input: ControlUiFileRead): ControlUiFileSnapsh
     }
     // An independent backing buffer transfers without copying pooled Buffer memory.
     const body = new Uint8Array(opened.stat.size);
-    let offset = 0;
-    while (offset < body.length) {
-      const count = fs.readSync(opened.fd, body, {
-        offset,
-        length: Math.min(512 * 1024, body.length - offset),
-        position: offset,
-      });
-      if (count === 0) {
-        break;
-      }
-      offset += count;
-    }
+    const offset = readFileWindowFullySync(opened.fd, Buffer.from(body.buffer), 0);
     snapshot.body = offset === body.length ? body : body.slice(0, offset);
     return snapshot;
   } finally {

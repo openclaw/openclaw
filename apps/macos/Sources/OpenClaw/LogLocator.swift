@@ -10,15 +10,6 @@ enum LogLocator {
         return URL(fileURLWithPath: "/tmp/openclaw")
     }
 
-    private static var stdoutLog: URL {
-        logDir.appendingPathComponent("openclaw-stdout.log")
-    }
-
-    private static var gatewayLog: URL {
-        let suffix = AppProfile.current.name.map { "-\($0)" } ?? ""
-        return logDir.appendingPathComponent("openclaw-gateway\(suffix).log")
-    }
-
     private static func ensureLogDirExists() {
         try? FileManager().createDirectory(at: self.logDir, withIntermediateDirectories: true)
     }
@@ -27,12 +18,23 @@ enum LogLocator {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
-    /// Returns the newest log file under /tmp/openclaw/ (rolling or stdout), or nil if none exist.
+    /// Prefer the current state's structured logs; retain launchd and pre-migration logs as fallback.
     static func bestLogFile() -> URL? {
-        self.ensureLogDirExists()
+        let stateDir = OpenClawPaths.stateDirURL
+        let directories = ProcessInfo.processInfo.environment["OPENCLAW_LOG_DIR"]?.isEmpty == false
+            ? [self.logDir]
+            : [
+                stateDir.appendingPathComponent("logs"),
+                stateDir.appendingPathComponent("tmp/openclaw-\(getuid())"),
+                self.logDir,
+            ]
+        return directories.lazy.compactMap { self.newestLogFile(in: $0) }.first
+    }
+
+    private static func newestLogFile(in directory: URL) -> URL? {
         let fm = FileManager()
         let files = (try? fm.contentsOfDirectory(
-            at: self.logDir,
+            at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles])) ?? []
 
@@ -48,12 +50,13 @@ enum LogLocator {
     /// Path to use for launchd stdout/err.
     static var launchdLogPath: String {
         self.ensureLogDirExists()
-        return stdoutLog.path
+        return self.logDir.appendingPathComponent("openclaw-stdout.log").path
     }
 
     /// Path to use for the Gateway launchd job stdout/err.
     static var launchdGatewayLogPath: String {
         self.ensureLogDirExists()
-        return gatewayLog.path
+        let suffix = AppProfile.current.name.map { "-\($0)" } ?? ""
+        return self.logDir.appendingPathComponent("openclaw-gateway\(suffix).log").path
     }
 }

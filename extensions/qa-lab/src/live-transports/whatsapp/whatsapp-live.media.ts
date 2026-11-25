@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
-import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
+import {
+  callWhatsAppGatewaySend,
+  writeWhatsAppQaWorkspaceFixture,
+} from "./whatsapp-live.gateway.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 
 export async function sendWhatsAppQaMediaAndObserve(
@@ -37,6 +41,66 @@ export async function sendWhatsAppQaMediaAndObserve(
       match: (message) => message.text.includes(params.message),
     });
   }
+}
+
+export async function runWhatsAppOutboundMediaChecks(
+  context: WhatsAppQaMessageScenarioContext,
+  token: string,
+  target: "dm" | "group",
+) {
+  const mediaRootToken = randomUUID().slice(0, 8);
+  const prefix = target === "group" ? "group-" : "";
+  const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
+    buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
+    fileName: `whatsapp-qa-${prefix}${mediaRootToken}.png`,
+  });
+  const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
+    buffer: createWhatsAppQaPdfBuffer(),
+    fileName: `whatsapp-qa-${prefix}${mediaRootToken}.pdf`,
+  });
+  const media: Array<{ kind: "image" | "document" | "audio"; mediaUrl: string }> = [
+    { kind: "image", mediaUrl: imagePath },
+    { kind: "document", mediaUrl: documentPath },
+  ];
+  if (target === "dm") {
+    media.push({
+      kind: "audio",
+      mediaUrl: await writeWhatsAppQaWorkspaceFixture(context, {
+        buffer: createWhatsAppQaAudioWavBuffer(),
+        fileName: `whatsapp-qa-${mediaRootToken}.wav`,
+      }),
+    });
+  }
+  for (const { kind, mediaUrl } of media) {
+    await sendWhatsAppQaMediaAndObserve(context, {
+      kind,
+      label: `${prefix}${kind}`,
+      mediaUrl,
+      message: `${token}_${kind.toUpperCase()}`,
+    });
+  }
+  if (target === "group") {
+    return "gateway send delivered image and document media to the group";
+  }
+
+  const multiStartedAt = new Date();
+  await callWhatsAppGatewaySend(context, {
+    label: "multi",
+    mediaUrls: [imagePath, documentPath],
+    message: `${token}_MULTI`,
+  });
+  await waitForScenarioObservedMessage(context, {
+    observedAfter: multiStartedAt,
+    match: (message) =>
+      message.kind === "media" && message.mediaType?.startsWith("image/") === true,
+  });
+  await waitForScenarioObservedMessage(context, {
+    observedAfter: multiStartedAt,
+    match: (message) =>
+      message.kind === "media" &&
+      (message.mediaType === "application/pdf" || message.mediaFileName?.endsWith(".pdf") === true),
+  });
+  return "gateway send delivered image, document, audio, and multi-media";
 }
 
 export const WHATSAPP_QA_ONE_PIXEL_PNG = Buffer.from(
@@ -134,13 +198,12 @@ export async function runWhatsAppStructuredInboundChecks(params: {
   await params.waitForStructuredReply("sticker", stickerStartedAt, params.stickerToken);
 }
 
-export function createWhatsAppQaAudioWavBuffer(params?: { durationSeconds?: number }) {
+function createWhatsAppQaAudioWavBuffer() {
   const sampleRate = 16_000;
   const channelCount = 1;
   const bitsPerSample = 16;
-  const durationSeconds = params?.durationSeconds ?? 1;
   const bytesPerSample = bitsPerSample / 8;
-  const dataBytes = sampleRate * durationSeconds * channelCount * bytesPerSample;
+  const dataBytes = sampleRate * channelCount * bytesPerSample;
   const buffer = Buffer.alloc(44 + dataBytes);
   buffer.write("RIFF", 0, "ascii");
   buffer.writeUInt32LE(36 + dataBytes, 4);

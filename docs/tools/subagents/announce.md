@@ -9,23 +9,111 @@ read_when:
 
 ## Announce
 
-Sub-agents report back via an announce step:
+Sub-agents report back through completion delivery:
 
-- The announce step runs inside the sub-agent session (not the requester session).
-- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
-- An exact `ANNOUNCE_SKIP` response suppresses announce output.
-- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
-- Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
+- The completed child's result is handed to the requester; delivery does not ask the child to generate a separate announcement.
+- Runs spawned with `expectsCompletionMessage: false` skip completion delivery entirely; the run registry records their delivery as not required.
+- Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
+- Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
+
+While a completion waits for its requester, its delivery record carries
+`requesterDelivery.state: "waiting"`, the continuation `runId` once assigned, and
+`blockingRunId` when another requester turn holds the mailbox. Pending handoffs
+have no terminal non-delivery disposition. Once the transcript owner commits the
+input, it immediately records `state: "consumed"` and the consuming run in the
+registry, before the requester source settles. Registry readers use that stored
+fact directly.
+A result waiting behind its recorded blocker stays pending while that execution
+still belongs to the live requester. When the turn ends or yields, normal
+completion admission resumes.
+An ordinary requester run ending or a later follow-up taking over does not discard
+the waiting results. An accepted completion turn keeps its delivery; findings not
+yet accepted remain pending for the requester's next turn.
+Public completion delivery resolves the requester's current session admission.
+If that turn is still preparing its backend after recovery, delivery waits for
+readiness before steering, rather than queuing the result behind the waiting parent.
+An idle requester receives a fresh completion input.
+Consumption is distinct from sending a reply to the user. A later cancellation
+does not turn a consumed private result into failed delivery; restart recovery
+and the existing completion retention window remain unchanged.
+Public settle turns also preserve the accepted input's sender attribution across
+restart. A matching restart-interrupted processing receipt resumes that same input
+and run, using its committed bytes without repeating transcript hooks or appending
+the child result again. Completed and intentionally stopped processing receipts
+remain final.
+
+A requester completion turn may finish with `NO_REPLY` or no visible text. That
+settles the child's completion without a retry, an extra model turn, or a notice.
+The parent decides whether to tell the user; later parent turns own any
+outstanding answer. A child task itself still owes its result; this quiet
+settlement applies to the parent reviewing it.
+
+A requester completion turn commits the child results to the requester transcript
+before it calls the model. A committed result is never dispatched again, even if
+the turn later fails, is aborted by Gateway shutdown, or its reply does not reach
+the channel.
+
+### Child status in requester history
+
+When the completion turn cannot run or does not consume the result (the wake is
+refused, aborted before admission, or the requester's delivery path fails),
+OpenClaw appends the child's end state to the requester transcript once, as
+model-visible history, and settles the delivery. This applies on the first
+failure to every child that owes a completion, including legacy rows without an
+explicit completion mode. There is no retry ladder, suspension, expiry or
+user-visible delivery error. The entry is not shown as a chat row; the user sees
+the parent's own reply and the child card.
+
+The entry names the child label, session and run, and its status:
+
+- `completed`, with the child's result (at most 8,000 characters per child and
+  32,000 per entry; a truncated result from a kept child says to ask the child for
+  the rest with `sessions_send`);
+- `failed: <error>`, `timed out` or `interrupted by Gateway restart`, followed by
+  "If you still need this work, resume it with sessions_send or start a new child
+  with sessions_spawn.";
+- `killed`.
+
+The parent reads the entry on its next turn and decides whether to tell the user,
+resume the child, start a new child or ignore it. A yielded requester whose
+continuation never ran ends as an ordinary run; the entry is in its history.
+Stopping the parent's turn does not discard a finished child's entry; a deleted
+requester receives nothing.
+
+Completion rows that older builds parked as suspended are settled the same way
+once, on the next registry sweep, without a wake.
 
 By default, delivery depends on requester depth:
 
-- Top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`).
+- Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
+Completion follow-up turns retain live operator-source custody when available.
+A batch uses that custody only when every member has the same live source and
+permission ceiling. Missing, revoked, or mixed custody uses the System write-only
+baseline instead; it does not refuse the result or borrow a sibling's permissions.
+Gateway admission still checks access to the selected requester session.
+
+Model fallback and other model-routing updates do not invalidate prepared
+completion or child follow-up authority. Changes to session identity, lifecycle,
+spawn lineage, tool policy, sandbox, or execution host still reject stale work.
+
+New-turn capability preparation refreshes stale inherited session metadata once
+per affected lookup before evaluating current policy again. This lets ordinary
+metadata updates coexist with child follow-ups and completion turns. It does not
+renew an active turn's retained authority: session replacement, policy revocation,
+and closed owners still fail their existing checks.
+
+The requester turn's captured origin owns completion routing, including after
+`sessions_yield` and for child pause notices. A WebChat origin does not inherit a
+previous external destination from the session. Without a captured origin, the
+stored delivery route remains the fallback; explicit external routing remains
+supported without clearing that history.
+
 For top-level requester sessions, completion-mode direct delivery first
 resolves any bound conversation/thread route and hook override, then fills
-missing channel-target fields from the requester session's stored route.
+missing channel-target fields from the requester's origin and compatible stored route.
 That keeps completions on the right chat/topic even when the completion
 origin only identifies the channel. When an override selects a different
 chat or topic, it does not inherit the previous route's thread. An explicit
@@ -36,27 +124,80 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
-After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. A still-running child from an earlier requester turn does
-not delay that batch's result; the earlier batch retains its own completion wake.
+When a completion or settle turn has only a source-bound `message` grant, it can
+send the completed work's photos and files using `media`, `attachments`, or media
+directives, with or without text. Normal outbound media validation still applies,
+including local-file roots. The grant cannot change the destination, channel,
+account, or thread, or perform actions other than `send`. Explicit `replyTo` stays
+limited to the current message or thread; inline reply and audio directives remain
+restricted. See [message tool access](/tools#configure-access-and-approvals).
+
+After `sessions_yield`, each finished child result in the frozen batch wakes the
+parent as soon as it and its descendants settle. Siblings that are still running,
+or paused on their own `sessions_yield`, keep their completion wake and wake the
+parent again when they finish; a result is delivered once. The wake names the
+siblings that are still working, so the parent can act on the ready results or
+call `sessions_yield` again to wait for the rest. A still-running child from an
+earlier requester turn does not delay that batch's result; the earlier batch
+retains its own completion wake.
+
+Private results are addressed to the current requester chat by its recorded agent
+and session key, regardless of the session store path recorded at spawn. If a new
+session, a reset or a compaction successor replaces the chat's session before the
+batch can deliver, the results go to the chat as it is now, as private input.
+A deleted chat drops them. A full reset also cancels the chat's unfinished children
+(see [Reset a conversation](/tools/subagents/nesting#reset-a-conversation)).
+
+Completion and settle run IDs stay within the 256-character execution-identity
+admission limit, including nested completions. IDs that fit remain unchanged;
+longer IDs retain their routing prefix and continuation markers with a SHA-256
+digest of the full identity. Batch size and nesting therefore do not prevent
+completion admission when execution-identity collection is enabled.
 
 Completion inputs retain their own turn identity across compaction and runtime
-context messages. If transcript persistence rejects a completion because its
-keyed input belongs to a closed turn, delivery records a permanent failure with
-the error. It does not retry other models or keep scheduling the same completion.
+context messages.
+
+Direct child-result delivery records its transcript mirror after work already
+queued on the requester session. The send settles without waiting for that
+append, so a requester waiting on its child can resume. These tagged mirrors
+record history without closing an open keyed input; ordinary final replies still
+close the turn. Mirrors remain best-effort bookkeeping after a successful send.
+
+A completion steered into the requester's active run counts as delivered once the
+steer commits, even if its delivery owner changes afterward. A confirmed handoff
+remains delivered even if its receipt callback fails; cleanup must not replay an
+already consumed result.
+
+Restart checkpoint reconciliation retains the confirmed delivery evidence before
+clearing the active recovery claim. A terminal run ID alone is not proof that the
+requester received its result.
 
 If a chunk in a direct-message text fallback fails or is aborted after earlier
-chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
-retries to avoid duplicating chunks the recipient already received. A successful
-child's result remains available for recovery.
+chunks were sent, OpenClaw does not resend the chunks the recipient already
+received.
 
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
-private turn of the original requester session. The parent can inspect the result,
-start another child, or reply `NO_REPLY`. OpenClaw does not automatically send the
-child result, parent final, or generated media to a channel. The parent can still
-choose to send a message through its permitted tools.
+private turn of the original requester session. The parent reviews the result,
+continues unfinished work, and settles the reviewed input. Private processing
+may finish silently; it does not by itself satisfy
+an outstanding user reply.
+OpenClaw does not automatically send the child result, parent final, or
+generated media to a channel. The parent can still choose to send a message
+through its permitted tools. When the requester has no current conversation or
+delivery target, the private completion guidance tells it to record its final
+reply in the session for the requester; no messaging send is needed.
+
+If the parent called `sessions_yield` while waiting for private children, the
+yield hands the conversation back to it. When those children settle, the parent
+resumes and answers the original conversation under its normal reply rules: with
+automatic replies its final text is delivered; with `visibleReplies:
+"message_tool"` it must send the answer with the `message` tool, and plain final
+text stays internal. Child results stay internal input, and nothing is sent
+automatically on the child's behalf. The resumed turn goes to the parent chat
+by its session key: if the session is replaced (for example by compaction) before
+the parent resumes, the current session receives the results as private input.
 
 This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
@@ -64,15 +205,30 @@ with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, o
 
 Finished private results remain in the registry until the spawning parent turn
 settles. A normal parent finish releases each ready result for private review;
-`sessions_yield` hands the results to its existing child batch instead. A reset or
-removed parent does not transfer the result to another session. When a settled
-batch contains a private result, its combined review stays private; ordinary
-siblings retain their individual completion delivery.
+`sessions_yield` hands the results to its existing child batch instead. A removed
+parent drops the result; any other chat never receives it. When a settled
+batch contains a private result, the child findings stay private input to the
+parent's review or yielded continuation; ordinary siblings retain their individual
+completion delivery.
 
-Waiting for the spawning parent turn does not consume a private result's delivery
-retry window. A normal parent finish starts that window when it releases the
-result. After `sessions_yield`, the yielded batch owns delivery; individual child
-cleanup cannot expire or suspend that batch's result.
+Inspecting a completed child's status before yielding does not consume or invalidate
+its private result.
+
+Waiting for the spawning parent turn does not settle a private result. A normal
+parent finish releases it for delivery. After `sessions_yield`, the yielded batch
+owns delivery; individual child cleanup does not settle that batch's result.
+
+Session controls still require the current caller’s authority. A completion report
+does not transfer the original human’s permissions. Keep authorized cleanup with
+the original requester turn and use after-turn self-archive when appropriate,
+rather than asking a notification-only turn to acquire owner privileges.
+Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
+follow-up still follows the destination conversation’s reply requirements.
+
+Child follow-up results retain access to the same requester session when its
+lifecycle revision advances. Each delivery attempt still checks current session
+access and requester authority; revoked authority cannot receive the continuation.
+Private completions continue to wait behind an active requester turn.
 
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;
@@ -89,18 +245,60 @@ Announce context is normalized to a stable internal event block:
 | Type           | Announce type + task label                                                                               |
 | Status         | Derived from runtime outcome (`ok`, `error`, `timeout`, or `unknown`) — **not** inferred from model text |
 | Result content | Latest visible assistant text from the child                                                             |
-| Follow-up      | Instruction describing when to reply vs stay silent                                                      |
+| Follow-up      | Instruction to review the result, continue unfinished work, and report the outcome                       |
 
-The result is the child's complete visible final answer for the completed run.
-OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. It does not shorten an answer to fit the former announce
-projection limits. The bounded lifecycle snapshot remains separate from the
-complete answer sent to the parent.
+The result is the child's complete visible final answer for the completed run,
+including ACP-backed runs and CLI fallback transcripts. A later turn in the same
+child session does not replace that run's answer. Native answers preserve the same
+text-block boundaries as terminal results. Already displayed replies retain their
+recorded display text, and media references remain available for parent review.
+Once cleanup and requester obligations
+have settled, the in-memory registry keeps a short task preview and lifecycle
+metadata. Full task and result text remain in SQLite and are loaded for selected
+reads or later mutations. Pending delivery, cancellation, and yielded work keep
+their payloads until those obligations settle.
+
+Restart recovery includes finished results whose requester has already settled,
+even when that requester has no interrupted-run marker. Lost process-local custody
+does not block delivery: recovery uses the System baseline when no live same-source
+custody remains. Pending delivery is not eligible for completed-run retention
+cleanup. Existing wakes resume through startup recovery.
+
+Registry removal records a `child_delivery_removed` session-state event in the
+same transaction. It identifies the run, its delivered, suspended, or discarded
+outcome, and the removal reason without copying result text. These receipts use
+the existing session-state history retention (30 days, at most 50,000 events);
+removing the short-lived registry row does not erase the delivery evidence.
+
+If completion receipts for the same run arrive out of order, the receipt with
+the newer producer end time owns the reply. Equal end times retain the first
+accepted reply; a correction with a newer end time can replace it.
+
+OpenClaw keeps each child result's own characters inside its prompt-data block, so
+a requester can quote it exactly: markup, entities, ampersands and tabs arrive as
+the child wrote them. Only a `<` that would open or close a data block, an
+OpenClaw prompt-region marker or an OpenClaw `<<<…>>>` delimiter is escaped as
+`&lt;`. Task titles stay fully escaped. Several results keep a stable order, and
+completion findings have a strict shared 160,000-character cap, including
+escaping and framing. Small answers stay intact; larger answers keep
+their beginning and an explicit truncation marker pointing to `sessions_history`
+with the child session key. `sessions_history` truncates text fields to 4,000
+characters; this pointer does not provide lossless retrieval of an omitted tail.
+Each shown child keeps its task and status, with result heads sharing the remaining
+space above a small floor. If even floor-sized blocks would exceed the cap, the
+remaining children become one bounded summary line with their count, the first few
+session keys, and guidance to inspect them with the session tools. Ordering stays
+deterministic. The bounded lifecycle snapshot and retained complete transcript
+stay separate from these prompt limits.
+
+A successful child with an empty final reply remains in the batch with its task
+identity, `ok` status, and `(no output)` result. Its successful execution status
+does not satisfy the required result.
 
 For nested work, descendant findings help the child form its answer. The child's
-own final answer is what travels onward to its parent. If the child sends its
-final answer through the message tool and then returns `NO_REPLY`, that final
-answer remains authoritative.
+own final answer is what travels onward to its parent. A final answer delivered
+through the message tool remains authoritative through its recorded source
+delivery, even if a later terminal response is empty or silent.
 
 Completion delivery can read an existing registered archive when child cleanup
 finishes before the parent resumes. The Control UI's **Tasks** inspector also
@@ -122,7 +320,9 @@ not change retained archives or completion delivery's final-answer scanner.
 Tasks reports this as a non-retryable preview limit; refreshing cannot resolve it.
 
 Terminal failed runs report failure status without replaying captured
-reply text. Tool/toolResult output is not promoted into child result text.
+reply text. When completion is recovered from the child's stored session, its
+recorded failure or timeout diagnostic is preserved for the parent.
+Tool/toolResult output is not promoted into child result text.
 
 ### Stats line
 
@@ -138,14 +338,17 @@ keeps the same input:
 Internal metadata is meant for orchestration only; user-facing replies
 should be rewritten in normal assistant voice.
 
+Usage is read once after the child settles. If usage has not been recorded yet,
+the stats line says `tokens unknown`; completion delivery does not wait for it.
+
 ### Why prefer `sessions_history`
 
 `sessions_history` is the safer orchestration path for reading a child's
 transcript from within an agent turn:
 
-- Redacts credential/token-like text even when general-purpose log redaction is disabled.
+- Preserves text, including credentials, without secret masking.
 - Truncates long text blocks (4000 chars per block) and drops thinking signatures, reasoning replay payloads, and inline image data.
 - Caps returned messages at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`.
 - Use `nextOffset` when present to page backward through older transcript windows.
-- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
+- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` wrappers, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.

@@ -1,0 +1,171 @@
+import path from "node:path";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { resolveUserPath } from "../utils.js";
+import { DuplicateAgentError } from "./agent-create-error.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
+import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
+import {
+  mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
+  type WorkspaceAttestation,
+} from "./workspace-state-store.js";
+import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
+import { loadWorkspaceTemplate } from "./workspace-template-load.js";
+
+const preparation = resolveGlobalSingleton(
+  Symbol.for("openclaw.workspacePreparationQueues"),
+  () => ({
+    queues: new Map<string, StoreWriterQueue>(),
+    admissionTail: Promise.resolve(),
+  }),
+);
+
+// The initializer owns seeding even when ordinary turns use this workspace.
+// Persist that custody with setup state so a restart cannot seed defaults.
+export async function deferWorkspaceBootstrap(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<() => Promise<void>> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, undefined, options);
+  return () => settleWorkspaceBootstrapDeferral(dir, options);
+}
+
+export async function settleWorkspaceBootstrapDeferral(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<void> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
+}
+
+/**
+ * Give a kept agent whose initializer stopped early the ordinary default files.
+ * BOOTSTRAP.md and setup state stay with the initializer, so a later seed still applies.
+ */
+export async function seedDeferredWorkspaceDefaults(
+  dir: string,
+  defaults?: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: readonly OptionalBootstrapFileName[];
+  },
+): Promise<void> {
+  const workspace = resolveUserPath(dir);
+  if (
+    defaults?.skipBootstrap ||
+    !(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred
+  ) {
+    return;
+  }
+  const skipped = new Set<string>(defaults?.skipOptionalBootstrapFiles);
+  await runWorkspacePreparation(workspace, async (filesystem) => {
+    for (const name of [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ].filter((file) => !skipped.has(file))) {
+      await publishBootstrapFile(path.join(workspace, name), () => loadWorkspaceTemplate(name), {
+        filesystem: [filesystem],
+      });
+    }
+  });
+}
+
+/** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
+export async function runWorkspacePreparation<T>(
+  dir: string,
+  prepare: (filesystem: WorkspaceFilesystemEvidence) => Promise<T>,
+): Promise<T> {
+  const admission = preparation.admissionTail.then(async () => {
+    const filesystem = await captureWorkspaceFilesystemEvidence(dir);
+    // Preserve invocation order through discovery, but never hold other directories
+    // behind an admitted operation. The wrapper keeps promise adoption out of the tail.
+    return {
+      completion: runQueuedStoreWrite({
+        queues: preparation.queues,
+        storePath: filesystem.canonical,
+        label: "Workspace preparation",
+        fn: async () => {
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          const result = await prepare(filesystem);
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          return result;
+        },
+      }),
+    };
+  });
+  preparation.admissionTail = admission.then(
+    () => {},
+    () => {},
+  );
+  return (await admission).completion;
+}
+
+export async function maybeWriteWorkspaceAttestation(
+  dir: string,
+  previous: WorkspaceAttestation | undefined,
+  collectGeneratedHashes: (
+    dir: string,
+    previousHashes?: ReadonlyMap<string, string>,
+  ) => Promise<Map<string, string>>,
+  guard?: WorkspaceStateGuard,
+): Promise<void> {
+  const assertHost = guard?.assertHost;
+  // Order snapshots by when their filesystem observation starts. The store
+  // compares against a separate lock-time clock, so a newer committed scan
+  // wins when this async collection finishes later.
+  const attestedAtMs = Date.now();
+  const generatedHashes = await collectGeneratedHashes(dir, previous?.generatedHashes);
+  assertHost?.();
+  // Coalesce unchanged evidence while retaining at least 23 hours of durable
+  // disappearance protection. Future-dated evidence still needs clock repair.
+  if (
+    previous &&
+    attestedAtMs >= previous.attestedAtMs &&
+    attestedAtMs - previous.attestedAtMs <= 60 * 60 * 1000 &&
+    generatedHashes.size === previous.generatedHashes.size &&
+    [...generatedHashes].every(([name, hash]) => previous.generatedHashes.get(name) === hash)
+  ) {
+    return;
+  }
+  try {
+    await replaceWorkspaceAttestation({
+      workspaceDir: dir,
+      attestedAtMs,
+      generatedHashes,
+      assertCurrent: assertHost,
+      recoveryHoldPredicate: guard?.recoveryHoldPredicate,
+      beforeLegacyApply: guard?.beforeLegacyApply,
+      filesystem: guard?.filesystem,
+      stateOwnerPath: guard?.stateOwnerPath,
+    });
+  } catch (error) {
+    if (error instanceof DuplicateAgentError) {
+      throw error;
+    }
+    // Attestation is a lifecycle guard; setup should not fail solely because
+    // the auxiliary disappearance evidence could not be refreshed.
+  }
+  assertHost?.();
+}
+
+export function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
+}

@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-// Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -224,17 +223,12 @@ async function metadataWithPublishedVersions(entry, baseUrl) {
   };
 }
 
-function decodePackagePath(pathname) {
+function findPackageForPath(pathname) {
   try {
-    return decodeURIComponent(pathname.slice(1));
+    return packages.get(decodeURIComponent(pathname.slice(1)));
   } catch {
     return undefined;
   }
-}
-
-function findPackageForPath(pathname) {
-  const packageName = decodePackagePath(pathname);
-  return packageName === undefined ? undefined : packages.get(packageName);
 }
 
 function findPackageTargetForPath(pathname) {
@@ -442,6 +436,8 @@ server.listen(requestedPort, bindHost, () => {
   try {
     fs.writeFileSync(tempFile, String(server.address().port));
     fs.renameSync(tempFile, portFile);
+    // Node test callers own IPC; shell callers retain the atomic port-file receipt.
+    process.send?.(server.address().port);
   } finally {
     fs.rmSync(tempFile, { force: true });
   }

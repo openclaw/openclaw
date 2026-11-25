@@ -1,4 +1,4 @@
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
@@ -12,6 +12,28 @@ import type { RoomMessageEventContent, MatrixRawEvent } from "./types.js";
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
+
+// Matrix rich replies: clients strip the legacy reply fallback (leading `> ` quote lines in body,
+// leading <mx-reply> in formatted_body); the quoted event is fetched separately as reply context.
+export function resolveMatrixCurrentContent(
+  content: RoomMessageEventContent,
+): RoomMessageEventContent {
+  if (!content["m.relates_to"]?.["m.in_reply_to"]?.event_id) {
+    return content;
+  }
+  const { body, formatted_body: html } = content;
+  const plain =
+    typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)
+      ? body.replace(/^(?:> .*(?:\n|$))+\n?/, "")
+      : body;
+  const formatted =
+    content.format === "org.matrix.custom.html"
+      ? html?.replace(/^<mx-reply>[\s\S]*?<\/mx-reply>/i, "")
+      : html;
+  return plain === body && formatted === html
+    ? content
+    : { ...content, body: plain, formatted_body: formatted };
+}
 
 export function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
@@ -41,32 +63,6 @@ export function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
   return relations[RelationType.Replace] !== undefined;
 }
 
-export function resolveMatrixInboundBodyText(params: {
-  rawBody: string;
-  filename?: string;
-  mediaPlaceholder?: string;
-  msgtype?: string;
-  hadMediaUrl: boolean;
-  mediaDownloadFailed: boolean;
-  mediaSizeLimitExceeded?: boolean;
-}): string {
-  if (params.mediaPlaceholder) {
-    return params.rawBody || params.mediaPlaceholder;
-  }
-  if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
-    return params.rawBody;
-  }
-  return (
-    formatMatrixMessageText({
-      body: params.rawBody,
-      filename: params.filename,
-      msgtype: params.msgtype,
-      tooLarge: params.mediaSizeLimitExceeded,
-      unavailable: true,
-    }) ?? ""
-  );
-}
-
 export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {
   if (set.has(roomId)) {
     return false;
@@ -81,7 +77,7 @@ export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolea
   return true;
 }
 
-export function resolveMatrixSharedDmContextNotice(params: {
+export async function resolveMatrixSharedDmContextNotice(params: {
   storePath: string;
   sessionKey: string;
   roomId: string;
@@ -89,7 +85,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
   dmSessionScope?: "per-user" | "per-room";
   sentRooms: Set<string>;
   logVerboseMessage: (message: string) => void;
-}): string | null {
+}): Promise<string | null> {
   if ((params.dmSessionScope ?? "per-user") === "per-room") {
     return null;
   }
@@ -99,7 +95,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
   try {
     const currentSession = resolveMatrixStoredSessionMeta(
-      getSessionEntry({
+      await getSessionEntryAsync({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
       }),

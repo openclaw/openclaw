@@ -33,7 +33,7 @@ describePosix("native prepare-gates comparison base", () => {
     chmodSync(pnpm, 0o755);
     Object.assign(f.env, {
       OPENCLAW_TESTBOX: "",
-      OPENCLAW_PR_GATES_REMOTE: "",
+      OPENCLAW_PR_GATES_REMOTE: "local",
       GITHUB_ACTIONS: "",
     });
     const prepared = f.run("prepare-init");

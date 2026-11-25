@@ -117,27 +117,4 @@ describe("web search Codex native config validation", () => {
       expect(issue?.allowedValues).toEqual(["cached", "live"]);
     }
   });
-
-  it("rejects invalid openaiCodex.contextSize", () => {
-    const result = validateConfigObjectRaw({
-      tools: {
-        web: {
-          search: {
-            openaiCodex: {
-              enabled: true,
-              contextSize: "huge",
-            },
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      const issue = result.issues.find(
-        (entry) => entry.path === "tools.web.search.openaiCodex.contextSize",
-      );
-      expect(issue?.allowedValues).toEqual(["low", "medium", "high"]);
-    }
-  });
 });

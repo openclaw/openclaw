@@ -16,7 +16,7 @@ describe("outbound delivery recovery retry backoff", () => {
     vi.useRealTimers();
   });
 
-  it("defers retries until the backoff boundary, then replays through channel resolution", async () => {
+  it("defers old SQLite entries until the backoff boundary, then replays through channel resolution", async () => {
     const retryCount = 3;
     const backoffMs = 120_000;
     vi.useFakeTimers();
@@ -30,6 +30,7 @@ describe("outbound delivery recovery retry backoff", () => {
     );
     setQueuedEntryState(stateDir, id, {
       retryCount,
+      enqueuedAt: startedAt.getTime() - 6 * 24 * 60 * 60_000,
       lastAttemptAt: startedAt.getTime(),
     });
 

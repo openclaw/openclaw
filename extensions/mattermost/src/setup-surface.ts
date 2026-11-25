@@ -10,9 +10,9 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { inspectMattermostAccount } from "./mattermost/accounts.js";
+import { inspectMattermostAccount, isMattermostConfigured } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
-import { applyMattermostSetupConfigPatch, isMattermostConfigured } from "./setup-core.js";
+import { applyMattermostSetupConfigPatch } from "./setup-core.js";
 
 const t = createSetupTranslator();
 
@@ -83,12 +83,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.mattermost.botTokenInput"),
       resolveAccount: inspectMattermostAccount,
       accountConfigured: isMattermostConfigured,
-      patchAccount: ({ cfg, accountId, patch }) =>
-        applyMattermostSetupConfigPatch({
-          cfg,
-          accountId,
-          patch,
-        }),
+      patchAccount: applyMattermostSetupConfigPatch,
       set: {},
     }),
   ],
@@ -113,12 +108,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           ? undefined
           : "Mattermost base URL must include a valid base URL.",
       normalize: (value) => normalizeMattermostBaseUrl(value) ?? value.trim(),
-      patchAccount: ({ cfg, accountId, patch }) =>
-        applyMattermostSetupConfigPatch({
-          cfg,
-          accountId,
-          patch,
-        }),
+      patchAccount: applyMattermostSetupConfigPatch,
     }),
   ],
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),

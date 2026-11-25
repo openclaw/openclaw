@@ -1,11 +1,9 @@
-// Voice Call setup helper migrates legacy config to the canonical schema.
 import {
   asFiniteNumber,
   asOptionalRecord,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/** Migrate legacy voice-call config input to the current canonical shape. */
 export function migrateVoiceCallLegacyConfigInput(params: {
   value: unknown;
   configPathPrefix?: string;

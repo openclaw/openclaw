@@ -12,28 +12,27 @@ const McpOAuthClientMetadataUrlSchema = z
     return url !== null && isHttpsUrl(url) && url.pathname !== "/";
   }, "Expected https:// URL with a non-root pathname");
 
+function createMcpSensitiveRecordSchema() {
+  return z
+    .record(
+      z.string(),
+      z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+    )
+    .optional();
+}
+
 export const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
-    env: z
-      .record(
-        z.string(),
-        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
-      )
-      .optional(),
+    env: createMcpSensitiveRecordSchema(),
     cwd: z.string().optional(),
     url: HttpUrlSchema.optional(),
     transport: z
       .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
       .optional(),
-    headers: z
-      .record(
-        z.string(),
-        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
-      )
-      .optional(),
+    headers: createMcpSensitiveRecordSchema(),
     connectionTimeoutMs: z.number().finite().positive().optional(),
     requestTimeoutMs: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
@@ -104,7 +103,7 @@ export const McpServerSchema = z
       const replacement =
         typeof disabled === "boolean"
           ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
-          : 'the canonical "enabled" boolean instead';
+          : 'the "enabled" boolean instead';
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `unsupported key "disabled"; use ${replacement}`,

@@ -4,22 +4,11 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
-
-export type TranscriptsSummary = {
-  sessionId: string;
-  title: string;
-  generatedAt: string;
-  overview: string;
-  participants: string[];
-  source: "model" | "heuristic";
-  model?: string;
-  transcript: string[];
-  decisions: string[];
-  actionItems: string[];
-  risks: string[];
-  utteranceCount: number;
-};
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 const ACTION_PATTERNS =
   /\b(todo|action|follow up|follow-up|assign|owner|next step|ship|fix|send|schedule)\b/i;

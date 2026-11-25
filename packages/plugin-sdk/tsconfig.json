@@ -24,6 +24,7 @@
     "../../packages/retry/src/**/*.ts",
     "../../packages/acp-core/src/**/*.ts",
     "../../packages/terminal-core/src/**/*.ts",
+    "../../packages/worker-runtime/src/**/*.ts",
     "../../src/plugin-sdk/**/*.ts",
     "../../src/video-generation/dashscope-compatible.ts",
     "../../src/video-generation/types.ts",

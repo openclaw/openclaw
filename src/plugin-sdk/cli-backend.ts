@@ -1,16 +1,15 @@
-/**
- * Public SDK type surface for CLI backend plugins and watchdog defaults.
- */
 export type {
   CliBackendAuthEpochMode,
   CliBackendConfig,
   CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendExecutionMode,
+  CliBackendInputImage,
   CliBackendJsonlUsage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
+  CliBackendMessageInjection,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,
@@ -29,6 +28,7 @@ export type {
   CliBackendToolAvailabilityEnforcement,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
+  CliBackendTurnInterrupt,
   CliBackendThinkingLevel,
   CliBackendUserInputOption,
   CliBackendUserInputQuestion,
@@ -36,6 +36,10 @@ export type {
   CliBackendUserInputResult,
 } from "../plugins/cli-backend.types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
+export type {
+  CliBackendTurnAssessment,
+  CliBackendTurnStatus,
+} from "../plugins/cli-backend-turn-status.types.js";
 export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,

@@ -92,7 +92,7 @@ func translateHTMLBlock(ctx context.Context, translator docsTranslator, htmlText
 				skipDepth--
 			}
 		case html.TextToken:
-			if shouldTranslateHTMLText(skipDepth, raw) {
+			if skipDepth == 0 && strings.TrimSpace(raw) != "" {
 				translated, err := translator.Translate(ctx, raw, srcLang, tgtLang)
 				if err != nil {
 					return "", err
@@ -107,10 +107,6 @@ func translateHTMLBlock(ctx context.Context, translator docsTranslator, htmlText
 	}
 
 	return out.String(), nil
-}
-
-func shouldTranslateHTMLText(skipDepth int, text string) bool {
-	return skipDepth == 0 && strings.TrimSpace(text) != ""
 }
 
 func isSkipTag(tag string) bool {

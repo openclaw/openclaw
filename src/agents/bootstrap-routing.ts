@@ -6,7 +6,11 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  isWorkspaceSetupCompleted,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 /**
  * Returns whether a session should receive primary bootstrap context. Subagents
@@ -17,10 +21,14 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
 }
 
-/** Inputs that decide whether this run should inject workspace bootstrap context. */
-type WorkspaceBootstrapRoutingInput = {
+/**
+ * Resolves workspace bootstrap routing after checking pending state and
+ * loaded bootstrap files. Content can prove bootstrap is pending; callers
+ * decide whether that content also proves the run can complete file changes.
+ */
+export async function resolveWorkspaceBootstrapRouting(params: {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
-  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
+  isWorkspaceSetupCompleted?: (workspaceDir: string) => Promise<boolean>;
   bootstrapFilesProvideAccess?: boolean;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   trigger?: string;
@@ -30,26 +38,16 @@ type WorkspaceBootstrapRoutingInput = {
   effectiveWorkspace: string;
   resolvedWorkspace: string;
   hasBootstrapFileAccess: boolean;
-};
-
-/** Bootstrap placement decision consumed by system/runtime context assembly. */
-type WorkspaceBootstrapRouting = {
+  /** Bootstrap files loaded for this run, when the run has read them already. */
+  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
+}): Promise<{
   bootstrapMode: BootstrapMode;
+  /** Routing withholds no workspace bootstrap content. Readability is checked after loading. */
+  deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
-  includeBootstrapInRuntimeContext: boolean;
-};
-
-/**
- * Resolves workspace bootstrap routing after checking pending state and
- * loaded bootstrap files. Content can prove bootstrap is pending; callers
- * decide whether that content also proves the run can complete file changes.
- */
-export async function resolveWorkspaceBootstrapRouting(
-  params: WorkspaceBootstrapRoutingInput,
-): Promise<WorkspaceBootstrapRouting> {
-  const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
-    params.resolvedWorkspace,
-  );
+  /** Recorded setup completion; earlier turns of this session may have followed BOOTSTRAP.md. */
+  bootstrapCompleted: boolean;
+}> {
   const hasBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>
@@ -58,8 +56,10 @@ export async function resolveWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
+  const workspaceBootstrapPending =
+    hasBootstrapContent || (await params.isWorkspaceBootstrapPending(params.resolvedWorkspace));
   const bootstrapMode = resolveBootstrapMode({
-    bootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    bootstrapPending: workspaceBootstrapPending,
     runKind: params.bootstrapContextRunKind ?? "default",
     isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
     isPrimaryRun: params.isPrimaryRun,
@@ -72,7 +72,14 @@ export async function resolveWorkspaceBootstrapRouting(
   });
   return {
     bootstrapMode,
+    // Completed workspaces deliver context even though they no longer need onboarding.
+    deliversCompleteWorkspaceContext: bootstrapMode === "full" || !workspaceBootstrapPending,
     includeBootstrapInSystemContext: bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
+    bootstrapCompleted:
+      !workspaceBootstrapPending &&
+      params.isPrimaryRun &&
+      (await (params.isWorkspaceSetupCompleted ?? isWorkspaceSetupCompleted)(
+        params.resolvedWorkspace,
+      )),
   };
 }

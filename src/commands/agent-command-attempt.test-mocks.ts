@@ -5,11 +5,14 @@ import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.
 
 const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
+// mock-isolation: Preserve real entry readers while suppressing run-end writes in command-attempt fixtures.
 vi.mock("../agents/command/session-store.runtime.js", async () => {
-  const accessor = await import("../config/sessions/session-accessor.js");
+  const reads = await import("../config/sessions/session-entry-read-runtime.js");
+  const current = await import("../config/sessions/session-entry-current-runtime.js");
   return {
-    loadSessionEntry: accessor.loadSessionEntry,
-    loadSessionEntryReadOnly: accessor.loadSessionEntryReadOnly,
+    readSessionEntryInWorker: reads.readSessionEntryInWorker,
+    withSessionEntryReadOnlyInWorker: reads.withSessionEntryReadOnlyInWorker,
+    captureSessionEntryCurrentRead: current.captureSessionEntryCurrentRead,
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });

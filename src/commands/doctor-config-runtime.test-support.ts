@@ -1,5 +1,10 @@
 // Fresh Doctor script processes share compiled config and install-index module identities.
 export const doctorConfigRuntimeEntrypoints = {
+  canonicalSessionRepair: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "doctor-session-canonical-keys.memory.test-support",
+    distWorkerPath: "commands/doctor-session-canonical-keys.memory.test-support.js",
+  },
   configIO: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/io",

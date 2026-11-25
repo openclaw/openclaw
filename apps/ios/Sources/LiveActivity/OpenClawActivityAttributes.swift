@@ -31,15 +31,6 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         /// Live Activity updates carry the real audible signal across the app/widget boundary.
         var voiceSamples: [UInt8]?
 
-        private enum CodingKeys: String, CodingKey {
-            case status
-            case verbatimDetail
-            case startedAt
-            case agentBadge
-            case toolName
-            case voiceSamples
-        }
-
         private enum LegacyCodingKeys: String, CodingKey {
             case statusText
             case isIdle

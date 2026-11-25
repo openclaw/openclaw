@@ -3,13 +3,16 @@ import {
   type createManagedHandoffLeaseDatabase,
 } from "./update-managed-service-handoff-database.js";
 import type {
+  BorrowedLegacyHandoffParent,
   LeaseAcquisition,
   ManagedHandoffLease,
   ManagedHandoffLeaseStoreOptions,
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
-import type { BorrowedLegacyHandoffParent } from "./update-managed-service-handoff-legacy-parent.js";
-import type { ManagedHandoffOriginalAdmission } from "./update-managed-service-handoff-original-owner.js";
+import {
+  managedHandoffOriginalGeneration,
+  type ManagedHandoffOriginalAdmission,
+} from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
 import { managedHandoffLeaseText as text } from "./update-managed-service-handoff-rows.js";
@@ -22,7 +25,9 @@ import {
 export function createManagedHandoffOriginalAcquisition(deps: {
   options: ManagedHandoffLeaseStoreOptions;
   acquirePinnedOriginal: (
-    pinnedOptions: ManagedHandoffLeaseStoreOptions,
+    pinnedOptions: ManagedHandoffLeaseStoreOptions & {
+      existingIdentity: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity>;
+    },
     root: string,
     owner: string,
     action: ManagedHandoffLeaseAction,
@@ -39,14 +44,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     originalParent?: ManagedHandoffParent,
   ) => LeaseAcquisition;
   originalUpdateAdmissions: WeakMap<ManagedHandoffLease, ManagedHandoffOriginalAdmission>;
-}): (
-  root: string,
-  owner: string,
-  action: ManagedHandoffLeaseAction,
-  transition?: boolean,
-  legacyParent?: BorrowedLegacyHandoffParent,
-  originalParent?: ManagedHandoffParent,
-) => LeaseAcquisition {
+}) {
   const {
     options,
     acquirePinnedOriginal,
@@ -57,7 +55,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
     originalUpdateAdmissions,
   } = deps;
   const { databasePath } = options;
-  function acquire(
+  return function acquire(
     root: string,
     owner: string,
     requestedAction: ManagedHandoffLeaseAction,
@@ -95,12 +93,7 @@ export function createManagedHandoffOriginalAcquisition(deps: {
       originalParent?.version === 2 &&
       originalParent.action.kind === "update" &&
       originalParent.action.mutationProtocol === "original-cancellation-v1"
-        ? {
-            key: originalParent.key,
-            owner: originalParent.owner,
-            payload: originalParent.payload,
-            updatedAt: originalParent.updatedAt,
-          }
+        ? managedHandoffOriginalGeneration(originalParent)
         : undefined;
     const payload = JSON.stringify({
       version: 2,
@@ -147,6 +140,5 @@ export function createManagedHandoffOriginalAcquisition(deps: {
       return { ...result, originalDatabaseIdentity };
     }
     return result;
-  }
-  return acquire;
+  };
 }

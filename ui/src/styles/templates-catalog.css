@@ -1,0 +1,739 @@
+section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
+  -webkit-line-clamp: 1;
+}
+
+.template-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.templates-content-skeleton {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+  & > .skeleton {
+    background: var(--bg-elevated);
+    height: 58px;
+    @media (max-width: 560px) {
+      height: 52px;
+    }
+  }
+  & > .skeleton-title {
+    width: min(220px, 60%);
+    height: 22px;
+  }
+}
+
+/* Keep the existing row controls local without repeating their selectors. */
+.templates-workspace-file {
+  position: relative;
+  &:has(.templates-workspace-file__open:hover) {
+    background: var(--surface-hover);
+  }
+  &.templates-workspace-file--all {
+    min-height: 72px;
+    padding-block: var(--space-4);
+    border-top: 1px solid var(--border);
+    .settings-row__title {
+      line-height: 20px;
+    }
+  }
+  /* Shared settings controls supply the glyph and state; retain the 18px lane. */
+  .settings-row__chevron {
+    --list-row-icon-size: 13px;
+    width: 18px;
+    height: 18px;
+    justify-content: center;
+  }
+  .templates-workspace-file__title {
+    gap: 4px;
+  }
+}
+.templates-workspace-file :where(button),
+.agents-home__template-card-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.templates-workspace-file__open {
+  min-width: 0;
+  text-align: left;
+
+  /* Cover the row while keeping help above the navigation target. */
+  &::after {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-md);
+    content: "";
+  }
+  &:focus-visible::after {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+}
+.templates-workspace-file__info {
+  position: relative;
+  z-index: 1;
+  --art-size: 28px;
+  --glyph-size: 14px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  &:hover,
+  &:focus-visible {
+    color: var(--accent);
+  }
+}
+
+/* Catalog and draft previews share the package shell, rows and artwork. */
+.template-package-preview {
+  display: grid;
+  grid-template-rows: 148px minmax(0, 1fr) auto;
+  width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  & > :where(header) {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 24px;
+    overflow: hidden;
+    & > div {
+      flex: 1;
+      min-width: 0;
+      & p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      & p:not(:last-child) {
+        margin: 4px 0 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: inherit;
+      }
+    }
+    & h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.3;
+      &:focus {
+        outline: none;
+      }
+    }
+  }
+  & > div {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 24px 16px;
+    overscroll-behavior: contain;
+  }
+}
+:where(.template-art) {
+  width: var(--art-size);
+  height: var(--art-size);
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  & svg {
+    width: var(--glyph-size, 100%);
+    height: var(--glyph-size, 100%);
+  }
+}
+.template-art img,
+.template-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+.template-package-art {
+  --art-size: 56px;
+  --glyph-size: 32px;
+}
+.template-package-row {
+  width: 100%;
+  min-height: 68px;
+  padding: 12px 8px;
+  border: 0;
+  background: transparent;
+  text-align: start;
+  &:hover {
+    background: var(--surface-hover);
+  }
+  & > span:not([class]) {
+    flex: 1;
+    min-width: 0;
+  }
+  & strong,
+  & small {
+    display: block;
+  }
+  & strong {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  & small {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  & > svg:last-child {
+    color: var(--muted);
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+  }
+}
+.template-package-count {
+  display: grid;
+  place-items: center;
+  height: 24px;
+  flex: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-creator__row {
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.template-creator__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  background: var(--card-highlight);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  &::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+    background: currentColor;
+  }
+  &:not([data-state]) {
+    float: inline-end;
+    margin-inline-start: 8px;
+  }
+  &[data-state] {
+    padding: 4px 9px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  &[data-state="pending"] {
+    color: var(--info);
+  }
+  &[data-state="published"] {
+    color: var(--ok);
+  }
+  &[data-state="unconfirmed"] {
+    color: var(--warn);
+  }
+  &[data-state="notPublished"],
+  &[data-state="draftUnavailable"] {
+    color: var(--danger);
+  }
+}
+.template-creator__row-icon {
+  --art-size: 34px;
+  --glyph-size: 22px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.template-creator__category,
+.template-creator__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.template-creator__category-icon {
+  --art-size: 56px;
+  --glyph-size: 28px;
+  align-self: center;
+  border-radius: 16px;
+  background: var(--card-highlight);
+}
+.template-creator__hint {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 14px;
+  line-height: 21px;
+}
+.template-creator__category {
+  & .template-creator__row {
+    min-height: 60px;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--card-highlight);
+    &:hover {
+      background: var(--surface-hover);
+    }
+    & strong {
+      font-size: 15px;
+      line-height: 21px;
+      font-weight: 500;
+    }
+  }
+}
+.template-automation-message {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.template-preview__detail .code-chunk,
+.templates-trust-warning > span {
+  white-space: pre-wrap;
+}
+.template-creator__detail-group {
+  display: grid;
+  gap: 8px;
+  & h3 {
+    margin: 0;
+    font: 13px/19px var(--font-body);
+    color: var(--muted);
+  }
+}
+.template-creator__detail-panel {
+  & article :is(h1, h2) {
+    font-size: 18px;
+    line-height: 26px;
+  }
+  margin: 0;
+  padding: 14px 16px;
+  min-width: 0;
+  background: var(--card-highlight);
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 23px;
+  overflow-wrap: anywhere;
+  & p:first-child,
+  & article > :first-child {
+    margin-top: 0;
+  }
+  & p:last-child,
+  & article > :last-child {
+    margin-bottom: 0;
+  }
+}
+.template-creator__properties {
+  & > div {
+    display: grid;
+    grid-template-columns: minmax(0, 108px) minmax(0, 1fr);
+    gap: 16px;
+    padding: 10px 0;
+  }
+  & dt {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  & dd {
+    margin: 0;
+    font-size: 14px;
+  }
+}
+.chat-template-review {
+  grid-column: 1;
+  width: min(620px, 100%);
+  margin: 16px auto;
+}
+
+.template-publish-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  width: 600px;
+  max-width: 100%;
+  padding: 20px;
+  background: var(--card);
+  color: var(--text);
+  overflow-wrap: anywhere;
+
+  & > header {
+    display: grid;
+    --art-size: 38px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+
+    & h2 {
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 17px;
+      line-height: 1.25;
+    }
+    & p {
+      margin: 4px 0 0;
+      font-size: 12px;
+    }
+  }
+
+  & > .template-summary {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: var(--muted);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  & > p[role="status"] {
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+  }
+  & > footer {
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+}
+
+.template-preview__contents {
+  border-bottom: 1px solid var(--border);
+}
+.template-package-row small,
+.template-preview header h2,
+.template-preview .settings-row__desc,
+.template-plugin-name,
+.template-creator--detail h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-preview .settings-row__desc,
+.template-plugin-name {
+  display: block;
+}
+
+.template-preview {
+  height: min(680px, var(--openclaw-modal-height-limit));
+  & > header {
+    &.template-preview__header--detail {
+      align-items: center;
+      & > div {
+        text-align: center;
+      }
+    }
+  }
+  & > footer {
+    height: 72px;
+    padding: 16px 28px;
+    border-top: 1px solid var(--border);
+  }
+  & .template-package-row {
+    border-top: 1px solid var(--border);
+    & > svg:first-child:not(:last-child) {
+      color: var(--accent);
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+  }
+  & .template-preview__loading {
+    min-height: 260px;
+    display: grid;
+    place-items: center;
+  }
+  & .template-preview__detail {
+    padding-bottom: 24px;
+    overflow-wrap: anywhere;
+    & h3 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    & > p {
+      margin: 0 0 28px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+  }
+  @media (max-width: 640px) {
+    & > header {
+      padding: 20px 16px;
+      gap: 12px;
+    }
+    & > div {
+      padding: 0 16px;
+    }
+    & > footer {
+      padding: 16px;
+    }
+  }
+}
+
+.template-creator {
+  width: min(620px, 100%);
+  height: min(565px, var(--openclaw-modal-height-limit));
+  background: var(--bg);
+  border-radius: inherit;
+
+  & h2 {
+    overflow-wrap: anywhere;
+  }
+  & > footer {
+    min-height: 64px;
+    padding: 12px 20px;
+  }
+  &:where(.template-creator--detail) {
+    grid-template-rows: 60px minmax(0, 1fr) auto;
+    & > div {
+      padding: 24px;
+    }
+    & > :where(header) {
+      align-items: center;
+      position: relative;
+      padding: 14px 64px;
+      border-bottom: 1px solid var(--border);
+      & h2 {
+        font: 500 16px/24px var(--font-body);
+        text-align: center;
+      }
+      & > button {
+        position: absolute;
+        inset-inline-start: 20px;
+        top: 14px;
+        height: 32px;
+        border-radius: 8px;
+        background: var(--card-highlight);
+      }
+    }
+  }
+}
+
+/* Catalog rows share the Plugins row; the Template's artwork fills its tile. */
+.agents-home__template-card-link:disabled {
+  cursor: default;
+}
+/* Keep the publisher visible beside Add. Move it below the name when the two don't fit. */
+.agents-home__explore.plugin-catalog-results--rows .agents-home__template-identity {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  line-height: calc(20px * var(--control-ui-text-scale));
+
+  .agents-home__template-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+  }
+
+  h3,
+  .plugin-card-author {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .plugin-card-author {
+    flex: none;
+    max-width: 100%;
+    margin-left: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+}
+
+.agents-home__template-art {
+  --glyph-size: 22px;
+}
+
+/* Template page: the artwork sits on a tonal tile, the soul reads as its personality. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__icon {
+  padding: 5px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  box-shadow: none;
+  color: var(--accent);
+  & > svg {
+    width: 60%;
+    height: 60%;
+    margin: auto;
+  }
+}
+
+/* The Add action stays beside the name, as on wide screens. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+  flex: none;
+}
+/* Rows that only have a name sit centred on their tile. */
+openclaw-templates-detail-view .plugin-capabilities .settings-row__text {
+  align-self: center;
+}
+
+/* The excerpt is plain text without its headings: a short preview reads better than a long one. */
+.templates-personality {
+  --plugin-readme-clamp: 96px;
+}
+
+.templates-personality__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.templates-personality__file {
+  position: relative;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--muted-strong);
+  font: 11.5px/1.4 var(--mono);
+  cursor: var(--cursor-action);
+  &:hover {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    color: var(--text);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+.templates-personality__text {
+  margin: 0;
+  max-width: 680px;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+/* Featured, search results and loading placeholders have no "View all" action;
+   keep their header as tall as the shelves that do. */
+.agents-home__explore .plugin-catalog-section__header {
+  min-height: 28px;
+}
+
+.agents-home__template-error {
+  position: relative;
+  z-index: 2;
+  margin: 0 0 0 54px;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.agents-home__template-empty {
+  margin: 0 0 16px;
+}
+
+.templates-trust-warning {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  & strong {
+    display: block;
+  }
+  & a {
+    color: inherit;
+    text-decoration: underline;
+  }
+}
+
+/* Hover references share this deferred template presentation sheet. */
+.template-reference-card {
+  width: min(360px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  & .template-art {
+    --art-size: 36px;
+    border-radius: 8px;
+  }
+  & .btn {
+    width: 100%;
+  }
+  & header > :last-child {
+    display: grid;
+    gap: 3px;
+  }
+  & strong {
+    font-size: 15px;
+  }
+  & p {
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+
+/* Phone: five lines of the personality preview; small text controls keep a finger-sized target. */
+@container (max-width: 560px) {
+  .templates-personality {
+    --plugin-readme-clamp: 120px;
+  }
+
+  .templates-personality__file::after {
+    position: absolute;
+    inset: -7px -4px;
+    content: "";
+  }
+
+  .plugin-catalog-detail--rail .templates-trust-warning a {
+    display: inline-block;
+    margin-block: -7px;
+    padding-block: 7px;
+  }
+}
+
+/* The whole soul reads as the plugin page's Readme does; status lines sit under the excerpt. */
+.templates-personality__markdown {
+  max-width: 680px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  & > :first-child {
+    margin-top: 0;
+  }
+}
+/* Headings inside the soul stay at reading size: no page-title type, no rules. */
+.templates-personality__markdown.sidebar-markdown h1,
+.templates-personality__markdown.sidebar-markdown h2,
+.templates-personality__markdown.sidebar-markdown h3,
+.templates-personality__markdown.sidebar-markdown h4,
+.templates-personality__markdown.sidebar-markdown h5,
+.templates-personality__markdown.sidebar-markdown h6 {
+  margin: 18px 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.templates-personality__markdown.sidebar-markdown h1 {
+  font-size: 16px;
+}
+.templates-personality__markdown.sidebar-markdown .lit-content > :first-child {
+  margin-top: 0;
+}
+.templates-personality__markdown.sidebar-markdown li {
+  font-size: inherit;
+  line-height: inherit;
+}
+.templates-personality__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}

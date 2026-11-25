@@ -21,6 +21,7 @@ export type WebInboundMsg = WebInboundMessage;
 export type WebChannelStatus = {
   running: boolean;
   connected: boolean;
+  authAgeMs?: number | null;
   reconnectAttempts: number;
   lastConnectedAt?: number | null;
   lastDisconnect?: {
