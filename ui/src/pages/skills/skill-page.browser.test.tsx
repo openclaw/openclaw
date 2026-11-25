@@ -106,8 +106,9 @@ describe.runIf(browserMode)("skill page layout", () => {
       expect(arrow.width).toBeGreaterThan(0);
       const label = document.createRange();
       label.selectNodeContents(link.firstElementChild!);
-      for (const line of label.getClientRects())
+      for (const line of label.getClientRects()) {
         expect(line.right).toBeLessThanOrEqual(arrow.left + 1);
+      }
       expect(link.scrollWidth).toBeLessThanOrEqual(link.clientWidth + 1);
       link.focus();
       const labelText = document.createRange();
@@ -115,8 +116,8 @@ describe.runIf(browserMode)("skill page layout", () => {
       const style = getComputedStyle(link);
       const outlineTop =
         link.getBoundingClientRect().top -
-        parseFloat(style.outlineWidth) -
-        parseFloat(style.outlineOffset);
+        Number.parseFloat(style.outlineWidth) -
+        Number.parseFloat(style.outlineOffset);
       expect(outlineTop).toBeGreaterThanOrEqual(labelText.getBoundingClientRect().bottom);
     },
   );

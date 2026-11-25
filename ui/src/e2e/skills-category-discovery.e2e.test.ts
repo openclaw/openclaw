@@ -188,7 +188,9 @@ suite.define(() => {
         expect(await title.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(40);
         const publisher = hero.locator(".skill-page__publisher");
         await publisher.locator("summary").press("Enter");
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
         expect(await publisher.innerText()).toContain(name);
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
         expect(await publisher.innerText()).toContain(owner.displayName);
         await publisher.locator("summary").press("Enter");
         expect(await gateway.getRequests("skills.install")).toHaveLength(0);

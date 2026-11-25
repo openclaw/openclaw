@@ -133,7 +133,11 @@ export function ClawHubSkillPage(props: { view: SkillsProps; installLocked: bool
                     {(owner) => (
                       <details class="skill-page__publisher">
                         <summary
-                          title={owner().handle ? "@" + owner().handle : owner().displayName}
+                          title={
+                            owner().handle
+                              ? "@" + owner().handle
+                              : (owner().displayName ?? undefined)
+                          }
                         >
                           <RegistryLabel
                             value={
