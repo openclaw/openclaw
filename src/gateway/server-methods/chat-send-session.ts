@@ -275,12 +275,10 @@ export async function prepareChatSendSession(params: {
       return { ok: false as const, error: creationError };
     }
   }
-  const resolvedSessionModel = await resolveGatewaySessionTurnModelRef({
-    cfg,
-    agentId,
-    sessionKey,
-    entry,
-  });
+  // Stop starts no turn, so it must not depend on reading the parent session.
+  const resolvedSessionModel = request.stopCommand
+    ? resolveSessionModelRef(cfg, entry, agentId)
+    : await resolveGatewaySessionTurnModelRef({ cfg, agentId, sessionKey, entry });
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
 

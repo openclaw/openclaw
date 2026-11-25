@@ -33,6 +33,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as storeLookup from "../session-utils-store-lookup.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { registerChatCollectedInputReplayCases } from "./chat-send-collected-input-replay.test-support.js";
@@ -358,6 +359,35 @@ describe("ordinary chat input admission", () => {
     expect(committed?.message["__openclaw"]).toMatchObject({ modelSelection: inherited });
     expect(loadSessionEntry(fixture.scope)?.lastSubmittedModel).toEqual(inherited);
     expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("modelOverride");
+  });
+
+  it("stops a session without reading the parent it inherits its model from", async () => {
+    await using fixture = await createBrowserFollowupFixture({
+      sessionKey: "agent:main:dashboard:inherit-child",
+    });
+    await patchSessionEntryCore(fixture.scope, () => ({
+      parentSessionKey: "agent:main:dashboard:inherit-parent",
+    }));
+    const lookup = storeLookup.resolveGatewaySessionStoreTargetWithStoreAsync;
+    using _ = vi
+      .spyOn(storeLookup, "resolveGatewaySessionStoreTargetWithStoreAsync")
+      .mockImplementation(async (params) => {
+        if (params.key.includes("inherit-parent")) {
+          throw new Error("parent session database unavailable");
+        }
+        return await lookup(params);
+      });
+
+    const respond = await fixture.send(vi.fn(), undefined, {
+      ...fixture.params,
+      message: "/stop",
+      idempotencyKey: "stop-inheriting-child",
+    });
+
+    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+      true,
+      expect.objectContaining({ aborted: true }),
+    ]);
   });
 
   it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
