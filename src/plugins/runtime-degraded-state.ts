@@ -1,6 +1,8 @@
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { resolveUserPath } from "../infra/home-dir.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
-/** Boot-stable quarantine state for configured plugins whose payload failed verification. */
+/** Process-local quarantine state for configured plugins whose payload failed verification. */
 
 export const PLUGIN_AVAILABILITY_POLICY = {
   state: "configured-unavailable",
@@ -92,6 +94,42 @@ export function listActiveDegradedPlugins(): readonly DegradedPlugin[] {
 
 export function findActiveDegradedPlugin(pluginId: string): DegradedPlugin | undefined {
   return activeDegradedPlugins.find((entry) => entry.pluginId === pluginId);
+}
+
+/** Refresh only the owned payloads explicitly reloaded at their quarantined roots. */
+export async function reverifyReloadedPluginPayloads(
+  requestedIds: ReadonlySet<string>,
+  metadata: PluginMetadataSnapshot,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const records = activeDegradedPlugins.flatMap((plugin) => {
+    if (!requestedIds.has(plugin.pluginId)) {
+      return [];
+    }
+    const selected = metadata.byPluginId.get(plugin.pluginId);
+    const record = metadata.index.installRecords[plugin.pluginId];
+    if (
+      !selected ||
+      !record?.installPath ||
+      !degradedPluginMatchesRoot(plugin, selected.rootDir) ||
+      !pluginInstallPathMatchesRoot(resolveUserPath(record.installPath, env), selected.rootDir)
+    ) {
+      return [];
+    }
+    return [[plugin.pluginId, record] as const];
+  });
+  if (!records.length) {
+    return;
+  }
+  const { runPluginPayloadSmokeCheck } = await import("./payload-verification.js");
+  const { checked, failures } = await runPluginPayloadSmokeCheck({
+    records: Object.fromEntries(records),
+    env,
+  });
+  activeDegradedPlugins = [
+    ...activeDegradedPlugins.filter((entry) => !checked.includes(entry.pluginId)),
+    ...buildDegradedPluginsFromVerificationFailures(failures),
+  ];
 }
 
 /** Drops a verification failure that belongs to a different selected plugin root. */

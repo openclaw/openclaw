@@ -20,6 +20,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
+import { reverifyReloadedPluginPayloads } from "../plugins/runtime-degraded-state.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -207,6 +208,9 @@ export async function reloadGatewayPlugins(
           }),
         );
         await checkpoint();
+        if (params.pluginLifecycle?.reason === "reload") {
+          await reverifyReloadedPluginPayloads(requestedIds, nextMetadata, params.env);
+        }
         const activationConfig = resolveGatewayStartupPluginActivationConfig({
           runtimeConfig: params.nextConfig,
           activationSourceConfig: params.sourceConfig,
