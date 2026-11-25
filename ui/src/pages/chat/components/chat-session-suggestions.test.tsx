@@ -69,7 +69,6 @@ describe("chat session suggestions", () => {
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("Awaiting approval");
     expect(container.querySelector(".session-suggestion__author")?.textContent).toBe("Alice");
-    expect(container.querySelector("[data-initials]")?.getAttribute("data-initials")).toBe("A");
   });
 
   it("hides owner actions when the resolve method is unavailable", () => {

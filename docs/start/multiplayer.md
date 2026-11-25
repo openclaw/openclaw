@@ -173,7 +173,7 @@ The Gateway binds to loopback by default. Give teammates access through authenti
 
 - **Tailnet (recommended):** put the host on your tailnet and enable [Tailscale Serve](/gateway/tailscale). With `gateway.auth.allowTailscale`, Control UI sign-in can use each person's Tailscale identity - no shared secret to distribute.
 - **Trusted proxy:** front the Gateway with an identity-aware proxy such as Cloudflare Access - see [Trusted proxy auth](/gateway/trusted-proxy-auth).
-- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Authentication](/gateway/authentication).
+- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Gateway auth settings](/gateway/config-gateway#gateway).
 
 The identity-backed options are worth the setup: they are what turns "someone did something" into "who did what" in the session UI and commit credit below.
 

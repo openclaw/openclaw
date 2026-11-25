@@ -4,6 +4,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/update/prepare.test.ts",
   "src/update/prepare-failure.test.ts",
   "src/state/state-upgrade.large-agent-db.test.ts",
+  "src/state/state-upgrade.test.ts",
+  "src/state/state-upgrade-startup.test.ts",
+  "src/state/state-upgrade.postgres.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",
@@ -19,6 +22,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/approval-session-audience.sqlite.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/secrets/runtime-web-provider.postgres.test.ts",
+  "src/agents/agent-bundle-mcp-webchat-requester.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   // A real channel plugin install acquires the host-owned lifecycle lease.
   "src/cli/channels-add-install.test.ts",
