@@ -33,6 +33,7 @@ import {
   shouldUseFeishuCard,
 } from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
+import { resolveFeishuMediaAttachmentFileName } from "./media-attachment-name.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {
@@ -669,9 +670,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         mediaUrls,
         caption: "",
         send: async ({ mediaUrl }) => {
+          const fileName = resolveFeishuMediaAttachmentFileName({
+            attachments: payload.attachments,
+            mediaUrl,
+          });
           const result = await sendMediaFeishu({
             ...replyTarget,
             mediaUrl,
+            ...(fileName ? { fileName } : {}),
             mediaAccess: resolveOutboundMediaAccessForConfig(cfg),
             ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
           });

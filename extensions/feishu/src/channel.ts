@@ -897,6 +897,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             // Thread replies share send's validated attachment boundary so aliases
             // and unsupported payloads cannot silently become text-only delivery.
             const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);
+            // The message tool's `filename` override (or an attachment's
+            // `name`) is the display name for the upload; without it the
+            // Feishu upload falls back to the media path basename (#205246).
+            const fileName =
+              readFirstString(ctx.params, ["filename", "fileName"]) ??
+              (Array.isArray(ctx.params.attachments)
+                ? ctx.params.attachments
+                    .filter(isRecord)
+                    .map((attachment) =>
+                      readFirstString(attachment, ["name", "filename", "fileName"]),
+                    )
+                    .find((name) => name !== undefined)
+                : undefined);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
               assertFeishuCardWithinEnvelope(textCard);
@@ -963,6 +976,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   text: fallbackText,
                   presentation,
                   ...(mediaUrl ? { mediaUrl } : {}),
+                  ...(mediaUrl && fileName
+                    ? { attachments: [{ path: mediaUrl, name: fileName }] }
+                    : {}),
                   ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
                   // The direct `send` action must keep an attachment failure
                   // visible on this path too: `sendPayload`'s shared signature
@@ -1001,6 +1017,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               result = await sendMedia!({
                 ...outboundContext,
                 mediaUrl,
+                ...(fileName ? { filename: fileName } : {}),
                 ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
                 // Direct sends surface upload failures; thread replies retain
                 // their existing attachment fallback behavior.

@@ -1085,4 +1085,41 @@ describe("Feishu chunked delivery and media receipts", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Feishu media filename override (#205246)", () => {
+  const reportUrl = "/tmp/repro/report_en.pdf";
+  const overrideName = "季度报告.pdf";
+
+  it("passes an explicit filename to the Feishu upload", async () => {
+    await sendMedia({ text: "probe", mediaUrl: reportUrl, filename: overrideName });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).toMatchObject({ mediaUrl: reportUrl, fileName: overrideName });
+  });
+
+  it("omits fileName when no override is given so the upload uses the media basename", async () => {
+    await sendMedia({ text: "probe", mediaUrl: reportUrl });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).not.toHaveProperty("fileName");
+  });
+
+  it("resolves the override from payload attachments on the sendPayload path", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrl: reportUrl,
+      attachments: [{ path: reportUrl, name: overrideName }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).toMatchObject({ mediaUrl: reportUrl, fileName: overrideName });
+  });
+
+  it("omits fileName on the sendPayload path when attachments carry no name", async () => {
+    await sendPayload({
+      text: "probe",
+      mediaUrl: reportUrl,
+      attachments: [{ path: reportUrl }],
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(mediaCall()).not.toHaveProperty("fileName");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
