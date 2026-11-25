@@ -47,6 +47,17 @@ private struct ChatComposerPermissionsSheet: View {
     @ScaledMetric(relativeTo: .body) private var iconScale = 1.0
     @State private var shown: Facts?
     @State private var sheetHeight: CGFloat = 560
+    /// An access mode picked here and not yet confirmed by the Gateway.
+    @State private var awaitedMode: AwaitedMode?
+    @State private var selectionCount = 0
+
+    private struct AwaitedMode {
+        var mode: OpenClawChatPermissionMode?
+        var pickedAt: Date
+    }
+
+    /// Picking a mode closes the sheet this long after its check moves, so the choice is seen.
+    private static let closeBeat: TimeInterval = 0.35
 
     /// Everything the sheet draws. A patch reloads the catalog, which is empty meanwhile, so the
     /// sheet keeps the last settled facts while one is in flight instead of flashing every row off.
@@ -116,8 +127,10 @@ private struct ChatComposerPermissionsSheet: View {
         .onChange(of: live, initial: true) { _, live in
             if live.isSettled {
                 self.shown = live
+                self.closeIfConfirmed(live)
             }
         }
+        .sensoryFeedback(.selection, trigger: self.selectionCount)
         .onDisappear { self.viewModel.dismissComposerCapabilityNotice() }
         .accessibilityIdentifier("chat-composer-permissions-sheet")
     }
@@ -131,9 +144,8 @@ private struct ChatComposerPermissionsSheet: View {
         } header: {
             Text("Access").font(OpenClawChatTypography.settingsSectionHeader)
         } footer: {
-            self.footer(
-                facts.modeReason ??
-                    (facts.notice == OpenClawChatViewModel.permissionsNextRunNotice ? facts.notice : nil))
+            // A confirmed mode closes the sheet, so its next-reply notice is never shown here.
+            self.footer(facts.modeReason)
         }
     }
 
@@ -227,10 +239,38 @@ private struct ChatComposerPermissionsSheet: View {
     // The view model drops a change while another is in flight, so taps wait for the settled state.
     // A started patch confirms later: show the choice now and let the settled facts correct it.
 
+    /// Access rows are a picker: a mode the Gateway confirms closes the sheet; a failure keeps it open
+    /// with the error. Tapping the current mode closes it too, so a tap always answers.
     private func select(_ mode: OpenClawChatPermissionMode?) {
         guard self.live.isSettled else { return }
+        guard mode != self.live.mode else {
+            self.dismiss()
+            return
+        }
         self.viewModel.selectComposerPermissionMode(mode)
-        self.show(after: self.live) { $0.mode = mode }
+        let live = self.live
+        // Nothing started (the view model refused, or failed before sending): show why and stay.
+        guard !live.isSettled || live.mode == mode else {
+            self.shown = live
+            return
+        }
+        self.show(after: live) { $0.mode = mode }
+        self.selectionCount += 1
+        self.awaitedMode = AwaitedMode(mode: mode, pickedAt: .now)
+        self.closeIfConfirmed(live)
+    }
+
+    private func closeIfConfirmed(_ live: Facts) {
+        guard let awaited = self.awaitedMode, live.isSettled else { return }
+        self.awaitedMode = nil
+        guard live.error == nil, live.mode == awaited.mode else { return }
+        let wait = Self.closeBeat - Date.now.timeIntervalSince(awaited.pickedAt)
+        Task { @MainActor in
+            if wait > 0 {
+                try? await Task.sleep(for: .seconds(wait))
+            }
+            self.dismiss()
+        }
     }
 
     private func setWebSearch(_ isOn: Bool) {
