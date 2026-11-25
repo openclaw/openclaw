@@ -26,7 +26,7 @@ export function createAccountCatalogOutcomes(initial: readonly ProviderCatalogOu
     JSON.stringify([provider, profileId]);
   return {
     outcomes,
-    accountListsModel(provider: string, profileId: string | undefined, modelId: string) {
+    accountListsModel: (provider: string, profileId: string | undefined, modelId: string) => {
       const key = keyOf(provider, profileId);
       let listings = accountListings.get(key);
       if (!listings) {

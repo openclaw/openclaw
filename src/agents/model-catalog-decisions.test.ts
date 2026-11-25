@@ -462,8 +462,8 @@ describe("captured model decisions", () => {
         entries: [row, sibling],
         accountCatalog,
       });
-      const evaluateRow = (entry: ModelCatalogEntry) =>
-        owner.evaluateEntry(entry, undefined, "codex");
+      const evaluateRow = (catalogRow: ModelCatalogEntry) =>
+        owner.evaluateEntry(catalogRow, undefined, "codex");
       expectAvailable(evaluateRow(row), profileId);
       const siblingDecision = evaluateRow(sibling);
       const initial = await owner.projectCatalog();
