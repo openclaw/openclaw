@@ -9,6 +9,7 @@ export function createCliProcessVitestConfig(
 ): ViteUserConfig {
   const config = createScopedVitestConfig(cliProcessTestFiles, {
     env,
+    intersectIncludeFile: true,
     fileParallelism: false,
     isolate: true,
     name: "cli-process",

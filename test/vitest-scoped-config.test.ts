@@ -7,6 +7,11 @@ import { convertPathToPattern, globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ViteUserConfig } from "vitest/config";
 import { parseCLI, resolveConfig } from "vitest/node";
+import { createSelectedNodeTestShardBundles } from "../scripts/lib/ci-node-test-plan.mts";
+import {
+  createVitestRunSpecs,
+  writeVitestIncludeFile,
+} from "../scripts/test-projects.test-support.mts";
 import { withEnvAsync } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
@@ -29,6 +34,10 @@ import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
+import {
+  intersectIncludePatterns,
+  serializeIncludePatterns,
+} from "./vitest/vitest.include-patterns.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
@@ -38,8 +47,11 @@ import {
   resolveScopedVitestPatterns,
 } from "./vitest/vitest.scoped-patterns.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
+import { createToolingDockerVitestConfig } from "./vitest/vitest.tooling-docker.config.ts";
 import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
+import { toolingDockerTestFiles } from "./vitest/vitest.tooling-paths.mjs";
+import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
@@ -662,17 +674,21 @@ describe("scoped vitest configs", () => {
         fs.writeFileSync(path.join(fixtureRoot, added), "// discovery only\n");
         expect(discover(fixtureRoot).toSorted()).toEqual([existing, added].toSorted());
 
-        fs.writeFileSync(includeFile, JSON.stringify([existing]));
-        const narrowed = createDatabaseWorkerWatchVitestConfig(
-          createOwner(env),
-          workerFiles.filter((file) => file.startsWith(`${root}/`)),
-          env,
-        );
-        const narrowedConfig = await resolveConfig({ config: false }, narrowed);
-        const workerProject = narrowedConfig.test.resolvedProjects[1]?.projectConfig;
-        expect(workerProject?.include).toEqual([
-          path.relative(workerProject!.dir, path.resolve(existing)),
-        ]);
+        for (const selection of [existing, path.resolve(existing).replaceAll("\\", "/")]) {
+          fs.writeFileSync(includeFile, JSON.stringify([selection]));
+          const narrowed = createDatabaseWorkerWatchVitestConfig(
+            createOwner(env),
+            workerFiles.filter((file) => file.startsWith(`${root}/`)),
+            env,
+          );
+          const narrowedConfig = await resolveConfig({ config: false }, narrowed);
+          const workerProject = narrowedConfig.test.resolvedProjects[1]?.projectConfig;
+          expect(workerProject?.include).toEqual([
+            path.isAbsolute(selection)
+              ? selection
+              : path.relative(workerProject!.dir, path.resolve(existing)).split(path.sep).join("/"),
+          ]);
+        }
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -685,6 +701,378 @@ describe("scoped vitest configs", () => {
     expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
   });
+
+  it("keeps filtered aggregate tooling membership inside each materialized pool", async () => {
+    const selected = [
+      ...toolingDockerTestFiles,
+      ...toolingIsolatedTestFiles.filter((file) => !file.endsWith("/vitest-fork-shutdown.test.ts")),
+    ];
+    const tempDir = tempDirs.make("openclaw-tooling-aggregate-");
+    const includeFile = path.join(tempDir, "include.json");
+    fs.writeFileSync(includeFile, JSON.stringify(selected));
+    const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+    const memberships = [];
+    for (const [createConfig, owned] of [
+      [createToolingDockerVitestConfig, toolingDockerTestFiles],
+      [createToolingIsolatedVitestConfig, toolingIsolatedTestFiles],
+    ] as const) {
+      const resolved = await resolveConfig({ config: false }, createConfig(env));
+      const expected = selected.filter(
+        (file) =>
+          owned.includes(file) && (owned === toolingIsolatedTestFiles || !isUnitFastTestFile(file)),
+      );
+      const actual = globSync(resolved.test.include, {
+        cwd: resolved.test.dir,
+        ignore: resolved.test.exclude,
+        dot: true,
+        expandDirectories: false,
+      });
+      expect(actual.toSorted()).toEqual(expected.toSorted());
+      memberships.push(...actual);
+      if (owned === toolingIsolatedTestFiles) {
+        expect(resolved.test.pool).toBe("forks");
+        expect(resolved.test.isolate).toBe(true);
+      }
+    }
+    const thinDocker = "test/scripts/docker-e2e-update-suppression.test.ts";
+    expect(isUnitFastTestFile(thinDocker)).toBe(true);
+    expect(memberships).not.toContain(thinDocker);
+    expect(memberships.toSorted()).toEqual(
+      selected.filter((file) => file !== thinDocker).toSorted(),
+    );
+    expect(new Set(memberships).size).toBe(memberships.length);
+  });
+
+  it.each(["relative", "absolute", "absolute-glob"])(
+    "keeps %s include-file selections within each tooling owner",
+    async (style) => {
+      const docker = "test/scripts/docker-build-helper.test.ts";
+      const isolated = "test/scripts/vitest-fork-shutdown.test.ts";
+      const foreign = "src/infra/unrelated.test.ts";
+      const includeFile = path.join(tempDirs.make("vitest-owner-includes-"), "include.json");
+      for (const selected of [[docker, isolated, foreign], [foreign], []]) {
+        fs.writeFileSync(
+          includeFile,
+          JSON.stringify(
+            style === "relative"
+              ? selected
+              : selected.map((file) =>
+                  path
+                    .resolve(
+                      style === "absolute-glob"
+                        ? file.replace(/(.)\.test\.ts$/u, "[$1].test.ts")
+                        : file,
+                    )
+                    .replaceAll("\\", "/"),
+                ),
+          ),
+        );
+        for (const [createConfig, file] of [
+          [createToolingDockerVitestConfig, docker],
+          [createToolingIsolatedVitestConfig, isolated],
+        ] as const) {
+          for (const dir of style !== "relative"
+            ? [undefined, path.resolve("test/scripts")]
+            : [undefined]) {
+            const resolved = await resolveConfig(
+              { config: false, ...(dir ? { dir } : {}) },
+              createConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+            );
+            if (dir) expect(resolved.test.dir).toBe(dir);
+            expect(
+              globSync(resolved.test.include, {
+                cwd: resolved.test.dir,
+                ignore: resolved.test.exclude,
+                dot: true,
+                expandDirectories: false,
+                absolute: true,
+              }),
+            ).toEqual(selected.includes(file) ? [path.resolve(file).replaceAll("\\", "/")] : []);
+          }
+        }
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains absolute members beside a relative covering glob under --dir (absolute first: %s)",
+    async (absoluteFirst) => {
+      const includeFile = path.join(tempDirs.make("vitest-mixed-origin-"), "include.json");
+      const relative = "test/scripts/**/*.test.ts";
+      for (const [createConfig, file] of [
+        [createToolingDockerVitestConfig, "test/scripts/docker-build-helper.test.ts"],
+        [createToolingIsolatedVitestConfig, "test/scripts/vitest-fork-shutdown.test.ts"],
+      ] as const) {
+        const absolute = path.resolve(file).replaceAll("\\", "/");
+        const inherited = absoluteFirst ? [absolute, relative] : [relative, absolute];
+        fs.writeFileSync(
+          includeFile,
+          JSON.stringify(
+            serializeIncludePatterns(
+              intersectIncludePatterns(inherited, [relative], path.matchesGlob, process.cwd())!,
+            ),
+          ),
+        );
+        const resolved = await resolveConfig(
+          { config: false, dir: path.resolve("test/scripts") },
+          createConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+        );
+        expect(
+          globSync(resolved.test.include, {
+            cwd: resolved.test.dir,
+            ignore: resolved.test.exclude,
+            dot: true,
+            expandDirectories: false,
+            absolute: true,
+          }),
+        ).toEqual([absolute]);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves owner and unit-fast exclusions with absolute selections (alternate dir: %s)",
+    async (alternateDir) => {
+      const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+      const isolated = "test/scripts/vitest-fork-shutdown.test.ts";
+      const docker = "test/scripts/docker-build-helper.test.ts";
+      const thin = "test/scripts/docker-e2e-update-suppression.test.ts";
+      const absolute = (file: string) => path.resolve(file).replaceAll("\\", "/");
+      const includeFile = path.join(tempDirs.make("vitest-absolute-owners-"), "include.json");
+      fs.writeFileSync(
+        includeFile,
+        JSON.stringify([ordinary, isolated, docker, thin].map(absolute)),
+      );
+      expect(isUnitFastTestFile(ordinary)).toBe(false);
+      expect(isUnitFastTestFile(thin)).toBe(true);
+      for (const cliExclude of [[], [absolute(docker)]]) {
+        const memberships = [];
+        for (const [createConfig, owned] of [
+          [createToolingVitestConfig, ordinary],
+          [createToolingIsolatedVitestConfig, isolated],
+          [createToolingDockerVitestConfig, docker],
+        ] as const) {
+          const resolved = await resolveConfig(
+            {
+              config: false,
+              dir: path.resolve(alternateDir ? "test/scripts" : "."),
+              cliExclude,
+            },
+            createConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+          );
+          const files = globSync(resolved.test.include, {
+            cwd: resolved.test.dir,
+            ignore: resolved.test.exclude,
+            dot: true,
+            expandDirectories: false,
+            absolute: true,
+          });
+          expect(files).toEqual(cliExclude.includes(absolute(owned)) ? [] : [absolute(owned)]);
+          memberships.push(...files);
+        }
+        expect(memberships).not.toContain(absolute(thin));
+        expect(new Set(memberships).size).toBe(memberships.length);
+      }
+    },
+  );
+
+  it("resolves the shared unit-fast exclusions in the invocation checkout", () => {
+    const file = "test/scripts/fixture.test.ts";
+    const roots = [tempDirs.make("vitest-thin-owner-"), tempDirs.make("vitest-stateful-owner-")];
+    for (const [index, root] of roots.entries()) {
+      fs.mkdirSync(path.join(root, "test/scripts"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, file),
+        index === 0 ? "export {};" : "import fs from 'node:fs';",
+      );
+      const ordinary = resolveScopedVitestPatterns([file], {
+        root,
+        argv: ["node", "vitest"],
+        externalInclude: [file],
+      });
+      expect(ordinary.scopedInclude).toEqual([file]);
+      expect(ordinary.scopedExclude.includes(file)).toBe(index === 0);
+      const isolated = resolveScopedVitestPatterns([file], {
+        root,
+        argv: ["node", "vitest"],
+        externalInclude: [file, "test/scripts/other.test.ts"],
+        intersectIncludeFile: true,
+        excludeUnitFastTests: false,
+      });
+      expect(isolated.scopedInclude).toEqual([file]);
+      expect(isolated.scopedExclude).not.toContain(file);
+    }
+  });
+
+  it.each([false, true])(
+    "applies CLI-process exclusions in the materialized root (explicit dir: %s)",
+    async (explicitDir) => {
+      const isolated = "src/cli/update-cli/update-command-legacy-finalize.test.ts";
+      const processFile = "src/cli/update-cli/update-command-migrated.test.ts";
+      const includeFile = path.join(tempDirs.make("vitest-cli-owner-"), "include.json");
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+      for (const excluded of [null, processFile, isolated]) {
+        for (const [createConfig, owned] of [
+          [createCliProcessVitestConfig, processFile],
+          [createToolingIsolatedVitestConfig, isolated],
+        ] as const) {
+          fs.writeFileSync(includeFile, JSON.stringify([owned]));
+          const resolved = await resolveConfig(
+            {
+              config: false,
+              ...(explicitDir ? { dir: process.cwd() } : {}),
+              ...(excluded ? { cliExclude: [excluded] } : {}),
+            },
+            createConfig(env),
+          );
+          expect(resolved.test.exclude).toEqual(
+            expect.arrayContaining((await requireTestConfig(createConfig(env))).exclude ?? []),
+          );
+          expect(
+            globSync(resolved.test.include, {
+              cwd: resolved.test.dir,
+              ignore: resolved.test.exclude,
+              dot: true,
+              expandDirectories: false,
+            }),
+          ).toEqual(excluded === owned ? [] : [owned]);
+        }
+      }
+    },
+  );
+
+  it.each(["repository", "native-dir", "absolute"])(
+    "retains CLI-process inventory and inherited negatives in %s coordinates",
+    async (style) => {
+      const base = "src/cli/update-cli/";
+      const selected = `${base}update-command{,-candidate-exit,-fresh-preview}.test.ts`;
+      const blocked = `${base}update-command-fresh-preview.test.ts`;
+      const map = (pattern: string) =>
+        style === "absolute"
+          ? path.resolve(pattern).split(path.sep).join("/")
+          : style === "native-dir"
+            ? pattern.slice("src/cli/".length)
+            : pattern;
+      const includeFile = path.join(tempDirs.make("native-cli-process-"), "include.json");
+      for (const include of [[map(selected), `!${map(blocked)}`], []]) {
+        fs.writeFileSync(includeFile, JSON.stringify(include));
+        const config = createCliProcessVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile });
+        const resolved = await resolveConfig(
+          {
+            config: false,
+            ...(style === "repository"
+              ? {}
+              : { dir: path.resolve(style === "native-dir" ? "src/cli" : "test/helpers") }),
+          },
+          config,
+        );
+        const files = globSync(resolved.test.include, {
+          cwd: resolved.test.dir || resolved.test.root,
+          ignore: resolved.test.exclude,
+          absolute: true,
+          dot: true,
+          expandDirectories: false,
+        });
+        expect(files).toEqual(
+          include.length
+            ? [
+                path
+                  .resolve(`${base}update-command-candidate-exit.test.ts`)
+                  .split(path.sep)
+                  .join("/"),
+              ]
+            : [],
+        );
+        expect(resolved.test.name).toBe("cli-process");
+        expect(resolved.test.isolate).toBe(true);
+      }
+    },
+  );
+
+  it("keeps the materialized Infra watch owner inside its admitted inventory", async () => {
+    const root = tempDirs.make("native-infra-watch-");
+    const worker = "test/scripts/upgrade-survivor-acp-metadata.test.ts";
+    const ordinary = "test/scripts/upgrade-survivor-native-assignments.test.ts";
+    fs.mkdirSync(path.join(root, "test/scripts"), { recursive: true });
+    for (const file of [worker, ordinary]) {
+      fs.writeFileSync(path.join(root, file), "import fs from 'node:fs';");
+    }
+    const target = "test/scripts/upgrade-survivor-*.test.ts";
+    const [spec] = createVitestRunSpecs(["--watch", target, "--project=infra"], {
+      cwd: root,
+      baseEnv: {},
+    });
+    expect(spec?.config).toBe("test/vitest/vitest.infra.config.ts");
+    expect(spec?.includePatterns).toEqual([target]);
+    expect(spec?.pnpmArgs.at(-1)).toBe("--project=infra");
+    const includeFile = path.join(root, "include.json");
+    writeVitestIncludeFile(includeFile, spec!.includePatterns!, { cwd: root, expandGlobs: false });
+    fs.unlinkSync(path.join(root, worker));
+    const config = createInfraVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile });
+    const { test } = await resolveConfig(
+      { config: false, root, dir: root, project: ["infra"] },
+      { ...config, root, test: { ...config.test, root } },
+    );
+    expect(test.dir).toBe(root);
+    const discovered = () =>
+      globSync(test.include, {
+        cwd: test.dir || test.root,
+        ignore: test.exclude,
+        expandDirectories: false,
+      });
+    expect(discovered()).toEqual([]);
+    // Resolve while the owned file is absent: its later arrival must still be
+    // admitted without letting ordinary tooling enter this standalone project.
+    fs.writeFileSync(path.join(root, worker), "");
+    expect(discovered()).toEqual([worker]);
+  });
+
+  it.each(["mixed", "docker", "isolated"])(
+    "materializes only the exact selected %s tooling files",
+    async (selection) => {
+      const docker = toolingDockerTestFiles[0]!;
+      const isolated = "test/scripts/upgrade-survivor-native-systemd.test.ts";
+      const targets =
+        selection === "mixed" ? [docker, isolated] : [selection === "docker" ? docker : isolated];
+      const jobs = createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" });
+      expect(jobs).not.toBeNull();
+      const groups = jobs!.flatMap((job) => job.groups);
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.toSorted(),
+      );
+      const memberships: string[] = [];
+      const root = tempDirs.make("openclaw-selected-tooling-");
+      for (const [index, group] of groups.entries()) {
+        const includeFile = path.join(root, `include-${index}.json`);
+        fs.writeFileSync(includeFile, JSON.stringify(group.includePatterns));
+        for (const config of group.configs) {
+          const createConfig = config.endsWith("/vitest.tooling-docker.config.ts")
+            ? createToolingDockerVitestConfig
+            : createToolingIsolatedVitestConfig;
+          expect(config).toMatch(/\/vitest\.tooling-(?:docker|isolated)\.config\.ts$/u);
+          const resolved = await resolveConfig(
+            { config: false },
+            createConfig({
+              ...group.env,
+              OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            }),
+          );
+          const actual = globSync(resolved.test.include, {
+            cwd: resolved.test.dir,
+            ignore: resolved.test.exclude,
+            dot: true,
+            expandDirectories: false,
+          });
+          expect(actual).toEqual([
+            createConfig === createToolingDockerVitestConfig ? docker : isolated,
+          ]);
+          memberships.push(...actual);
+        }
+      }
+      expect(memberships.toSorted()).toEqual(targets.toSorted());
+      expect(new Set(memberships).size).toBe(targets.length);
+    },
+  );
 
   it("keeps plugin source forks and native-loader forks on their own loaders", async () => {
     const testConfig = await requireTestConfig(defaultPluginsConfig);

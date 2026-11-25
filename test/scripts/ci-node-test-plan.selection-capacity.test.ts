@@ -136,6 +136,24 @@ it.each([
   expect(jobs[0]?.pretestBuildMode).toBe(mode);
 });
 
+it("retains the complete required-build owner for an exact boundary selection", () => {
+  const targets = ["src/infra/boundary-path.test.ts"];
+  const full = createNodeTestShardBundles({
+    runnerBackend: "hybrid",
+    changedPaths: targets,
+    compactMode: "pull-request",
+    includeReleaseOnlyPluginShards: false,
+    includeProofTests: false,
+  }).flatMap((job) => job.groups ?? []);
+  const selected = expectDefined(
+    createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+    "boundary selection",
+  ).flatMap((job) => job.groups);
+  expect(selected).toHaveLength(1);
+  expect(selected[0]?.requiresDist).toBe(true);
+  expect(selected[0]).toEqual(full.find((group) => group.shard_name === selected[0]?.shard_name));
+});
+
 it("retains canonical capacity and exact scope for a compact selection", () => {
   const targets = [
     "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",

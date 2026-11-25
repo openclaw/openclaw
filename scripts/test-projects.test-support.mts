@@ -14,6 +14,7 @@ import {
   isAgentsSpawnProductionBoundaryTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
+import { getCliVitestProjectOwner } from "../test/vitest/vitest.cli-paths.mjs";
 import {
   cliProcessTestFiles,
   isCliProcessTestFile,
@@ -57,17 +58,27 @@ import {
 } from "../test/vitest/vitest.include-patterns.ts";
 import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
-import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
+import {
+  createVitestCliDiscovery,
+  isSharedVitestExcludedPath,
+  loadPatternListFromEnv,
+  relativizeScopedPatterns,
+} from "../test/vitest/vitest.pattern-file.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
+import {
+  resolveScopedVitestPatterns,
+  type ScopedVitestPatternOptions,
+} from "../test/vitest/vitest.scoped-patterns.ts";
 import { fullSuiteVitestShards, tuiPtyTestFiles } from "../test/vitest/vitest.test-shards.mjs";
 import {
   isToolingIsolatedTestFile,
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
+import { toolingVitestProjectScopes } from "../test/vitest/vitest.tooling-paths.mjs";
 import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
@@ -94,6 +105,7 @@ import {
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
   filterUnitConfigTestFiles,
+  boundaryTestFiles,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   classifyPackageJsonScriptChange,
@@ -165,6 +177,8 @@ type VitestRunPlan = {
   timingTargets?: string[];
   includePatterns: string[] | null;
   watchMode: boolean;
+  /** Owner-prepared include-file constraints must not be intersected again at the repository root. */
+  includePatternsPrepared?: boolean;
 };
 
 export type VitestRunSpec = ReturnType<typeof createVitestRunSpecs>[number];
@@ -5508,11 +5522,8 @@ export function parseTestProjectsArgs(args: string[], cwd = process.cwd()) {
     if (watch) {
       watchMode = watch.value;
     }
-    // Preserve bare wrapper --watch's existing omission of the named run command.
+    // Headless Vitest does not default to watch: preserve explicit intent in its argv.
     const next = args[index + 1];
-    if (!passthrough && arg === "--watch" && next !== "true" && next !== "false") {
-      continue;
-    }
     forwardedArgs.push(arg);
     if (vitestOptionConsumesNextArg(arg, next)) {
       forwardedArgs.push(next!);
@@ -5527,6 +5538,194 @@ export function parseTestProjectsArgs(args: string[], cwd = process.cwd()) {
   }
 
   return { forwardedArgs, nonTargetArgs, targetArgs, watchMode };
+}
+
+function prepareCompetingWatchOwners(
+  targets: string[],
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  ownedTargets: ReadonlySet<string>,
+  runtime: VitestPatternRuntime = {},
+) {
+  const cli = getCliVitestProjectOwner();
+  const owners: Record<string, ScopedVitestPatternOptions & { include: string[]; name: string }> = {
+    ...toolingVitestProjectScopes,
+    cli: { include: cli.include, exclude: cli.exclude, dir: cli.root, name: "cli" },
+    cliProcess: {
+      include: [...cliProcessTestFiles],
+      intersectIncludeFile: true,
+      name: "cli-process",
+    },
+    infra: {
+      include: [...databaseWorkerCoreTestFiles],
+      exclude: [...boundaryTestFiles, ...cliProcessTestFiles],
+      intersectIncludeFile: true,
+      name: "infra",
+    },
+  };
+  const groups = new Map<string, { kind: string; family: string; targets: string[] }>();
+  for (const target of targets) {
+    const relative = toRepoRelativeTarget(target, cwd);
+    const kind = classifyTarget(target, cwd);
+    if (isVitestConfigFileTarget(relative)) continue;
+    const family = isPathAtOrUnder(relative, cli.root)
+      ? "cli"
+      : kind === "tooling" ||
+          kind === "toolingDocker" ||
+          isPathAtOrUnder(relative, "test") ||
+          isPathAtOrUnder(relative, "src/scripts")
+        ? "tooling"
+        : "toolingIsolated";
+    const isCompetingOwner = kind === "cli" || kind in toolingVitestProjectScopes;
+    const isExcludedWorker =
+      family !== "toolingIsolated" &&
+      (databaseWorkerCoreTestFiles.includes(relative) || cliProcessTestFiles.includes(relative));
+    if (!isCompetingOwner && !isExcludedWorker) continue;
+    const key = `${family}:${kind}`;
+    const group = groups.get(key) ?? { kind, family, targets: [] };
+    group.targets.push(target);
+    groups.set(key, group);
+  }
+  let inherited: string[] | null | undefined;
+  let native: ReturnType<typeof createVitestCliDiscovery> | undefined;
+  const cache = new Map<string, { available: string[]; selected: string[] }>();
+  const scopes = [...groups.values()].map((group) => {
+    const includes = group.targets.map((target) => toScopedIncludePattern(target, cwd));
+    const ownerNames =
+      group.family === "cli"
+        ? ["cli", "toolingIsolated", "infra", "cliProcess"]
+        : group.family === "tooling"
+          ? ["tooling", "toolingIsolated", "toolingDocker", "infra", "cliProcess"]
+          : ["toolingIsolated"];
+    const membership = ownerNames.map((kind) => {
+      const owner = owners[kind]!;
+      native ??= createVitestCliDiscovery(args, cwd);
+      const status = native.projectStatus(owner.name);
+      // Excluded projects must not classify unit-fast sources or crawl files.
+      // Invalid/help invocations retain native diagnostics without admission.
+      if (status !== "eligible") return { kind, status, available: [], selected: [], includes: [] };
+      if (inherited === undefined) {
+        // Owned literals may outlive missing borrowed metadata, but an existing
+        // include file still owns its negative constraints.
+        inherited = loadIncludePatternsForSpecFilter(
+          env,
+          targets.every((target) => ownedTargets.has(toScopedIncludePattern(target, cwd))),
+        );
+      }
+      const effectiveDir = native.effectiveDir(owner.dir);
+      const absolutePattern = (pattern: string, basis: string) =>
+        runtime.resolvePattern?.(pattern, basis) ??
+        path.resolve(basis, pattern).split(path.sep).join("/");
+      const atDir = (pattern: string) =>
+        path.isAbsolute(pattern)
+          ? pattern
+          : path.posix.relative(absolutePattern(".", effectiveDir), absolutePattern(pattern, cwd));
+      const requested = includes.map(atDir);
+      const external =
+        inherited === null
+          ? requested
+          : serializeIncludePatterns(
+              intersectIncludePatterns(
+                [
+                  ...relativizeScopedPatterns(inherited, owner.dir),
+                  ...includes.filter((pattern) => ownedTargets.has(pattern)).map(atDir),
+                ],
+                requested,
+                runtime.matchesGlob ?? path.matchesGlob,
+                effectiveDir,
+                effectiveDir,
+                runtime.resolvePattern,
+              )!,
+            );
+      const patterns = resolveScopedVitestPatterns(owner.include, {
+        ...owner,
+        root: cwd,
+        effectiveDir,
+        argv: ["node", "vitest", ...args],
+        externalInclude: external,
+      });
+      const key = JSON.stringify([
+        owner.name,
+        patterns.scopedInclude,
+        effectiveDir,
+        patterns.scopedExclude,
+      ]);
+      let result = cache.get(key);
+      if (!result) {
+        result = native.discover(patterns.scopedInclude, effectiveDir, patterns.scopedExclude);
+        cache.set(key, result);
+      }
+      // Undo only the factory's static projection for its include-file input.
+      // The live selector is preserved; the physical discovery census is not serialized.
+      const selection = splitIncludePatterns(external);
+      const toWire = (pattern: string) =>
+        path.isAbsolute(pattern) || !owner.dir ? pattern : `${owner.dir}/${pattern}`;
+      const wire = serializeIncludePatterns({
+        include: selection.include.map(toWire),
+        exclude: selection.exclude.map(toWire),
+      });
+      const absolute = serializeIncludePatterns({
+        include: selection.include.map((pattern) => absolutePattern(pattern, effectiveDir)),
+        exclude: selection.exclude.map((pattern) => absolutePattern(pattern, effectiveDir)),
+      });
+      return { kind, status, ...result, includes: wire, absolute };
+    });
+    return { ...group, includes, membership };
+  });
+  const hasSelected = scopes.some((scope) =>
+    scope.membership.some((owner) => owner.selected.length),
+  );
+  const byTarget = new Map<string, { kind: string | null; includes: string[] }>();
+  const files = new Set<string>();
+  let nativeFallback: { kind: string; includes: string[] } | undefined;
+  for (const scope of scopes) {
+    const eligible = scope.membership.filter((owner) => owner.status === "eligible");
+    if (!eligible.length) {
+      nativeFallback ??= { kind: scope.kind, includes: scope.includes };
+      for (const target of scope.targets)
+        byTarget.set(target, { kind: null, includes: scope.includes });
+      continue;
+    }
+    const activeOwners = eligible.filter((owner) => {
+      const selected = hasSelected ? owner.selected : owner.available;
+      for (const file of selected) files.add(file);
+      return selected.length > 0;
+    });
+    const kinds = activeOwners.map((owner) => owner.kind);
+    const compositeWorker =
+      kinds.length === 2 && kinds.includes("infra") && kinds.includes(scope.family);
+    if (kinds.length > 1 && !compositeWorker) {
+      throw new Error(
+        "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+      );
+    }
+    const family = eligible.find((owner) => owner.kind === scope.family);
+    const onlyImpliedWorker =
+      kinds.length === 1 && kinds[0] === "infra" && scope.kind === scope.family && family;
+    const selected =
+      compositeWorker || onlyImpliedWorker
+        ? family!
+        : (activeOwners[0] ?? eligible.find((owner) => owner.kind === scope.kind) ?? eligible[0]!);
+    const kind = activeOwners.length || !hasSelected ? selected.kind : null;
+    const includes =
+      compositeWorker &&
+      activeOwners.some(
+        (owner) => JSON.stringify(owner.includes) !== JSON.stringify(selected.includes),
+      )
+        ? selected.absolute!
+        : selected.includes;
+    for (const target of scope.targets) byTarget.set(target, { kind, includes });
+  }
+  const unmeasuredPatterns = targets
+    .filter((target) => !byTarget.has(target))
+    .map((target) => toScopedIncludePattern(target, cwd));
+  const matchesUnmeasured = createIncludePatternMatcher(unmeasuredPatterns, runtime.matchesGlob);
+  return {
+    byTarget,
+    nativeFallback,
+    matchesWorker: (file: string) => files.has(file) || matchesUnmeasured(file),
+  };
 }
 
 export function buildVitestRunPlans(
@@ -5586,11 +5785,35 @@ export function buildVitestRunPlans(
   }
 
   const nonTargetArgs = changedTargetArgs !== null ? activeForwardedArgs : remainingArgs;
-  const classifiedTargets = activeTargetArgs.map((targetArg) => ({
-    targetArg,
-    relative: toRepoRelativeTarget(targetArg, cwd),
-    kind: classifyTarget(targetArg, cwd),
-  }));
+  const watchOwners = watchMode
+    ? prepareCompetingWatchOwners(
+        activeTargetArgs,
+        nonTargetArgs,
+        cwd,
+        options.env ?? process.env,
+        ownedTargets,
+        options,
+      )
+    : null;
+  const classifiedTargets = activeTargetArgs.flatMap((targetArg) => {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    const prepared = watchOwners?.byTarget.get(targetArg);
+    if (prepared?.kind === null) return [];
+    return [{ targetArg, relative, kind: prepared?.kind ?? classifyTarget(targetArg, cwd) }];
+  });
+  if (classifiedTargets.length === 0 && watchOwners?.nativeFallback) {
+    // No eligible project is not an empty file selection. Let native startup
+    // report that error, including with --passWithNoTests or an empty include file.
+    return [
+      {
+        config: VITEST_CONFIG_BY_KIND[watchOwners.nativeFallback.kind] ?? DEFAULT_VITEST_CONFIG,
+        forwardedArgs: nonTargetArgs,
+        includePatterns: watchOwners.nativeFallback.includes,
+        includePatternsPrepared: true,
+        watchMode,
+      },
+    ];
+  }
   const gatewayProjectShards = (options.env ?? process.env).OPENCLAW_GATEWAY_PROJECT_SHARDS;
   const hasGatewayAggregateTarget = classifiedTargets.some(
     ({ kind, relative }) =>
@@ -5622,9 +5845,9 @@ export function buildVitestRunPlans(
       ? [toScopedIncludePattern(targetArg, cwd)]
       : [];
   });
-  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter(
-    createIncludePatternMatcher(databaseWorkerPatterns, options.matchesGlob),
-  );
+  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles
+    .filter(createIncludePatternMatcher(databaseWorkerPatterns, options.matchesGlob))
+    .filter((file) => !watchOwners || watchOwners.matchesWorker(file));
   const hasPackageFileTarget = classifiedTargets.some(
     ({ kind, relative }) =>
       kind === "packageContract" && relative !== PACKAGE_CONTRACT_VITEST_CONFIG,
@@ -5704,9 +5927,17 @@ export function buildVitestRunPlans(
   }
   if (impliedDatabaseWorkerTargets.length > 0) {
     const current = groupedTargets.get("infra") ?? [];
-    for (const target of impliedDatabaseWorkerTargets) {
-      if (!current.includes(target)) {
-        current.push(target);
+    // A prepared worker owner already carries the live selector. Appending its
+    // present file census would discard the prepared coordinate/constraint facts.
+    if (
+      !watchOwners ||
+      !current.length ||
+      !current.every((target) => watchOwners.byTarget.has(target))
+    ) {
+      for (const target of impliedDatabaseWorkerTargets) {
+        if (!current.includes(target)) {
+          current.push(target);
+        }
       }
     }
     groupedTargets.set("infra", current);
@@ -5794,12 +6025,20 @@ export function buildVitestRunPlans(
   }
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
-  const impliedCliProcessTargets = cliProcessTestFiles.filter(matchesActiveIncludePattern);
+  const impliedCliProcessTargets = cliProcessTestFiles
+    .filter(matchesActiveIncludePattern)
+    .filter((file) => !watchOwners || watchOwners.matchesWorker(file));
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];
-    for (const target of impliedCliProcessTargets) {
-      if (!current.includes(target)) {
-        current.push(target);
+    if (
+      !watchOwners ||
+      !current.length ||
+      !current.every((target) => watchOwners.byTarget.has(target))
+    ) {
+      for (const target of impliedCliProcessTargets) {
+        if (!current.includes(target)) {
+          current.push(target);
+        }
       }
     }
     groupedTargets.set("cliProcess", current);
@@ -5813,7 +6052,13 @@ export function buildVitestRunPlans(
     ...impliedExtensionWorkerTargets,
   ];
   const previousWatchKinds = watchMode
-    ? new Set(classifiedTargets.map(({ targetArg }) => classifyTarget(targetArg, cwd, true)))
+    ? new Set(
+        classifiedTargets.map(({ targetArg, kind }) =>
+          watchOwners?.byTarget.get(targetArg)?.kind && kind !== "infra"
+            ? kind
+            : classifyTarget(targetArg, cwd, true),
+        ),
+      )
     : new Set<string>();
   if (watchMode && (groupedTargets.size > 1 || previousWatchKinds.size > 1)) {
     if (impliedWatchWorkerTargets.length > 0 && previousWatchKinds.size === 1) {
@@ -5833,7 +6078,17 @@ export function buildVitestRunPlans(
           forwardedArgs: nonTargetArgs,
           includePatterns: wholeOwner
             ? null
-            : uniqueOrdered(activeTargetArgs.map((target) => toScopedIncludePattern(target, cwd))),
+            : uniqueOrdered(
+                activeTargetArgs.flatMap(
+                  (target) =>
+                    watchOwners?.byTarget.get(target)?.includes ?? [
+                      toScopedIncludePattern(target, cwd),
+                    ],
+                ),
+              ),
+          ...(watchOwners && activeTargetArgs.every((target) => watchOwners.byTarget.has(target))
+            ? { includePatternsPrepared: true }
+            : {}),
           watchMode: true,
         },
       ];
@@ -5897,16 +6152,22 @@ export function buildVitestRunPlans(
       )
         ? unitCliIncludes
         : null;
-    const includePatterns = useCliTargetArgs
-      ? scopedUnitIncludes
-      : useWholeConfigTarget
-        ? null
-        : uniqueOrdered(
-            grouped.flatMap((targetArg) => {
-              const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
-              return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
-            }),
-          );
+    const preparedIncludes =
+      watchOwners && grouped.every((target) => watchOwners.byTarget.has(target))
+        ? uniqueOrdered(grouped.flatMap((target) => watchOwners.byTarget.get(target)!.includes))
+        : null;
+    const includePatterns =
+      preparedIncludes ??
+      (useCliTargetArgs
+        ? scopedUnitIncludes
+        : useWholeConfigTarget
+          ? null
+          : uniqueOrdered(
+              grouped.flatMap((targetArg) => {
+                const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
+                return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
+              }),
+            ));
     const broadToolingScriptPlans = createBroadToolingScriptPlans({
       config,
       cwd,
@@ -5955,6 +6216,7 @@ export function buildVitestRunPlans(
       config,
       forwardedArgs: forwardedPlanArgs,
       includePatterns,
+      ...(preparedIncludes !== null ? { includePatternsPrepared: true } : {}),
       watchMode,
     });
   }
@@ -6289,13 +6551,16 @@ export function createVitestRunSpecs(
     cwd,
     params,
   );
-  const inheritedIncludes = plans.some((plan) => plan.includePatterns !== null)
+  const inheritedIncludes = plans.some(
+    (plan) => plan.includePatterns !== null && !plan.includePatternsPrepared,
+  )
     ? loadIncludePatternsForSpecFilter(
         baseEnv,
         plans.every((plan) => ownsIncludeSelection(plan.includePatterns, ownedTargets)),
       )
     : null;
   const scopedPlans = plans.flatMap((originalPlan) => {
+    if (originalPlan.includePatternsPrepared) return [originalPlan];
     const plan =
       originalPlan.includePatterns && inheritedIncludes
         ? {
@@ -6367,11 +6632,7 @@ function loadIncludePatternsForSpecFilter(env: NodeJS.ProcessEnv, allowMissing =
   if (!filePath || (allowMissing && !fs.existsSync(filePath))) {
     return null;
   }
-  const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-  return parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
+  return loadPatternListFromEnv(INCLUDE_FILE_ENV_KEY, env);
 }
 
 function filterPlansForContractIncludeFile(

@@ -4357,11 +4357,6 @@ export function createSelectedNodeTestShardBundles(
   if (describeVolume) {
     options.onVolumePrepared?.(describeVolume);
   }
-  const isWholeToolingPair = (group: NodeTestShardGroup) =>
-    group.shard_name === "core-tooling-isolated" &&
-    group.configs.length === 2 &&
-    group.configs[0] === "test/vitest/vitest.tooling-docker.config.ts" &&
-    group.configs[1] === TOOLING_ISOLATED_CONFIG;
   const selectedGroups = new Map<NodeTestShardGroup, string[]>();
   for (const target of selected) {
     if (tooling.has(target)) {
@@ -4397,9 +4392,9 @@ export function createSelectedNodeTestShardBundles(
       const selectedConfigs = group.configs.filter((config) =>
         files.some((file) => configs.get(file) === config),
       );
-      // A shared include file would cross config boundaries for mixed pairs.
-      // Single-config selections retain that config's isolation and process policy.
-      if (group.requiresDist || (isWholeToolingPair(group) && selectedConfigs.length !== 1)) {
+      // Build owners remain indivisible. Other configs intersect the shared
+      // selection with their own inventory, including mixed tooling pairs.
+      if (group.requiresDist) {
         retainedSeconds += seconds;
         canonicalFamilies.set(group, compactStripeFamily(group));
         return [group];

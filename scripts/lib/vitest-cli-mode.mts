@@ -25,6 +25,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--outputFile",
   "--pool",
   "--project",
+  "-p",
   "--reporter",
   "--reporters",
   "--repeats",

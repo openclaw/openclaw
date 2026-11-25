@@ -1,14 +1,14 @@
 // Vitest tooling config wires the tooling test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
-import { toolingTestExclude, toolingTestInclude } from "./vitest.tooling-paths.mjs";
+import { toolingVitestProjectScopes } from "./vitest.tooling-paths.mjs";
 
 export function createToolingVitestConfig(env?: Record<string, string | undefined>) {
-  const config = createScopedVitestConfig(toolingTestInclude, {
+  const { include, ...scope } = toolingVitestProjectScopes.tooling;
+  const config = createScopedVitestConfig(include, {
+    ...scope,
     env,
-    exclude: toolingTestExclude,
     includeOpenClawRuntimeSetup: false,
-    name: "tooling",
     passWithNoTests: true,
   });
   return {

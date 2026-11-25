@@ -1,0 +1,4 @@
+# Live watch owner selection and native discovery regression coverage.
+# Scope is the dependent Watch remainder; prerequisite credit stays separate.
+# Recompute this exact test-line increment when the comparison base changes.
+1559
