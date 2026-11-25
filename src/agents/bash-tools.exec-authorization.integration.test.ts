@@ -242,6 +242,24 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     }
   });
 
+  it("preserves quoted argument bytes through an allowlisted executable", async () => {
+    const touch = fs.realpathSync("/usr/bin/touch");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: touch }] } },
+    });
+    const data = "é🦞a\rb\vc\fd";
+    const result = await tool(reviewer(), "allowlist").execute("literal-data", {
+      command: `${touch} 'single-${data}' "double-${data}"`,
+    });
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+    // The filesystem preserves the argument bytes that terminal output sanitization removes.
+    expect(fs.existsSync(path.join(root, `single-${data}`))).toBe(true);
+    expect(fs.existsSync(path.join(root, `double-${data}`))).toBe(true);
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+  });
+
   it("executes static assignments and blocks recursive assignments before process creation", async () => {
     const echoPath = fs.realpathSync("/bin/echo");
     saveExecApprovals({

@@ -7,7 +7,13 @@ const require = createRequire(import.meta.url);
 
 export type BashCommandParser = (source: string) => TreeSitter.Tree;
 
-export class CommandExplanationUnsupportedControlCharacterError extends Error {}
+export const SHELL_CONTROL_CHARACTERS = /[\r\v\f]/u;
+
+export class CommandExplanationUnsupportedControlCharacterError extends Error {
+  constructor() {
+    super("Shell command contains unsupported control characters");
+  }
+}
 export class CommandExplanationSourceSizeLimitError extends Error {}
 export class CommandExplanationParseTimeoutError extends Error {}
 
@@ -61,12 +67,12 @@ function parseBashForCommandExplanation(
 }
 
 export function assertExplainableShellSource(source: string): void {
-  // tree-sitter treats these as whitespace, but POSIX shells treat them as word bytes.
-  // Reject the whole source, including decoded wrapper payloads, rather than rewrite it.
-  if (/[\r\v\f]/u.test(source)) {
-    throw new CommandExplanationUnsupportedControlCharacterError(
-      "Shell command contains unsupported control characters",
-    );
+  // Without a quoted argument or room to parse, these bytes cannot be verified as data.
+  if (
+    SHELL_CONTROL_CHARACTERS.test(source) &&
+    (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS || !/['"]/u.test(source))
+  ) {
+    throw new CommandExplanationUnsupportedControlCharacterError();
   }
   if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
     throw new CommandExplanationSourceSizeLimitError("Shell command is too large to explain");

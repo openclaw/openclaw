@@ -1,4 +1,6 @@
-// Decodes and classifies raw bash word text for the command explainer.
+// Decodes and classifies Bash words for the command explainer.
+import type { Node as TreeSitterNode } from "web-tree-sitter";
+
 export function hasEscapedLineContinuation(text: string): boolean {
   return /\\(?:\r\n|[\r\n])/.test(text);
 }
@@ -111,4 +113,89 @@ export function decodeShellText(
     index += 1;
   }
   return decoded;
+}
+
+type ShellWordValue = { kind: "literal"; value: string } | { kind: "dynamic"; value: string };
+
+const DYNAMIC_WORD_NODE_TYPES = new Set([
+  "arithmetic_expansion",
+  "command_substitution",
+  "expansion",
+  "process_substitution",
+  "simple_expansion",
+]);
+
+function hasDynamicWordPart(root: TreeSitterNode): boolean {
+  const pending = [root];
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    if (DYNAMIC_WORD_NODE_TYPES.has(node.type)) {
+      return true;
+    }
+    for (const child of node.namedChildren) {
+      pending.push(child);
+    }
+  }
+  return false;
+}
+
+export function shellWordValue(node: TreeSitterNode): ShellWordValue {
+  if (DYNAMIC_WORD_NODE_TYPES.has(node.type)) {
+    return { kind: "dynamic", value: node.text };
+  }
+  if (
+    node.type !== "command_name" &&
+    node.type !== "concatenation" &&
+    node.namedChildren.some((child) => hasDynamicWordPart(child))
+  ) {
+    return {
+      kind: "dynamic",
+      value: node.type === "string" ? decodeShellText(node.text, "double") : node.text,
+    };
+  }
+
+  switch (node.type) {
+    case "command_name":
+    case "concatenation": {
+      const parts = node.namedChildren;
+      if (
+        node.type === "command_name" ? parts.length === 0 : hasUnescapedDynamicPattern(node.text)
+      ) {
+        return {
+          kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
+          value: decodeShellText(node.text),
+        };
+      }
+      let value = "";
+      let dynamic = false;
+      for (const part of parts) {
+        const partValue = shellWordValue(part);
+        value += partValue.value;
+        if (partValue.kind !== "literal") {
+          dynamic = true;
+          if (node.type === "command_name") {
+            break;
+          }
+        }
+      }
+      return { kind: dynamic ? "dynamic" : "literal", value };
+    }
+    case "word":
+      return {
+        kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
+        value: decodeShellText(node.text),
+      };
+    case "raw_string":
+      return { kind: "literal", value: node.text.slice(1, -1) };
+    case "string":
+      return { kind: "literal", value: decodeShellText(node.text, "double") };
+    case "ansi_c_string":
+      return { kind: "literal", value: decodeShellText(node.text, "ansi-c") };
+    default:
+      return {
+        kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
+          ? "dynamic"
+          : "literal",
+        value: decodeShellText(node.text),
+      };
+  }
 }

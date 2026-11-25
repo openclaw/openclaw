@@ -295,7 +295,7 @@ export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
+  // Only trim shell whitespace; CR, VT, and FF must reach the parser for inspection.
   const windows = normalizeLowercaseStringOrEmpty(context.platform).startsWith("win");
   // Windows shells accept CRLF as a line ending. Normalize only the inspection copy;
   // the caller still executes the original command unchanged.
@@ -303,7 +303,7 @@ export async function detectUnsafeExecControlShellCommand(
   const rawCommand = trimShellBoundaryWhitespace(inspectionCommand);
   let explanation: CommandExplanation;
   try {
-    explanation = await explainShellCommand(rawCommand);
+    explanation = await explainShellCommand(rawCommand, { allowLiteralControlArguments: !windows });
   } catch (error) {
     if (
       error instanceof CommandExplanationWorkLimitError ||
@@ -356,7 +356,7 @@ function rejectIncompleteCommandAnalysis(
   }
   if (unsafeKind === "unsupported-control-character") {
     throw new Error(
-      "exec cannot run a shell command containing unsupported control characters: a raw carriage return, vertical tab, or form feed, even inside quotes. The shell and OpenClaw's command inspector read these bytes differently, so the command cannot be inspected safely. Remove them, convert CRLF line endings to LF (Windows hosts accept CRLF), or write the bytes as escape sequences such as printf '\\r'.",
+      "exec cannot run a shell command containing unsupported control characters: a raw carriage return, vertical tab, or form feed that the command inspector cannot verify as literal argument data. Remove them, convert CRLF line endings to LF (Windows hosts accept CRLF), or write the bytes as escape sequences such as printf '\\r'.",
     );
   }
   if (unsafeKind === "parser-failure") {
