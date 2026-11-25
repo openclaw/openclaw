@@ -469,11 +469,9 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
         accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)? = nil,
-        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil,
-        openClawIDDashboardCookie: HTTPCookie? = nil)
+        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil)
     {
         self.url = url
-        self.openClawIDDashboardCookie = openClawIDDashboardCookie
         self.authScript = authScript
         self.authScriptProvider = authScriptProvider
         self.nativeAuth = ControlUINativeGatewayAuthHandler(
@@ -861,9 +859,11 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
         accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)? = nil,
-        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil)
+        onAccessCookieBoundaryFailure: (@MainActor () -> Void)? = nil,
+        openClawIDDashboardCookie: HTTPCookie? = nil)
     {
         self.url = url
+        self.openClawIDDashboardCookie = openClawIDDashboardCookie
         self.authScript = authScript
         self.authScriptProvider = authScriptProvider
         self.tls = tls
