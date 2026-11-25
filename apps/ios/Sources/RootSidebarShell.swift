@@ -215,10 +215,14 @@ private struct RootSidebarContentCard: ViewModifier {
             .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !isPresented)
             .overlay {
-                OpenClawProBackground()
-                    .opacity(shade * 0.24)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                // Mounted only while it draws: at zero opacity SwiftUI still exposed this full-screen layer as a
+                // blank accessibility element in front of every control, despite accessibilityHidden.
+                if shade > 0 {
+                    OpenClawProBackground()
+                        .opacity(shade * 0.24)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
             // Keep the chat card round at the screen edge, including behind system bars.
             .clipShape(shape)

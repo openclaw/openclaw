@@ -60,17 +60,14 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         self.capture("partial-roster", in: app)
         let retry = app.buttons["Sessions.PartialLoad.Refresh"]
         XCTAssertTrue(retry.waitForExistence(timeout: 5))
-        // Every control in the root shell reports isHittable false on this runtime (the chat screen's too),
-        // while onboarding and system apps report true; the cause is not identified. Tap the center, as a
-        // finger does; the recovery below proves the tap reached the button.
-        XCTAssertGreaterThanOrEqual(retry.frame.height, 44)
+        XCTAssertTrue(retry.isHittable)
         XCTAssertEqual(retry.label, "Try again")
         // Capture the control's identity while it still exists; resolving it after
         // recovery would fail (the notice is gone once the roster is complete).
         let retryIdentity = "label=\(retry.label); identifier=\(retry.identifier)"
 
         try await self.setPartial(false, fixture: fixture)
-        retry.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        retry.tap()
         XCTAssertTrue(laterPage.waitForExistence(timeout: 15), "Try again loads the rest of the roster")
         XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
         XCTAssertFalse(retry.exists)
