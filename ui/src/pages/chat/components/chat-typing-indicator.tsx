@@ -1,5 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { getLocale, t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
@@ -9,7 +9,7 @@ import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-pre
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 let listFormatter: Intl.ListFormat | undefined;
 let listLocale: string | undefined;
@@ -124,7 +124,10 @@ function TypingRow(props: { actor: ChatTypingActorView; avatarPlacement: AvatarP
                 {props.actor.label}
               </span>
               <span
-                class="agent-chat__typing-state agent-chat__typing-text"
+                class={[
+                  "agent-chat__typing-state agent-chat__typing-text",
+                  { "text-shimmer": !props.actor.paused },
+                ]}
                 data-typing={props.actor.paused ? undefined : ""}
               >
                 {t(
@@ -217,7 +220,7 @@ export function ChatTypingIndicator(props: {
                   </span>
                 </Show>
                 <span class="agent-chat__typing-summary">
-                  <span class="agent-chat__typing-text" data-typing="">
+                  <span class="agent-chat__typing-text text-shimmer" data-typing="">
                     {groupLabel()?.content}
                   </span>
                 </span>

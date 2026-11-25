@@ -256,12 +256,6 @@ export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
-  const prepared =
-    getPublishedRuntimeToolInputSchema(schema) || isPreparedToolSchemaNormalization(schema);
-  const boundedSchema = prepared ? schema : truncateToolSchemaDepth(schema, options?.toolName);
-  if (prepared && wasToolSchemaTruncated(schema)) {
-    reportToolSchemaTruncation(schema, options?.toolName);
-  }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
@@ -287,6 +281,12 @@ export function normalizeToolParameterSchema(
       }
       return cached;
     }
+  }
+  const prepared =
+    getPublishedRuntimeToolInputSchema(schema) || isPreparedToolSchemaNormalization(schema);
+  const boundedSchema = prepared ? schema : truncateToolSchemaDepth(schema, options?.toolName);
+  if (prepared && wasToolSchemaTruncated(schema)) {
+    reportToolSchemaTruncation(schema, options?.toolName);
   }
   const isGeminiProvider =
     normalizedProvider.includes("google") ||

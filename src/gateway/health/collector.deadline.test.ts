@@ -25,7 +25,7 @@ const timeoutProbe = { timedOut: true, error: "health collection timed out after
 const blockedAccounts = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
 let scope: AsyncWorkScope;
 const cleanup: Array<() => void> = [];
-let sessionPrepared = createDeferredCore();
+let channelPlanning = createDeferredCore();
 
 function hold<T>(value: T) {
   const deferred = createDeferredCore<T>();
@@ -66,13 +66,14 @@ function installProbe(accountIds: string[], probe: Probe, id = "chat") {
 }
 
 function collect(audience: "public" | "admin" = "admin") {
-  sessionPrepared = createDeferredCore();
+  channelPlanning = createDeferredCore();
   return scope.track(() => collectHealth({ audience, probe: true }));
 }
 
 async function flushHealthPreparation(collecting: Promise<unknown>) {
-  // Settle real session I/O and its yield before advancing the fake deadline.
-  await awaitGateBeforeSettlement(sessionPrepared.promise, collecting, "Early health settlement");
+  // Channel planning follows both heartbeat and session preparation; neither read
+  // alone proves real I/O has settled before advancing the fake deadline.
+  await awaitGateBeforeSettlement(channelPlanning.promise, collecting, "Early health settlement");
   await vi.advanceTimersByTimeAsync(0);
   await flushImmediate();
 }
@@ -85,14 +86,14 @@ beforeAll(async () => {
   }));
   // mock-isolation: control worker-read completion independently of the health deadline clock.
   vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
-    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(() => {
-      const summary = readSummary();
-      sessionPrepared.resolve();
-      return summary;
-    }),
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(() => readSummary()),
   }));
+  // mock-isolation: keep deadline probes on fixture plugins without loading live plugin metadata.
   vi.doMock("../../channels/plugins/read-only.js", () => ({
-    listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
+    listReadOnlyChannelPluginsForConfig: () => {
+      channelPlanning.resolve();
+      return healthPluginsForTest;
+    },
   }));
   const [health, channelTestUtils] = await Promise.all([
     import("./collector.js"),

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsStore } from "./store.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export function createTranscriptLibraryStoreFixture(stateDir: string) {
   const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };

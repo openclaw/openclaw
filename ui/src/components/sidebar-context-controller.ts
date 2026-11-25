@@ -1,12 +1,15 @@
 import { createContext, createSignal } from "solid-js";
 import { elementRef } from "../lib/reactive/element-ref.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarBase } from "./app-sidebar-base.ts";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 
 export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
   content(): HTMLElement | undefined;
+  rowFloor(): number;
+  captureRowFloor(value: number): void;
+  registerWindow(read: () => readonly string[] | undefined): () => void;
   readAnchor(): { key: string; offset: number } | undefined;
   captureAnchor(anchor: { key: string; offset: number }): void;
   subscribeScroll(listener: () => void): () => void;
@@ -15,13 +18,15 @@ export const SidebarScrollContext = createContext<{
 /** Preserve the shared sidebar's scroll position for each destination. */
 export function createSidebarScroll(
   host: Pick<
-    AppSidebarSessionNavigationElement,
-    "isConnected" | "navigationView" | "contextualSidebar"
-  >,
+    AppSidebarBase,
+    "isConnected" | "navigationView" | "contextualSidebar" | "sidebarSnapshot"
+  > & { readonly snapshot: { capture(): void } },
 ) {
   const positions = new Map<string, number>();
   const anchors = new Map<string, { key: string; offset: number }>();
   const scrollListeners = new Set<() => void>();
+  const windows = new Set<() => readonly string[] | undefined>();
+  let rowFloor: number | undefined;
   const [state, setState] = createSignal<SidebarSessionsScrollState>("none");
   let presentedKey = "sessions";
   let scroller: HTMLElement | undefined;
@@ -33,6 +38,30 @@ export function createSidebarScroll(
       : host.navigationView;
   return {
     state,
+    rowFloor: () => rowFloor ?? host.sidebarSnapshot?.rowFloor ?? 32,
+    captureRowFloor(value: number) {
+      rowFloor = value;
+      host.snapshot.capture();
+    },
+    registerWindow(read: () => readonly string[] | undefined) {
+      windows.add(read);
+      return () => {
+        windows.delete(read);
+      };
+    },
+    windowKeys() {
+      const keys = new Set<string>();
+      for (const read of windows) {
+        const sessionKeys = read();
+        if (!sessionKeys) {
+          return undefined;
+        }
+        for (const sessionKey of sessionKeys) {
+          keys.add(sessionKey);
+        }
+      }
+      return [...keys];
+    },
     element: () => scroller,
     content: () => content,
     createContentRef() {

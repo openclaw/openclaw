@@ -16,11 +16,8 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
 import type {
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
-  SpeechSynthesisTarget,
 } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -32,9 +29,14 @@ import {
   resolveTtsProviderCandidates,
   type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
-import type { TtsProviderAttempt } from "./tts-runtime-types.js";
+import type {
+  SpeechProviderConfig,
+  SpeechProviderOverrides,
+  SpeechSynthesisTarget,
+  TtsProviderAttempt,
+} from "./tts-runtime-types.js";
 import {
-  readTtsPrefs,
+  readTtsPrefsAsync,
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
@@ -71,10 +73,11 @@ export async function throwTtsProjectionError(
   error: unknown,
   cleanup: () => void | Promise<void>,
 ): Promise<never> {
-  const [result] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
-  if (result.status === "rejected") {
-    throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
-  }
+  await Promise.resolve()
+    .then(cleanup)
+    .catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
+    });
   throw error;
 }
 
@@ -136,7 +139,7 @@ export async function acquireTtsRequest(
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
   }
-  const prefs = readTtsPrefs(prefsPath);
+  const prefs = await readTtsPrefsAsync(prefsPath);
   const persona = resolveTtsPersonaFromPrefs(config, prefs);
   const queries = await acquirePluginCapabilityProviders({ key: "speechProviders", cfg });
   try {

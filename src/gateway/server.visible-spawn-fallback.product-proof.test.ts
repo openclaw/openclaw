@@ -579,7 +579,11 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           ).toEqual([
             expect.objectContaining({
               role: "custom",
-              openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
+              openclawRunError: {
+                runId: settledRunId,
+                summary: expect.stringMatching(/\S/),
+                cause: { provider: "proof-primary", failoverReason: "rate_limit" },
+              },
             }),
           ]);
         }
@@ -684,7 +688,6 @@ describe("CLI model inheritance through MCP", () => {
             });
             const caller = createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: currentGrant.admittedRunContext,
-              receiptAuthority: currentGrant.isCurrent,
               agentId: scoped.agentId,
               sessionKey: context.sessionKey,
             });

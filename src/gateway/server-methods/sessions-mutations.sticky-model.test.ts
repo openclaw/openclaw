@@ -1,6 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -260,6 +264,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.restoreAllMocks();
 });
 
@@ -544,6 +549,41 @@ describe("sessions.patch personal model-account ownership", () => {
 });
 
 describe("explicit session model runtimes", () => {
+  it.each([
+    { agentRuntime: undefined, expectedRuntime: "claude-cli" },
+    { agentRuntime: "openclaw", expectedRuntime: "openclaw" },
+  ])(
+    "routes a provider switch to $expectedRuntime when runtime is $agentRuntime",
+    async ({ agentRuntime, expectedRuntime }) => {
+      cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
+      const key = `agent:main:provider-switch-${expectedRuntime}`;
+      cfg.agents!.defaults!.models = {
+        "openai/gpt-5.6-sol": {},
+        "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+      };
+      await seedSession(key, { ...selectedModel, agentRuntimeOverride: "openclaw" });
+      runtimeChoice.prepare.mockImplementation(async ({ runtimeId, preferredRuntimeId }) => ({
+        kind: "ready",
+        runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
+        validate: () => undefined,
+      }));
+
+      const response = await patchSession({
+        key,
+        model: "anthropic/claude-sonnet-4-6",
+        ...(agentRuntime ? { agentRuntime } : {}),
+      });
+
+      expect(response[0], response[2]?.message).toBe(true);
+      expect(response[1]).toMatchObject({ resolved: { agentRuntime: { id: expectedRuntime } } });
+      expect(readSession(key)).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        agentRuntimeOverride: expectedRuntime,
+      });
+    },
+  );
+
   it.each([
     { model: undefined, agentRuntime: "codex" },
     { model: "gpt-5.6-sol", agentRuntime: "codex" },

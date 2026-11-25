@@ -28,6 +28,7 @@ const custody = vi.hoisted(() => ({
   census: vi.fn(),
   retireBroker: vi.fn<() => Promise<boolean>>(),
   activeNativeWork: false,
+  activeWorkerPath: "",
   actualNativeSource: false,
 }));
 
@@ -50,6 +51,12 @@ vi.mock("../infra/worker-native-lifecycle.js", async (importOriginal) => {
         ...source,
         retireIdleBroker: () =>
           custody.actualNativeSource ? source.retireIdleBroker() : custody.retireBroker(),
+        activeWorkerPaths: () =>
+          custody.actualNativeSource
+            ? source.activeWorkerPaths()
+            : custody.activeNativeWork
+              ? [custody.activeWorkerPath]
+              : [],
         get hasActiveWorkers() {
           return custody.actualNativeSource ? source.hasActiveWorkers : custody.activeNativeWork;
         },
@@ -73,6 +80,7 @@ afterEach(() => {
 it.each([
   "idle",
   "idle-read-pool",
+  "idle-plugin-preparation",
   "independent-owner",
   "independent-thread",
   "late-independent-thread",
@@ -81,7 +89,8 @@ it.each([
   "reclaims retained runtimes only after Doctor-owned readers settle (%s broker)",
   async (broker) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      custody.actualNativeSource = broker === "idle-read-pool";
+      const realNativeSource = broker === "idle-read-pool" || broker === "idle-plugin-preparation";
+      custody.actualNativeSource = realNativeSource;
       materializeSharedStateDatabase(state.env);
       const root = fs.realpathSync(state.root);
       const packageRoot = path.join(root, "checkout");
@@ -89,6 +98,7 @@ it.each([
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
       mocks.packageRoot.mockReturnValue(packageRoot);
       const artifact = createDoctorRuntimeProjection(root, packageRoot, "Old001");
+      custody.activeWorkerPath = path.join(artifact, "worker.js");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       vi.spyOn(packageRoots, "resolveOpenClawPackageRootsSync").mockReturnValue([packageRoot]);
       mocks.service.mockReturnValue({
@@ -129,7 +139,8 @@ it.each([
         const maintenance = getOpenClawDatabaseMaintenanceScope();
         expect(maintenance?.ownsSchemaMaintenance).toBe(true);
         maintenance!.assertAdmission();
-        custody.activeNativeWork = broker === "late-independent-thread";
+        custody.activeNativeWork =
+          broker === "late-independent-thread" || broker === "independent-thread";
         return {
           pids: readSource
             ? readSource.hasActiveWorkers
@@ -142,7 +153,7 @@ it.each([
         ownerIdentity = fs.readFileSync(ownerPath);
         doctorReaders = readOnlyWorkerScope.getStore();
         expect(doctorReaders?.active).toBe(true);
-        brokerLive = broker !== "independent-thread";
+        brokerLive = broker !== "independent-thread" && !realNativeSource;
         if (broker === "idle-read-pool") {
           const { executeExistingOpenClawStateRead } =
             await import("../state/openclaw-state-db-readonly.js");
@@ -154,6 +165,27 @@ it.each([
           );
           readSource = captureRetainedNativeWorkerSource();
           expect(readSource.hasActiveWorkers).toBe(true);
+        }
+        if (broker === "idle-plugin-preparation") {
+          const { captureRetainedNativeWorkerSource } =
+            await import("../infra/worker-native-lifecycle.js");
+          const { withPluginSourceCaptureStorage } =
+            await import("../plugins/plugin-source-capture-context.js");
+          const { preparePluginGenerationArtifact } =
+            await import("../plugins/plugin-generation-worker.js");
+          const pluginRoot = path.join(root, "plugin-source");
+          const entry = path.join(pluginRoot, "index.js");
+          fs.mkdirSync(pluginRoot);
+          fs.writeFileSync(
+            path.join(pluginRoot, "package.json"),
+            '{"name":"fixture","type":"module"}',
+          );
+          fs.writeFileSync(entry, "export const value = 42;");
+          // Setup module loaders retain this artifact for the command's plugin cache.
+          await withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, () =>
+            preparePluginGenerationArtifact({ rootDir: pluginRoot, source: entry }),
+          );
+          expect(captureRetainedNativeWorkerSource().hasActiveWorkers).toBe(true);
         }
         await initialDoctorHealthContribution("doctor:retained-update-runtimes").run(ctx);
         expect(fs.existsSync(artifact)).toBe(true);
@@ -171,7 +203,8 @@ it.each([
       await completed;
       const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
       expect(custody.census).toHaveBeenCalledOnce();
-      const retained = broker !== "idle" && broker !== "idle-read-pool";
+      const retained =
+        broker !== "idle" && broker !== "idle-read-pool" && broker !== "idle-plugin-preparation";
       expect(fs.existsSync(artifact)).toBe(retained);
       if (retained) {
         expect(output).toContain(

@@ -1,19 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import type { SqliteSchemaCatalog } from "../infra/sqlite-schema-catalog-types.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import {
-  tableExists,
-  tableHasColumn,
-  tablePrimaryKeyColumns,
-} from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { readGeneratedSqliteCatalog } from "./postgres-schema.generated/sqlite-catalogs.js";
 
 const AUDIT_EVENT_STATE_SCHEMA_VERSION = 2;
 const CANONICAL_AUDIT_TABLES = ["audit_events", "audit_identity_keys"].map((name) => ({
   name,
   sql: normalizeSchemaSql(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, name)),
 }));
+let auditSchemaCatalog: SqliteSchemaCatalog | undefined;
 
 const AUDIT_EVENT_LEGACY_COLUMNS = [
   "sequence",
@@ -56,26 +57,24 @@ const AUDIT_EVENT_V2_COLUMNS = [
   "target_ref",
 ] as const;
 
-function tableColumnInfo(db: DatabaseSync, tableName: string) {
-  return db.prepare(`PRAGMA table_info(${tableName})`).all();
-}
-
-function tableHasExactColumns(
+function tableHasCanonicalColumns(
   db: DatabaseSync,
   tableName: string,
   expected: readonly string[],
-): boolean {
-  const names = tableColumnInfo(db, tableName).map((column) => column.name);
-  return names.length === expected.length && names.every((name, index) => name === expected[index]);
-}
-
-function tableHasRequiredColumns(
-  db: DatabaseSync,
-  tableName: string,
+  primaryKey: string,
   required: readonly string[],
 ): boolean {
-  const columns = new Map(tableColumnInfo(db, tableName).map((column) => [column.name, column]));
-  return required.every((name) => Number(columns.get(name)?.notnull ?? 0) === 1);
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const keys = columns.filter((column) => Number(column.pk ?? 0) > 0);
+  return (
+    columns.length === expected.length &&
+    columns.every((column, index) => column.name === expected[index]) &&
+    keys.length === 1 &&
+    keys[0]?.name === primaryKey &&
+    required.every((name) =>
+      columns.some((column) => column.name === name && Number(column.notnull ?? 0) === 1),
+    )
+  );
 }
 
 function tableSql(db: DatabaseSync, tableName: string): string | undefined {
@@ -85,16 +84,22 @@ function tableSql(db: DatabaseSync, tableName: string): string | undefined {
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
-function tableHasUniqueColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+function tableHasUniqueColumns(
+  db: DatabaseSync,
+  tableName: string,
+  columnNames: readonly string[],
+): boolean {
   const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all();
-  return indexes.some((index) => {
-    if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
-      return false;
-    }
-    const escaped = index.name.replaceAll("'", "''");
-    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all();
-    return columns.length === 1 && columns[0]?.name === columnName;
-  });
+  return columnNames.every((columnName) =>
+    indexes.some((index) => {
+      if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
+        return false;
+      }
+      const escaped = index.name.replaceAll("'", "''");
+      const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all();
+      return columns.length === 1 && columns[0]?.name === columnName;
+    }),
+  );
 }
 
 function hasCanonicalAuditEventTable(
@@ -104,13 +109,10 @@ function hasCanonicalAuditEventTable(
 ): boolean {
   const sql = tableSql(db, "audit_events")?.toLowerCase();
   return (
-    tableHasExactColumns(db, "audit_events", expectedColumns) &&
-    tablePrimaryKeyColumns(db, "audit_events").join(",") === "sequence" &&
-    tableHasRequiredColumns(db, "audit_events", requiredColumns) &&
+    tableHasCanonicalColumns(db, "audit_events", expectedColumns, "sequence", requiredColumns) &&
     typeof sql === "string" &&
     /\bsequence\s+integer\s+primary\s+key\s+autoincrement\b/.test(sql) &&
-    tableHasUniqueColumn(db, "audit_events", "event_id") &&
-    tableHasUniqueColumn(db, "audit_events", "source_id")
+    tableHasUniqueColumns(db, "audit_events", ["event_id", "source_id"])
   );
 }
 
@@ -120,9 +122,13 @@ function hasCanonicalAuditIdentityKeyTable(db: DatabaseSync): boolean {
   }
   const sql = tableSql(db, "audit_identity_keys")?.toLowerCase();
   return (
-    tableHasExactColumns(db, "audit_identity_keys", ["id", "key_id", "key", "created_at"]) &&
-    tablePrimaryKeyColumns(db, "audit_identity_keys").join(",") === "id" &&
-    tableHasRequiredColumns(db, "audit_identity_keys", ["id", "key_id", "key", "created_at"]) &&
+    tableHasCanonicalColumns(
+      db,
+      "audit_identity_keys",
+      ["id", "key_id", "key", "created_at"],
+      "id",
+      ["id", "key_id", "key", "created_at"],
+    ) &&
     typeof sql === "string" &&
     /\bcheck\s*\(\s*id\s*=\s*1\s*\)/.test(sql)
   );
@@ -144,6 +150,25 @@ export function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
       readSqliteUserVersion(db) < AUDIT_EVENT_STATE_SCHEMA_VERSION &&
       !tableExists(db, "audit_identity_keys")
     );
+  }
+  // Schema generation imports migration owners before its new catalog exists.
+  auditSchemaCatalog ??= {
+    tables: expectDefined(
+      readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL),
+      "canonical shared-state catalog",
+    )
+      .tables.filter((table) => CANONICAL_AUDIT_TABLES.some(({ name }) => name === table.name))
+      .map((table) =>
+        Object.assign({}, table, { indexes: table.indexes.filter((index) => index.unique === 1) }),
+      ),
+    views: [],
+  };
+  if (
+    collectSqliteSchemaIssues(db, auditSchemaCatalog, {
+      allowCompatibleAdditiveColumns: true,
+    }).length === 0
+  ) {
+    return true;
   }
   return (
     hasCanonicalAuditEventTable(db, AUDIT_EVENT_V2_COLUMNS, [

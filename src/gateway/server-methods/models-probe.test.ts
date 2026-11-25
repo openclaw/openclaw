@@ -114,9 +114,10 @@ it("normalizes providers, trims profiles, and clamps the timeout", async () => {
       provider: "openai",
       profileIds: ["work"],
       timeoutMs: 5_000,
-      maxTokens: 8,
     }),
   });
+  // Test access sends no output cap, so reasoning models can answer.
+  expect(mocks.runAuthProbes.mock.calls[0]?.[0].options).not.toHaveProperty("maxTokens");
 });
 
 it("probes the default agent without a configured model when agentId is empty", async () => {

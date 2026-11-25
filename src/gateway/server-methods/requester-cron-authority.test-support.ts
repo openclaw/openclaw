@@ -29,9 +29,12 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { pruneStaleControlPlaneBuckets } from "../control-plane-rate-limit.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
+import { decideTurnGrant } from "../operator-admission.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import type { GatewayUiCommandTarget } from "../ui-command-target.types.js";
@@ -46,21 +49,28 @@ export let stateDir: string;
 export let cron: CronService;
 
 export function installRequesterCronAuthorityTestHooks(
-  createdActor: SessionCreatedActor = CREATOR,
+  createdActor: SessionCreatedActor | (() => SessionCreatedActor) = CREATOR,
 ) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     stateDir = tempDirs.make("openclaw-requester-cron-authority-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     runtimeConfig.setRuntimeConfigSnapshot(cfg);
     replaceSessionEntrySync(
       { sessionKey: SESSION },
-      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor },
+      {
+        sessionId: SESSION_ID,
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        createdActor: typeof createdActor === "function" ? createdActor() : createdActor,
+      },
     );
   });
 
   afterEach(async () => {
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
     cron?.stop();
     await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
@@ -71,18 +81,14 @@ export function installRequesterCronAuthorityTestHooks(
   });
 }
 
-export function admission(
-  runId: string,
-  client: GatewayClient,
-  childSessionKey?: string,
-  isCurrent?: () => boolean,
-) {
+export function admission(runId: string, client: GatewayClient, childSessionKey?: string) {
   return cronAdmission.resolveGatewayCronCreatorAuthorityAdmission({
     runId,
     resolvedSessionKey: SESSION,
     sessionId: SESSION_ID,
     client,
-    isCurrent,
+    // The grant admission gives this client's connect scopes.
+    grant: decideTurnGrant(client.connect.scopes ?? []),
     request: { message: "Update the maintenance automation", idempotencyKey: runId },
     inputProvenance: childSessionKey
       ? {
@@ -91,7 +97,6 @@ export function admission(
           sourceSessionKey: childSessionKey,
         }
       : undefined,
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
   });
 }
@@ -99,7 +104,7 @@ export function admission(
 export type RequesterRun<T> = (
   identity: AgentRuntimeIdentity,
   admittedRun: runContext.AdmittedRunContext,
-  creator?: cronAuthority.CronCreatorAuthorityCapability,
+  creator?: CronCreatorAuthorityCapability,
 ) => Promise<T>;
 
 export async function inRun<T>(
@@ -132,7 +137,7 @@ export async function inRun<T>(
       ...caller,
       delegatedAuthority: { kind: "local", ...authority },
     };
-    const execute = (creator?: cronAuthority.CronCreatorAuthorityCapability) =>
+    const execute = (creator?: CronCreatorAuthorityCapability) =>
       gatewayCaller.withGatewayToolCallerIdentity({ ...caller, approvalAuthority: authority }, () =>
         run(identity, admittedRun, creator),
       );
@@ -198,7 +203,7 @@ export async function createCreatorTransportTools(params: {
   requesterOrigin?: RequesterOrigin;
   config: OpenClawConfig;
   admitted: runContext.AdmittedRunContext;
-  creator?: cronAuthority.CronCreatorAuthorityCapability;
+  creator?: CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;

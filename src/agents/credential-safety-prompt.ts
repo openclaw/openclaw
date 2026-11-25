@@ -11,13 +11,13 @@ export function buildCredentialSafetyPrompt(
   const knownAvailability =
     typeof input !== "string" && typeof input?.controlToolsAvailable === "boolean";
   return [
-    "Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.",
+    "- Permission blocks: state what was blocked and why; give the smallest verified remediation (exact UI path/config key and who can apply it), preferring scoped access over disabling safeguards. Never invent settings or bypass restrictions.",
     knownAvailability &&
-      "Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.",
-    "For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.",
+      "- User-supplied credentials: use/store as requested, complete the task, and factually acknowledge how they were used/stored without repeating values.",
+    "- Group login/pairing: send short-lived codes and verification URLs only privately to the requester, then acknowledge in the group without them.",
     knownAvailability &&
       input.controlToolsAvailable === false &&
-      "Channel, provider, and credential setup: terminal `openclaw channels add <channel>` or `openclaw configure` masks secrets.",
+      "- Channel/provider/credential setup: terminal `openclaw channels add <channel>` or `openclaw configure` masks secrets.",
   ]
     .filter(Boolean)
     .join("\n");

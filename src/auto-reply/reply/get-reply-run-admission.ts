@@ -96,11 +96,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [
-      opts?.operatorAuthority?.assertCurrent,
-      opts?.internalEventExecution?.assertCurrent,
-      opts?.scheduledAutomation?.assertCurrent,
-    ],
+    [opts?.internalEventExecution?.assertCurrent, opts?.scheduledAutomation?.assertCurrent],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();
@@ -199,6 +195,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  // A yielded tool's result continues the session's own work, so it drains passive notices
+  // like an ordinary turn. Other producer-owned turns (automations, hooks, explicit wakes)
+  // consume only their captured occurrence and leave unrelated notices queued.
+  const producerOwnedSelection =
+    opts?.internalEventExecution !== undefined &&
+    !(
+      ctx.InputProvenance?.kind === "internal_system" &&
+      ctx.InputProvenance.sourceTool === "tool_handoff"
+    );
   const drainedSystemEventBlocks: string[] = [];
   const drainSystemEventBlocks = async () => {
     if (useFastReplyRuntime) {
@@ -222,8 +227,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        // Producer-owned turns consume only their captured occurrence selection.
-        events: opts?.internalEventExecution ? (eventContext?.events ?? []) : undefined,
+        // Ordinary drains still skip turn-owned and delivery-held entries.
+        events: producerOwnedSelection ? (eventContext?.events ?? []) : eventContext?.events,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -308,11 +313,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const explicitThink =
       (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
       explicitThinkingLevelOverride !== undefined;
-    if (explicitThink) {
+    if (explicitThink && !opts?.normalizeThinkingLevelOverride) {
       return finishReplyPreparation(typing, () => ({
         text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       }));
     }
+  }
+
+  if (opts?.normalizeThinkingLevelOverride && explicitThinkingLevelOverride !== undefined) {
+    resolvedThinkLevel = thinkingSelection.level;
   }
 
   const providedReplyOperation = opts?.replyOperation;

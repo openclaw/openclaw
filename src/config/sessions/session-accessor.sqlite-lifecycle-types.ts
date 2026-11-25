@@ -4,6 +4,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -35,7 +36,9 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionMcpStoreSource } from "./session-mcp-store-admission.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -133,6 +136,7 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 type SessionLifecycleCreation = {
+  receipt?: { operation: SessionCreationOperation; sessionKey: string; entry: SessionEntry };
   preparedTranscript?: {
     sessionKey: string;
     sessionId: string;
@@ -165,8 +169,8 @@ export type SessionEntryLifecycleMutationParams = {
   beforeCommitInTransaction?: () => void;
   /** Retain source authority around the final writer, after projection and native preparation. */
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
-  /** Non-throwing notification after outer COMMIT, before lifecycle publication and owner cleanup. */
-  onLifecycleCommitted?: () => void;
+  /** Non-throwing after outer COMMIT, before publication/cleanup; only memory omits its file source. */
+  onLifecycleCommitted?: (source?: AgentDatabaseExecutionFileIdentity) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 };
 
@@ -176,6 +180,7 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 };
 
 export type SqliteSessionReclamationCallbacks = {
+  preparedReferenceOwners?: (sessionKey: string) => Map<string, string> | undefined;
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
   afterCommit?: () => void;
@@ -243,6 +248,12 @@ export type SessionMaintenanceMetadataResult =
       ageFact?: SessionEntryMaintenanceAgeFact;
     };
 
+/** An exact committed storage generation whose final current entry was removed. */
+export type SessionMaintenanceMcpRelease = {
+  sessionIds: string[];
+  source: SessionMcpStoreSource;
+};
+
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       kind: "lifecycle-projection-plan";
@@ -269,6 +280,7 @@ export type SqliteSessionReclamationPlan =
       agentId: string;
       entries: SessionEntryRemovalPlan[];
       kind: "maintenance-finalize";
+      retainedMcpSessionIds?: readonly string[];
     })
   | (SessionReclamationPlanBase & {
       deleteParams: ReclamationDeleteParams;
@@ -316,6 +328,7 @@ type SqliteSessionReclamationValue =
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
         /** Positions in the captured plan; never echo its saved entry snapshots. */
         committedEntryIndices: number[];
+        mcpRelease?: SessionMaintenanceMcpRelease;
       };
     }
   | {

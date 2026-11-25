@@ -3,8 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { isCompactionSummaryRequest } from "../../../test/helpers/compaction-summary-request.js";
 import { writeOpenAiResponsesItem } from "../../../test/helpers/openai-responses-item.test-support.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { setSessionMcpRuntimeScheduler } from "../../agents/agent-bundle-mcp-manager-api.js";
@@ -21,6 +23,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -40,6 +43,11 @@ it.each([false, true])(
       let toolRounds = 0;
       let overWindow = 0;
       let summariesBeforeAnswer = 0;
+      let largestPrompt = 0;
+      let publishedBeforeSummary = 0;
+      let rateLimitedAfterSummary = false;
+      const requests: Array<{ body: string; input: unknown[]; tokens: number }> = [];
+      const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
       await writeFile(reportPath, "Project evidence row.\n".repeat(1_800));
       const server = createServer((request, response) => {
@@ -49,8 +57,38 @@ it.each([false, true])(
           body += chunk;
         });
         request.on("end", () => {
-          // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
-          if (body.includes("context summarization assistant")) {
+          const wire = JSON.parse(body) as {
+            input: unknown[];
+            instructions?: string;
+            tools?: unknown[];
+            max_output_tokens?: number;
+          };
+          const tokens = Math.ceil(
+            JSON.stringify({
+              input: wire.input,
+              instructions: wire.instructions,
+              tools: wire.tools,
+            }).length / 4,
+          );
+          if (summaryRequests === 0) {
+            publishedBeforeSummary = Math.max(
+              publishedBeforeSummary,
+              loadSessionEntry(scope)?.totalTokens ?? 0,
+            );
+          }
+          largestPrompt = Math.max(largestPrompt, tokens);
+          if (midTurn && tokens + (wire.max_output_tokens ?? 4_096) > contextWindow) {
+            overWindow += 1;
+            response.writeHead(400, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                error: { message: "Your input exceeds the context window of this model." },
+              }),
+            );
+            return;
+          }
+          requests.push({ body, input: wire.input, tokens });
+          if (isCompactionSummaryRequest(body)) {
             summaryRequests += 1;
             if (midTurn) {
               writeOpenAiResponsesText(response, {
@@ -64,25 +102,17 @@ it.each([false, true])(
             response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
             return;
           }
-          const wire = JSON.parse(body) as {
-            input: unknown[];
-            tools?: unknown[];
-            max_output_tokens?: number;
-          };
-          const tokens = Math.ceil(
-            JSON.stringify({ input: wire.input, tools: wire.tools }).length / 4,
-          );
-          if (midTurn && tokens + (wire.max_output_tokens ?? 4_096) > 32_768) {
-            overWindow += 1;
-            response.writeHead(400, { "content-type": "application/json" });
+          if (midTurn && summaryRequests > 0 && !rateLimitedAfterSummary) {
+            rateLimitedAfterSummary = true;
+            response.writeHead(429, { "content-type": "application/json", "retry-after-ms": "10" });
             response.end(
               JSON.stringify({
-                error: { message: "Your input exceeds the context window of this model." },
+                error: { message: "Rate limit reached", code: "rate_limit_exceeded" },
               }),
             );
             return;
           }
-          const toolCall = midTurn && summaryRequests === 0 && toolRounds < 16;
+          const toolCall = midTurn && summaryRequests === 0 && toolRounds < 64;
           if (toolCall) {
             toolRounds += 1;
           } else {
@@ -151,8 +181,8 @@ it.each([false, true])(
                   name: "Synthetic model",
                   reasoning: false,
                   input: ["text"],
-                  contextWindow: 32_768,
-                  contextTokens: 32_768,
+                  contextWindow,
+                  contextTokens: contextWindow,
                   maxTokens: 4_096,
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
@@ -169,18 +199,18 @@ it.each([false, true])(
         await replaceSessionEntry(scope, {
           sessionId,
           updatedAt: Date.now(),
-          totalTokens: midTurn ? 0 : 30_000,
+          totalTokens: midTurn ? 560_000 : 30_000,
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
-        const seed = SessionManager.open(scope, state.workspaceDir);
-        for (let turn = 0; turn < (midTurn ? 0 : 12); turn += 1) {
-          seed.appendMessage({
+        const seed = await SessionManager.openAsync(scope, state.workspaceDir);
+        for (let turn = 0; turn < (midTurn ? 56 : 12); turn += 1) {
+          await seed.appendMessageAsync({
             role: "user",
-            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            content: `Earlier question ${turn}. ${"Background detail. ".repeat(midTurn ? 2_200 : 250)}`,
             timestamp: turn + 1,
           });
-          seed.appendMessage(
+          await seed.appendMessageAsync(
             makeAssistantMessageFixture({
               provider: "test-provider",
               api: midTurn ? "openai-responses" : "openai-completions",
@@ -188,7 +218,7 @@ it.each([false, true])(
               content: [{ type: "text", text: `Earlier answer ${turn}.` }],
               stopReason: "stop",
               errorMessage: undefined,
-              usage: createUsageFixture(30_000, 5, 30_005),
+              usage: createUsageFixture(midTurn ? 560_000 : 30_000, 5, midTurn ? 560_005 : 30_005),
             }),
           );
         }
@@ -209,6 +239,11 @@ it.each([false, true])(
             senderIsOwner: true,
           });
           followupRun.prompt = prompt;
+          // Channel ingress keys each user turn, so a retry can resend it in place.
+          followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+            target: { ...scope, sessionEntry: undefined },
+            input: { text: prompt, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
+          });
           const entry = loadSessionEntry(scope)!;
           return await runReplyAgent(
             createReplyParams(followupRun, {
@@ -227,7 +262,40 @@ it.each([false, true])(
           );
         };
 
-        expect(await turn("First question after the long history.", "turn-1")).toMatchObject({
+        const turnOneResult = await turn("First question after the long history.", "turn-1");
+        if (midTurn) {
+          // #204111: the warm summary request is the previous request plus one instruction.
+          const summaryIndex = requests.findIndex((request) =>
+            isCompactionSummaryRequest(request.body),
+          );
+          const [previous, summary] = [requests[summaryIndex - 1]!, requests[summaryIndex]!];
+          const previousItems = JSON.stringify(previous.input).slice(0, -1);
+          expect(JSON.stringify(summary.input).startsWith(previousItems)).toBe(true);
+          const added = summary.input.slice(previous.input.length) as Array<
+            Record<string, unknown>
+          >;
+          expect(added.map((item) => item.type ?? item.role)).toEqual([
+            "function_call",
+            "function_call_output",
+            "message",
+          ]);
+          expect(added.at(-1)).toMatchObject({ role: "user" });
+          // The retry after compaction resends the keyed turn once, with no hidden prompt.
+          // The first one is rate limited; the second retry after the same compaction
+          // sends the identical request.
+          const [limited, retry] = [requests[summaryIndex + 1]!, requests[summaryIndex + 2]!];
+          expect(JSON.stringify(retry.input)).toBe(JSON.stringify(limited.input));
+          const userTurns = (retry.input as Array<Record<string, unknown>>).filter((item) =>
+            JSON.stringify(item.content ?? "").includes(
+              '] First question after the long history."',
+            ),
+          );
+          expect(userTurns).toHaveLength(1);
+          expect(retry.body).not.toContain(
+            "Continue the current task from the existing transcript",
+          );
+        }
+        expect(turnOneResult).toMatchObject({
           text: "ANSWER-1",
         });
         expect(overWindow, "the provider received an over-window request").toBe(0);
@@ -235,6 +303,7 @@ it.each([false, true])(
         if (midTurn) {
           expect(toolRounds).toBeGreaterThan(1);
           expect(summariesBeforeAnswer).toBeGreaterThan(0);
+          expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         }
         const compactions = (await loadTranscriptEvents(scope))
           .map(asOptionalRecord)
@@ -244,9 +313,48 @@ it.each([false, true])(
           midTurn ? "Earlier report evidence summarized" : "removed without a summary",
         );
         const summariesAfterFirstTurn = summaryRequests;
+        const turnTwoStart = requests.length;
         expect(await turn("Second question.", "turn-2")).toMatchObject({ text: "ANSWER-2" });
+        if (midTurn) {
+          // The next turn extends the retry request: the question stays in its history.
+          const retry = requests[turnTwoStart - 1]!;
+          const next = requests[turnTwoStart]!;
+          expect(
+            JSON.stringify(next.input).startsWith(JSON.stringify(retry.input).slice(0, -1)),
+          ).toBe(true);
+          expect(
+            (next.input as Array<Record<string, unknown>>).filter((item) =>
+              JSON.stringify(item.content ?? "").includes(
+                '] First question after the long history."',
+              ),
+            ),
+          ).toHaveLength(1);
+        }
         expect(summaryRequests).toBe(summariesAfterFirstTurn);
         expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
+        if (midTurn) {
+          // The warm summary request is the request that crossed the shared trigger plus one
+          // instruction: it exceeds the trigger by at most one tool round and that instruction.
+          const trigger = resolveCompactionThreshold({
+            contextWindowTokens: contextWindow,
+            reserveTokensFloor: 0,
+          });
+          const summaryAt = requests.findIndex((request) =>
+            isCompactionSummaryRequest(request.body),
+          );
+          const beforeSummary = requests.slice(0, summaryAt);
+          const toolRound = Math.max(
+            ...beforeSummary
+              .slice(1)
+              .map((request, index) => request.tokens - beforeSummary[index]!.tokens),
+          );
+          const instruction = Math.ceil(
+            JSON.stringify(requests[summaryAt]!.input.at(-1)).length / 4,
+          );
+          expect(largestPrompt).toBeLessThan(
+            Math.min(contextWindow, trigger + toolRound + instruction),
+          );
+        }
       } finally {
         await waitForSessionMaintenance(sessionKey);
         const mcpManager = getSessionMcpRuntimeTestManager();

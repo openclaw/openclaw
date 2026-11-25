@@ -21,59 +21,55 @@ it.each(['label:"Team  Planning"', '"label:Team  Planning"'])(
   },
 );
 
-it("limits suggestions before matching while preserving raw option spelling", () => {
-  const values = [
-    "OpenAI",
-    "OpenAI",
-    "openai",
-    " ",
-    "",
-    undefined,
-    "four",
-    "five",
-    "six",
-    "seventh",
-  ];
-  const sessions = values.map((value, index) => ({
-    key: `session-${index}`,
-    agentId: value,
-    channel: value,
-    modelProvider: value,
-    model: value,
-    usage: null,
-  }));
-  const options = buildUsageFilterOptions(sessions);
+it("matches the full catalog before capping suggestions and preserves raw spelling", () => {
+  const values = ["first", "second", "third", "fourth", "fifth", "sixth", "OpenAI", "openai"];
+  const options = { agent: values, channel: values, provider: values, model: values, tool: values };
   const suggest = (query: string) =>
     buildQuerySuggestions(query, extractQueryTerms(query), options);
-  expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
-  for (const key of ["agent", "channel", "provider", "model"]) {
+  for (const key of ["agent", "channel", "provider", "model", "tool"]) {
     for (const query of [`${key}:OPEN`, `"${key}:OPEN"`, `${key}:"OPEN"`]) {
       expect(suggest(query).map((entry) => entry.value)).toEqual([
         `${key}:OpenAI`,
         `${key}:openai`,
       ]);
     }
-    expect(suggest(`${key}:seventh`)).toEqual([]);
+    expect(suggest(`${key}:`).map((entry) => entry.value)).toEqual(
+      ["first", "second", "third", "fourth", "fifth", "sixth"].map((value) => `${key}:${value}`),
+    );
+    expect(suggest(`${key}:missing`)).toEqual([]);
   }
   expect(suggest("constructor:")).toEqual([]);
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
 });
 
-it("quotes newly selected multiword values so they parse as one term", () => {
-  const query = setQueryTokensForKey("provider:local ", "model", ["Local Model"]);
-  expect(query).toBe('provider:local model:"Local Model" ');
+it("suggests values whose Greek sigma form differs from the query", () => {
+  const options = buildUsageFilterOptions([
+    { key: "session-greek", agentId: "ΕΛΕΓΧΟΣ", usage: null },
+  ]);
+  for (const query of ["agent:Σ", "agent:σ", "agent:ς"]) {
+    expect(
+      buildQuerySuggestions(query, extractQueryTerms(query), options).map((entry) => entry.value),
+    ).toEqual(["agent:ΕΛΕΓΧΟΣ"]);
+  }
+});
+
+it.each([
+  ["Local Model", 'model:"Local Model"'],
+  ['Atlas "Mini Pro"', 'model:"Atlas ""Mini Pro"""'],
+  ['A"B', 'model:"A""B"'],
+])("keeps the selected model %s as one query term", (model, token) => {
+  const query = setQueryTokensForKey("provider:local ", "model", [model]);
+  expect(query).toBe(`provider:local ${token} `);
   expect(extractQueryTerms(query).map(({ key, value }) => ({ key, value }))).toEqual([
     { key: "provider", value: "local" },
-    { key: "model", value: "Local Model" },
+    { key: "model", value: model },
   ]);
   // Reselecting keeps the existing quoted term instead of appending a duplicate.
-  expect(setQueryTokensForKey(query, "model", ["Local Model"])).toBe(query);
+  expect(setQueryTokensForKey(query, "model", [model])).toBe(query);
 
-  const options = buildUsageFilterOptions([
-    { key: "session-1", model: "Local Model", usage: null },
-  ]);
-  expect(buildQuerySuggestions("model:Loc", extractQueryTerms("model:Loc"), options)).toEqual([
-    { label: "model:Local Model", value: 'model:"Local Model"' },
+  const options = buildUsageFilterOptions([{ key: "session-1", model, usage: null }]);
+  expect(buildQuerySuggestions("model:", extractQueryTerms("model:"), options)).toEqual([
+    { label: `model:${model}`, value: token },
   ]);
 });
 
@@ -95,6 +91,7 @@ it("keeps daily headers aligned with numeric cells", () => {
       cacheWriteCost: 4,
       totalCost: -2,
       missingCostEntries: 2,
+      cacheUnmeasuredInput: 0,
     },
   ]);
   expect(csv).toBe(

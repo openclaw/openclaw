@@ -137,6 +137,7 @@ type CodexThreadConfigurationParams = JsonObject & {
   sandbox?: CodexSandboxMode | null;
   cyberAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   serviceTier?: CodexServiceTier | null;
+  baseInstructions?: string;
   developerInstructions?: string;
 };
 
@@ -183,7 +184,6 @@ export type CodexThreadForkParams = CodexThreadConfigurationParams & {
   cwd?: string | null;
   permissions?: string | null;
   config?: JsonObject | null;
-  baseInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -465,6 +465,7 @@ export type CodexGetAccountResponse = {
     | { type: "apiKey" }
     | { type: "chatgpt"; email: string | null; planType: string }
     | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean }
+    | { type: "gcp" }
     | null;
   requiresOpenaiAuth: boolean;
 };

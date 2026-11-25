@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
@@ -11,6 +11,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import * as storeLookup from "../session-utils-store-lookup.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import type { AgentTurnContext } from "./types.js";
 
@@ -221,3 +222,60 @@ it.each<[string, string, boolean, { persistedModel?: string; modelOverride?: str
     }
   },
 );
+
+it.each([
+  { name: "against the model the session inherits from its parent", parentReadable: true },
+  {
+    name: "for a request naming provider and model without reading the parent",
+    parentReadable: false,
+  },
+])("admits image input $name", async ({ parentReadable }) => {
+  // The agent default cannot read images; the parent's pick can.
+  const fixture = await contentFixture("main", "text-only");
+  const parentKey = "agent:main:dashboard:inherit-parent";
+  const requestedSessionKey = "agent:main:dashboard:inherit-child";
+  const env = fixture.testState.env;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: parentKey, env },
+    {
+      sessionId: "inherit-parent",
+      updatedAt: 1,
+      providerOverride: "mock-openai",
+      modelOverride: "main-vision",
+      modelOverrideSource: "user",
+    },
+  );
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: requestedSessionKey, env },
+    { sessionId: "inherit-child", updatedAt: 1, parentSessionKey: parentKey },
+  );
+
+  const explicit = parentReadable
+    ? {}
+    : { providerOverride: "mock-openai", modelOverride: "main-vision" };
+  if (!parentReadable) {
+    vi.spyOn(storeLookup, "resolveGatewaySessionStoreTargetWithStoreAsync").mockRejectedValue(
+      new Error("parent session database unavailable"),
+    );
+  }
+
+  const result = await prepareAgentContentPhase({
+    ...fixture,
+    request: {
+      message: "Inspect this synthetic pixel",
+      agentId: "main",
+      idempotencyKey: "image-inherited-model",
+    },
+    requestedSessionKey,
+    ...explicit,
+    knownAgents: ["main"],
+  });
+
+  expect(fixture.respond).not.toHaveBeenCalled();
+  expect(result).toMatchObject({
+    images: [expect.objectContaining({ mimeType: "image/png", data: SYNTHETIC_PIXEL })],
+    imageOrder: ["inline"],
+    offloadedRefs: [],
+  });
+  expect(result).not.toMatchObject({ needsImageUnderstanding: true });
+});

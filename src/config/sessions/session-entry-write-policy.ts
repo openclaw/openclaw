@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { getChildLogger } from "../../logging/logger.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -20,7 +21,10 @@ export function applySessionEntryWritePolicy(
     preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
-  let normalizedEntry = initialEntry;
+  let normalizedEntry = preserveSessionDelegatedOperatorSource(
+    initialEntry,
+    canonicalPreviousEntry,
+  );
   if (
     canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
     canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
@@ -28,15 +32,28 @@ export function applySessionEntryWritePolicy(
     normalizedEntry.incognito
   ) {
     delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.lifecycleRestartScope;
     delete normalizedEntry.mainRestartRecovery;
-  } else if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
-    // Public projections omit the shutdown marker; same-incarnation bookkeeping retains it.
-    normalizedEntry = {
-      ...normalizedEntry,
-      ...(canonicalPreviousEntry.resumeAfterRestart
-        ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
-        : {}),
-    };
+  } else {
+    // Public projections omit the shutdown marker and the run's restart resume scope;
+    // same-incarnation bookkeeping retains them.
+    if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        ...(canonicalPreviousEntry.resumeAfterRestart
+          ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
+          : {}),
+      };
+    }
+    if (
+      !Object.hasOwn(normalizedEntry, "lifecycleRestartScope") &&
+      canonicalPreviousEntry.lifecycleRestartScope
+    ) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        lifecycleRestartScope: canonicalPreviousEntry.lifecycleRestartScope,
+      };
+    }
   }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
@@ -102,6 +119,17 @@ export function applySessionEntryWritePolicy(
   } else if (normalizedEntry.profileInvolvement) {
     const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
     normalizedEntry = forkEntry;
+  }
+  // Authenticated sources belong to this logical node's people, not its transcript generation.
+  // Writers that omit the private field keep the committed sources; a fork starts without them.
+  const operatorSources = Object.hasOwn(normalizedEntry, "operatorSources")
+    ? normalizedEntry.operatorSources
+    : canonicalPreviousEntry?.operatorSources;
+  if (operatorSources && (canonicalPreviousEntry || options.allowStoredAliases)) {
+    normalizedEntry = { ...normalizedEntry, operatorSources };
+  } else if (Object.hasOwn(normalizedEntry, "operatorSources")) {
+    const { operatorSources: _forkSources, ...entryWithoutSources } = normalizedEntry;
+    normalizedEntry = entryWithoutSources;
   }
   const previousEntry =
     options.previousEntry === undefined

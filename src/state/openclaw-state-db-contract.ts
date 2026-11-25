@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+
+export const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
@@ -93,6 +96,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
+  "device_pairing_browser_requests",
   "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
@@ -175,6 +179,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "local workspace baselines → shared immutable trees and compact scan fingerprints",
   "template-names-v36": "starter installs and provenance → canonical Template storage names",
   "worker-resource-receipts-v37": "immutable provider resource identity retained through teardown",
+  "repository-disk-authority-v38": "repository authority and pending-result disk identity retained",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",
@@ -184,3 +189,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
   kind: keyof typeof STATE_SCHEMA_MIGRATION_DESCRIPTIONS;
   path: string;
 };
+
+export type StateWriteTransactionOptions = Pick<
+  SqliteTransactionOptions,
+  "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+> & { singleStatement?: true };

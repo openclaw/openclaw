@@ -4,7 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { z } from "zod";
 import {
   isArchivePathWithin,
@@ -242,7 +242,7 @@ function parseBackupManifestPostgresAnchors(value: unknown): BackupManifestPostg
       typeof anchor.storeId !== "string" ||
       !anchor.storeId.trim() ||
       typeof anchor.namespace !== "string" ||
-      !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(anchor.namespace)
+      !/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(anchor.namespace)
     ) {
       throw new Error("Backup manifest contains an invalid PostgreSQL anchor.");
     }
@@ -295,6 +295,7 @@ export type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    excludeWorktreeTemplates?: boolean;
     onlyConfig?: boolean;
   };
   paths?: {
@@ -594,11 +595,9 @@ export function isRootBackupManifestEntry(entryPath: string): boolean {
 
 export function verifyBackupManifestEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
-  const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
-
-  if (!entries.has(manifestEntryPath)) {
-    throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
+  if (!entries.has(`${archiveRoot}/manifest.json`)) {
+    throw new Error(`Archive is missing manifest entry: ${archiveRoot}/manifest.json`);
   }
 
   for (const entry of normalizedEntries) {

@@ -3,7 +3,8 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
@@ -102,6 +103,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(model, { messages, tools: [] }, {
     apiKey: "test-key",
     sessionId,
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
     transport: "sse",
     reasoningEffort: "low",
     onPayload: (payload: Record<string, unknown>) => ({ ...payload, store: true }),
@@ -200,6 +202,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
       const options = {
         apiKey: "test-key",
         sessionId: "real-sse-store-policy",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("real-sse-store-policy"),
         transport: "sse",
         reasoningEffort: "low",
       } satisfies OpenAIResponsesOptions;

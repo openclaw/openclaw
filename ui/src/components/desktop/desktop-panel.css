@@ -104,10 +104,6 @@ openclaw-desktop-panel {
   .desktop-touch-toolbar .desktop-audio-label {
     display: none;
   }
-  .desktop-fullscreen-icon > svg {
-    width: 15px;
-    height: 15px;
-  }
   .bp:fullscreen {
     inset: 0;
     width: 100%;
@@ -136,19 +132,13 @@ openclaw-desktop-panel {
     flex: 1;
   }
   .desktop-sizing {
+    --settings-control-height: 32px;
+
     width: 88px;
-    height: 32px;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 6px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
   }
   .desktop-touch-toolbar .desktop-sizing {
-    height: 44px;
+    --settings-control-height: 44px;
   }
   .desktop-sizing-menu__trigger {
     height: 28px;
@@ -328,13 +318,13 @@ openclaw-desktop-panel {
   .desktop-rail__menu--desktop {
     width: 330px;
     padding: 8px;
-    border-radius: 22px;
+    border-radius: var(--menu-radius-large);
   }
   .desktop-rail__menu--desktop .oc-menu-item,
   .desktop-rail__menu--desktop .desktop-toolbar-action {
     min-height: 36px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--menu-item-radius);
     font-size: 13px;
     line-height: 18px;
     gap: 10px;
@@ -790,12 +780,26 @@ openclaw-desktop-panel {
     gap: 5px;
   }
   .desktop-environment__id {
-    overflow: hidden;
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
+  }
+  .desktop-environment__label,
+  .desktop-environment__qualifier {
+    display: block;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Machine IDs share long prefixes. Clip the start, not the identifying end. */
+  .desktop-environment__label[data-identifier="true"],
+  .desktop-environment__qualifier {
+    direction: rtl;
+    text-align: match-parent;
+  }
+  .desktop-environment__qualifier {
+    color: var(--muted);
+    font-size: 11px;
   }
   .desktop-environment__meta,
   .desktop-environment__sessions {

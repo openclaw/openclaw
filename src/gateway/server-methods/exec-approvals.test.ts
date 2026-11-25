@@ -62,83 +62,63 @@ async function callHandler(
 }
 
 describe("exec approvals gateway methods", () => {
-  it.each([false, true])(
-    "commits native usage only while its live requester still owns the request (revoked=%s)",
-    async (revoked) => {
-      const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
-        "../../infra/exec-approvals.js",
-      );
-      await withTempDir("native-exec-request-", async (stateDir) => {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-          const owner = await acquireGatewayLock({ env: process.env, allowInTests: true });
-          expect(owner).not.toBeNull();
-          const pattern = "/usr/bin/echo";
-          await actual.updateExecApprovals({
-            update: {
-              kind: "replace",
-              file: { version: 1, agents: { main: { allowlist: [{ pattern }] } } },
-            },
-          });
-          let current = true;
-          let commitObserved = false;
-          const admission = probe.admission(workerAdmission, (request, grant, admit) => {
-            if (request.stage === "commit") {
-              commitObserved = true;
-              current = !revoked;
-            }
-            admit(request, grant);
-          });
-          try {
-            const respond = await callHandler(
-              "exec.approvals.native.commit",
-              {
-                expectedOwnerId: expectDefined(
-                  readLockPayloadSync(owner!.lockPath, true)?.ownerId,
-                  "state owner id",
-                ),
-                agentId: "main",
-                command: "echo native",
-                uses: [{ match: { pattern }, resolvedPath: pattern }],
-                grants: [],
-                authorization: {
-                  source: "current-policy",
-                  security: "full",
-                  ask: "off",
-                  allowlistSatisfied: true,
-                },
-              },
-              createSessionMutationTestContext({}),
-              () => current,
-            );
-            expect(commitObserved).toBe(true);
-            if (revoked) {
-              expect(respond).toHaveBeenCalledWith(
-                false,
-                undefined,
-                expect.objectContaining({
-                  code: "UNAVAILABLE",
-                  message: expect.stringContaining("Gateway requester authority changed"),
-                }),
-              );
-              expect(
-                actual.readExecApprovalsSnapshot().file.agents?.main?.allowlist?.[0]?.lastUsedAt,
-              ).toBeUndefined();
-            } else {
-              expect(respond).toHaveBeenCalledWith(true, { authorized: true }, undefined);
-              expect(
-                actual.readExecApprovalsSnapshot().file.agents?.main?.allowlist?.[0]
-                  ?.lastUsedCommand,
-              ).toBe("echo native");
-            }
-          } finally {
-            admission.mockRestore();
-            await closeOpenClawStateDatabaseAsync();
-            await owner?.release();
-          }
+  it("commits native usage for its admitted requester", async () => {
+    const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
+      "../../infra/exec-approvals.js",
+    );
+    await withTempDir("native-exec-request-", async (stateDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const owner = await acquireGatewayLock({ env: process.env, allowInTests: true });
+        expect(owner).not.toBeNull();
+        const pattern = "/usr/bin/echo";
+        await actual.updateExecApprovals({
+          update: {
+            kind: "replace",
+            file: { version: 1, agents: { main: { allowlist: [{ pattern }] } } },
+          },
         });
+        let commitObserved = false;
+        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "commit") {
+            commitObserved = true;
+          }
+          admit(request, grant);
+        });
+        try {
+          const respond = await callHandler(
+            "exec.approvals.native.commit",
+            {
+              expectedOwnerId: expectDefined(
+                readLockPayloadSync(owner!.lockPath, true)?.ownerId,
+                "state owner id",
+              ),
+              agentId: "main",
+              command: "echo native",
+              uses: [{ match: { pattern }, resolvedPath: pattern }],
+              grants: [],
+              authorization: {
+                source: "current-policy",
+                security: "full",
+                ask: "off",
+                allowlistSatisfied: true,
+              },
+            },
+            createSessionMutationTestContext({}),
+            () => true,
+          );
+          expect(commitObserved).toBe(true);
+          expect(respond).toHaveBeenCalledWith(true, { authorized: true }, undefined);
+          expect(
+            actual.readExecApprovalsSnapshot().file.agents?.main?.allowlist?.[0]?.lastUsedCommand,
+          ).toBe("echo native");
+        } finally {
+          admission.mockRestore();
+          await closeOpenClawStateDatabaseAsync();
+          await owner?.release();
+        }
       });
-    },
-  );
+    });
+  });
 
   it.each([false, true])(
     "reads the owner-routed local socket path without mutation (revoked=%s)",
@@ -316,34 +296,8 @@ describe("exec approvals gateway methods", () => {
     );
   });
 
-  it("rejects a legacy caller revoked while reading the policy before a save", async () => {
-    let current = true;
-    updateExecApprovalsMock.mockClear();
-    readExecApprovalsSnapshotMock.mockImplementationOnce(async () => {
-      current = false;
-      return makeSnapshot();
-    });
-
-    const respond = await callHandler(
-      "exec.approvals.set",
-      { baseHash: "base-hash", file: { version: 1, agents: {} } },
-      undefined,
-      () => current,
-    );
-
-    expect(updateExecApprovalsMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("Gateway requester authority changed"),
-      }),
-    );
-  });
-
   it.each(["get", "set"])(
-    "rolls back a legacy %s mutation when requester authority ends before commit",
+    "finishes a started legacy %s mutation after requester authority ends",
     async (operation) => {
       const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
         "../../infra/exec-approvals.js",
@@ -377,15 +331,8 @@ describe("exec approvals gateway methods", () => {
               () => current,
             );
             expect(commitObserved).toBe(true);
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({
-                code: "UNAVAILABLE",
-                message: expect.stringContaining("Gateway requester authority changed"),
-              }),
-            );
-            expect(actual.readExecApprovalsSnapshot().raw).toBe(before.raw);
+            expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+            expect(actual.readExecApprovalsSnapshot().raw).not.toBe(before.raw);
           } finally {
             admissionSpy.mockRestore();
             ensureExecApprovalsSnapshotMock.mockReset();

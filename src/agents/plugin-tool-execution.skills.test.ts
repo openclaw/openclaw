@@ -8,14 +8,18 @@ import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../skills/loading/workspace-skill-source-reader.js";
 import { syncWorkspaceSkills } from "../skills/loading/workspace-skill-sync.runtime.js";
-import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
+import {
+  closeSkillsWatchers,
+  prepareSandboxFsContext,
+  refreshSkillsDiscovery,
+} from "../skills/runtime/refresh.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
 } from "../skills/test-support/home-env.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
@@ -95,10 +99,9 @@ it.each(
       },
       loadSkills: async (request) => readWorkspaceSkillSources(request),
     });
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
     });
     const bind = async () => {
       const snapshot = await buildSkillSnapshot(workspace, options);
@@ -108,6 +111,7 @@ it.each(
         targetWorkspaceDir: sandboxDir,
         skillsSnapshot: snapshot,
       });
+      sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
       const prepared = resolveSandboxSkillRuntimeInputs({
         sandbox,
         skillsAnchorWorkspace: workspace,

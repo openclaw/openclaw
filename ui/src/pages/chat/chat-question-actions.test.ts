@@ -1,12 +1,62 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
-import { createQuestionPromptState } from "../../app/question-prompt.ts";
+import {
+  createQuestionHarness,
+  createQuestionResolver,
+} from "../../app/question-prompt.test-support.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import {
   createAsyncQuestionPresentation,
   subscribeAsyncQuestionState,
 } from "./components/chat-async-question.ts";
+
+const questions = createQuestionHarness();
+
+it("leaves composer replies with the Gateway instead of cancelling the question", async () => {
+  const { actions, request } = sendingQuestion(async () => true);
+  await expect(actions.onSend()).resolves.toBe(true);
+  expect(request).not.toHaveBeenCalled();
+});
+
+function sendingQuestion(onSend: ChatProps["onSend"]) {
+  const request = createQuestionResolver();
+  const { state: questionState } = questions.createConnectedState(request);
+  const state: Parameters<typeof createChatQuestionActions>[0]["state"] = {
+    sessionKey: "agent:main:main",
+    connectionEpoch: 1,
+    handleSendChat: vi.fn(),
+    lastError: null,
+    chatQueue: [],
+  };
+  let current = true;
+  const actions = createChatQuestionActions({
+    state,
+    questionState,
+    sendActions: { onSend },
+    canSend: true,
+    isCurrent: () => current,
+  });
+  return { state, request, actions, retire: () => (current = false) };
+}
+
+it.each(["session", "connection", "pane"] as const)(
+  "does not send from a retired %s composer",
+  async (changed) => {
+    const send = vi.fn(async () => true);
+    const fixture = sendingQuestion(send);
+    if (changed === "session") {
+      fixture.state.sessionKey = "agent:main:other";
+    } else if (changed === "connection") {
+      fixture.state.connectionEpoch += 1;
+    } else {
+      fixture.retire();
+    }
+    await fixture.actions.onSend();
+    expect(send).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["session", "connection", "pane", "outbox"] as const)(
   "does not resubmit a question after %s changes",
@@ -29,7 +79,8 @@ it.each(["session", "connection", "pane", "outbox"] as const)(
     let current = true;
     const actions = createChatQuestionActions({
       state,
-      questionState: createQuestionPromptState(() => {}),
+      questionState: questions.createState(),
+      sendActions: { onSend: vi.fn() },
       canSend: true,
       isCurrent: () => current,
     });

@@ -79,19 +79,27 @@ export type CreateModelAuthAvailabilityResolverParams = {
   syntheticAuthProviderRefs?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
+  /**
+   * Whether the loaded provider plugin owns OAuth refresh for this provider. Lets an expired
+   * plugin-owned OAuth profile with refresh material stay runnable, matching the runtime refresh path.
+   */
+  canRefreshProviderOAuth?: (provider: string) => boolean;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  /** Config/source route facts only; account and credential decisions remain local. */
+  resolveOpenAIProviderRoutes?: Parameters<typeof createOpenAIModelRoutesResolver>[1];
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
   /**
-   * Ids the credential's own ready account listing returned, including hidden rows; absent when
+   * Checks the credential's own ready account listing, including hidden rows; unknown when
    * that credential has no ready listing. Another account's listing says nothing about this one.
    */
-  accountListedModelIds?: (
+  accountListsModel?: (
     provider: string,
     profileId: string | undefined,
-  ) => ReadonlySet<string> | undefined;
+    normalizedModelId: string,
+  ) => boolean | undefined;
 };
 
 export type AuthTarget = ModelAuthAvailabilityRef & {

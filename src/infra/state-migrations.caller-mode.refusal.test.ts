@@ -215,7 +215,7 @@ describe("legacy state migration read-only refusals", () => {
         }
       }
       const before = snapshotFiles(fixture.root);
-      const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnly");
+      const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnlyAsync");
 
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
@@ -262,7 +262,7 @@ describe("legacy state migration read-only refusals", () => {
         },
       }),
     );
-    const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnly");
+    const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnlyAsync");
     const plan = await planFixture(fixture);
 
     expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");

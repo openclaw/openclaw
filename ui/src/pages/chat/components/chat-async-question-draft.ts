@@ -129,7 +129,12 @@ export function persistAsyncQuestionDrafts(
       }
       const questionDrafts = snapshot(session);
       const signature = JSON.stringify(questionDrafts);
-      if (signature === session.saved || signature === session.attempted) {
+      if (signature === session.saved) {
+        // Undo can return to the stored draft without writing. A later dismissal is a new attempt.
+        session.attempted = undefined;
+        return;
+      }
+      if (signature === session.attempted) {
         return;
       }
       // A failed snapshot stays visible but must not reschedule itself on every render.

@@ -2,10 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -13,12 +10,14 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import type { GatewayMethodOwner, GatewayMethodSessionAccess } from "./methods/descriptor.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { readPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
@@ -58,7 +57,7 @@ function denied(message = "Session access changed; reopen the session before con
   );
 }
 
-class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
+export class SessionAccessPreparationPendingError extends SessionMutationAuthorizationChangedError {
   constructor() {
     super(
       errorShape(
@@ -131,8 +130,13 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
-  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined);
+  const service = readPluginSessionWorkAuthority();
+  const serviceOwner =
+    service && client?.internal?.pluginRuntimeOwnerId === service.pluginId
+      ? service.target
+      : undefined;
+  const owner =
+    tool ?? runtime ?? (ambient?.operationalRunInstance ? ambient : undefined) ?? serviceOwner;
   const inherited = runtime?.sessionSpawnContext?.inheritedToolPolicy;
   const inheritedPolicy = inherited
     ? { allow: [...inherited.allow], deny: [...inherited.deny] }
@@ -144,17 +148,21 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     denied("An agent can only access resources in its own conversation.");
   }
   const assertRun = () => {
-    tool?.assertCurrent?.();
-    if (ambient) {
-      if (
-        !assertAmbient ||
-        ambient.agentId !== parsed.agentId ||
-        ambient.sessionKey !== sessionKey ||
-        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context)
-      ) {
+    if (serviceOwner) {
+      service!.assertCurrent();
+      if (service!.context !== params.context) {
         denied();
       }
-      assertAmbient();
+    }
+    tool?.assertCurrent?.();
+    if (
+      ambient &&
+      (!ambient.operationalRunInstance ||
+        ambient.agentId !== parsed.agentId ||
+        ambient.sessionKey !== sessionKey ||
+        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context))
+    ) {
+      denied();
     }
     if (runtime && params.context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
       denied();
@@ -173,6 +181,8 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           denied();
         }
         ambient.assertToolAllowed(requiredTool);
+      } else if (serviceOwner) {
+        service!.assertToolAllowed(requiredTool);
       } else if (!inheritedPolicy) {
         denied();
       }
@@ -187,7 +197,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   };
   assertRun();
   originalGrant?.assertCurrent();
-  originalRun?.assertCurrent();
   const projection = getSessionRowProjection(params.context);
   if (!projection) {
     denied("Session access is unavailable during Gateway startup; retry when it is ready.");
@@ -196,7 +205,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     assertPreparationSourceCurrent?.();
     assertRun();
     originalGrant?.assertCurrent();
-    originalRun?.assertCurrent();
     const currentActor = resolveGatewayOperatorRoleActor(client);
     if (
       params.hasCurrentClientAuthority?.() === false ||
@@ -209,7 +217,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       denied();
     }
   };
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client,
     context: params.context,
     hasCurrentClientAuthority: params.hasCurrentClientAuthority,
@@ -219,13 +227,11 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     assertIngress();
     const profile = profileId ? await prepareUserProfileRoleAuthority(profileId) : undefined;
     assertIngress();
-    captured?.authority.assertCurrent();
     if (actor?.kind !== "system" && (!profile || profile.profileId !== profileId)) {
       denied("This operation requires a current authenticated profile.");
     }
     await projection.prepareMembership();
     assertIngress();
-    captured?.authority.assertCurrent();
     const query = { agentId: parsed.agentId, key: sessionKey };
     const original = projection.sharingTarget(query);
     if (!original?.entry.sessionId || original.canonicalKey !== sessionKey) {
@@ -239,6 +245,13 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         ? { lifecycleRevision: original.entry.lifecycleRevision }
         : {}),
     });
+    if (
+      serviceOwner &&
+      (target.sessionId !== serviceOwner.sessionId ||
+        target.lifecycleRevision !== serviceOwner.lifecycleRevision)
+    ) {
+      denied();
+    }
     const policyClient: GatewayClient = {
       ...client,
       connect: { ...client.connect, scopes: originalScopes },
@@ -299,7 +312,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         denied();
       }
       try {
-        captured?.authority.assertCurrent();
         originalGrant?.assertCurrent();
         if (profile && !profile.isCurrent()) {
           denied();
@@ -314,13 +326,16 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           currentToolPolicy?.sandboxRequired !== toolPolicy?.sandboxRequired ||
           currentToolPolicy?.sandboxed !== toolPolicy?.sandboxed
         ) {
-          denied("The session's current tool policy does not allow this operation.");
+          denied(operatorRefusalText("tool-policy-denies", "run this operation"));
         }
         const sharing = prepareSessionSharing(
           { cfg: params.context.getRuntimeConfig(), client: policyClient },
           {
             aliases: new Set(profile?.aliases ?? []),
             sessionCap: role?.sessions.others,
+            policy: role,
+            memberAccess: (row, identity) =>
+              projection.memberAccess(row.storePath, row.storeKey, identity),
             isMember: (row, identity) =>
               projection.hasMembership(row.storePath, row.storeKey, identity),
           },
@@ -333,7 +348,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
               expectedProfileId: profileId,
               isCreator: sharing.isCreator,
             })) ||
-          sharing.authorizeTarget(current)
+          sharing.authorizeTarget(current, undefined, false)
         ) {
           denied();
         }
@@ -426,7 +441,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       );
       if (!sessionOnly) {
         releases.push(onUserProfilesChanged(check), onOperatorRolePolicyChanged(check));
-        const sourceSignal = captured?.authority.signal ?? originalGrant?.signal;
+        const sourceSignal = originalGrant?.signal ?? captured?.authority.signal;
         if (sourceSignal) {
           sourceSignal.addEventListener("abort", check, { once: true });
           releases.push(() => sourceSignal.removeEventListener("abort", check));

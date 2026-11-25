@@ -36,14 +36,21 @@ async function handshake() {
 async function acceptHello(
   { socket, connect }: Awaited<ReturnType<typeof handshake>>,
   auth?: GatewayHelloOk["auth"],
+  features?: GatewayHelloOk["features"],
 ) {
   socket.emitMessage({
     type: "res",
     id: connect.id,
     ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      ...(auth ? { auth } : {}),
+      ...(features ? { features } : {}),
+    },
   });
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() => expect(socket.sent.join("\n")).toContain('"sessions.messages.subscribe"'));
   const subscription = socket.sent
     .map((value) => JSON.parse(value))
     .find((frame) => frame.method === "sessions.messages.subscribe");
@@ -89,6 +96,14 @@ it("hands off one connection, initial history, and ordered events without loss o
   expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
 });
 
+it("delivers hello once when it arrives during adoption", async () => {
+  const connection = await handshake();
+  const onHello = vi.fn();
+  expect(boot.adopt({ ...options, onHello })).toBe(boot.client);
+  await acceptHello(connection);
+  expect(onHello).toHaveBeenCalledTimes(1);
+});
+
 it("keeps live delivery when the pane needs a different initial history request", async () => {
   const connection = await handshake();
   const { socket } = connection;
@@ -114,6 +129,54 @@ it("keeps live delivery when the pane needs a different initial history request"
   expect(wsInstances).toHaveLength(1);
 });
 
+it.each([false, true])(
+  "admits inline output and retires the early snapshot (approvals: %s)",
+  async (approvals) => {
+    const connection = await handshake();
+    const { socket } = connection;
+    const initial = await acceptHello(
+      connection,
+      approvals ? { role: "operator", scopes: ["operator.approvals"] } : undefined,
+    );
+    socket.emitMessage({
+      type: "res",
+      id: initial.id,
+      ok: true,
+      payload: { key, initialHistory: { ok: true, payload: { messages: ["early snapshot"] } } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boot.adopt(options)).toBe(boot.client);
+    const pending = takeEarlyGatewaySubscription(boot.client, key, {
+      initialHistory,
+      includeLiveToolOutput: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const upgrade = socket.sent
+      .map((value) => JSON.parse(value))
+      .filter((frame) => frame.method === "sessions.messages.subscribe")[1];
+    expect(upgrade.params).toEqual({
+      key,
+      subscriptionId: initial.params.subscriptionId,
+      includeLiveToolOutput: true,
+      ...(approvals ? { includeApprovals: true } : {}),
+    });
+    socket.emitMessage({
+      type: "res",
+      id: upgrade.id,
+      ok: true,
+      payload: { key, ...(approvals ? { approvalReplay: { exec: ["current-approval"] } } : {}) },
+    });
+    const subscription = await pending;
+    expect(subscription?.includeLiveToolOutput).toBe(true);
+    if (approvals) {
+      expect(subscription?.includeApprovals).toBe(true);
+      expect(subscription?.approvalReplay).toEqual({ exec: ["current-approval"] });
+    }
+    expect(subscription).not.toHaveProperty("initialHistory");
+    expect(wsInstances).toHaveLength(1);
+  },
+);
+
 it("prepares authorized approval replay on the same observer before the pane attaches", async () => {
   const connection = await handshake();
   const { socket } = connection;
@@ -123,6 +186,7 @@ it("prepares authorized approval replay on the same observer before the pane att
     role: "operator",
     scopes: ["operator.approvals"],
   });
+  expect(initial.params.includeApprovals).toBe(true);
   socket.emitMessage({
     type: "res",
     id: initial.id,
@@ -130,20 +194,6 @@ it("prepares authorized approval replay on the same observer before the pane att
     payload: {
       key,
       initialHistory: { ok: true, payload: { messages: ["snapshot"] } },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  const replay = request("sessions.messages.subscribe")[1];
-  expect(replay.params).toMatchObject({
-    includeApprovals: true,
-    subscriptionId: initial.params.subscriptionId,
-  });
-  socket.emitMessage({
-    type: "res",
-    id: replay.id,
-    ok: true,
-    payload: {
-      key,
       approvalReplay: { exec: ["pending-approval"] },
     },
   });
@@ -158,7 +208,7 @@ it("prepares authorized approval replay on the same observer before the pane att
     includeApprovals: true,
     approvalReplay: { exec: ["pending-approval"] },
   });
-  expect(request("sessions.messages.subscribe")).toHaveLength(2);
+  expect(request("sessions.messages.subscribe")).toHaveLength(1);
   expect(request("sessions.messages.unsubscribe")).toHaveLength(0);
 });
 
@@ -197,14 +247,11 @@ it("counts approval replay against the retained byte bound", async () => {
     type: "res",
     id: request().id,
     ok: true,
-    payload: { key, initialHistory: { ok: true, payload: { messages: [] } } },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  socket.emitMessage({
-    type: "res",
-    id: request().id,
-    ok: true,
-    payload: { key, approvalReplay: { oversized: "x".repeat(1024 * 1024) } },
+    payload: {
+      key,
+      initialHistory: { ok: true, payload: { messages: [] } },
+      approvalReplay: { oversized: "x".repeat(1024 * 1024) },
+    },
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(boot.adopt(options)).toBeNull();
@@ -354,4 +401,66 @@ it("delivers a rejected early subscription to the existing read-retry owner", as
   expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ payload: 1 }));
   expect(wsInstances).toHaveLength(1);
   expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
+});
+
+it("does not admit history after retirement while its runtime is loading", async () => {
+  const loading = Promise.withResolvers<void>();
+  vi.resetModules();
+  vi.doMock("../lib/sessions/session-message-subscriptions.runtime.ts", async (importOriginal) => {
+    await loading.promise;
+    return importOriginal();
+  });
+  try {
+    window.dispatchEvent = () => true;
+    const deferred = await import("./gateway-boot.ts");
+    boot.client.stop();
+    boot = new deferred.EarlyGateway(options, key, initialHistory, href);
+    const { socket, connect } = await handshake();
+    socket.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: true,
+      payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal("location", { href: `${href}-other` });
+    expect(boot.adopt(options)).toBeNull();
+    loading.resolve();
+    await vi.dynamicImportSettled();
+    expect(socket.sent.map((value) => JSON.parse(value).method)).toEqual(["connect"]);
+    expect(socket.readyState).toBe(3);
+  } finally {
+    loading.resolve();
+    vi.doUnmock("../lib/sessions/session-message-subscriptions.runtime.ts");
+  }
+});
+
+it.each([false, true])(
+  "gates identity-only early approval replay on the advertised recipient capability: %s",
+  async (advertised) => {
+    const connection = await handshake();
+    const subscription = await acceptHello(
+      connection,
+      {
+        role: "operator",
+        scopes: ["operator.sessions.read"],
+        profileActivityViewerId: "creator",
+      },
+      { capabilities: advertised ? ["session-approval-recipients-v1"] : [] },
+    );
+    expect(subscription.params.includeApprovals === true).toBe(advertised);
+  },
+);
+
+it("requests approval replay only for an authenticated profile, not a bare principal", async () => {
+  const { canSubscribeSessionApprovals } = await import("../app/session-approval-access.ts");
+  const hello: GatewayHelloOk = {
+    type: "hello-ok",
+    protocol: PROTOCOL_VERSION,
+    auth: { role: "operator", scopes: ["operator.sessions.read"] },
+    features: { capabilities: ["session-approval-recipients-v1"] },
+  };
+  expect(canSubscribeSessionApprovals(hello, undefined, { id: "principal" })).toBe(false);
+  const profile = { id: "creator", identity: { type: "profile" as const, id: "creator" } };
+  expect(canSubscribeSessionApprovals(hello, undefined, profile)).toBe(true);
 });

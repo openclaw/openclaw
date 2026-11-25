@@ -170,6 +170,7 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = Pick<
 >;
 
 export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
+  assertBackupUnchanged: () => void;
   apply: (beforeCommit?: () => void) => Promise<void>;
 };
 

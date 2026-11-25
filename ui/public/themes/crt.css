@@ -6,12 +6,15 @@
    The attribute selector outscores the :root capability flip to 1.25. */
 :root[data-theme="crt"],
 :root[data-theme="crt-light"] {
+  --status-running: #1d4ed8;
+  --field-focus-border: var(--accent);
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;
   --radius-xl: 6px;
   --radius: 3px;
   --radius-menu: 3px;
+  --menu-radius-large: 3px;
   --radius-menu-item: 2px;
   --radius-tooltip: 2px;
   --openclaw-corner-radius-scale: 0.25;
@@ -29,6 +32,9 @@
 }
 
 :root[data-theme="crt"] {
+  /* The surface and elevated tones sit too close here for the selected lift to read. */
+  --segmented-selected: color-mix(in srgb, var(--text) 16%, var(--bg-elevated));
+  --status-running: #60a5fa;
   /*
    * Accent — monochrome white phosphor on tube black, amber as the cursor
    * accent. Phosphor owns the green tube; CRT is the white one (the third
@@ -104,7 +110,6 @@
   --card-foreground: #1b1b1b;
   --card-highlight: rgba(20, 20, 20, 0.02);
   --popover-foreground: #1b1b1b;
-  --session-hovercard-surface: var(--card);
 
   --text: #373737;
   --text-strong: #1b1b1b;

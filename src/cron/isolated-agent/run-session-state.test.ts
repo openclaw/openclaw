@@ -1,25 +1,33 @@
 // Run session state tests cover persisted session state for isolated cron agents.
 import crypto from "node:crypto";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
-  applySessionEntryLifecycleMutation,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { projectCronSessionEntry } from "../../config/sessions/session-entry-patch-operation.js";
+import {
+  bindSessionMcpStoreOwner,
+  readSessionMcpStoreOwner,
+} from "../../config/sessions/session-mcp-store-admission.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { prepareCronRunAdmission } from "../run-admission.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
+import { TEST_SCHEDULED_EXECUTION } from "../scheduled-occurrence.test-support.js";
+import { createCronSessionRowWriter } from "./run-prepare-runtime.js";
 import {
   adoptCronRunSessionMetadata,
   createCronRunContinuationSession,
@@ -129,6 +137,116 @@ describe("syncCronSessionLiveSelection", () => {
 });
 
 describe("createPersistCronSessionEntry", () => {
+  it.each(["file", "memory"] as const)(
+    "binds the acknowledged %s owner to the prompt issuer and clears it on a rejected write",
+    async (storage) => {
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:hook:receipt",
+        sessionId: "hook-row",
+      };
+      const dir = sessionDirs.make();
+      const storePath =
+        storage === "file"
+          ? path.join(dir, "sessions.json")
+          : resolveIncognitoOpenClawAgentSqlitePath({
+              agentId: target.agentId,
+              env: { OPENCLAW_STATE_DIR: dir },
+            });
+      const memory =
+        storage === "memory"
+          ? memorySessionActorOwners.get({ agentId: target.agentId, path: storePath })
+          : undefined;
+      if (memory) {
+        onTestFinished(() => {
+          memorySessionActorOwners.closeDatabase({ agentId: target.agentId, path: storePath });
+        });
+      }
+      const cronSession = makeCronSession(
+        makeSessionEntry({ sessionId: target.sessionId }),
+        storePath,
+      );
+      const persist = createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: target.sessionKey,
+        workspaceDir: path.dirname(storePath),
+        persistSessionEntry: createCronSessionRowWriter({
+          agentId: target.agentId,
+          agentSessionKey: target.sessionKey,
+        }),
+      });
+      const issue = () =>
+        prepareCronRunAdmission({
+          ...target,
+          storeAdmission: cronSession,
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
+          cfg: {},
+          jobId: "hook",
+          runId: crypto.randomUUID(),
+          deliveryAttemptFence: null,
+        });
+
+      await persist(undefined, cronSession.sessionEntry, cronSession);
+      const committed = readSessionMcpStoreOwner(cronSession, target);
+      expect(committed).toEqual(expect.any(String));
+      if (memory) {
+        const reference = {};
+        bindSessionMcpStoreOwner(reference, {
+          ...target,
+          databaseIdentity: memory.identity.incarnation,
+        });
+        expect(committed).toBe(readSessionMcpStoreOwner(reference, target));
+      }
+      const first = issue();
+      const instance = first.preparedRunAdmission.operationalRunInstance;
+      try {
+        expect(readSessionMcpStoreOwner(instance, target)).toBe(committed);
+      } finally {
+        first.close();
+      }
+      expect(readSessionMcpStoreOwner(instance, target)).toBeUndefined();
+
+      const rejectedWrite = () => {
+        throw new Error("pre-run write rejected");
+      };
+      await expect(persist(rejectedWrite, cronSession.sessionEntry, cronSession)).rejects.toThrow(
+        "pre-run write rejected",
+      );
+      const rejected = issue();
+      try {
+        expect(
+          readSessionMcpStoreOwner(rejected.preparedRunAdmission.operationalRunInstance, target),
+        ).toBeUndefined();
+      } finally {
+        rejected.close();
+      }
+    },
+  );
+
+  it("replaces intermediate request occupancy only when final accounting owns the write", async () => {
+    const sessionKey = "agent:main:cron:context";
+    const initial = makeSessionEntry({ totalTokens: 436_631, totalTokensFresh: true });
+    const cronSession = makeCronSession({ ...initial });
+    cronSession.initialSessionEntry = initial;
+    const rows = { [sessionKey]: { ...initial, totalTokens: 810_448 } };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(rows),
+    });
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(810_448);
+    rows[sessionKey]!.totalTokens = 900_000;
+    cronSession.sessionEntry.totalTokens = 20_015;
+    cronSession.contextTotalsAccounted = true;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(20_015);
+    rows[sessionKey]!.totalTokens = 30_000;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(30_000);
+  });
+
   // Regression (review P1): a stale cron reset landing on an empty prior
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.
@@ -156,39 +274,19 @@ describe("createPersistCronSessionEntry", () => {
       },
     } as MutableCronSession;
 
-    // Mirrors the run-prepare producer: a pending boundary goes through the
-    // batched lifecycle mutation with the run workspace attached.
     await createPersistCronSessionEntry({
       cronSession,
       agentSessionKey,
       workspaceDir: "/tmp/cron-stale-workspace",
-      persistSessionEntry: async ({
-        sessionKey,
-        storePath: rowStorePath,
-        resetBoundary,
-        operation,
-      }) => {
-        if (!resetBoundary) {
-          throw new Error("expected a pending cron reset boundary");
-        }
-        let entry = operation.next;
-        await applySessionEntryLifecycleMutation({
-          activeSessionKey: sessionKey,
-          agentId: "main",
-          storePath: rowStorePath,
-          upserts: [
-            {
-              sessionKey,
-              resetBoundary,
-              buildEntry: ({ currentEntry }) =>
-                (entry = projectCronSessionEntry(operation, currentEntry)),
-            },
-          ],
-          skipMaintenance: true,
-        });
-        return entry;
-      },
-    })();
+      persistSessionEntry: createCronSessionRowWriter({ agentId: "main", agentSessionKey }),
+    })(undefined, cronSession.sessionEntry, cronSession);
+    expect(
+      readSessionMcpStoreOwner(cronSession, {
+        agentId: "main",
+        sessionKey: agentSessionKey,
+        sessionId: cronSession.sessionEntry.sessionId,
+      }),
+    ).toEqual(expect.any(String));
 
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
     if (!target.path) {

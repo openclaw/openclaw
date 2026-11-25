@@ -7,14 +7,18 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationRepairLease,
+  settlePendingPackageActivation,
+} from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
+import { resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -31,10 +35,13 @@ import {
   recordedUpdateRunDrivers,
   inspectUpdateRunAbandonment,
 } from "../../infra/update-run-activity.js";
+import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
+  getUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
@@ -54,6 +61,7 @@ import { pluginCohortRecoveryMatchesSource } from "../../infra/update-run-recove
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
@@ -82,6 +90,10 @@ import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
 import {
+  inspectPluginCohortInstallation,
+  settleInterruptedUpdatePluginCohort,
+} from "./update-plugin-cohort-settlement.js";
+import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
 } from "./update-retained-custody.js";
@@ -106,8 +118,8 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   const discoveredRoot = await resolveUpdateRoot();
   const installKey = resolveUpdateInstallRoot(discoveredRoot);
-  if (pluginCohort && resolveUpdateInstallRoot(pluginCohort.cohort.installKey) !== installKey) {
-    throw new Error("Plugin cohort recovery belongs to a different installation.");
+  if (pluginCohort) {
+    inspectRepairCohortInstallation(pluginCohort, installKey, { env: process.env });
   }
   await refuseHostOwnedUpdate(discoveredRoot, opts);
   await refuseImmutableUpdateActivation(discoveredRoot, opts);
@@ -187,11 +199,20 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       throw new Error("Plugin cohort repair selected a different installation before custody.");
     }
     try {
+      const packageLease = await readPackageActivationRepairLease(root);
       const repair = await (
-        await prepareManagedHandoffLeaseStore()
+        await prepareManagedHandoffLeaseStore(
+          packageLease
+            ? {
+                databasePath: packageLease.databasePath,
+                existingIdentity: packageLease,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+              }
+            : undefined,
+        )
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
+      if (packageLease || repair || !legacy || !fs.existsSync(legacy)) {
         return repair;
       }
       // An earlier macOS Gateway's handoff stays in its own store until repaired.
@@ -221,6 +242,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (handoff) {
+    defaultRuntime.error(
+      "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
+    );
+  }
   if (pluginCohort) {
     if (
       !validChannel ||
@@ -231,56 +257,27 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       throw new Error("Plugin cohort recovery requires a fresh update repair invocation.");
     }
     const originalPair = pluginCohort;
+    // A replaced package directory keeps the key its dead driver's lease recorded.
+    const cohortKey = resolveUpdateInstallRoot(originalPair.cohort.installKey);
     const settleCohort = async (ownership: UpdateRecoveryFence) => {
       const assertCurrent = () => {
         ownership.assertCurrent();
         if (
           resolveUpdateInstallRoot(discoveredRoot) !== installKey ||
-          resolveUpdateInstallRoot(originalPair.cohort.installKey) !== installKey
+          resolveUpdateInstallRoot(originalPair.cohort.installKey) !== cohortKey
         ) {
           throw new Error("Plugin cohort recovery installation changed during repair.");
         }
       };
-      assertCurrent();
-      const current = await inspectPluginCohortRecoveryAdmission(
+      // Under the claim, the replaced installation's evidence must still hold.
+      const replaced = inspectRepairCohortInstallation(originalPair, installKey, options);
+      await settleInterruptedUpdatePluginCohort({
+        expected: originalPair,
+        root: discoveredRoot,
+        ...(replaced ? { replaced } : {}),
         options,
-        originalPair.cohort.runId,
-      );
-      assertCurrent();
-      if (
-        !current ||
-        current.cohort.transactionId !== originalPair.cohort.transactionId ||
-        current.cohort.installKey !== originalPair.cohort.installKey
-      ) {
-        throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
-      }
-      if (current.cohort.disposition === "commit") {
-        const [version, buildId] = await Promise.all([
-          readPackageVersion(discoveredRoot),
-          readBuiltGatewayBuildId(discoveredRoot),
-        ]);
-        assertCurrent();
-        if (
-          version !== current.reservation.to.version ||
-          (buildId ?? null) !== current.reservation.to.buildId
-        ) {
-          throw new Error(
-            "Plugin cohort commit does not match the installed candidate version and build.",
-          );
-        }
-      }
-      const { settleUpdatePluginCohort } = await import("../../plugins/update-cohort-recovery.js");
-      assertCurrent();
-      await settleUpdatePluginCohort({
-        runId: current.cohort.runId,
-        action: current.cohort.disposition === "commit" ? "commit" : "rollback",
-        env,
-        fence: { assertCurrent },
+        assertCurrent,
       });
-      assertCurrent();
-      // The plugin reservation is gone before ordinary history reconciliation.
-      await assertUpdateRecoveryAdmission(options);
-      assertCurrent();
       if (admission.kind === "conflict") {
         await reconcileUnderRepairOwnership({ assertCurrent });
       } else {
@@ -295,8 +292,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       await settleCohort(handoff);
     } else {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const ownership = await executor.enter(originalPair.cohort.installKey);
-        if (captureUpdateCommandExecutorAuthority(ownership).installKey !== installKey) {
+        // A replacing installation is claimed beside the key its dead driver recorded.
+        const ownership = await executor.enter(originalPair.cohort.installKey, {
+          serviceRoot: discoveredRoot,
+        });
+        if (captureUpdateCommandExecutorAuthority(ownership).installKey !== cohortKey) {
           throw new Error("Plugin cohort recovery lost its installation executor.");
         }
         await settleCohort(ownership);
@@ -325,7 +325,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
               trigger: "cli",
               settlement: {
                 reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                detail: `${settled.detail} Operation ${settled.operationId}${settled.retained ? `; evidence retained at ${settled.retained}` : ""}.`,
               },
             },
             options,
@@ -408,11 +408,15 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     ? Math.min(...recoveryRuns.map((run) => run.createdAtMs))
     : undefined;
   const history = inspectNewerRecoveryHistory(recoverySinceMs, recentRuns);
+  const interruptedGateway = findUpdateGatewayStop(recentRuns);
   const recoveryRunIds = [
     ...new Set(
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
     ),
   ];
+  if (interruptedGateway && !recoveryRunIds.includes(interruptedGateway.runId)) {
+    recoveryRunIds.push(interruptedGateway.runId);
+  }
   const finalizeRepair = async () => {
     try {
       // Driver death is a historical fact; maintenance completion is acknowledged separately.
@@ -430,13 +434,16 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
 
   if (
     handoff ||
+    interruptedGateway ||
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoverySinceMs === undefined ||
     recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
-    history.incomplete
+    history.incomplete ||
+    // Finalization verifies a recorded data-at-risk mark before acknowledging it.
+    listUnverifiedDataAtRisk(recentRuns).length > 0
   ) {
     return await finalizeRepair();
   }
@@ -493,7 +500,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     currentHistory.incomplete
   ) {
     throw new Error(
-      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop --force", env)} first.`,
     );
   }
   const reconciled = activeRuns.length
@@ -526,6 +533,31 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
         : ""),
     retained,
   );
+}
+
+/** Today's refusal while the recorded installation exists; otherwise what its evidence lacks. */
+function inspectRepairCohortInstallation(
+  pair: PluginCohortRecoveryPair,
+  installKey: string,
+  options: OpenClawStateDatabaseOptions & { env: NodeJS.ProcessEnv },
+) {
+  const installation = inspectPluginCohortInstallation(
+    pair,
+    installKey,
+    getUpdateRun(pair.cohort.runId, options),
+  );
+  if (installation.kind === "other") {
+    throw new Error("Plugin cohort recovery belongs to a different installation.");
+  }
+  if (installation.kind === "unproven") {
+    const next = installation.wait
+      ? `Wait for that update to finish, then retry ${formatCliCommand("openclaw update repair", options.env)}.`
+      : `Run ${formatCliCommand("openclaw triage", options.env)} for an agent that reads this update history and settles it.`;
+    throw new Error(
+      `Plugin cohort recovery belongs to the installation at ${pair.cohort.installKey}, which no longer exists, and this installation cannot show it replaced that one: ${installation.why}. ${next}`,
+    );
+  }
+  return installation.kind === "replaced" ? installation : undefined;
 }
 
 function reportRepairResult(

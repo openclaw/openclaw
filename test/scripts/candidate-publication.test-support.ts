@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parse } from "yaml";
 import { dockerReleaseArtifactName } from "../../scripts/docker-release-artifacts.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -13,6 +14,7 @@ import {
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
+  buildReleaseExecutionPlan,
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
@@ -20,6 +22,7 @@ import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
 } from "../../scripts/release-qualification-admission.mjs";
+import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
 import {
@@ -33,23 +36,52 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
-const version = "2026.8.28-beta.1";
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    qualificationSha?: string;
+    candidateVersion?: string;
+    targetContextRef?: string;
+    qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
+    publicationArtifactSource?: { runId: string; runAttempt: number };
+    reuseEvidence?: boolean;
+    preflightFirst?: boolean;
+    rerunGroup?: "all" | "build-only";
+    releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
     protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
-  const fixture = trustedMainNpmFixture();
-  const q = options.candidateSha ?? defaultQ;
+  const selectedProfile = options.releaseProfile;
+  const extended =
+    selectedProfile === "extended-stable" || options.publicationRoute === "extended-stable";
+  const version =
+    options.candidateVersion ??
+    (extended
+      ? "2026.8.33"
+      : selectedProfile && selectedProfile !== "beta"
+        ? "2026.8.28"
+        : "2026.8.28-beta.1");
+  const beta = version.includes("-beta.");
+  const profile =
+    selectedProfile === "extended-stable"
+      ? "stable"
+      : (selectedProfile ?? (beta ? "beta" : "stable"));
+  const fixture = trustedMainNpmFixture(profile === "beta" ? "beta" : "stable", {
+    targetVersion: extended ? "2026.8.28" : version,
+  });
+  const c = options.candidateSha ?? defaultQ;
+  const q = options.qualificationSha ?? c;
   const branch =
     options.transportRef ??
-    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
+    (options.candidateSha || options.qualificationSha
+      ? "release-ci/" + q.slice(0, 12) + "-123"
+      : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -62,10 +94,23 @@ export function candidatePublicationFixture(
   const purpose = options.purpose ?? "publish";
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
-  const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
+  const laneInputs = {
+    ...(options.preflightFirst ? { preflight_first: "true" } : {}),
+    ...(options.publicationArtifactSource
+      ? { publication_artifact_source_json: JSON.stringify(options.publicationArtifactSource) }
+      : {}),
+    qualification_baselines_json: options.qualificationBaselines
+      ? JSON.stringify(options.qualificationBaselines)
+      : extended
+        ? JSON.stringify({
+            upgradeBaseline: "openclaw@2026.7.33",
+            upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.28"],
+          })
+        : qualificationBaselinesJson,
+  };
   const selection: PublicationSelection = {
-    route: "normal",
-    npmDistTag: "beta",
+    route: options.publicationRoute ?? (extended ? "extended-stable" : "normal"),
+    npmDistTag: extended ? "extended-stable" : beta ? "beta" : "latest",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -75,22 +120,27 @@ export function candidatePublicationFixture(
     publicationSelection: publishing ? selection : null,
   };
   Object.assign(inputs, {
-    ref: q,
-    expected_sha: q,
-    target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
-    rerun_group: "all",
+    ref: c,
+    expected_sha: c,
+    target_context_ref:
+      options.targetContextRef ??
+      (extended ? "extended-stable/" : "release/") + version.split("-")[0],
+    release_profile: profile,
+    reuse_evidence: String(options.reuseEvidence ?? options.rerunGroup !== "build-only"),
+    rerun_group: options.rerunGroup ?? "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: String(profile !== "beta"),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
-    candidateSha: q,
+    candidateSha: c,
+    qualificationSha: q,
     transportRef: branch,
     candidateVersion: version,
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
+    baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
   });
   inputs.trusted_workflow_json = publicationDispatchEnvelope(
     tooling,
@@ -103,31 +153,53 @@ export function candidatePublicationFixture(
     JSON.parse(
       JSON.stringify(value)
         .replaceAll(legacyRunId, runId)
-        .replaceAll(fixture.targetSha, q)
+        .replaceAll(fixture.targetSha, c)
         .replaceAll(fixture.workflowSha, q)
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
     );
+  // Match source admission for a regular core release with a matching Android
+  // pin: beta omits the final-only Linux/Android outputs, final includes them.
+  const platforms = [
+    ...(!beta && !extended
+      ? [{ id: "android", source: ".github/workflows/android-release.yml" }]
+      : []),
+    { id: "docker", source: ".github/workflows/docker-release.yml" },
+    ...(!beta && !extended
+      ? [{ id: "linux", source: ".github/workflows/linux-app-release-request.yml" }]
+      : []),
+    ...(!extended
+      ? [{ id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" }]
+      : []),
+  ];
   const source = createPublicationSourceFact(
     publicationSourceRequest({
       PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
-      PUBLICATION_TARGET_SHA: q,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
+      PUBLICATION_TARGET_SHA: c,
+      PUBLICATION_COVERAGE_POLICY:
+        options.rerunGroup === "build-only" ||
+        extended ||
+        profile === "full" ||
+        (beta && profile !== "beta")
+          ? ""
+          : beta
+            ? "npm-beta-v1"
+            : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(profile === "beta"),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
       GITHUB_RUN_ID: runId,
       GITHUB_RUN_ATTEMPT: "1",
     }),
-    publishing ? { packages: [], platforms: [] } : null,
+    publishing ? { packages: [], platforms } : null,
     publishing
       ? {
           version,
           packages: [{ name: "openclaw", version, targets: ["npm"] }],
-          platforms: [],
+          platforms,
         }
       : null,
   );
@@ -190,38 +262,126 @@ export function candidatePublicationFixture(
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
   };
-  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields);
-  plan.children = plan.children.filter((child) => child.selected);
-  const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
-  Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
-    upgradeBaseline: qualificationBaselines.upgradeBaseline,
-    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
+  const qualificationBaselines = JSON.parse(laneInputs.qualification_baselines_json);
+  const candidate = fullReleaseCandidateManifestFixture({
+    targetSha: c,
+    toolingSha: q,
+    releaseProfile: inputs.release_profile,
+    releaseSoak: inputs.run_release_soak === "true",
+    upgradeSurvivorBaseline: qualificationBaselines.upgradeBaseline,
+    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines.join(" "),
+    upgradeSurvivorScenarios: "",
   });
+  candidate.package.version = version;
+  const candidateBinding = buildFullReleaseCandidateBinding({
+    manifest: candidate,
+    artifact: {
+      id: "104",
+      name: "full-release-candidate-v2-" + candidate.requestSha256,
+      digest: "a".repeat(64),
+      expiresAt: "2099-01-01T00:00:00Z",
+      runId: "77",
+      runAttempt: "1",
+    },
+  });
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
+    releaseProfile: profile,
+    rerunGroup: inputs.rerun_group,
+    targetVersion: version,
+    coveragePolicy: source.coverage.coverage_policy || undefined,
+    candidate: candidateBinding,
+    candidateRequest: candidate.request,
+  });
+  if (options.preflightFirst) {
+    plan.gates = plan.gates.map((gate) =>
+      gate.name === "Prepare release npm artifacts"
+        ? { ...gate, name: "Prepare initial release npm artifacts" }
+        : gate,
+    );
+  }
+  if (plan.coveragePolicy === undefined) {
+    delete plan.coveragePolicy;
+  }
+  plan.children = plan.children.filter((entry) => entry.selected);
+  if (options.rerunGroup === "build-only") {
+    plan.gates = buildReleaseExecutionPlan({
+      parentRunId: runId,
+      parentRunAttempt: 1,
+      rerunGroup: "build-only",
+      releaseProfile: profile,
+      qualificationCoverage: coverage,
+      workflowRef: branch,
+      workflowSha: q,
+      childPhaseVersion: 3,
+      candidateRequired: true,
+      resolveTargetResult: "success",
+      npmPreparationResult: "success",
+      npmQualificationResult: "success",
+      dockerPreparationResult: "success",
+      candidateAcquisitionResult: "success",
+    }).gates;
+    for (const child of plan.children) {
+      Object.assign(child, {
+        required: false,
+        selected: false,
+        result: "skipped",
+        runId: "",
+        runAttempt: null,
+        url: "",
+        source: "fresh",
+        sourceParentAttempt: null,
+      });
+    }
+  }
+  const qualificationSources = new Map<string, string>();
+  const qualificationSource = (path: string) => {
+    const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
+    qualificationSources.set(path, bytes);
+    return bytes;
+  };
   const jobsFor = (requestedRunId: string) => {
-    const child = plan.children.find((entry) => entry.runId === requestedRunId);
+    const planned = plan.children.find((entry) => entry.runId === requestedRunId);
+    const child = coverage.children.find((entry) => entry.key === planned?.key);
     const names =
       requestedRunId === runId
-        ? coverage.requiredParentJobs
-        : expectDefined(
-            coverage.children.find((entry) => entry.key === child?.key),
-            "covered child",
-          ).requiredJobs;
-    return names.map((name, index) =>
-      Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
-    );
+        ? [
+            ...coverage.requiredParentJobs,
+            ...(options.rerunGroup === "build-only"
+              ? plan.gates
+                  .filter((gate) => gate.required)
+                  .map((gate) => gate.name)
+                  .filter((name) => !coverage.requiredParentJobs.includes(String(name)))
+              : []),
+          ]
+        : expectDefined(child, "covered child").requiredJobs;
+    return [
+      ...names.map((name, index) =>
+        Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
+      ),
+      ...(requestedRunId === runId && options.rerunGroup === "build-only"
+        ? coverage.children.map((spec, index) =>
+            Object.assign(mapped(fixture.parentJob), {
+              id: 700 + index,
+              name: spec.parentJobName,
+              conclusion: "skipped",
+            }),
+          )
+        : []),
+    ];
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
-    // Fresh qualification has no reused evidence or shared candidate artifact.
-    candidateBinding: undefined,
+    releaseProfile: profile,
+    rerunGroup: inputs.rerun_group,
+    // Fresh qualification uses its own sealed candidate, not reused evidence.
+    candidateBinding,
     evidenceReuse: undefined,
     ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
-    targetRef: q,
-    targetSha: q,
+    targetRef: c,
+    targetSha: c,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
-  delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
   Object.assign(
     manifest.validationInputs,
@@ -233,11 +393,28 @@ export function candidatePublicationFixture(
     ),
     publicationIntentInputs(source),
   );
+  if (plan.coveragePolicy) {
+    manifest.validationInputs.coveragePolicy = plan.coveragePolicy;
+  } else {
+    delete manifest.validationInputs.coveragePolicy;
+  }
+  manifest.validationInputs.targetVersion = version;
   manifest.validationInputs.targetContextRef = expectDefined(
     inputs.target_context_ref,
     "normalized target context ref",
   );
-  for (const child of plan.children) {
+  if (options.rerunGroup === "build-only") {
+    manifest.childEvidence = {};
+    manifest.childRuns = Object.fromEntries(plan.children.map((entry) => [entry.key, ""]));
+    for (const exemption of coverage.exemptions ?? []) {
+      manifest.childRuns[exemption.childRole] = {
+        disposition: exemption.disposition,
+        runId: "",
+        supportingEvidence: exemption.supportingEvidence,
+      };
+    }
+  }
+  for (const child of plan.children.filter((entry) => entry.selected)) {
     const composite = composeReleaseAttemptJobs([{ jobs: jobsFor(child.runId), runAttempt: 1 }], {
       effectiveRunAttempt: 1,
       plannedRunAttempt: 1,
@@ -297,14 +474,26 @@ export function candidatePublicationFixture(
   };
   const client = {
     ...fixture.client,
+    downloadArtifactArchive() {
+      throw new Error("Fresh candidate fixture does not download reused artifacts");
+    },
+    getRunArtifacts() {
+      throw new Error("Fresh candidate fixture does not enumerate reused artifacts");
+    },
     validateChildReuse() {
       throw new Error("Fresh candidate fixture does not contain reused children");
     },
     getArtifact() {
       throw new Error("Fresh candidate fixture does not reuse publication artifacts");
     },
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not verify retained publication artifacts");
+    },
+    readWorkloadIdentity: denied,
     compareCommitLineage: denied,
     compareCommits: denied,
+    getCommit: denied,
+    resolveQualificationAdmissionDescriptor: denied,
     verifyQualificationAdmission: (
       verification: Parameters<typeof verifyQualificationAdmission>[0],
     ) =>
@@ -316,9 +505,10 @@ export function candidatePublicationFixture(
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
-    getWorkflowSource: () => workflowSource,
+    getWorkflowSource: (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
+      qualificationSource(path),
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
-    getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
+    getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
     getRunAttempt: (id: string, attempt: number) => {
       if (attempt !== 1) {
@@ -334,7 +524,11 @@ export function candidatePublicationFixture(
         : fixture.client
             .getJobLog(id)
             .replaceAll(legacyRunId, runId)
-            .replaceAll(fixture.targetSha, q),
+            .replaceAll(fixture.targetSha, c)
+            .replace(
+              /CI_RELEASE_SCOPE: \S+/gu,
+              `CI_RELEASE_SCOPE: ${plan.coveragePolicy === "npm-beta-v1" ? "npm-beta" : plan.coveragePolicy === "npm-stable-v1" ? "npm-stable" : "full"}`,
+            ),
     getRunAttemptJobs: async (id: string) =>
       id === runId ? [...originalJobs, sealer] : jobsFor(id),
     loadExecutionPlan: () => plan,
@@ -362,15 +556,24 @@ export function candidatePublicationFixture(
     jobName: "Qualify prepared npm package",
   };
   const npmManifest = {
-    version: 3,
-    releaseSha: q,
+    version: options.rerunGroup === "build-only" ? 4 : 3,
+    ...(options.rerunGroup === "build-only"
+      ? {
+          npmDistTag: selection.npmDistTag,
+          validation: {
+            mode: "build-only",
+            skipped: ["source", "sdk", "dependencies", "contents"],
+          },
+        }
+      : {}),
+    releaseSha: c,
     releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
     tarballSha256: hash(npmBytes),
     producer: npmProducer,
     preparedBundle: {
       schema: "openclaw.prepared-npm-bundle/v1",
-      source: { sha: q },
+      source: { sha: c },
       package: { sha256: hash(npmBytes) },
       producer: { repository, workflowSha: q },
     },
@@ -393,8 +596,11 @@ export function candidatePublicationFixture(
     expires_at: "2099-01-01T00:00:00Z",
   };
   const npmQualified = {
-    schema: "openclaw.qualified-npm-preflight/v1",
-    source: { sha: q },
+    schema:
+      options.rerunGroup === "build-only"
+        ? "openclaw.sealed-npm-preflight/v1"
+        : "openclaw.qualified-npm-preflight/v1",
+    source: { sha: c },
     producer: npmProducer,
     manifestSha256: hash(npmManifestBytes),
     artifact: {
@@ -406,7 +612,7 @@ export function candidatePublicationFixture(
     },
   };
   const npmJob = completedJob(780, npmProducer.jobName);
-  const artifactName = dockerReleaseArtifactName(q, "1");
+  const artifactName = dockerReleaseArtifactName(c, "1");
   const payloadBytes = ["immutable amd64 OCI payload", "immutable arm64 OCI payload"];
   const architectures = ["amd64", "arm64"];
   const dockerArtifacts = architectures.map((arch, i) =>
@@ -415,7 +621,7 @@ export function candidatePublicationFixture(
   const docker = {
     schemaVersion: 1,
     repository,
-    sourceSha: q,
+    sourceSha: c,
     toolingSha: q,
     tag: `v${version}`,
     version,
@@ -492,12 +698,14 @@ export function candidatePublicationFixture(
     return JSON.stringify(readApi(endpoint));
   };
   return {
+    c,
     q,
     p,
     branch,
     repository,
     runId,
     publisherFullRef: admission.producer.workflowFullRef,
+    qualificationSources,
     admission,
     source,
     plan,

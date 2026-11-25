@@ -81,8 +81,10 @@ describe("Claude CLI assistant snapshots", () => {
   });
 
   it("preserves tool-split snapshots when commentary is disabled", () => {
+    const boundaries: Array<true | undefined> = [];
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createClaudeParser({
+      onToolUseStart: (tool) => boundaries.push(tool.followsAssistantText),
       onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
     });
 
@@ -103,7 +105,25 @@ describe("Claude CLI assistant snapshots", () => {
       { text: "Inspecting now.", delta: "Inspecting now." },
       { text: "Inspecting now.\n\nDone.", delta: "\n\nDone." },
     ]);
+    expect(boundaries).toEqual([true]);
     expect(parser.getOutput()?.text).toBe("Inspecting now.\n\nDone.");
+  });
+
+  it("does not bind text after a tool in a mixed native snapshot", () => {
+    const starts: Array<true | undefined> = [];
+    const parser = createClaudeParser({
+      onToolUseStart: (tool) => starts.push(tool.followsAssistantText),
+    });
+    parser.push(
+      joinJsonlFrames(
+        claudePartialSnapshot("msg", [
+          { type: "tool_use", id: "tool-1", name: "Read", input: {} },
+          { type: "text", text: "New answer." },
+        ]),
+      ),
+    );
+    parser.finish();
+    expect(starts).toEqual([undefined]);
   });
 
   it("keeps nested tool-result text out of the visible snapshot", () => {

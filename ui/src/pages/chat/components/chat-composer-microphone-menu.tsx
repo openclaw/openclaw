@@ -1,10 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
-import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
+import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
+import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
@@ -14,33 +18,63 @@ export function MicrophoneMenu(props: {
 }) {
   const items = createMemo(
     () => {
-      const capabilities = [
-        {
-          key: "realtime",
+      const keyed = props.picker.apiKeyProviders ?? {};
+      const capabilityRow = (
+        key: "realtime" | "dictation",
+        status: MicrophonePickerProps["realtimeStatus"],
+        provider: string | undefined,
+        fallback: {
+          label: string;
+          unavailableReason: string;
+          canConfigure: boolean;
+        },
+      ) =>
+        // A sign-in without voice names its fix: that provider's API key.
+        provider && props.picker.onConfigureApiKey && status === "unavailable"
+          ? {
+              key,
+              status,
+              label: voiceApiKeyMessage(key === "realtime" ? "talk" : "dictation", provider),
+              unavailableReason: undefined,
+              canConfigure: true,
+              provider,
+            }
+          : { key, status, ...fallback, provider: undefined };
+      let capabilities = [
+        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
           label: t("chat.composer.realtimeTalkCapability"),
-          status: props.picker.realtimeStatus,
           unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-          onOpenSettings: props.picker.onOpenTalkSettings,
-        },
-        {
-          key: "dictation",
+          canConfigure: Boolean(props.picker.onOpenTalkSettings),
+        }),
+        capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
-          status: props.picker.dictationStatus,
           unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
-          onOpenSettings: props.picker.onOpenDictationSettings,
-        },
+          canConfigure: Boolean(props.picker.onOpenDictationSettings),
+        }),
       ].filter(
         (capability) =>
           capability.status !== "ready" &&
           (capability.key !== "realtime" || props.picker.showRealtimeCapability !== false),
       );
+      // Talk and dictation missing the same key read as one fix, not two.
+      if (
+        capabilities.length === 2 &&
+        !keyed.speech &&
+        capabilities[0]!.provider &&
+        capabilities[0]!.provider === capabilities[1]!.provider
+      ) {
+        capabilities = [
+          {
+            ...capabilities[1]!,
+            label: voiceApiKeyMessage("voice", capabilities[1]!.provider),
+          },
+        ];
+      }
       const entries: MenuEntry[] = [
         {
           kind: "content",
           id: "heading",
-          content: (
-            <div class="chat-talk-input-picker__heading">{t("chat.composer.microphoneInput")}</div>
-          ),
+          content: <MenuHeading label={t("chat.composer.microphoneInput")} />,
         },
       ];
       const notice = (id: string, className: string, message: string, role?: "status" | "alert") =>
@@ -55,16 +89,33 @@ export function MicrophoneMenu(props: {
             </div>
           ),
         });
+      const fault = (id: string, issue: RealtimeTalkDeviceIssue) => {
+        const message = realtimeTalkDeviceIssueMessage(issue, "audioinput");
+        entries.push({
+          id,
+          label: message,
+          disabled: true,
+          class: "chat-talk-input-picker__notice",
+          content: (
+            <InlineAlert compact tone="warning" class="chat-talk-input-picker__alert">
+              {message}
+            </InlineAlert>
+          ),
+        });
+      };
       const issue =
         !props.picker.loading && props.picker.devices.length === 0 ? props.picker.issue : null;
       if (issue) {
-        const fault = issue !== "none-found" && issue !== "list-unsupported";
-        notice(
-          "unavailable",
-          `chat-talk-input-picker__empty${fault ? " chat-talk-input-picker__empty--fault" : ""}`,
-          realtimeTalkDeviceIssueMessage(issue, "audioinput"),
-          "status",
-        );
+        if (issue === "none-found" || issue === "list-unsupported") {
+          notice(
+            "unavailable",
+            "chat-talk-input-picker__empty",
+            realtimeTalkDeviceIssueMessage(issue, "audioinput"),
+            "status",
+          );
+        } else {
+          fault("unavailable", issue);
+        }
       } else {
         for (const option of [
           { deviceId: "", label: t("chat.composer.systemDefaultMicrophone") },
@@ -100,12 +151,7 @@ export function MicrophoneMenu(props: {
           notice("loading", "chat-talk-input-picker__note", t("common.loading"), "status");
         }
         if (props.picker.issue) {
-          notice(
-            "issue",
-            "chat-talk-input-picker__warning",
-            realtimeTalkDeviceIssueMessage(props.picker.issue, "audioinput"),
-            "alert",
-          );
+          fault("issue", props.picker.issue);
         }
         if (props.picker.voiceActive) {
           notice(
@@ -115,6 +161,12 @@ export function MicrophoneMenu(props: {
           );
         }
       }
+      // Sections meet at a divider; rows inside a section never draw their own.
+      const separator = (id: string) =>
+        entries.push({ kind: "content", id, content: <div role="separator" /> });
+      if (capabilities.length > 0) {
+        separator("capabilities-separator");
+      }
       for (const capability of capabilities) {
         const detail =
           capability.status === "checking"
@@ -123,15 +175,19 @@ export function MicrophoneMenu(props: {
               ? t("chat.composer.talkCapabilityUnknown")
               : capability.unavailableReason;
         entries.push({
-          id: `capability:${capability.key}`,
+          id: capability.provider
+            ? capability.key === "realtime" && keyed.speech
+              ? "speech-api-key"
+              : `api-key:${capability.provider}`
+            : `capability:${capability.key}`,
           label: [
             capability.label,
             detail,
-            capability.onOpenSettings ? t("chat.composer.configureCapability") : null,
+            capability.canConfigure ? t("chat.composer.configureCapability") : null,
           ]
             .filter(Boolean)
             .join(" "),
-          disabled: !capability.onOpenSettings,
+          disabled: !capability.canConfigure,
           class: "chat-talk-input-picker__capability",
           attributes: {
             "data-chat-talk-capability": capability.key,
@@ -148,10 +204,10 @@ export function MicrophoneMenu(props: {
                 ) : null}
                 <span>{capability.label}</span>
               </strong>
-              <span>{detail}</span>
+              {detail && <span>{detail}</span>}
             </span>
           ),
-          details: capability.onOpenSettings ? (
+          details: capability.canConfigure ? (
             <span class="chat-talk-input-picker__settings">
               <span aria-hidden="true">
                 <Icon name="settings" />
@@ -162,25 +218,16 @@ export function MicrophoneMenu(props: {
         });
       }
       if (props.picker.onHoldToDictateChange) {
+        separator("preferences-separator");
         entries.push({
           id: "hold-to-dictate",
           label: t("chat.composer.holdToDictate"),
           type: "checkbox",
           checked: props.picker.holdToDictate !== false,
-          class: "chat-talk-input-picker__preference",
+          class: "oc-menu-item--switch chat-talk-input-picker__preference",
           attributes: { "data-chat-talk-preference": "hold-to-dictate" },
           closeOnSelect: false,
-          details: (
-            <span
-              class={[
-                "chat-controls__speed-toggle",
-                { "chat-controls__speed-toggle--active": props.picker.holdToDictate !== false },
-              ]}
-              aria-hidden="true"
-            >
-              <span class="chat-controls__speed-toggle-thumb" />
-            </span>
-          ),
+          details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
         });
       }
       return entries;

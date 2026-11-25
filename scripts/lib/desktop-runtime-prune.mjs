@@ -9,7 +9,7 @@ const developmentFiles = {
   zod: { versions: ["4.6.5"], sources: ["src"], trees: [] },
   "@anthropic-ai/sdk": { versions: ["0.132.1"], sources: ["src"], trees: [] },
   "@mistralai/mistralai": {
-    versions: ["2.7.0"],
+    versions: ["3.2.0"],
     sources: ["src"],
     trees: [
       "tests",

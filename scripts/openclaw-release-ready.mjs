@@ -27,7 +27,9 @@ import {
 import { isRecord } from "./lib/record-shared.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
+  authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
@@ -56,7 +58,7 @@ const INPUTS = new Set([
   "publish_docker_only",
   "release_profile",
   "release_evidence_mode",
-  "wait_for_clawhub",
+  "fast_track_request",
 ]);
 
 function requireValue(condition, message) {
@@ -113,6 +115,9 @@ export function validateReleaseButtonInputs(value) {
   );
   const inputs = Object.fromEntries(
     Object.entries(value).map(([key, entry]) => {
+      if (key === "fast_track_request" && typeof entry === "string" && entry) {
+        return [key, JSON.stringify(JSON.parse(entry))];
+      }
       requireValue(
         (typeof entry === "string" || typeof entry === "boolean") &&
           !/[\r\n\0]/u.test(String(entry)),
@@ -165,7 +170,6 @@ export function validateReleaseButtonInputs(value) {
     publish_openclaw_npm: "true",
     publish_docker_only: "false",
     release_evidence_mode: "full-release-validation",
-    wait_for_clawhub: "true",
   };
 }
 
@@ -275,8 +279,14 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
-  const deadline = Date.now() + 110 * 60_000;
+async function waitForRun(
+  runId,
+  attempt,
+  workflow,
+  tooling,
+  { allowFailure = false, timeoutMinutes = 110 } = {},
+) {
+  const deadline = Date.now() + timeoutMinutes * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
     producer(run, workflow, tooling);
@@ -302,13 +312,7 @@ async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = fa
   );
 }
 
-function dispatch(workflow, inputs, tooling) {
-  verifyReleaseToolingIdentity({
-    repository: REPOSITORY,
-    workflowRef: tooling.ref,
-    workflowFullRef: tooling.fullRef,
-    workflowSha: tooling.sha,
-  });
+async function dispatch(workflow, inputs, tooling, revalidateAuthority) {
   const args = [
     "--method",
     "POST",
@@ -322,6 +326,14 @@ function dispatch(workflow, inputs, tooling) {
   }
   // Dispatch is a mutation: never retry an uncertain response. A new request
   // could create a second publisher even when the first response was lost.
+  verifyReleaseToolingIdentity({
+    repository: REPOSITORY,
+    workflowRef: tooling.ref,
+    workflowFullRef: tooling.fullRef,
+    workflowSha: tooling.sha,
+  });
+  // Finish remote reads before checking the operator permission that authorizes POST.
+  await revalidateAuthority?.();
   const result = api(`actions/workflows/${workflow}/dispatches`, args);
   requireValue(
     Number.isSafeInteger(result.workflow_run_id) && result.workflow_run_id > 0,
@@ -362,7 +374,8 @@ export function validateReadyRelease(value, expected) {
     const descriptor = value.plugins[target];
     requireValue(
       descriptor?.repository === REPOSITORY &&
-        descriptor.workflowSha === value.tooling.sha &&
+        descriptor.workflowSha ===
+          (target === "npm" ? (expected.npmWorkflowSha ?? value.tooling.sha) : value.tooling.sha) &&
         (target === "npm" || descriptor.workflowHeadBranch === value.tooling.ref) &&
         descriptor.workflowPath === path,
       `Prepared ${target} producer differs from the release tooling.`,
@@ -371,9 +384,39 @@ export function validateReadyRelease(value, expected) {
   validatePreparedNpmArtifactDescriptor(value.plugins.npm, {
     repository: REPOSITORY,
     sourceSha: value.sourceSha,
-    workflowSha: value.tooling.sha,
+    workflowSha: expected.npmWorkflowSha ?? value.tooling.sha,
   });
   return value;
+}
+
+function authenticateReadyNpm({
+  artifact,
+  inputs,
+  sourceSha,
+  toolingSha,
+  toolingFullRef,
+  evidenceClient,
+  fastTrackPublication,
+}) {
+  return authenticatePreparedNpmArtifact({
+    artifact,
+    repository: REPOSITORY,
+    sourceSha,
+    workflowSha: toolingSha,
+    workflowFullRef: toolingFullRef,
+    releaseTag: inputs.tag,
+    selectionMode: "all-publishable",
+    plugins: "",
+    npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+    fastTrackRequest: inputs.fast_track_request,
+    fastTrackPublication,
+    fullReleaseValidationRunId: inputs.full_release_validation_run_id,
+    fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
+    publisherPolicySha256: createHash("sha256")
+      .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
+      .digest("hex"),
+    evidenceClient,
+  });
 }
 
 async function loadPreparedPlugins({
@@ -381,55 +424,84 @@ async function loadPreparedPlugins({
   inputs,
   sourceSha,
   toolingSha,
+  toolingFullRef,
   sourceRoot,
   outputDir,
   token,
   fetchImpl,
+  evidenceClient,
+  targets = ["npm", "clawhub"],
 }) {
   requireValue(
-    isRecord(plugins) && Object.keys(plugins).toSorted().join(",") === "clawhub,npm",
-    "Both npm and ClawHub preparation artifacts are required.",
+    targets.length > 0 && targets.every((target) => ["npm", "clawhub"].includes(target)),
+    "Unknown prepared plugin target.",
+  );
+  requireValue(
+    isRecord(plugins) &&
+      Object.keys(plugins).every((target) => ["npm", "clawhub"].includes(target)) &&
+      targets.every((target) => isRecord(plugins[target])),
+    "Preparation artifacts are required for each selected target.",
   );
   mkdirSync(outputDir, { recursive: true });
-  const publisherPolicySha256 = createHash("sha256")
-    .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
-    .digest("hex");
+  const adoption = targets.includes("npm")
+    ? await authenticateReadyNpm({
+        artifact: plugins.npm,
+        inputs,
+        sourceSha,
+        toolingSha,
+        toolingFullRef,
+        evidenceClient,
+      })
+    : undefined;
+  const publisherPolicySha256 = adoption?.publisherPolicySha256;
   const common = { token, fetchImpl, sourceRoot, selectionMode: "all-publishable", plugins: "" };
   const results = await Promise.allSettled([
-    downloadPreparedNpmRelease({
-      ...common,
-      artifact: plugins.npm,
-      sourceSha,
-      workflowSha: toolingSha,
-      repository: REPOSITORY,
-      npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
-      publisherPolicySha256,
-      archivePath: join(outputDir, `npm-${plugins.npm.artifactId}.zip`),
-    }),
-    resolvePreparedClawHubMatrix({
-      ...common,
-      descriptor: plugins.clawhub,
-      candidateSha: sourceSha,
-      toolingSha,
-      archivePath: join(outputDir, `clawhub-${plugins.clawhub.artifactId}.zip`),
-    }),
+    targets.includes("npm")
+      ? downloadPreparedNpmRelease({
+          ...common,
+          artifact: plugins.npm,
+          sourceSha,
+          workflowSha: adoption.workflowSha,
+          repository: REPOSITORY,
+          npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+          publisherPolicySha256,
+          archivePath: join(outputDir, `npm-${plugins.npm.artifactId}.zip`),
+        })
+      : { packages: [] },
+    targets.includes("clawhub")
+      ? resolvePreparedClawHubMatrix({
+          ...common,
+          descriptor: plugins.clawhub,
+          candidateSha: sourceSha,
+          toolingSha,
+          archivePath: join(outputDir, `clawhub-${plugins.clawhub.artifactId}.zip`),
+        })
+      : [],
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) {
     throw failure.reason;
   }
   const [npm, clawhub] = results.map((result) => result.value);
+  await adoption?.revalidateAuthority?.();
   return {
     npm,
     clawhub: { packages: clawhub.map((entry) => entry.prepared) },
     publisherPolicySha256,
+    adoption,
   };
 }
 
 export async function prefetchPreparedPlugins(options) {
-  const manifests = await loadPreparedPlugins(options);
-  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token, fetchImpl } =
-    options;
+  const capacity = options.reportCapacity
+    ? createPreparedNpmCapacityObserver(options.fetchImpl)
+    : undefined;
+  const manifests = await loadPreparedPlugins({
+    ...options,
+    fetchImpl: capacity?.fetchImpl ?? options.fetchImpl,
+  });
+  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token } = options;
+  const fetchImpl = capacity?.packageFetchImpl ?? options.fetchImpl;
   const admissionDir = mkdtempSync(join(outputDir, "verified-"));
   const tasks = [
     ...manifests.npm.packages.map(
@@ -438,7 +510,7 @@ export async function prefetchPreparedPlugins(options) {
           package: entry,
           repository: REPOSITORY,
           sourceSha,
-          workflowSha: toolingSha,
+          workflowSha: manifests.adoption.workflowSha,
           npmDistTag: manifests.npm.npmDistTag,
           publisherPolicySha256: manifests.publisherPolicySha256,
           sourcePackageJson: join(sourceRoot, entry.packageDir, "package.json"),
@@ -470,6 +542,8 @@ export async function prefetchPreparedPlugins(options) {
       throw failure.reason;
     }
   }
+  await manifests.adoption?.revalidateAuthority?.();
+  capacity?.report(tasks.length);
   writeJson(join(admissionDir, "verified.json"), {
     sourceSha,
     toolingSha,
@@ -479,7 +553,7 @@ export async function prefetchPreparedPlugins(options) {
   return { ...manifests, inputs };
 }
 
-async function readReady(descriptor, directory, tooling, token) {
+async function readReady(descriptor, directory, tooling, token, fastTrackPublication) {
   requireValue(
     descriptor?.workflowPath === PREPARE_WORKFLOW &&
       descriptor.repository === REPOSITORY &&
@@ -506,10 +580,33 @@ async function readReady(descriptor, directory, tooling, token) {
     "Release readiness artifact name mismatch.",
   );
   const sourceSha = api(`commits/${encodeURIComponent(value.inputs?.tag)}`, ["--jq", "{sha}"]).sha;
-  return validateReadyRelease(value, { sourceSha, tooling });
+  const adoption = await authenticateReadyNpm({
+    artifact: value.plugins?.npm,
+    fastTrackPublication,
+    inputs: value.inputs,
+    sourceSha,
+    toolingSha: tooling.sha,
+    toolingFullRef: tooling.fullRef,
+  });
+  await adoption.revalidateAuthority?.();
+  return {
+    ready: validateReadyRelease(value, {
+      sourceSha,
+      tooling,
+      npmWorkflowSha: adoption.workflowSha,
+    }),
+    revalidateAuthority: adoption.revalidateAuthority,
+  };
 }
 
-function publicationInputs(ready, resumeRunId) {
+function publicationInputs(ready, resumeRunId, fastTrackRequest = "") {
+  requireValue(typeof fastTrackRequest === "string", "fast_track_request must be JSON text.");
+  requireValue(
+    !fastTrackRequest ||
+      !ready.inputs.fast_track_request ||
+      isDeepStrictEqual(JSON.parse(fastTrackRequest), JSON.parse(ready.inputs.fast_track_request)),
+    "Publication must retain the exception request bound to release preparation.",
+  );
   const effectiveResumeRunId = resumeRunId || ready.inputs.openclaw_npm_resume_run_id || "";
   requireValue(
     effectiveResumeRunId === "" ||
@@ -520,6 +617,7 @@ function publicationInputs(ready, resumeRunId) {
   return {
     ...ready.inputs,
     ...(resumeRunId ? { openclaw_npm_resume_run_id: resumeRunId } : {}),
+    ...(fastTrackRequest ? { fast_track_request: fastTrackRequest } : {}),
     prepared_plugins: JSON.stringify(ready.plugins),
   };
 }
@@ -555,8 +653,15 @@ async function readPublicationRequest(path, directory, tooling, token) {
       }),
     "Publication request is unknown, unverified, malformed, or inconsistent; do not redispatch.",
   );
-  const ready = await readReady(request.preparedArtifact, directory, tooling, token);
-  const inputs = publicationInputs(ready, request.openclawNpmResumeRunId ?? "");
+  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token, {
+    runId: request.releaseRunId,
+    runAttempt: request.releaseRunAttempt,
+  });
+  const inputs = publicationInputs(
+    ready,
+    request.openclawNpmResumeRunId ?? "",
+    request.inputs?.fast_track_request ?? "",
+  );
   requireValue(
     ready.sourceSha === request.sourceSha &&
       isDeepStrictEqual(inputs, request.inputs) &&
@@ -584,14 +689,6 @@ async function verifyPublicationOutcome(run, request, tooling, token, directory)
       outputDir: join(directory, "core-postpublish-verification"),
     });
   }
-  const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
-  await verifyClawHubPostpublish({
-    event: { workflow_run: run },
-    parentStatePolicy: "sealed-producer",
-    verifierSha: tooling.sha,
-    token,
-    outputDir: join(directory, "clawhub-public-verification"),
-  });
 }
 
 async function main() {
@@ -624,20 +721,19 @@ async function main() {
       inputs.tag === `v${packageJson.version}`,
       "Release tag and source package version differ.",
     );
-    const { authenticateFullReleaseValidationEvidence } =
-      await import("./validate-full-release-validation-evidence.mjs");
-    const authenticated = await authenticateFullReleaseValidationEvidence({
-      run: api(
-        `actions/runs/${inputs.full_release_validation_run_id}/attempts/${inputs.full_release_validation_run_attempt}`,
-      ),
-      expectedRepository: REPOSITORY,
-      expectedRunId: inputs.full_release_validation_run_id,
-      expectedRunAttempt: inputs.full_release_validation_run_attempt,
-      expectedTargetSha: sourceSha,
-      expectedReleaseTag: inputs.tag,
-      expectedTrustedWorkflowFullRef: tooling.fullRef,
-      expectedTrustedWorkflowSha: tooling.sha,
-      expectedPublicationSelection: {
+    const adoption = await authenticatePreparedNpmArtifact({
+      repository: REPOSITORY,
+      sourceSha,
+      workflowSha: tooling.sha,
+      workflowFullRef: tooling.fullRef,
+      fastTrackRequest: inputs.fast_track_request,
+      fullReleaseValidationRunId: inputs.full_release_validation_run_id,
+      fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
+      releaseTag: inputs.tag,
+      selectionMode: "all-publishable",
+      plugins: "",
+      npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+      publicationSelection: {
         route: "prepared",
         npmDistTag: inputs.npm_dist_tag,
         publishOpenclawNpm: true,
@@ -650,20 +746,13 @@ async function main() {
             }
           : {}),
       },
-      verifierSourceSha: tooling.sha,
-      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
-      isTrustedMainAncestor: (sha) => {
-        const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-        return (
-          ["ahead", "identical"].includes(comparison.status) &&
-          comparison.merge_base_commit?.sha === sha
-        );
-      },
+      publisherPolicySha256: createHash("sha256")
+        .update(
+          readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
+        )
+        .digest("hex"),
     });
-    const npmArtifact = validatePreparedNpmArtifactDescriptor(
-      authenticated.evidence.current.manifest.publicationArtifacts?.pluginNpm,
-      { repository: REPOSITORY, sourceSha, workflowSha: tooling.sha },
-    );
+    const npmArtifact = adoption.artifact;
     const request = {
       schema: "openclaw.release-ready/v1",
       repository: REPOSITORY,
@@ -694,10 +783,13 @@ async function main() {
     if (values.request === undefined) {
       // npm bytes are already qualified by FRV. Persist before the remaining
       // mutation so an uncertain ClawHub dispatch is never repeated blindly.
-      request.clawhubRunId = dispatch(
-        "plugin-clawhub-release.yml",
-        { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
-        tooling,
+      request.clawhubRunId = (
+        await dispatch(
+          "plugin-clawhub-release.yml",
+          { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
+          tooling,
+          adoption.revalidateAuthority,
+        )
       ).workflow_run_id;
       replaceJson(requestPath, request);
       reportDispatch("plugin-clawhub-release.yml", request.clawhubRunId);
@@ -727,11 +819,18 @@ async function main() {
       ".github/workflows/plugin-clawhub-release.yml",
       tooling,
     );
+    const adoption = await authenticateReadyNpm({
+      artifact: request.npmArtifact,
+      inputs: request.inputs,
+      sourceSha: request.sourceSha,
+      toolingSha: tooling.sha,
+      toolingFullRef: tooling.fullRef,
+    });
     const plugins = {
       npm: validatePreparedNpmArtifactDescriptor(request.npmArtifact, {
         repository: REPOSITORY,
         sourceSha: request.sourceSha,
-        workflowSha: tooling.sha,
+        workflowSha: adoption.workflowSha,
       }),
       clawhub: artifactFor(
         clawhubRun,
@@ -749,17 +848,19 @@ async function main() {
         tooling,
         plugins,
       },
-      request,
+      { ...request, npmWorkflowSha: adoption.workflowSha },
     );
     await prefetchPreparedPlugins({
       plugins,
       inputs: ready.inputs,
       sourceSha: ready.sourceSha,
       toolingSha: tooling.sha,
+      toolingFullRef: tooling.fullRef,
       sourceRoot: resolve(values["source-root"]),
       outputDir: join(directory, "packages"),
       token,
     });
+    await adoption.revalidateAuthority?.();
     writeJson(join(directory, READY_FILE), ready);
     output(
       "artifact_name",
@@ -783,10 +884,10 @@ async function main() {
       "openclaw_npm_resume_run_id must be a positive safe integer.",
     );
     const descriptor = readJson(values.artifact);
-    const ready = await readReady(descriptor, directory, tooling, token);
+    const { ready, revalidateAuthority } = await readReady(descriptor, directory, tooling, token);
     // Recovery changes only the existing owner's resume selector. The parent
     // verifies its authority and canonical core bytes before starting writers.
-    const inputs = publicationInputs(ready, resumeRunId);
+    const inputs = publicationInputs(ready, resumeRunId, process.env.FAST_TRACK_REQUEST_JSON ?? "");
     const request = {
       schema: "openclaw.release-dispatch/v1",
       repository: REPOSITORY,
@@ -816,10 +917,8 @@ async function main() {
     // non-execution. Existing intent never authorizes another mutation.
     writeJson(requestPath, request);
     try {
-      request.releaseRunId = dispatch(
-        "openclaw-release-publish.yml",
-        inputs,
-        tooling,
+      request.releaseRunId = (
+        await dispatch("openclaw-release-publish.yml", inputs, tooling, revalidateAuthority)
       ).workflow_run_id;
       request.state = "unverified";
       replaceJson(requestPath, request);
@@ -872,7 +971,8 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
-      { allowFailure: true },
+      // The publish job alone may run 270 minutes with hour-long npm readbacks.
+      { allowFailure: true, timeoutMinutes: 330 },
     );
     await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");

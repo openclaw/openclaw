@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -14,6 +15,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   selectStoredSessionLineage,
 } from "./session-store-key.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
@@ -53,7 +55,8 @@ export async function prepareGatewaySessionEntryReader(params: {
     params.entry?.modelOverrideSource === "default" ||
     resolveDirectStoredModelOverride({
       sessionEntry: params.entry,
-      defaultProvider: resolveSessionConfiguredDefault(params.cfg, params.agentId).provider,
+      defaultProvider:
+        resolveSessionConfiguredDefault(params.cfg, params.agentId)?.provider ?? DEFAULT_PROVIDER,
     })
   ) {
     return (key) => params.store[key];
@@ -111,4 +114,30 @@ export async function prepareGatewaySessionEntryReader(params: {
     }
   }
   return (key) => params.store[key] ?? prepared.get(key);
+}
+
+/**
+ * The model a turn admitted for this session starts on: the session's own pick, else its
+ * parent's, else the configured default. Native harness ownership is applied by the run.
+ */
+export async function resolveGatewaySessionTurnModelRef(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  entry?: SessionEntry;
+}): Promise<{ provider: string; model: string } | undefined> {
+  const { cfg, agentId, sessionKey, entry } = params;
+  const selected = resolveSessionSelectedModelRef({
+    cfg,
+    agentId,
+    sessionKey,
+    source: {
+      entry,
+      readSourceEntry: sessionKey
+        ? await prepareGatewaySessionEntryReader({ cfg, agentId, sessionKey, entry, store: {} })
+        : () => undefined,
+    },
+    preparedRuntimeOwnership: null,
+  });
+  return selected && { provider: selected.provider, model: selected.model };
 }

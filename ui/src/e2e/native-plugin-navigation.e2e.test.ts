@@ -54,10 +54,17 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   const pages = sidebar.locator(".sidebar-pages");
   const pluginLink = pages.getByRole("link", { name: "UI fixture", exact: true });
   await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-  const builtInLink = pages.getByRole("link", { name: "Plugins", exact: true });
+  const builtInLink = pages.getByRole("link", { name: "Customize", exact: true });
+  // Each choice closes the page menu, so reopen it before reading or choosing in it.
+  const openPages = async () => {
+    if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
+      await pagesButton.click();
+    }
+  };
   const selected = async (active: boolean, navigation: Promise<unknown>) => {
     await navigation;
     await (active ? revisionOne : plugins).waitFor();
+    await openPages();
     await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe(active ? "page" : null);
   };
   const measureWidth = (link: typeof pluginLink) =>
@@ -72,15 +79,19 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
     })
     .toBeLessThan(0.5);
   expect(await customize.count()).toBe(0);
-  await selected(false, builtInLink.click());
-  await selected(true, pluginLink.click());
+  const choose = async (link: typeof pluginLink) => {
+    await openPages();
+    await link.click();
+  };
+  await selected(false, choose(builtInLink));
+  await selected(true, choose(pluginLink));
   await selected(false, page.goBack());
   await selected(true, page.goForward());
   await page.goto(`${suite.server.baseUrl}plugin?p.filter=review&id=proof&plugin=ui-fixture`);
   await revisionOne.waitFor();
   await pagesButton.click();
   await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-  await selected(false, builtInLink.click());
+  await selected(false, choose(builtInLink));
   expect(await customize.count()).toBe(0);
   await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
   await plugins.waitFor();
@@ -96,13 +107,38 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   await button("Reload plugin UI").click();
   await gateway.waitForRequest("plugins.controlUi.reload");
   await button("Back to app").click();
-  await pagesButton.click();
-  await pluginLink.click();
+  await choose(pluginLink);
   await heading("Fixture revision two").waitFor();
   expect(pageErrors).toEqual([]);
 }
 
+async function checkPhoneTitle({ page }: { page: Page }) {
+  await installMockGateway(page, {
+    featureMethods: [...defaultControlUiFeatureMethods, "plugins.controlUi.list"],
+    methodResponses: {
+      "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+      "plugins.controlUi.list": catalog("one"),
+    },
+  });
+  await page.route("**/__openclaw__/plugins/control-ui/ui-fixture/*/index.js", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: pluginModule("one", false),
+    }),
+  );
+  await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
+  await page.getByRole("heading", { name: "Fixture revision one", exact: true }).waitFor();
+  // The shared plugin route names the page by its own label, not the generic "Plugin".
+  await expect.poll(() => page.locator(".topbar-page-title").textContent()).toBe("UI fixture");
+  await expect.poll(() => page.title()).toBe("UI fixture — OpenClaw");
+}
+
 suite.define(() => {
+  it("names a plugin page by its own label in the phone header and tab title", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 }, serviceWorkers: "block" }, (fixture) =>
+      checkPhoneTitle(fixture),
+    ));
   it.each([true, false])(
     "updates native page selection and keeps reload in Plugins Advanced (admin: %s)",
     (admin) =>

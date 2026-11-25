@@ -4,8 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -47,7 +46,7 @@ const prepare = (params: Omit<PrepareParams, "config" | "env" | "isActive">) =>
   prepareProviderCatalogRun({ config: {}, env: {}, isActive: () => true, ...params });
 
 afterEach(async () => {
-  await loggerTestApi.flushFileLogQueueForTests();
+  await flushLogger();
   setLoggerOverride(null);
   resetLogger();
   vi.clearAllMocks();
@@ -230,6 +229,28 @@ it("bypasses a selected account's HTTP cache on explicit refresh", async () => {
   }
 });
 
+it("does not start OAuth refresh after catalog preparation closes during runtime loading", async () => {
+  let active = true;
+  await prepareProviderCatalogRun({
+    provider: catalogProvider("openai", "OpenAI", async () => null),
+    config: {},
+    env: {},
+    agentDir: tempDirs.make("catalog-oauth-closed-"),
+    authStore: createAuthProfileStoreFixture({
+      "openai:selected": createOAuthRefreshCredential({ expires: 1 }),
+    }),
+    resolveProviderAuth: () => {
+      queueMicrotask(() => {
+        active = false;
+      });
+      return { apiKey: undefined, profileId: "openai:selected", mode: "oauth", source: "profile" };
+    },
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    isActive: () => active,
+  });
+  expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+});
+
 it("passes refreshed OAuth grant metadata to the catalog", async () => {
   const agentDir = tempDirs.make("catalog-oauth-grant-");
   const profileId = "openai:sharing";
@@ -344,7 +365,7 @@ it.each([true, false])(
       const result = await runProviderCatalog(prepared);
       const finalized = prepared.finalizeCatalogResult?.(result) ?? result;
       const providers = normalizePluginDiscoveryResult({ provider, result: finalized });
-      await loggerTestApi.flushFileLogQueueForTests();
+      await flushLogger();
       const records = (await fs.readFile(logFile, "utf8"))
         .trim()
         .split("\n")

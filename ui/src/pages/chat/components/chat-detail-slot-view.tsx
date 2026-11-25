@@ -103,6 +103,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
         >
           <ChatDetailPanel
+            registerPanelHost={props.registerPanelHost}
             class="chat-sidebar"
             content={content()}
             attachmentChat={props.chat}

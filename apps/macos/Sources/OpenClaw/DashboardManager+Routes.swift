@@ -78,9 +78,11 @@ extension DashboardManager {
     {
         let root = OpenClawConfigFile.loadDict()
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        // An OpenClaw ID claw resolves through the endpoint store, which owns its tunnel route.
         if mode == .remote,
            resolution.transport == .direct,
-           let url = resolution.directURL
+           let url = resolution.directURL,
+           !MacOpenClawIDOperatorRoute.shared.serves(url)
         {
             return GatewayConnection.EndpointSnapshot(
                 config: (

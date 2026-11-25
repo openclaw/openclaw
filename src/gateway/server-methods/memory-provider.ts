@@ -4,12 +4,12 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { MemorySearchRequest } from "../../plugins/memory-provider-types.js";
+import type { MemorySearchRequest } from "../../plugins/memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -113,7 +113,7 @@ async function captureMemoryReadAuthority(
 ): Promise<{ scopes: readonly string[]; assertCurrent: () => void; release: () => void }> {
   const { client, context, signal, hasCurrentClientAuthority } = options;
   if (isSyntheticGatewayCaller(client) || client?.internal?.remoteIngressPrincipal) {
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,
@@ -124,10 +124,7 @@ async function captureMemoryReadAuthority(
     }
     return {
       scopes: captured.authority.scopes,
-      assertCurrent: () => {
-        assertRequestCurrent();
-        captured.authority.assertCurrent();
-      },
+      assertCurrent: assertRequestCurrent,
       release: captured.release,
     };
   }
@@ -171,7 +168,7 @@ function assertOperatorMemoryAccess(params: {
 
 /** Neutral reads deliberately do not use workspace RPCs or Memory Core artifacts. */
 async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions) {
-  const { params, req, respond, context, client, signal, hasCurrentClientAuthority } = options;
+  const { params, req, respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
   let agentId: string;
   let operation: ReturnType<typeof parseOperation>;
@@ -201,8 +198,8 @@ async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions
   const assertRequestCurrent = () => {
     signal?.throwIfAborted();
     client?.connectionSignal?.throwIfAborted();
-    if (!open || client?.invalidated || hasCurrentClientAuthority?.() === false) {
-      throw new Error("Memory request authority is no longer active");
+    if (!open) {
+      throw new Error("Memory request ended. Start a new request to retry.");
     }
   };
   let captured: Awaited<ReturnType<typeof captureMemoryReadAuthority>> | undefined;
@@ -210,19 +207,8 @@ async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions
   try {
     assertRequestCurrent();
     captured = await captureMemoryReadAuthority(options, assertRequestCurrent);
-    const { scopes, assertCurrent: assertCapturedCurrent } = captured;
-    // The provider calls this right before each effect, so a role or roster
-    // change during open or search still refuses a read the policy now forbids.
-    const assertCurrent = () => {
-      assertCapturedCurrent();
-      assertOperatorMemoryAccess({
-        client,
-        cfg: context.getRuntimeConfig(),
-        agentId,
-        operation,
-        scopes,
-      });
-    };
+    const { scopes, assertCurrent } = captured;
+    assertOperatorMemoryAccess({ client, cfg, agentId, operation, scopes });
     assertCurrent();
     const acquired = await getActiveMemoryProviderCore({
       cfg,

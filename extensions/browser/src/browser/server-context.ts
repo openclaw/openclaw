@@ -1,11 +1,8 @@
 import fs from "node:fs";
-import {
-  resolveCdpControlPolicy,
-  resolveCdpReachabilityPolicy,
-} from "./cdp-reachability-policy.js";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
@@ -14,6 +11,7 @@ import {
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
@@ -113,6 +111,9 @@ function createProfileContext(
     openTab: rawTabOps.openTab,
   });
   const capabilities = getBrowserProfileCapabilities(profile);
+  // External CDP (remote or attachOnly) keeps a Playwright session open across requests.
+  const externallyManagedCdp =
+    capabilities.isRemote || (profile.driver === "openclaw" && profile.attachOnly);
 
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
@@ -138,7 +139,16 @@ function createProfileContext(
       }
       return await withLease(options?.signal, async (signal) => {
         // Explicit targets can come from history; lookup must not launch or restart a browser.
-        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+        // A short probe can time out on a slow external CDP link while the open session still
+        // works, so only that already-open session may resolve the tab; never reconnect here.
+        if (
+          targetId !== undefined &&
+          !(await rawAvailability.isReachable(undefined, { signal })) &&
+          !(
+            externallyManagedCdp &&
+            getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(profile.cdpUrl)
+          )
+        ) {
           throw new BrowserProfileUnavailableError(
             `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
           );
@@ -256,45 +266,18 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           undefined,
           async (signal, runtime) => {
             const activeProfile = runtime.profile;
-            const capabilities = getBrowserProfileCapabilities(activeProfile);
-            let activeRunning = Boolean(runtime.running);
             let activeTabCount = 0;
-
-            if (capabilities.usesChromeMcp) {
-              try {
-                activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                  onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                });
-              } catch {
-                activeRunning = false;
-              }
-            } else {
-              if (!activeRunning) {
-                try {
-                  const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                    profileIsLoopback: activeProfile.cdpIsLoopback,
-                    attachOnly: activeProfile.attachOnly,
-                  })
-                    ? 200
-                    : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning =
-                    capabilities.mode === "local-extension"
-                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                      : await isChromeReachable(
-                          activeProfile.cdpUrl,
-                          probeTimeoutMs,
-                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                          signal,
-                        );
-                } catch {
-                  activeRunning = false;
-                }
-              }
-              if (activeRunning) {
-                const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-              }
-            }
+            const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+              profileIsLoopback: activeProfile.cdpIsLoopback,
+              attachOnly: activeProfile.attachOnly,
+            })
+              ? 200
+              : current.resolved.remoteCdpTimeoutMs;
+            const activeRunning = await profileCtx
+              .isTransportAvailable(probeTimeoutMs, signal, {
+                onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+              })
+              .catch(() => false);
             signal.throwIfAborted();
             return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
           },

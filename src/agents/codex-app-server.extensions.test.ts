@@ -5,7 +5,7 @@ import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
 } from "../plugin-sdk/agent-harness.js";
-import { listAgentToolResultMiddlewares } from "../plugins/agent-tool-result-middleware.js";
+import { listAgentToolResultMiddlewareRegistrations } from "../plugins/agent-tool-result-middleware.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -98,7 +98,7 @@ it("does not treat auto-enabled runtime config as explicit middleware opt-in", a
   const result = await runner.applyToolResultMiddleware(toolResultEvent());
 
   expect(result.content).toEqual([{ type: "text", text: "raw" }]);
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(0);
 });
 
 it("loads missing installed middleware when bundled middleware is already active", async () => {
@@ -121,13 +121,13 @@ it("loads missing installed middleware when bundled middleware is already active
   loadOpenClawPlugins({ config, onlyPluginIds: ["bundled"] });
   setRuntimeConfigSnapshot(config);
 
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(1);
 
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
   const result = await runner.applyToolResultMiddleware(toolResultEvent());
 
   expect(result.content).toEqual([{ type: "text", text: "raw | bundled | installed" }]);
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(1);
 });
 
 it("preserves tool output when published Codex plugins omit factories", async () => {
@@ -166,10 +166,10 @@ it("restores plugin-registered middleware from cache", async () => {
   const options = enabledOptions(middlewareId);
   setRuntimeConfigSnapshot(options.config);
   loadOpenClawPlugins(options);
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
-  expect(listAgentToolResultMiddlewares("openclaw")).toHaveLength(0);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(1);
+  expect(listAgentToolResultMiddlewareRegistrations("openclaw")).toHaveLength(0);
   resetActivePluginRegistryForTest();
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(0);
   loadOpenClawPlugins(options);
   const result = await createAgentToolResultMiddlewareRunner({
     runtime: "codex",
@@ -188,5 +188,5 @@ it("rejects middleware without its runtime contract", () => {
       message: "plugin must declare contracts.agentToolResultMiddleware for: codex",
     }),
   );
-  expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  expect(listAgentToolResultMiddlewareRegistrations("codex")).toHaveLength(0);
 });

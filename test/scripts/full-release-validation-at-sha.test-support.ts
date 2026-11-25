@@ -53,6 +53,7 @@ export function createDispatchFixture(
     admissionRevokedActor?: boolean;
     admissionFailedUpload?: boolean;
     qualificationMovedRef?: boolean;
+    qualificationRefReadFailure?: boolean;
     advanceMainAfterAdmission?: boolean;
     stopAfterAccepted?: "admission" | "qualification";
     bareShaFetchFailure?: boolean;
@@ -100,8 +101,10 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     toolingLagFetchFailure?: boolean;
+    toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
+    activeInventory?: "short-once" | "short-always" | "short-invalid-row" | "malformed";
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
     candidateOpenPrHead?: boolean;
@@ -142,13 +145,13 @@ export function createDispatchFixture(
   writeFileSync(npmCallsPath, "");
   writeFileSync(
     publishedVersionsPath,
-    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.9.6"]),
+    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.7.35", "2026.9.6"]),
   );
   const npmPath = join(binDir, "npm");
   writeFileSync(
     npmPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(npmCallsPath)}, JSON.stringify(args) + "\\n");
 if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) {
@@ -192,6 +195,9 @@ for (const method of ["execFileSync", "spawnSync"]) {
         .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
       if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
     }
+    if (args[0] === "diff" && args.includes("--shortstat") && ${JSON.stringify(options.toolingLagComparisonFailure ?? false)}) {
+      failure = "fixture tooling comparison failed";
+    }
     const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
     if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
       failure = "fatal: remote error: upload-pack: not our ref " + args.at(-1);
@@ -213,7 +219,7 @@ fs.mkdtempSync = (prefix, ...args) => {
   const requests = join(process.cwd(), ".artifacts", "full-release-validation");
   const requestPath = process.env.MOCK_REQUEST_FILE || join(requests, fs.readdirSync(requests).find((name) => name.endsWith(".json")));
   const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-  if (intent.phase !== "prepared" || intent.refs.workflow !== "intended") {
+  if (intent.phase !== "prepared" || !["intended", "uncertain"].includes(intent.refs.workflow)) {
     throw new Error("payload preparation requires durable prepared intent before the workflow ref");
   }
   const directory = makeDirectory(prefix, ...args);
@@ -341,7 +347,7 @@ module.exports = async () => {
   writeFileSync(
     ghPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 fs.appendFileSync(process.env.MOCK_PATH_GH_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.error("PATH gh must not be used");
 process.exit(89);
@@ -353,8 +359,10 @@ process.exit(89);
   writeFileSync(
     selectedGhPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
 const fail = (message, code = 1) => { console.error(message); process.exit(code); };
@@ -535,6 +543,9 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
   const concurrencyInventory = fields.has("status");
+  if (!concurrencyInventory && fs.existsSync(${JSON.stringify(admissionCapturePath)} + ".ref-read-failed")) {
+    fs.writeFileSync(${JSON.stringify(admissionCapturePath)} + ".recovery-inventory", "authority revoked during recovery inventory");
+  }
   const requestDirectory = require("node:path").join(process.cwd(), ".artifacts", "full-release-validation");
   const requestFile = fs.existsSync(requestDirectory)
     ? fs.readdirSync(requestDirectory).find((name) => name.endsWith(".json"))
@@ -553,7 +564,7 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     !fs.existsSync(acceptedRunPath) && concurrencyInventory && fields.get("status") === "in_progress"
     ? [{ ...runMetadata(777, { conclusion: null, status: "in_progress" }), head_branch: request?.request?.workflowRef?.replace(/[0-9]{13}$/, "0000000000001") }]
     : [];
-  const runs = activeConcurrencyRuns.length > 0
+  const runs = concurrencyInventory
     ? activeConcurrencyRuns
     : index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
       ? []
@@ -569,7 +580,20 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  let totalCount = runs.length;
+  const activeInventory = ${JSON.stringify(options.activeInventory)};
+  if (activeInventory && concurrencyInventory && fields.get("status") === "queued") {
+    const marker = runDiscoveryIndexPath + ".short-active-read";
+    if (activeInventory === "short-invalid-row") {
+      totalCount = 2;
+      runs.push({ ...runMetadata(0), status: "queued" });
+    } else if (activeInventory === "malformed") totalCount = -1;
+    else if (activeInventory === "short-always" || !fs.existsSync(marker)) {
+      totalCount++;
+      fs.writeFileSync(marker, "short page");
+    }
+  }
+  console.log(JSON.stringify({ total_count: totalCount, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];
@@ -700,7 +724,11 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
         MOCK_REQUEST_FILE: extraArgs.includes("--request-file")
           ? extraArgs[extraArgs.indexOf("--request-file") + 1]
           : "",
-        MOCK_WORKFLOW_SHA: options.candidateOwned ? targetSha : workflowSha,
+        MOCK_WORKFLOW_SHA: extraArgs.includes("--workflow-sha")
+          ? extraArgs[extraArgs.indexOf("--workflow-sha") + 1]
+          : options.candidateOwned
+            ? targetSha
+            : workflowSha,
         MOCK_VERIFIER_SHA: workflowSha,
         MOCK_ADVANCED_P_PATH: admissionCapturePath + ".advanced",
         GIT_AUTHOR_NAME: "Release Fixture",

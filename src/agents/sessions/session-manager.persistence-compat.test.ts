@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, describe, expect, it } from "vitest";
-import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -242,19 +240,6 @@ describe("SessionManager persistence compatibility", () => {
     expect(manager.getLeafId()).toBe(questionId);
     expect(manager.getAppendParentId()).toBe(questionId);
   });
-});
-
-it("keeps file fixture appends and rewrites readable after an unterminated record", async () => {
-  const dir = tempDirs.make("openclaw-session-manager-compat-");
-  const file = path.join(dir, "unterminated.jsonl");
-  await fs.writeFile(file, JSON.stringify(header("unterminated", dir)));
-  const manager = openFileBackedSessionManagerForTest(file, dir);
-  manager.appendMessage(makeUserMessage("appended", 1));
-  expect(openFileBackedSessionManagerForTest(file, dir).buildSessionContext().messages).toEqual([
-    expect.objectContaining({ content: "appended", role: "user" }),
-  ]);
-  expect(manager.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
-  expect(openFileBackedSessionManagerForTest(file, dir).buildSessionContext().messages).toEqual([]);
 });
 
 async function userSession() {

@@ -3,26 +3,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InternalAgentTurnDispatchOptions } from "../../../gateway/agent-turn/internal-facade.types.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { parseMessageWithAttachments } from "../../../gateway/chat-attachments.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
-import {
-  OutboundDeliveryError,
-  PlatformMessageNotDispatchedError,
-} from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { saveMediaBuffer } from "../../../media/store.js";
+import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
-import {
-  reserveSessionControllerSource,
-  retireSessionControllerInput,
-} from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -30,6 +25,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { detectAndLoadPromptImages } from "../../embedded-agent-runner/run/images.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -43,6 +39,7 @@ import {
   musicCompletionEvents,
   taskCompletionEvents,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { buildSavedMediaAttachment } from "../../tools/media-generate-result-shared.js";
 import {
   testing,
   deliverSubagentAnnouncement,
@@ -66,6 +63,7 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureQueueContext: OpenClawStateWorkerContext;
 
 beforeEach(() => {
@@ -230,7 +228,7 @@ describe("queued completion handoff", () => {
         expect(executed).toBe(false);
         if (outcome === "delivery deadline") {
           deliveryDeadline.abort(new Error("completion delivery expired"));
-          expect(await delivery).toMatchObject({ delivered: false, path: "none" });
+          expect(await delivery).toMatchObject({ delivered: false });
           parentSettled.resolve();
           await vi.advanceTimersByTimeAsync(0);
           expect(executed).toBe(false);
@@ -275,24 +273,11 @@ const slackThreadOrigin = {
 } as const;
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
-const missingVisibleCompletion = {
-  delivered: false,
-  path: "direct",
-  reason: "visible_reply_missing",
-  error: "completion agent did not produce a visible reply",
-};
 const identifiedCompletion = (overrides: Parameters<typeof taskCompletionEvents>[0] = {}) =>
   taskCompletionEvents({ childSessionId: "child-session-id", ...overrides });
 const messageToolConfig = { messages: { groupChat: { visibleReplies: "message_tool" as const } } };
-const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
 const responseWithResult = (result: Record<string, unknown>) => ({ result });
 
-function expectSentMessage(
-  sendMessage: typeof runtimeSendMessage,
-  fields: Record<string, unknown>,
-) {
-  expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
 function expectNoExternalDelivery(
   callGateway: typeof runtimeCallGateway,
   sendMessage: typeof runtimeSendMessage,
@@ -316,10 +301,6 @@ function createPayloadGatewayMock(...payloads: Record<string, unknown>[]) {
   return createGatewayMock({
     result: { payloads, ...(payloads.length > 0 ? { deliveryStatus: sentDeliveryStatus } : {}) },
   });
-}
-
-function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
-  return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
 }
 
 function createRoleRestrictedInProcessGatewayMock(response: Record<string, unknown>) {
@@ -366,11 +347,8 @@ function createSendMessageMock() {
   })) as unknown as typeof runtimeSendMessage;
 }
 
-const committedSessionSpawnEvidence = {
-  acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
-} as const;
-
-function registerDirectTargetTestChannel(channelId: string): void {
+function registerDirectTargetTestChannel(channelId: string) {
+  const instance = createTestInstance(channelId);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -382,13 +360,15 @@ function registerDirectTargetTestChannel(channelId: string): void {
             capabilities: { chatTypes: ["direct", "channel"] },
           }),
           messaging: {
-            inferTargetChatType: ({ to }: { to: string }) =>
+            inferTargetChatType: instance.wrap(({ to }: { to: string }) =>
               to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+            ),
           },
         },
       },
     ]),
   );
+  return instance;
 }
 
 function expectGatewayAgentParams(
@@ -403,10 +383,8 @@ function expectInProcessAgentParams(
   dispatchGatewayMethodInProcess: typeof runtimeDispatchGatewayMethodInProcess,
   expected: Record<string, unknown>,
 ) {
-  const method = mockCallArg(dispatchGatewayMethodInProcess, 0, 0);
-  expect(method).toBe("agent");
-  const params = mockCallArg(dispatchGatewayMethodInProcess, 0, 1);
-  return expectRecordFields(params, expected);
+  expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 0)).toBe("agent");
+  return expectRecordFields(mockCallArg(dispatchGatewayMethodInProcess, 0, 1), expected);
 }
 
 type AnnouncementInput = Parameters<typeof deliverSubagentAnnouncement>[0];
@@ -494,9 +472,7 @@ async function deliverFixture(
       isActive === true,
     ),
     ...(routeName === "thread" || routeName === "telegram"
-      ? {
-          resolveRequesterSessionAbandonment: () => requesterAbandonment,
-        }
+      ? { resolveRequesterSessionAbandonment: () => requesterAbandonment }
       : {}),
   });
   return deliverAnnouncement({
@@ -514,14 +490,6 @@ async function deliverFixture(
     ...(delivery.completionTarget ? { completionRequesterSessionId: "requester-session-dm" } : {}),
   });
 }
-const deliverSlackThreadAnnouncement = (params: DeliveryFixtureParams) =>
-  deliverFixture("thread", params);
-const deliverSlackChannelAnnouncement = (params: DeliveryFixtureParams) =>
-  deliverFixture("channel", params);
-const deliverDiscordDirectMessageCompletion = (params: DeliveryFixtureParams) =>
-  deliverFixture("discord", params);
-const deliverTelegramDirectMessageCompletion = (params: DeliveryFixtureParams) =>
-  deliverFixture("telegram", params);
 
 async function runDelivery(
   route: keyof typeof deliveryRoutes,
@@ -624,7 +592,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   const deliveredPayload = (text: string) => ({
     result: { payloads: [{ text }], deliveryStatus: sentDeliveryStatus },
   });
-  const missingResult = { delivered: false, path: "direct", reason: "visible_reply_missing" };
   const completionCase = (
     name: string,
     route: DeliveryCase["route"],
@@ -632,7 +599,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ): DeliveryCase => ({ name, route, ...fields });
   it.each<DeliveryCase>([
     completionCase("yield custody", "thread", {
-      response: {},
       params: {
         sessionId: "requester-session-1",
         isActive: true,
@@ -643,9 +609,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         delivered: false,
         path: "none",
         reason: "completion_handoff_pending",
-        terminal: true,
-        disposition: "intentional_non_delivery",
       },
+      gatewayCalls: 0,
+    }),
+    completionCase("cron run holding its turn after its attempt ended", "thread", {
+      params: { requesterSessionKey: "agent:main:cron:job:run:run-1", isActive: true },
+      expected: { delivered: false, path: "none", reason: "completion_handoff_pending" },
       gatewayCalls: 0,
     }),
     completionCase("omitted synthesis result", "discord", {
@@ -692,10 +661,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-qa-fallback-empty:text-direct",
       },
     }),
-    completionCase("channel target with a direct key", "channel", {
-      params: { requesterSessionKey: "agent:main:discord:dm:U123" },
-      expected: missingResult,
-    }),
     completionCase("visible but failed delivery", "thread", {
       response: responseWithResult({
         payloads: [{ text: "Tests passed and the PR is ready for review." }],
@@ -706,35 +671,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
       expected: { delivered: false, path: "direct", error: "Slack send failed: channel not found" },
     }),
-    completionCase("active suppressed completion", "thread", {
-      response: responseWithResult({
-        payloads: [],
-        deliveryStatus: {
-          status: "suppressed",
-          reason: "no_visible_payload",
-          resultCount: 0,
-        },
-      }),
-      params: { isActive: true },
-      expected: missingResult,
-      gatewayCalls: 1,
-    }),
-    completionCase("typed missing child output", "discord", {
-      params: {
-        isActive: true,
-        sourceSessionKey: "agent:worker:subagent:empty-success",
-        internalEvents: identifiedCompletion({
-          childSessionKey: "agent:worker:subagent:empty-success",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "(no output)",
-          noVisibleResult: true,
-        }),
-      },
-      expected: { ...missingVisibleCompletion, terminal: undefined },
-    }),
     completionCase("abandoned requester", "telegram", {
-      response: deliveredPayload("child completion output"),
       params: { requesterAbandonment: "timeout", isActive: false },
       expected: {
         delivered: false,
@@ -768,18 +705,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         to: "telegram:-1003871627242",
         threadId: "6823",
       },
-    }),
-    completionCase("required message tool missing", "channel", {
-      response: deliveredPayload("The subagent is done."),
-      params: { sourceTool: "subagent_announce", runtimeConfig: messageToolConfig },
-      expected: {
-        delivered: false,
-        path: "direct",
-        reason: "message_tool_delivery_missing",
-        error: "completion agent did not use the message tool for message-tool-only delivery",
-        disposition: "permanent_failure",
-      },
-      gatewayCalls: 1,
     }),
     completionCase("committed tool final after error", "discord", {
       response: responseWithResult({
@@ -818,7 +743,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expectRecordFields(result, expected ?? { delivered: true, path: "direct" });
     if (sent) {
-      expectSentMessage(sendMessage, sent);
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(sent));
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
@@ -861,17 +786,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "accepted",
       response: { status: "accepted", runId: "pending" },
-      expected: { path: "direct", reason: "requester_turn_pending", disposition: "session_queued" },
-    },
-    {
-      name: "error",
-      response: { status: "error", result: { payloads: [{ text: "failed" }] } },
-      expected: { disposition: "retryable" },
-    },
-    {
-      name: "operator cancellation",
-      response: { status: "timeout", stopReason: "rpc", summary: "cancelled" },
-      expected: { terminal: true, disposition: "intentional_non_delivery" },
+      expected: { path: "queued", reason: "requester_turn_pending" },
     },
   ])("records private handoff $name without raw fallback", async ({ response, expected }) => {
     const { result: delivery, sendMessage } = await runDelivery("discord", {
@@ -884,19 +799,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([null, "replacement-parent"])(
-    "does not deliver private completion to a missing or replaced parent: %s",
+    "hands a private completion only to a live parent chat, also after a reset: %s",
     async (currentRequesterSessionId) => {
       const { result, callGateway, sendMessage } = await runDelivery("discord", {
-        response: { status: "ok", result: { payloads: [] } },
+        response: { status: "ok", inputProcessingCompleted: true, result: { payloads: [] } },
         completionTarget: "parent",
         currentRequesterSessionId,
         internalEvents: taskCompletionEvents(),
       });
-      expect(result).toMatchObject({
-        delivered: false,
-        reason: "completion_handoff_unavailable",
-        terminal: true,
-      });
+      if (currentRequesterSessionId) {
+        expectGatewayAgentParams(callGateway, { expectedExistingSessionId: "replacement-parent" });
+        return expect(sendMessage).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ delivered: false, reason: "completion_handoff_unavailable" });
       expectNoExternalDelivery(callGateway, sendMessage);
     },
   );
@@ -905,14 +820,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "intentional suppression",
       suppressionReason: "cancelled_by_message_sending_hook",
-      disposition: "intentional_non_delivery",
       reason: "delivery_suppressed",
     },
     {
       name: "adapter ambiguity",
       suppressionReason: "adapter_returned_no_identity",
-      disposition: "ambiguous",
-      reason: undefined,
+      reason: "delivery_suppressed",
     },
   ] as const)("reports $name from direct text completion fallback", async (testCase) => {
     const onDeliveryResult = vi.fn();
@@ -934,7 +847,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      disposition: testCase.disposition,
       reason: testCase.reason,
     });
     expect(onDeliveryResult).not.toHaveBeenCalled();
@@ -968,89 +880,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(content).not.toContain(modelRouteChange);
     expect(content).toContain("x".repeat(8_000));
   });
-
-  it.each(["cancelled", "source owner changed"] as const)(
-    "stops a failed-child notice when %s at platform dispatch",
-    async (blockedBy) => {
-      const childSessionKey = `agent:worker:subagent:${blockedBy.replaceAll(" ", "-")}`;
-      const controller = new AbortController();
-      let sourceEffectsAllowed = true;
-      const platformSend = vi.fn();
-      const callGateway = createGatewayMock(new Error("provider rejected requester synthesis"));
-      const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
-        expect(params.skipQueue).toBe(true);
-        expect(params.abortSignal).toBe(controller.signal);
-        if (blockedBy === "cancelled") {
-          controller.abort();
-        } else {
-          sourceEffectsAllowed = false;
-        }
-        await params.onPlatformSendDispatch?.();
-        platformSend();
-        return {
-          channel: "discord",
-          to: "dm:U123",
-          via: "direct" as const,
-          mediaUrl: null,
-          result: { messageId: "msg-after-stale-dispatch" },
-        };
-      }) as unknown as typeof runtimeSendMessage;
-
-      const result = await deliverDiscordDirectMessageCompletion({
-        callGateway,
-        sendMessage,
-        signal: controller.signal,
-        sourceSessionKey: childSessionKey,
-        sourceTool: "subagent_announce",
-        isSourceSessionEffectsAllowed: () => sourceEffectsAllowed,
-        internalEvents: taskCompletionEvents({
-          childSessionKey,
-          status: "error",
-          statusLabel: "failed before fallback dispatch",
-          result: "private child output",
-        }),
-      });
-
-      expect(result).toMatchObject(
-        blockedBy === "cancelled"
-          ? { delivered: false, path: "none" }
-          : { delivered: false, path: "none", reason: "source_owner_changed", terminal: true },
-      );
-      expect(sendMessage).toHaveBeenCalledOnce();
-      expect(platformSend).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      route: "discord",
-      sourceSessionKey: "agent:worker:subagent:expected-child",
-      childSessionKey: "agent:worker:subagent:other-child",
-    },
-    {
-      route: "thread",
-      sourceSessionKey: "agent:worker:subagent:failed-thread-child",
-      childSessionKey: "agent:worker:subagent:failed-thread-child",
-      directIdempotencyKey: "announce-failed-thread-child",
-    },
-  ] as const)(
-    "does not send a failed-child notice for an untrusted or non-direct $route event",
-    async ({ route, childSessionKey, ...options }) => {
-      const { result, sendMessage } = await runDelivery(route, {
-        response: new Error("provider rejected requester synthesis"),
-        ...options,
-        sourceTool: "subagent_announce",
-        internalEvents: taskCompletionEvents({
-          childSessionKey,
-          status: "error",
-          statusLabel: "failed: provider rejected child run",
-          result: "private child output",
-        }),
-      });
-      expectRecordFields(result, { delivered: false, path: "direct" });
-      expect(sendMessage).not.toHaveBeenCalled();
-    },
-  );
 
   it("delivers dormant child completion under restrictive gateway roles with Gateway-owned timeout policy", async () => {
     const callGateway = createGatewayMock();
@@ -1120,111 +949,64 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("admits only the delivered generation as image input without widening workspace discovery", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", mediaTempDirs.make("openclaw-generated-inspection-"));
+    try {
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const generated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      const unrelated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockReturnValueOnce({
+        id: "session-delivery-media",
+        claimed: false,
+        status: "completed",
+      });
+      const { callGateway, sendMessage } = await runDelivery("discord", {
+        sourceTool: "image_generate",
+        inputAttachments: [
+          { type: "image", mimeType: "image/png", content: png.toString("base64") },
+        ],
+        internalEvents: imageCompletionEvents({
+          mediaUrls: [generated.path],
+          attachments: [buildSavedMediaAttachment("image", generated)],
+        }),
+      });
+      const request = mockCallArg(callGateway);
+      const input = request.params;
+      if (!input || typeof input !== "object") {
+        throw new Error("Expected completion agent input");
+      }
+      const attachments = Reflect.get(input, "attachments");
+      expect(attachments).toEqual([
+        expect.objectContaining({ mimeType: "image/png", content: png.toString("base64") }),
+      ]);
+      const parsed = await parseMessageWithAttachments("Review the generated image", attachments);
+      const prepared = await detectAndLoadPromptImages({
+        prompt: `Inspect ${unrelated.path}`,
+        workspaceDir: mediaTempDirs.make("openclaw-inspection-workspace-"),
+        workspaceOnly: true,
+        model: { input: ["text", "image"] },
+        existingImages: parsed.images,
+        media: parsed.media,
+        imageOrder: parsed.imageOrder,
+      });
+      expect(prepared.images).toHaveLength(1);
+      expect(prepared.skippedCount).toBe(1);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(input).toMatchObject({
+        internalEvents: [{ mediaUrls: undefined, attachments: undefined }],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   registerDescendantWakeCurrencyTests({
     createRoleRestrictedInProcessGatewayMock,
     createGatewayMock,
     runDescendantWake,
-  });
-
-  it.each<[string, Record<string, unknown>, string?]>([
-    ["non-subagent NO_REPLY", silentResult, "agent_harness_task"],
-  ])(
-    "rejects session-only completion without a result: %s",
-    async (_name, gatewayResult, sourceTool) => {
-      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
-        status: "ok",
-        inputProcessingCompleted: true,
-        result: gatewayResult,
-      });
-      testing.setDepsForTest({
-        dispatchGatewayMethodInProcess,
-        getRequesterSessionActivity: requesterActivity("requester-session-local", false),
-        getRuntimeConfig: () => ({}),
-      });
-      const result = await deliverAnnouncement({
-        requesterSessionKey: "agent:main:local-session",
-        bestEffortDeliver: true,
-        directIdempotencyKey: "announce-local",
-        sourceTool,
-      });
-      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
-        deliver: false,
-        channel: undefined,
-        to: undefined,
-        bestEffortDeliver: true,
-      });
-      expectRecordFields(result, missingVisibleCompletion);
-    },
-  );
-
-  it("queues completion until ordinary requester compaction releases its turn", async () => {
-    const route = deliveryRoutes.telegram;
-    const target = captureSessionTarget({
-      storeScope: "/synthetic/requester-compaction/sessions.db",
-      sessionKey: route.key,
-      incarnation: route.sessionId,
-      agentId: "main",
-    });
-    const compactionEntered = createDeferredCore();
-    const releaseCompaction = createDeferredCore();
-    const compaction = withSessionTurn(
-      { target, sessionKey: route.key, sessionId: route.sessionId },
-      async (operation) => {
-        if (!operation) {
-          throw new Error("Requester compaction requires its retained controller operation");
-        }
-        operation.setPhase("preflight_compacting");
-        compactionEntered.resolve();
-        await releaseCompaction.promise;
-      },
-    );
-    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
-    const sendMessage = createSendMessageMock();
-    let delivery: ReturnType<typeof deliverTelegramDirectMessageCompletion> | undefined;
-    let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        compactionEntered.promise,
-        compaction,
-        "Compaction exited before retaining its controller turn",
-      );
-      input = reserveSessionControllerSource(route.key, {
-        target,
-        reservationId: "requester-compaction-completion",
-        policy: { mode: "followup" },
-      });
-      const compactionClaim = input.mailbox.claim;
-      expect(compactionClaim).toBeDefined();
-      delivery = deliverTelegramDirectMessageCompletion({
-        callGateway,
-        sendMessage,
-        controllerInput: input,
-        isActive: false,
-        internalEvents: identifiedCompletion({
-          taskLabel: "telegram compacting completion",
-        }),
-      });
-      await awaitGateBeforeSettlement(
-        vi.waitFor(() => expect(input?.phase).toBe("waiting")),
-        delivery,
-        "Completion settled before waiting behind requester compaction",
-      );
-      expect(input.mailbox.claim).toBe(compactionClaim);
-      expectNoExternalDelivery(callGateway, sendMessage);
-      releaseCompaction.resolve();
-      await compaction;
-      await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
-      await input.settlement.promise;
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(input.mailbox.entries).toEqual([]);
-    } finally {
-      releaseCompaction.resolve();
-      if (input) {
-        retireSessionControllerInput(input);
-      }
-      await Promise.allSettled([compaction, ...(delivery ? [delivery] : [])]);
-    }
   });
 
   const generatedVideoAttachment = {
@@ -1421,9 +1203,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
       expectRecordFields(result, {
         delivered: false,
-        path: "queued",
+        path: "none",
         reason: "completion_handoff_unavailable",
-        disposition: status === "failed" ? "permanent_failure" : "retryable",
       });
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
@@ -1433,96 +1214,32 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  const silentGatewayResult = {
-    ...silentResult,
-    deliveryStatus: sentDeliveryStatus,
-  };
-  type NoOutputCompletionCase = [
-    name: string,
-    gatewayResult: Record<string, unknown>,
-    expected: Record<string, unknown>,
-    mode: "automatic" | "queued" | "off-target",
-    event?: NonNullable<Parameters<typeof taskCompletionEvents>[0]>,
-  ];
-  it.each<NoOutputCompletionCase>([
-    ["missing automatic receipt", silentResult, missingVisibleCompletion, "automatic"],
-    [
-      "committed side effects",
-      { payloads: [], ...committedSessionSpawnEvidence },
-      { ...missingVisibleCompletion, disposition: "permanent_failure" },
-      "automatic",
-    ],
-    [
-      "failed child, silent parent",
-      silentGatewayResult,
-      {
-        delivered: false,
-        path: "direct",
-        reason: "message_tool_delivery_missing",
-        error: "completion agent did not use the message tool for message-tool-only delivery",
-      },
-      "queued",
-      { status: "error", statusLabel: "failed" },
-    ],
-    // These paired regressions distinguish the producer's absence fact from placeholder wording.
-    [
-      "reworded missing result",
-      silentGatewayResult,
-      missingVisibleCompletion,
-      "queued",
-      { result: "(no result yet; child still running)" },
-    ],
-    [
-      "visible placeholder text",
-      silentGatewayResult,
-      { delivered: true, path: "direct" },
-      "queued",
-      { noVisibleResult: undefined },
-    ],
-    [
-      "off-target message",
-      {
+  it("delivers visible placeholder text for channel completion", async () => {
+    const callGateway = createGatewayMock({
+      result: {
         payloads: [],
-        didSendViaMessagingTool: true,
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            accountId: "acct-1",
-            to: "channel:OTHER",
-            text: "An unrelated channel update.",
-          },
-        ],
+        meta: { terminalReply: { disposition: "silent" } },
+        deliveryStatus: sentDeliveryStatus,
       },
-      { ...missingVisibleCompletion, disposition: "permanent_failure" },
-      "off-target",
-    ],
-  ])("%s for no-output channel completion", async (_name, gatewayResult, expected, mode, event) => {
-    const callGateway = createGatewayMock({ result: gatewayResult });
-    const sendMessage = mode === "off-target" ? createSendMessageMock() : undefined;
+    });
     const childSessionKey = "agent:worker:subagent:no-output";
-    const result = await deliverSlackChannelAnnouncement({
+    const result = await deliverFixture("channel", {
       callGateway,
-      sendMessage,
       directIdempotencyKey: "announce-channel-no-output",
       sourceTool: "subagent_announce",
       sourceSessionKey: childSessionKey,
-      runtimeConfig: mode === "automatic" ? {} : messageToolConfig,
+      runtimeConfig: messageToolConfig,
       internalEvents: taskCompletionEvents({
         childSessionKey,
         childSessionId: "child-session-id",
         result: "(no output)",
-        noVisibleResult: true,
-        ...event,
+        noVisibleResult: undefined,
       }),
     });
-    expectRecordFields(result, expected);
+    expectRecordFields(result, { delivered: true, path: "direct" });
     const request = expectRecordFields(mockCallArg(callGateway), { method: "agent" });
     const isValid = validateAgentParams(request.params);
     expect(isValid ? "" : formatValidationErrors(validateAgentParams.errors)).toBe("");
-    if (sendMessage) {
-      expect(sendMessage).not.toHaveBeenCalled();
-    }
   });
 
   it.each(["accepted", "in_flight", "yielded"] as const)(
@@ -1533,7 +1250,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ? { status: "ok", result: { payloads: [], meta: { yielded: true } } }
           : { status: state },
       );
-      const result = await deliverSlackChannelAnnouncement({
+      const result = await deliverFixture("channel", {
         callGateway,
         directIdempotencyKey: `announce-pending-message-tool-${state}`,
         sourceTool: "subagent_announce",
@@ -1546,7 +1263,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ? {
               delivered: false,
               reason: "completion_handoff_pending",
-              disposition: "session_queued",
+              path: "queued",
             }
           : { delivered: true, path: "direct" },
       );
@@ -1598,7 +1315,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     });
     const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
+    const result = await deliverFixture("discord", {
       callGateway,
       sendMessage,
       sourceTool: "subagent_announce",
@@ -1607,18 +1324,20 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectDeliveryPath(result, "direct");
     if (fallsBack) {
-      expectSentMessage(sendMessage, {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "dm:U123",
-        content: "child completion output",
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          content: "child completion output",
+        }),
+      );
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
   });
 
-  const ambiguousCompletion = { delivered: false, disposition: "ambiguous" };
+  const undeliveredCompletion = { delivered: false };
   const suppressedCompletionReceipt = (reasons: string[]) => ({
     status: "suppressed",
     resultCount: 0,
@@ -1633,7 +1352,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         "no_visible_payload",
         "adapter_returned_no_identity",
       ]),
-      expected: ambiguousCompletion,
+      expected: { ...undeliveredCompletion, finalAssistantVisibleText: "" },
     },
     {
       name: "empty output before a hook cancellation",
@@ -1644,7 +1363,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ]),
       expected: {
         delivered: false,
-        disposition: "intentional_non_delivery",
         reason: "delivery_suppressed",
         error: "cancelled_by_message_sending_hook",
       },
@@ -1664,7 +1382,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           },
         ],
       },
-      expected: ambiguousCompletion,
+      expected: undeliveredCompletion,
     },
     {
       name: "partial send without per-payload details",
@@ -1674,34 +1392,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sentBeforeError: true,
         errorMessage: "supplement failed",
       },
-      expected: ambiguousCompletion,
+      expected: undeliveredCompletion,
     },
-    { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
     const { deliveryStatus, expected } = testCase;
-    const payloads = "payloads" in testCase ? testCase.payloads : undefined;
     const callGateway = createGatewayMock({
+      status: "ok",
       result: {
-        payloads: payloads ?? [{ text: "Generated completion" }],
+        payloads: "payloads" in testCase ? testCase.payloads : [{ text: "Generated completion" }],
         deliveryStatus,
       },
     });
-    const result = await deliverSlackThreadAnnouncement({
+    const result = await deliverFixture("thread", {
       callGateway,
       directIdempotencyKey: "announce-undelivered-receipt",
     });
 
-    expect(result).toMatchObject(
-      expected ?? {
-        delivered: false,
-        reason: "visible_reply_missing",
-      },
-    );
+    expect(result).toMatchObject(expected);
     expect(result.requesterVisibleFinalDelivered).toBeUndefined();
-    if (expected?.disposition === "ambiguous") {
-      expect(result.reason).toBeUndefined();
-      expect(result.terminal).toBeUndefined();
-    }
   });
 
   const requesterSettleCases = createRequesterSettleCases();
@@ -1747,91 +1455,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
   });
 
-  const transient = new Error("connect ECONNRESET");
-  const permanent = new Error("chat not found");
-  const wrapped = (cause: Error) => new Error("outbound delivery failed", { cause });
-  const identifiedSend = (message: string, channel: "telegram" | "discord") =>
-    new OutboundDeliveryError(message, {
-      cause: new Error(message),
-      results: [{ channel, messageId: "already-sent" }],
+  it("routes a completion after the finished child's plugin scope closes", async () => {
+    const scope = new PluginInvocationScope(createTestRegistry(), [
+      registerDirectTargetTestChannel("telegram"),
+    ]);
+    const delivery = scope.run(async () => {
+      await Promise.resolve();
+      return runDelivery("telegram", { internalEvents: identifiedCompletion() });
     });
-  const identifiedError = identifiedSend("connect ECONNRESET", "telegram");
-  const rejected = new PlatformMessageNotDispatchedError("payload rejected by platform policy", {
-    cause: transient,
-    retryable: false,
-  });
-  const writerRebound = (cause?: Error) =>
-    Object.assign(
-      new Error("session writer claim changed before transcript persistence", { cause }),
-      {
-        name: "SessionTranscriptWriterClaimReboundError",
-      },
-    );
-  type FailureCase = [
-    name: string,
-    error: Error,
-    outcome: "permanent_failure" | "ambiguous" | "retryable",
-    route?: "active" | "direct",
-  ];
-  it.each<FailureCase>([
-    [
-      "parent restart admission race",
-      new Error(
-        'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED',
-      ),
-      "retryable",
-    ],
-    ["wrapped permanent failure", wrapped(permanent), "permanent_failure"],
-    ["typed rejection beats transient cause", wrapped(rejected), "permanent_failure"],
-    ["identified platform send", identifiedError, "ambiguous"],
-    [
-      "nested visible reply",
-      new Error("connect ECONNRESET", {
-        cause: Object.assign(new Error("platform send completed"), { visibleReplySent: true }),
-      }),
-      "ambiguous",
-    ],
-    ["writer rebound after send", writerRebound(identifiedError), "ambiguous", "active"],
-    ["writer rebound", writerRebound(), "retryable"],
-    [
-      "wrapped writer rebound",
-      new Error("requester handoff failed", { cause: writerRebound() }),
-      "retryable",
-    ],
-    ["writer rebound with permanent cause", writerRebound(permanent), "permanent_failure"],
-    [
-      "identified incomplete send",
-      identifiedSend("incomplete terminal response", "discord"),
-      "ambiguous",
-      "direct",
-    ],
-    [
-      "writer rebound sent marker",
-      Object.assign(writerRebound(), { sentBeforeError: true }),
-      "ambiguous",
-    ],
-  ])("%s", async (_name, error, outcome, route) => {
-    const callGateway = createGatewayMock();
-    vi.mocked(callGateway).mockRejectedValue(error);
-    const sendMessage = createSendMessageMock();
-    const result =
-      route === "direct"
-        ? await deliverDiscordDirectMessageCompletion({
-            callGateway,
-            sendMessage,
-            sourceTool: "subagent_announce",
-            internalEvents: identifiedCompletion(),
-          })
-        : await deliverSlackChannelAnnouncement({
-            callGateway,
-            directIdempotencyKey: "announce-retry-contract",
-            ...(route === "active" ? { isActive: true } : {}),
-          });
-    expect(result).toMatchObject({ delivered: false, path: "direct", disposition: outcome });
-    expect(callGateway).toHaveBeenCalledOnce();
-    if (route === "direct") {
-      expect(sendMessage).not.toHaveBeenCalled();
-    }
+    scope.release();
+    const { result, sendMessage } = await delivery;
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
   it("does not text-fallback when source ownership changes during the Gateway attempt", async () => {
@@ -1841,7 +1476,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       throw new Error("incomplete terminal response code=incomplete_result");
     });
     const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
+    const result = await deliverFixture("discord", {
       callGateway,
       sendMessage,
       sourceTool: "subagent_announce",
@@ -1853,7 +1488,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "none",
       reason: "source_owner_changed",
-      terminal: true,
     });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();

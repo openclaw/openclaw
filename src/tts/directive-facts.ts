@@ -4,7 +4,11 @@ import {
   buildCodeSpanIndex,
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
-import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
+import {
+  findFenceSpanAt,
+  scanFenceSpans,
+  type FenceScanState,
+} from "../../packages/markdown-core/src/fences.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { replaceOutsideCodeRegionParts } from "../utils/directive-tags.js";
 
@@ -118,7 +122,38 @@ type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
   flush: () => string;
   hasBufferedDirectiveText: () => boolean;
+  pendingFenceLine: () => string | undefined;
 };
+
+/** Append a delivered block to the raw source for final speech synthesis. */
+export function appendTtsBlockSource(
+  source: string,
+  text: string,
+  cleaner: TtsDirectiveTextStreamCleaner | undefined,
+  cleanerInput = text,
+): string {
+  if (!source || cleaner?.hasBufferedDirectiveText()) {
+    return source + text;
+  }
+  const marker = cleanerInput[0];
+  if (marker === "~" || marker === "`") {
+    const run = cleaner?.pendingFenceLine()?.trimStart();
+    if (
+      run?.startsWith(marker) &&
+      /^(?:~+|`+)$/u.test(run) &&
+      cleanerInput.startsWith(marker.repeat(Math.max(1, 3 - run.length)))
+    ) {
+      // Two single-marker blocks still have their normal separator until a third marker
+      // establishes a fence. Only remove it when the scanner saw both on the same line.
+      const joinedSource =
+        run.length === 2 && source.endsWith(marker + "\n" + marker)
+          ? source.slice(0, -2) + marker
+          : source;
+      return joinedSource + text;
+    }
+  }
+  return source + "\n" + text;
+}
 
 function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
   const normalized = body.trim().replace(/\s+/g, "").toLowerCase();
@@ -167,8 +202,18 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
         if (tagStart === -1) {
           // A chunk can end on a single "["; hold it so the next chunk can
           // complete "[[" instead of leaking markup or swallowing the rest.
-          const tail = input.endsWith("[") ? input.length - 1 : input.length;
+          let tail = input.endsWith("[") ? input.length - 1 : input.length;
           if (!insideHiddenTextBlock) {
+            const ticks = /`+$/.exec(input.slice(index, tail));
+            if (ticks) {
+              const start = tail - ticks[0].length;
+              const before = buildCodeSpanIndex(input.slice(index, start), inlineCode, fence);
+              const fenced = scanFenceSpans(input.slice(index, tail), fence).spans;
+              // An opening run is not complete until the next block supplies lookahead.
+              if (!before.inlineState.open && !findFenceSpanAt(fenced, tail - index - 1)) {
+                tail = start;
+              }
+            }
             output += trackVisibleText(input.slice(index, tail));
           }
           pending = input.slice(tail);
@@ -226,6 +271,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       fence = {};
       return tail;
     },
+    pendingFenceLine: () => fence.pendingLine?.text,
     hasBufferedDirectiveText(): boolean {
       return pending.length > 0 || insideHiddenTextBlock;
     },

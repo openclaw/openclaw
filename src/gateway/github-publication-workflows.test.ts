@@ -17,7 +17,6 @@ import { callGatewayTool } from "../agents/tools/gateway.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
-import * as publicationExecutor from "./github-publication-executor.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -25,7 +24,7 @@ import {
   guestScopes,
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -66,7 +65,6 @@ function invokeTool<T>(
           agentId: "main",
           sessionKey: SESSION_KEY,
           operationalRunInstance: { instanceId: "publication-tool", runId: "publication-run" },
-          receiptAuthority: () => caller.operatorAuthority?.assertCurrent(),
           gatewayContextResolver: () => context,
           ...caller,
         },
@@ -119,12 +117,10 @@ it.each([
   { operation: "modify", allowed: false, actor: "operator", route: "tool" },
   { operation: "ordinary", allowed: false, actor: "operator", route: "tool" },
   { operation: "modify", allowed: true, actor: "admin", route: "tool" },
-  { operation: "modify", allowed: false, actor: "narrowed", route: "tool" },
   { operation: "modify", allowed: true, actor: "system", route: "tool" },
   { operation: "modify", allowed: false, actor: "system", route: "tool" },
   { operation: "modify", allowed: false, actor: "unscoped-system", route: "tool" },
   { operation: "modify", allowed: true, actor: "admin", route: "gateway" },
-  { operation: "modify", allowed: false, actor: "admin", route: "gateway-session" },
   { operation: "modify", allowed: false, actor: "admin", route: "gateway-empty" },
   { operation: "modify", allowed: false, actor: "system", route: "gateway-write" },
   { operation: "modify", allowed: true, actor: "system", route: "gateway-write" },
@@ -162,8 +158,7 @@ it.each([
 
     const system =
       actor === "system" || actor === "unscoped-system" || actor === "system-missing-scopes";
-    const nativeFullSource =
-      route !== "rpc" && !system && (allowed || actor === "admin" || actor === "narrowed");
+    const nativeFullSource = route !== "rpc" && !system && (allowed || actor === "admin");
     if (nativeFullSource) {
       await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       invalidateOperatorRolePolicy(f.guestProfile);
@@ -171,8 +166,7 @@ it.each([
     const source = nativeFullSource
       ? await createGitHubPublicationRequesterFixture({
           profileId: f.guestProfile,
-          scopes:
-            actor === "admin" || actor === "narrowed" ? ["operator.admin"] : ["operator.write"],
+          scopes: actor === "admin" ? ["operator.admin"] : ["operator.write"],
           agentId: "main",
           sessionKey: SESSION_KEY,
         })
@@ -195,7 +189,7 @@ it.each([
     };
     let result: unknown;
     if (route !== "rpc") {
-      const original = await captureGatewayOperatorRunAuthority({ client, context });
+      const original = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!system) {
         assert(original, "Expected original operator authority");
       }
@@ -203,12 +197,7 @@ it.each([
         onTestFinished(original.release);
       }
       const accepted = vi.spyOn(f.coordinator, "requestForSessionV2");
-      const scopedClient =
-        actor === "unscoped-system"
-          ? undefined
-          : actor === "narrowed"
-            ? { ...client, connect: { ...client.connect, scopes: guestScopes } }
-            : client;
+      const scopedClient = actor === "unscoped-system" ? undefined : client;
       const scopes: OperatorScope[] =
         route === "gateway-empty"
           ? []
@@ -259,7 +248,7 @@ it.each([
       expect(result).toMatchObject({
         status: "failed",
         code: "github_rejected",
-        nextAction: expect.stringMatching(/OpenClaw.*not a GitHub token scope/),
+        nextAction: expect.stringMatching(/does not allow it.*not a GitHub token scope/),
       });
       expect(workspace.effects).toEqual([]);
       expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
@@ -269,6 +258,37 @@ it.each([
         "ordinary accepted work\n",
       );
     }
+  },
+);
+
+it.each(["first", "existing"] as const)(
+  "does not treat a matching target workflow as inheritance of a branch-owned commit (%s)",
+  async (kind) => {
+    const f = await createRequesters();
+    const workspace = f.local;
+    const file = await writeWorkflow(workspace, "owned.yml", true);
+    const ancestor = await commitAll(workspace, "original workflow");
+    let target = ancestor;
+    await workspace.git("update-ref", "refs/heads/main", target);
+    mockTargetHead(() => target);
+    if (kind === "existing") {
+      await fs.writeFile(workspace.file("artifact.txt"), "first source change\n");
+      expect(await f.publish("first-source")).toMatchObject({ status: "published" });
+    }
+    await fs.writeFile(file, workflow + "# changed on the source branch\n");
+    await commitAll(workspace, "source workflow edit");
+    const tree = await workspace.git("rev-parse", "HEAD^{tree}");
+    target = await workspace.git("commit-tree", tree, "-p", ancestor, "-m", "matching target edit");
+    await workspace.git("update-ref", "refs/heads/main", target);
+    await fs.writeFile(workspace.file("feature.txt"), "ordinary source change\n");
+    const writesBefore = f.externalWrites.length;
+
+    expect(await f.publish("source-owned-workflow")).toMatchObject({
+      status: "failed",
+      code: "github_rejected",
+      nextAction: expect.stringContaining("I did not publish these GitHub workflow changes"),
+    });
+    expect(f.externalWrites).toHaveLength(writesBefore);
   },
 );
 
@@ -384,7 +404,7 @@ it("rejects target inheritance with multiple best common ancestors", async () =>
   expect(await f.publish("ambiguous")).toMatchObject({
     status: "failed",
     code: "github_rejected",
-    nextAction: expect.stringContaining("Ask a maintainer"),
+    nextAction: expect.stringContaining("Ask a Gateway admin to do it"),
   });
   expect(await workspace.git("rev-parse", "HEAD")).toBe(merged);
   expect(workspace.effects.filter((effect) => effect === "push")).toHaveLength(1);
@@ -406,12 +426,11 @@ it("checks the accepted tree while leaving later workflow edits unpublished", as
 });
 
 it.each(["before local CAS", "before push"] as const)(
-  "settles the accepted index when workflow permission closes %s",
+  "finishes the accepted workflow publication when permission changes %s",
   async (boundary) => {
     const f = await createRequesters();
     const workspace = f.local;
     const file = await writeWorkflow(workspace);
-    const head = await workspace.git("rev-parse", "HEAD");
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (args, options) => {
       const result = await transport(args, options);
@@ -426,66 +445,22 @@ it.each(["before local CAS", "before push"] as const)(
       return result;
     });
     await expect(f.publish(boundary, f.maintainer)).resolves.toMatchObject({
-      status: "failed",
-      code: "identity_changed",
+      status: "published",
     });
-    expect(workspace.effects).toEqual([]);
-    if (boundary === "before push") {
-      expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(
-        workflow.trim(),
-      );
-      expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
-    } else {
-      expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
-      await expect(fs.stat(workspace.file(".git/index.lock"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(
-        (await fs.readdir(workspace.file(".git"))).some((entry) =>
-          entry.startsWith("index.openclaw-"),
-        ),
-      ).toBe(false);
-    }
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
+    expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(workflow.trim());
+    expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
+    await expect(fs.stat(workspace.file(".git/index.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(
+      (await fs.readdir(workspace.file(".git"))).some((entry) =>
+        entry.startsWith("index.openclaw-"),
+      ),
+    ).toBe(false);
     expect(await fs.readFile(file, "utf8")).toBe(workflow);
   },
 );
-
-it("rechecks the publisher after workflow authorization at the push boundary", async () => {
-  const f = await createRequesters();
-  await writeWorkflow(f.local);
-  const execute = publicationExecutor.executeGitHubPublication;
-  let pushRecorded = false;
-  let publisherRevoked = false;
-  const intercepted = vi
-    .spyOn(publicationExecutor, "executeGitHubPublication")
-    .mockImplementation((params) =>
-      execute({
-        ...params,
-        recordEffect: async (effect, observed) => {
-          await params.recordEffect?.(effect, observed);
-          if (effect === "push" && observed === undefined) {
-            pushRecorded = true;
-          }
-        },
-        assertWorkflowChangesAllowed: () => {
-          params.assertWorkflowChangesAllowed();
-          if (pushRecorded) {
-            publisherRevoked = true;
-            mocks.matchesIdentity.mockReturnValue(false);
-          }
-        },
-      }),
-    );
-  onTestFinished(() => intercepted.mockRestore());
-
-  await expect(f.publish("publisher-at-push", f.maintainer)).rejects.toThrow(
-    GitHubPublicationRecoveryPendingError,
-  );
-  expect(publisherRevoked).toBe(true);
-  expect(f.maintainer.assertCurrent).not.toThrow();
-  expect(f.local.effects).toEqual([]);
-  expect(f.externalWrites).toEqual([]);
-});
 
 it("cannot reintroduce a workflow after a remote reset following the last observation", async () => {
   const f = await createRequesters();

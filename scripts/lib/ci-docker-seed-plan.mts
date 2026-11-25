@@ -5,16 +5,20 @@ const OWNER_DOCKER_SEED_LANES = [
   "mcp-code-mode-gateway",
   "mcp-docker-custody",
   "update-channel-switch",
+  "release-update-survivor",
 ] as const;
 
 export function resolveDockerSeedLanes(options: { includeReleaseOnly: boolean }) {
   return options.includeReleaseOnly
-    ? [...MAIN_DOCKER_SEED_LANES, ...OWNER_DOCKER_SEED_LANES]
+    ? [
+        ...MAIN_DOCKER_SEED_LANES,
+        ...OWNER_DOCKER_SEED_LANES.filter((lane) => lane !== "release-update-survivor"),
+      ]
     : [...MAIN_DOCKER_SEED_LANES];
 }
 
-// The published-driver tripwire runs intact in hourly main and full release
-// validation. PRs retain the other Docker lanes through their owner map.
+// Published-driver compatibility stays main/release-only. The source-built
+// successor below proves the current update owners on relevant PRs.
 const MCP_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
@@ -51,6 +55,26 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
   const selected = new Set<DockerSeedLane>();
   for (const changedPath of changedPaths) {
     const normalizedPath = changedPath.replaceAll("\\", "/");
+    if (
+      [
+        "src/update/",
+        "src/state/",
+        "src/cli/update-cli/",
+        "src/daemon/",
+        "scripts/e2e/lib/upgrade-survivor/",
+      ].some((prefix) => normalizedPath.startsWith(prefix)) ||
+      [
+        "openclaw.mjs",
+        "release-launcher-forward.mjs",
+        "Dockerfile",
+        "src/gateway/server-start.ts",
+        "scripts/e2e/upgrade-survivor-docker.sh",
+        "scripts/lib/ci-docker-seed-plan.mts",
+        "scripts/lib/docker-e2e-scenarios.mts",
+      ].includes(normalizedPath)
+    ) {
+      selected.add("release-update-survivor");
+    }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
       selected.add(lane);
     }

@@ -27,9 +27,12 @@ it("keeps locked modes unavailable and selects enabled numeric shortcuts with re
   const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
   expect(document.activeElement).toBe(trigger);
-  expect(
-    container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
-  ).toBe(true);
+  await waitForSolid(() =>
+    expect(
+      container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
+    ).toBe(true),
+  );
+  expect(document.activeElement).toBe(trigger);
   menu.dispatchEvent(new KeyboardEvent("keydown", { key: "5", bubbles: true, cancelable: true }));
   expect(onSelect).not.toHaveBeenCalled();
   expect(menu.matches(":popover-open")).toBe(true);
@@ -58,6 +61,7 @@ it("includes the documentation link in keyboard menu navigation", async () => {
   link.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
   );
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(document.activeElement).toBe(
       container.querySelector('[data-chat-permission-option="default"]'),
@@ -83,6 +87,8 @@ it.each(["saved", "failed"])(
     ));
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent?.trim()).toBe("Ask me");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Default (Ask me)");
     trigger.click();
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
@@ -95,9 +101,10 @@ it.each(["saved", "failed"])(
       container
         .querySelector('[data-chat-permission-option="default"]')
         ?.getAttribute("aria-label"),
-    ).toBe("Default (Guarded)");
+    ).toBe("Agent default (Ask me)");
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true, cancelable: true }));
     await waitForSolid(() => expect(trigger.getAttribute("aria-busy")).toBe("true"));
+    expect(trigger.textContent?.trim()).toBe("Auto-review");
     expect(trigger.disabled).toBe(false);
     expect(menu.matches(":popover-open")).toBe(true);
     expect(
@@ -125,6 +132,7 @@ it.each(["saved", "failed"])(
     }
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
     expect(trigger.getAttribute("aria-busy")).toBeNull();
+    expect(trigger.textContent?.trim()).toBe(outcome === "failed" ? "Ask me" : "Auto-review");
   },
 );
 
@@ -193,9 +201,10 @@ it("preserves option content on unrelated refreshes while admitting permission c
   setProps({ ...options });
   flush();
   expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
-  expect(row.textContent).toContain("The agent's configured permissions.");
+  expect(row.textContent).toContain("Agent default");
+  expect(row.textContent).toContain("Uses this agent’s settings.");
   expect(row.getAttribute("aria-checked")).toBe("false");
-  expect(row.getAttribute("aria-label")).toBe("Default (Guarded)");
+  expect(row.getAttribute("aria-label")).toBe("Agent default (Ask me)");
   expect(container.querySelector('[data-chat-permission-option="guarded"]')?.textContent).toContain(
     "Default",
   );
@@ -208,3 +217,23 @@ it("preserves option content on unrelated refreshes while admitting permission c
     container.querySelector('[data-chat-permission-option="full"]')?.matches(":disabled"),
   ).toBe(false);
 });
+
+it.each(["guarded", "read-only"] as const)(
+  "offers participants only tighter modes from %s",
+  async (mode) => {
+    const { container } = mountSolid(() => (
+      <ChatPermissionPicker participant mode={mode} canSelectFull onSelect={() => {}} />
+    ));
+    flush();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    trigger.click();
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-permission-option="read-only"]')).not.toBeNull(),
+    );
+    expect(
+      [...container.querySelectorAll("[data-chat-permission-option]")].map((option) =>
+        option.getAttribute("data-chat-permission-option"),
+      ),
+    ).toEqual(mode === "guarded" ? ["read-only", "guarded"] : ["read-only"]);
+  },
+);

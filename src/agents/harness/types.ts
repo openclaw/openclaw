@@ -11,7 +11,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
-import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-catalog.types.js";
 import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -69,6 +69,17 @@ export type AgentHarnessSupport =
       /** Lossless host fallback when this harness cannot reproduce the prepared request. */
       fallbackRuntime?: "openclaw";
     };
+
+/** Activation facts and model-route rules for read-only selection without a plugin call. */
+export type AgentHarnessRouteSupport = {
+  runtimeId: string;
+  runtimeName: string;
+  providerIds: readonly string[];
+  routeOptionalProviderIds?: readonly string[];
+  unobservedModelProvider?: string;
+  acceptsNativeCommand?: boolean;
+  availability: AgentHarnessSupport;
+};
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
@@ -166,8 +177,8 @@ type AgentHarnessSettledTurnFinalizationParams<
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
 export type AgentHarnessSettledTurnFinalizationResult = {
-  /** The single completed assistant answer produced by the isolated operation. */
-  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Completed answer projected from the isolated attempt; stored usage may lack a price. */
+  assistant: import("../../llm/types.js").AssistantHistoryMessage;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
@@ -544,6 +555,8 @@ type AgentHarnessContract<
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
   contextManagement?: "native";
+  /** Optional prepared facts for projections that carry no execution auth. */
+  routeSupport?: AgentHarnessRouteSupport;
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";

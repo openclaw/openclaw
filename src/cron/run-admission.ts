@@ -9,6 +9,10 @@ import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../config/sessions/session-mcp-store-admission.js";
+import {
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
@@ -25,11 +29,6 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  captureCronJobMessageActionAuthority,
-  captureCronJobMessageSourceAuthority,
-  captureCronJobStandingGrantAuthority,
-} from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import { resolveScheduledSenderBit } from "./execution-context-registry.js";
 import type { MintedScheduledExecution } from "./scheduled-occurrence.js";
@@ -44,6 +43,8 @@ export function prepareCronRunAdmission(params: {
   runId: string;
   sessionId?: string;
   sessionKey: string;
+  storeAdmission?: object;
+  sourceReplySessionKey?: string;
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -58,9 +59,14 @@ export function prepareCronRunAdmission(params: {
   scheduledExecution: MintedScheduledExecution;
 }) {
   const { runId, scheduledToolPolicy } = params;
-  if (!params.scheduledExecution) {
-    // Every scheduled run belongs to exactly one occurrence admitted by `admitScheduledOccurrence`.
-    throw new Error("a scheduled run requires its admitted occurrence");
+  const { result } = params.scheduledExecution;
+  if (result.status !== "ready") {
+    // A scheduled run starts only with its admitted context; the run record and the
+    // job's failure notice carry this refusal.
+    const cause = result.status === "fail" ? result.error : `its conversation is ${result.reason}`;
+    throw new Error(
+      `This automation's access could not be admitted (${cause}), so the run did not start. Recreate the automation from a chat that still has access.`,
+    );
   }
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const resolveGatewayContext =
@@ -101,19 +107,17 @@ export function prepareCronRunAdmission(params: {
         params.executionIdentity.onPostAdmission,
       )
     : basePreparedRunAdmission;
-  const scheduledMessageAuthority =
-    scheduledToolPolicy && isRuntimeToolAllowed("message", params.toolsAllow)
-      ? captureCronJobMessageActionAuthority({ jobId: params.jobId, operationalRunInstance })
-      : undefined;
-  const scheduledMessageSourceAuthority = scheduledMessageAuthority
-    ? captureCronJobMessageSourceAuthority({ jobId: params.jobId, operationalRunInstance })
-    : undefined;
+  const scheduledMessage =
+    scheduledToolPolicy && isRuntimeToolAllowed("message", params.toolsAllow);
   const deliveryAttemptFence = params.deliveryAttemptFence;
-  if (scheduledMessageAuthority && !deliveryAttemptFence) {
-    params.scheduledExecution.release();
-    preparedRunAdmission.close();
-    throw new Error("scheduled message authority requires its occurrence delivery fence");
-  }
+  const assertAdmittedRun = Object.assign(() => readAdmittedSource()(), {
+    prepareSessionSource: () => prepareSessionSourceAuthority(readAdmittedSource()),
+  });
+  const assertRunCurrent = composeSessionSourceAssertion([
+    assertAdmittedRun,
+    deliveryAttemptFence?.standingGrantAuthority?.assertCurrent ??
+      deliveryAttemptFence?.assertCurrent,
+  ]);
   // This opaque token remains unusable until this exact operational instance
   // is admitted by the live occurrence. Scheduled runners redeem the same host grant.
   const messageActionTurnCapability = deliveryAttemptFence
@@ -121,28 +125,25 @@ export function prepareCronRunAdmission(params: {
         agentId: params.agentId,
         runId,
         sessionKey: params.sessionKey,
+        sourceReplySessionKey: params.sourceReplySessionKey,
         sessionId: params.sessionId,
         requesterAccountId:
-          scheduledMessageAuthority && scheduledToolPolicy?.mode === "account"
+          scheduledMessage && scheduledToolPolicy?.mode === "account"
             ? scheduledToolPolicy.ownerAccountId
             : undefined,
         deliveryAttempt: {
           beforeAttempt: () => deliveryAttemptFence.beforeAttempt(),
           assertCurrent: composeSessionSourceAssertion([
-            Object.assign(() => readAdmittedSource()(), {
-              prepareSessionSource: () => prepareSessionSourceAuthority(readAdmittedSource()),
-            }),
+            assertAdmittedRun,
             deliveryAttemptFence.assertCurrent,
           ]),
         },
-        ...(scheduledMessageAuthority && scheduledToolPolicy
+        ...(scheduledMessage && scheduledToolPolicy
           ? {
               scheduled: {
                 policy: scheduledToolPolicy,
-                assertCurrent: scheduledMessageAuthority,
-                ...(scheduledMessageSourceAuthority
-                  ? { assertSourceCurrent: scheduledMessageSourceAuthority }
-                  : {}),
+                assertCurrent: assertRunCurrent,
+                assertSourceCurrent: assertRunCurrent,
                 ...(params.channelRequester ? { channelRequester: params.channelRequester } : {}),
               },
             }
@@ -150,17 +151,21 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  inheritSessionMcpStoreOwner(params.storeAdmission, operationalRunInstance);
   const close = () => {
+    bindSessionMcpStoreOwner(operationalRunInstance, undefined);
     params.scheduledExecution.release();
     revokeMessageActionTurnCapability(messageActionTurnCapability);
     preparedRunAdmission.close();
   };
   return {
     preparedRunAdmission,
-    standingGrantAuthority: captureCronJobStandingGrantAuthority({
-      jobId: params.jobId,
-      operationalRunInstance,
-    }),
+    standingGrantAuthority: deliveryAttemptFence?.standingGrantAuthority
+      ? {
+          ...deliveryAttemptFence.standingGrantAuthority,
+          assertCurrent: assertRunCurrent,
+        }
+      : undefined,
     messageActionTurnCapability,
     /** The minted execution context once the run is admitted. */
     readScheduledExecution: () => params.scheduledExecution.current(),

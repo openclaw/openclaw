@@ -84,6 +84,7 @@ export const pluginApiDefaultHandlers = {
   scheduleSessionTurn: async () => undefined,
   unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
   registerMemoryCapability: () => {},
+  registerLearnContribution: () => {},
   registerMemoryPromptSupplement: () => {},
   registerMemoryPromptPreparation: () => {},
   registerMemoryCorpusSupplement: () => {},
@@ -140,6 +141,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
+    ...(params.metrics ? { metrics: params.metrics } : {}),
     ...registrations,
     ...(params.registerSubagentProfile
       ? { registerSubagentProfile: params.registerSubagentProfile }

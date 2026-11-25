@@ -450,7 +450,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
                 });
               },
             });
-            return undefined;
+            return { disposition: "published" as const };
           },
         },
       };
@@ -476,7 +476,10 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     const note = "@openclaw/demo@2026.9.6 superseded by 2026.9.7; dist-tag latest stays.";
     const lines = await verifyBetaRelease(fixture.args, {
       rootDir: fixture.rootDir,
-      pluginNpmReadback: { evidence: [], verify: async () => note },
+      pluginNpmReadback: {
+        evidence: [],
+        verify: async () => ({ disposition: "published" as const, note }),
+      },
     });
     expect(lines).toContain(`plugin npm WARN: ${note}`);
     expect(lines).toContain("plugin npm OK: 1");
@@ -516,7 +519,8 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(commands).toHaveLength(90);
+      // One hour of 10s retries under the default npm readback budget.
+      expect(commands).toHaveLength(360);
       expect(commands.every((args) => args[0] === "npm" && args[1] === "view")).toBe(true);
     },
   );

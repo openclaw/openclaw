@@ -1,5 +1,6 @@
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionPeopleEnglish } from "../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -12,6 +13,7 @@ import type {
 } from "./session-menu-actions.ts";
 import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
@@ -58,10 +60,6 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
-  const [searching, setSearching] = createSignal(() => {
-    searchGeneration();
-    return false;
-  });
   const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
@@ -74,17 +72,20 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC").split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
-        [
-          owner.label,
-          owner.id,
-          owner.type,
-          owner === state.self ? t("sessionsView.assignToMe") : "",
-        ]
-          .join(" ")
-          .toLocaleLowerCase()
+        foldSearchCase(
+          [
+            owner.label,
+            owner.id,
+            owner.type,
+            owner === state.self ? t("sessionsView.assignToMe") : "",
+          ]
+            .join(" ")
+            .toLocaleLowerCase(),
+        )
+          .normalize("NFC")
           .includes(term),
       ),
     );
@@ -98,13 +99,10 @@ export function useSessionMenuDetails(
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
         <HeaderSearch
-          title={t("sessionsView.assignTo")}
           label={t("sessionsView.searchPeople")}
           query={query()}
-          open={searching()}
           controlRef={() => controls?.ref()}
           inputProps={{ "data-search": "", "data-form-control": "" }}
-          onOpenChange={setSearching}
           onQueryChange={setQuery}
         />
       </div>
@@ -141,7 +139,7 @@ export function useSessionMenuDetails(
           ) : undefined,
         };
       }),
-      ...(options.length === 0
+      ...(options.length === 0 && !ownerSnapshot().loading && !ownerSnapshot().error
         ? [
             {
               kind: "content" as const,
@@ -163,7 +161,11 @@ export function useSessionMenuDetails(
   const reason = () => readState().actionDisabledReasons["set-communication"];
   const communicationControls = (
     <div class="session-menu__communication">
-      <h3 class="session-menu__communication-heading">{t("sessionsView.communication.title")}</h3>
+      <MenuHeading
+        as="h3"
+        class="session-menu__communication-heading"
+        label={t("sessionsView.communication.title")}
+      />
       <For each={["send", "receive"] as const}>
         {(direction) => {
           const label = () =>

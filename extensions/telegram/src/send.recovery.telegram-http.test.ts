@@ -21,6 +21,7 @@ import {
 describe("Telegram send recovery conformance over HTTP", () => {
   const emptyMessage = "Bad Request: text must be non-empty";
   const writeForbidden = "Bad Request: CHAT_WRITE_FORBIDDEN";
+  const effectId = "5104841245755180586";
   const fixture = useTelegramHttpFixture();
   const { cfg, requests, rejections, runtime, buttons } = fixture;
   const sendThrough = (
@@ -118,13 +119,16 @@ describe("Telegram send recovery conformance over HTTP", () => {
     "keeps %s first-reply ownership and final controls on multipart rich fallback",
     async (entry) => {
       rejections.push("Bad Request: RICH_MESSAGE_CONTENT_REQUIRED");
+      const pendingEffect = entry === "public" ? effectId : undefined;
       const result = await sendThrough(entry, "A".repeat(4500), undefined, true, {
         firstReply: true,
         textLimit: 32_768,
         linkPreview: false,
+        messageEffectId: pendingEffect,
       });
       expectMethods("sendRichMessage", "sendMessage", "sendMessage");
       expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
+      expect(fieldValues("message_effect_id")).toEqual([pendingEffect, pendingEffect, undefined]);
       expectFields(
         {
           parse_mode: [undefined, undefined],
@@ -610,8 +614,10 @@ describe("Telegram send recovery conformance over HTTP", () => {
       replyToMessageId: 7,
       replyToIdSource: "implicit",
       replyToMode: "first",
+      messageEffectId: effectId,
     });
     expect(fieldValues("reply_to_message_id")).toEqual(["7", undefined]);
+    expect(fieldValues("message_effect_id")).toEqual([effectId, undefined]);
   });
 
   it("preserves a mismatched native venue receipt", async () => {

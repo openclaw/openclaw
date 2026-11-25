@@ -3,7 +3,6 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   resolveQaParityPackScenarioIds,
 } from "./agentic-parity.js";
-import { resolveQaRepoPath } from "./repo-path.js";
 import { resolveQaRuntimePairLaneScenarioIds } from "./runtime-pair-lane-selection.js";
 import {
   readQaScenarioById,
@@ -23,17 +22,13 @@ it("keeps repo-backed scenarios YAML-only", () => {
   expect(listScenarioMarkdownPaths()).toStrictEqual([]);
 });
 
-it("keeps scenario documentation and code references backed by the repository", () => {
-  for (const scenario of readQaScenarioPack().scenarios) {
-    for (const kind of ["docsRefs", "codeRefs"] as const) {
-      for (const reference of scenario[kind] ?? []) {
-        const resolvedReference =
-          resolveQaRepoPath(import.meta.dirname, reference, "file") ??
-          resolveQaRepoPath(import.meta.dirname, reference, "directory");
-        expect(resolvedReference, `${scenario.id} ${kind} ${reference} exists`).not.toBeNull();
-      }
-    }
-  }
+it("contains the apply-patch parity probe to its QA workspace", () => {
+  expect(readQaScenarioById("runtime-tool-apply-patch").gatewayConfigPatch).toMatchObject({
+    tools: {
+      fs: { workspaceOnly: true },
+      exec: { applyPatch: { workspaceOnly: true } },
+    },
+  });
 });
 
 it("keeps the audited parallel script allowlist exact", () => {

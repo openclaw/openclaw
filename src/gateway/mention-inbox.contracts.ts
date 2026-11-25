@@ -1,19 +1,33 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ErrorShape,
+  SessionMemberPermissionLevel,
   MentionsListResult,
   UsersMentionableParams,
   UsersMentionableResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { PreparedSessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { MentionCommittedInput } from "./mention-inbox-input.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
 /** Keep the Gateway context independent of its context-consuming Inbox implementation. */
 export type MentionInbox = {
+  prepareInvitation: (
+    client: GatewayClient | null,
+    target: { agentId: string; sessionKey: string; entry: SessionEntry | undefined },
+    mentions: readonly {
+      profileId: string;
+      token: string;
+      access?: SessionMemberPermissionLevel;
+    }[],
+  ) => PreparedSessionMentionInvitation | undefined;
   mentionable: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
     publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
+    /** Internal display lookup includes the reader, but never creates recipients. */
+    displayProfileIds?: readonly string[],
   ) => Promise<void>;
   /** @deprecated Await validateRecipientsAsync. Removed in a later release after stable deprecation. */
   validateRecipients: (
@@ -46,7 +60,10 @@ export type MentionInbox = {
   recordCommittedInput: (input: MentionCommittedInput) => void;
   /** @deprecated Await invalidateAsync. The synchronous adapter rejects calls; its signature is removed in a later release after stable deprecation. */
   invalidate: (sessionKey?: string) => void;
-  recordCommittedInputAsync: (input: MentionCommittedInput) => Promise<void>;
+  recordCommittedInputAsync: (
+    input: MentionCommittedInput,
+    client?: GatewayClient | null,
+  ) => Promise<void>;
   invalidateAsync: (sessionKey?: string) => Promise<void>;
   dispose: () => Promise<void>;
 };

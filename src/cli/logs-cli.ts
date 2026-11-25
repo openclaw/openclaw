@@ -5,6 +5,7 @@ import {
   coerceErrorMessage as normalizeErrorMessage,
   toStringifiedError,
 } from "@openclaw/normalization-core/error-coercion";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   resolveIntegerOption,
   resolvePositiveTimerTimeoutMs,
@@ -38,11 +39,12 @@ import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
+import { requestLogsTail, type LogsFollowConnection } from "./logs-cli.gateway.js";
 import { parseLogsPositiveInt } from "./logs-cli.options.js";
 
 type LogsTailPayload = Partial<Omit<LogsTailResult, "cursor">> & {
@@ -98,7 +100,7 @@ async function fetchGatewayLogs(
   opts: LogsRequestOptions,
   gatewayCursor: number | undefined,
   showProgress: boolean,
-  params: { limit: number; maxBytes: number; signal?: AbortSignal },
+  params: { limit: number; maxBytes: number; signal?: AbortSignal; follow?: LogsFollowConnection },
 ): Promise<LogsTailPayload> {
   params.signal?.throwIfAborted();
   const gatewayExtra =
@@ -110,11 +112,11 @@ async function fetchGatewayLogs(
           mode: GATEWAY_CLIENT_MODES.BACKEND,
           deviceIdentity: null,
         };
-  const payload = await callGatewayFromCli(
-    "logs.tail",
+  const payload = await requestLogsTail(
     opts,
     { cursor: gatewayCursor, limit: params.limit, maxBytes: params.maxBytes },
     params.signal ? { ...gatewayExtra, signal: params.signal } : gatewayExtra,
+    params.follow,
   );
   params.signal?.throwIfAborted();
   if (!payload || typeof payload !== "object") {
@@ -318,6 +320,7 @@ export function registerLogsCli(program: Command) {
       ...(configUnavailable ? { config } : {}),
       localConfigUnavailable: configUnavailable && isImplicitLoopbackGatewayConnection(connection),
     };
+    const follow: LogsFollowConnection | undefined = opts.follow ? {} : undefined;
     let gatewayRecovery: GatewayRecoveryState = { kind: "idle" };
     const abortGatewayRecoveryProbe = () => {
       if (gatewayRecovery.kind === "probing") {
@@ -383,7 +386,18 @@ export function registerLogsCli(program: Command) {
         }
       }
       const level = parsed.level ?? "";
-      const message = parsed.message || parsed.raw;
+      let message = parsed.message;
+      if (message === "") {
+        // When every positional log argument is empty (for example a blank console line), show an empty
+        // message. Records without positional arguments (for example single-object logger records) keep
+        // the raw line.
+        const positional = Object.entries(safeParseJsonRecord(raw) ?? {}).filter(([key]) =>
+          /^\d+$/.test(key),
+        );
+        const blank =
+          positional.length > 0 && positional.every(([, value]) => value === "" || value === null);
+        message = blank ? "" : raw;
+      }
       if (!pretty) {
         return [time, level, label, message].filter(Boolean).join(" ").trim();
       }
@@ -425,6 +439,7 @@ export function registerLogsCli(program: Command) {
         limit,
         maxBytes,
         signal: signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal,
+        follow,
       }).then(
         (payload): GatewayRecoveryResult => ({ ok: true, payload, startedAt }),
         (error: unknown): GatewayRecoveryResult => ({ ok: false, error }),
@@ -498,6 +513,7 @@ export function registerLogsCli(program: Command) {
                 limit,
                 maxBytes,
                 signal,
+                follow,
               });
             } catch (error) {
               signal?.throwIfAborted();
@@ -546,6 +562,7 @@ export function registerLogsCli(program: Command) {
                   limit,
                   maxBytes,
                   signal,
+                  follow,
                 });
           }
         } catch (err) {
@@ -720,6 +737,8 @@ export function registerLogsCli(program: Command) {
       // The command signal owner records SIGINT/SIGTERM/output status after teardown.
     } finally {
       await abortGatewayRecoveryProbe();
+      follow?.close?.();
+      await follow?.closed;
     }
   });
 }

@@ -7,6 +7,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
+import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import { prepareAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
@@ -20,6 +21,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawAgentMigrationSchema } from "../state/openclaw-agent-schema-history.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V26_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
@@ -36,15 +39,10 @@ import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
-function openLegacyDatabase(pathname: string, version = 26, agentId = "main") {
+function openLegacyDatabase(pathname: string, version: 24 | 26 = 26, agentId = "main") {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
-  database.exec(
-    fs.readFileSync(
-      new URL(`../../test/fixtures/sqlite/openclaw-agent-schema-v${version}.sql`, import.meta.url),
-      "utf8",
-    ),
-  );
+  database.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V26_SQL);
   database.exec(`PRAGMA user_version = ${version}`);
   database
     .prepare(`INSERT INTO schema_meta
@@ -77,14 +75,15 @@ function migrationParams(
 
 it("attributes version and additive schema preparation before admitting retained readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    openOpenClawStateDatabase({ env: state.env });
+    const sharedPath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
     const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     {
       using database = openLegacyDatabase(pathname);
       database.exec("PRAGMA journal_mode = WAL; ALTER TABLE session_nodes DROP COLUMN project_id");
     }
     const warnings: string[] = [];
-    const generations = readUpdateDatabaseGenerations([pathname]);
+    const generations = readUpdateDatabaseGenerations([sharedPath, pathname]);
     const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
       env: state.env,
       signal: new AbortController().signal,
@@ -93,18 +92,28 @@ it("attributes version and additive schema preparation before admitting retained
     await withMaintenance(async () => {
       await capture.admit();
       await capture.run(async () => {
-        const result = await prepareDoctorDatabaseMigrations(
-          migrationParams(state.env, [
-            {
-              kind: "agent",
-              agentId: "main",
-              path: pathname,
-              foundVersion: 26,
-              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-            },
-          ]),
-        );
-        expect(result.warnings).toEqual([]);
+        const synchronous = vi.spyOn(readOnlyWorker, "runSqliteReadOnlyWorkerSync");
+        try {
+          const result = await prepareDoctorDatabaseMigrations(
+            migrationParams(state.env, [
+              {
+                kind: "agent",
+                agentId: "main",
+                path: pathname,
+                foundVersion: 26,
+                supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              },
+            ]),
+          );
+          expect(result.warnings).toEqual([]);
+          expect(
+            synchronous.mock.calls.filter(
+              ([source]) => source === pathname || source === sharedPath,
+            ),
+          ).toEqual([]);
+        } finally {
+          synchronous.mockRestore();
+        }
         using reader = new DatabaseSync(pathname, { readOnly: true });
         expect(reader.prepare("SELECT project_id FROM session_nodes").all()).toEqual([]);
         const admitted = openOpenClawAgentDatabase({
@@ -301,8 +310,8 @@ it.each([
               .prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'")
               .get(),
           ).toEqual({ value_json: '"preserved"' });
-          expect(liveFullChecks()).toBe(1);
-          expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
+          expect(liveFullChecks()).toBe(verifiedLiveSource ? 1 : 0);
+          expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual(verification);
         });
       } finally {
         vi.restoreAllMocks();
@@ -361,7 +370,11 @@ it("bounds the version phase and restores a committed member when a later migrat
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     using database = openLegacyDatabase(pathname);
+    // Before optional pending-input first use, every present migration table
+    // supports scoped recovery; present AUTOINCREMENT storage needs a full image.
+    expect(database.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
     database.exec(`
+      DROP TABLE session_pending_inputs;
       INSERT INTO context_engine_turn_outbox
         (rowid, advancement_key, engine_id, session_id, payload_json, created_at)
       VALUES (40, 'z-first', 'test', 'history', '{"state":"ready"}', 1),
@@ -399,9 +412,11 @@ it("bounds the version phase and restores a committed member when a later migrat
     };
     {
       using broken = openLegacyDatabase(failedMigration.path, 26, "broken");
+      expect(broken.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
       // Valid SQLite, but an unsupported outbox shape makes the real version
       // runner fail after the first member has committed.
       broken.exec(`
+        DROP TABLE session_pending_inputs;
         ALTER TABLE context_engine_turn_outbox DROP COLUMN last_error;
       `);
     }
@@ -423,6 +438,11 @@ it("bounds the version phase and restores a committed member when a later migrat
     expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
       OPENCLAW_AGENT_SCHEMA_VERSION,
     );
+    expect(
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_pending_inputs'")
+        .all(),
+    ).toEqual([]);
     {
       using broken = new DatabaseSync(failedMigration.path, { readOnly: true });
       expect(broken.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
@@ -494,6 +514,10 @@ it("preserves orphan history before admitting a group of scoped version migratio
     }));
     for (const migration of migrations) {
       using database = openLegacyDatabase(migration.path, 26, migration.agentId);
+      // Exercise current-target scoped migrations before optional pending-input
+      // first use, without discarding any accepted input or seeded history.
+      expect(database.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
+      database.exec("DROP TABLE session_pending_inputs");
       database.exec("PRAGMA foreign_keys = OFF;");
       database.exec(`
         INSERT INTO context_engine_turn_outbox
@@ -536,6 +560,11 @@ it("preserves orphan history before admitting a group of scoped version migratio
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        database
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_pending_inputs'")
+          .all(),
+      ).toEqual([]);
       expect(fs.readdirSync(path.dirname(migration.path))).toEqual(
         expect.arrayContaining([expect.stringMatching(/\.scoped\.bak$/)]),
       );

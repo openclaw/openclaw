@@ -1,8 +1,8 @@
 import { beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { clearFollowupQueue, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -268,12 +268,10 @@ it.each([undefined, "openclaw", "claude-cli"])(
       model: "gpt-4o",
       agentRuntime: "openclaw",
     });
-    const compatible = agentRuntimeOverride === "openclaw";
     const stored = loadSessionEntryReadOnly(target);
     expect(stored).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-4o" });
-    expect([stored?.agentRuntimeOverride, stored?.nativeRuntimeConsent]).toEqual(
-      compatible ? ["openclaw", "openclaw"] : [undefined, undefined],
-    );
+    expect(stored).not.toHaveProperty("agentRuntimeOverride");
+    expect(stored).not.toHaveProperty("nativeRuntimeConsent");
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   },
 );

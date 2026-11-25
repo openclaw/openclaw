@@ -32,6 +32,11 @@ const imageOutputs = {
   artifact_run_id: reference("steps.image_artifact.outputs", "run_id"),
 };
 const candidateScope = "needs.installer_smoke_candidate_payload.outputs";
+const dockerBuilder = {
+  name: "Set up Docker Buildx",
+  uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+  with: { version: "v0.23.0" },
+};
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -323,6 +328,7 @@ it.each([
 
 it("builds one local target image and uploads provenance-bound bytes", () => {
   const producer = job("root_dockerfile_image");
+  expect(step(producer, dockerBuilder.name)).toEqual(dockerBuilder);
   expect(producer.permissions).toEqual({ contents: "read", packages: "read" });
   expect(producer.outputs).toMatchObject({
     ...imageOutputs,
@@ -577,6 +583,7 @@ it("binds independent installer producer-consumer pairs to immutable artifact tu
     const producerScope = `needs.${producerName}.outputs`;
     const consumerName = `installer_smoke_${group}`;
     const producer = job(producerName);
+    expect(step(producer, dockerBuilder.name)).toEqual(dockerBuilder);
     expect(producer.needs, producerName).toEqual(["preflight"]);
     expect(producer["timeout-minutes"], producerName).toBe(45);
     expect(producer.outputs, producerName).toEqual({
@@ -769,6 +776,7 @@ pnpm install`);
 
 it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
   const producer = job("installer_smoke_candidate_payload");
+  expect(step(producer, dockerBuilder.name)).toEqual(dockerBuilder);
   expect(producer.needs).toEqual(["preflight"]);
   expect(producer["timeout-minutes"]).toBe(75);
   expect(producer.outputs).toMatchObject({
@@ -786,6 +794,7 @@ it("packages candidate code only in an isolated image and verifies the sealed pa
   expect(download.run).toContain(
     '"https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}"',
   );
+  expect(step(producer, "Build pinned candidate packaging harness").run).toContain("--load");
   const packageStep = step(producer, "Package candidate only inside pinned harness");
   assertText(packageStep.run).contains(`--user node
 --cap-drop ALL

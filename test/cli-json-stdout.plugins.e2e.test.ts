@@ -8,6 +8,7 @@ import {
   expectCleanOutput,
   expectCliError,
   expectMissing,
+  expectOnlyLoggingState,
   ttySource,
   preloadArgs,
   cliCase,
@@ -97,7 +98,9 @@ it.each([
     const source =
       "tty" in testCase
         ? ttySource
-        : ['globalThis.fetch = async () => { throw new Error("offline fixture"); };'];
+        : [
+            'globalThis.fetch = Object.assign(async () => { throw new Error("offline fixture"); }, { mock: {} });',
+          ];
     const result = runBuiltCli(
       tempHome,
       testCase.args,
@@ -192,6 +195,7 @@ it.each([
       await expectMissing(path.dirname(clonePath as string));
     }
 
-    await expectMissing(stateDir, configPath, path.join(tempHome, ".claude"));
+    await expectOnlyLoggingState(stateDir);
+    await expectMissing(configPath, path.join(tempHome, ".claude"));
   });
 });

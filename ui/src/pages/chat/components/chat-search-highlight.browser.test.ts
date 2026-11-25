@@ -1,10 +1,16 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  CHAT_SEARCH_HIGHLIGHT,
-  registerChatSearchTextBlock,
-  syncChatSearchHighlight,
-} from "./chat-search-highlight.ts";
+import { registerChatSearchTextBlock, watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
+
+const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
+
+function watchSearch(root: HTMLElement): TranscriptSearchState {
+  const search = new TranscriptSearchState();
+  onTestFinished(watchChatSearchHighlight(root, search));
+  search.toggle();
+  return search;
+}
 
 const nextFrame = () =>
   new Promise<void>((resolve) => {
@@ -14,6 +20,8 @@ const nextFrame = () =>
 it("updates changed text without replacing other blocks or panes and retires closed searches", async () => {
   const first = document.body.appendChild(document.createElement("section"));
   const second = document.body.appendChild(document.createElement("section"));
+  const firstSearch = watchSearch(first);
+  const secondSearch = watchSearch(second);
   const releases: (() => void)[] = [];
   const text = (root: Element, value: string) => {
     const block = root.appendChild(document.createElement("div"));
@@ -26,8 +34,8 @@ it("updates changed text without replacing other blocks or panes and retires clo
   const stable = text(first, "Needle two");
   const sibling = text(second, "Needle three");
   onTestFinished(() => {
-    syncChatSearchHighlight(first, "");
-    syncChatSearchHighlight(second, "");
+    firstSearch.close();
+    secondSearch.close();
     releases.forEach((release) => release());
     first.remove();
     second.remove();
@@ -36,8 +44,8 @@ it("updates changed text without replacing other blocks or panes and retires clo
   const ranges = () => Array.from(CSS.highlights.get(CHAT_SEARCH_HIGHLIGHT) ?? []);
   const inBlock = (block: Element) =>
     ranges().filter((range) => block.contains(range.startContainer));
-  syncChatSearchHighlight(first, "needle");
-  syncChatSearchHighlight(second, "needle");
+  firstSearch.setQuery("needle");
+  secondSearch.setQuery("needle");
   await nextFrame();
   expect(ranges().map((range) => (range instanceof Range ? range.toString() : null))).toEqual([
     "Needle",
@@ -69,30 +77,31 @@ it("updates changed text without replacing other blocks or panes and retires clo
   await nextFrame();
   expect(inBlock(added)).toEqual([]);
 
-  syncChatSearchHighlight(first, "");
+  firstSearch.close();
   expect(ranges()).toEqual([siblingRange]);
-  syncChatSearchHighlight(second, "");
+  secondSearch.close();
   expect(CSS.highlights.has(CHAT_SEARCH_HIGHLIGHT)).toBe(false);
 });
 
 it("cancels a queued text refresh when a query changes and search closes before the frame", async () => {
   const root = document.body.appendChild(document.createElement("section"));
+  const search = watchSearch(root);
   const block = root.appendChild(document.createElement("div"));
   block.className = "chat-text";
   block.textContent = "Needle";
   const release = registerChatSearchTextBlock(block);
   onTestFinished(() => {
-    syncChatSearchHighlight(root, "");
+    search.close();
     release();
     root.remove();
     vi.restoreAllMocks();
   });
-  syncChatSearchHighlight(root, "needle");
+  search.setQuery("needle");
   await nextFrame();
   block.firstChild!.textContent += " changed";
   await Promise.resolve();
-  syncChatSearchHighlight(root, "changed");
-  syncChatSearchHighlight(root, "");
+  search.setQuery("changed");
+  search.close();
   const read = vi.spyOn(document, "createTreeWalker");
   const range = vi.spyOn(document, "createRange");
   await nextFrame();
@@ -104,6 +113,7 @@ it("cancels a queued text refresh when a query changes and search closes before 
 it("materializes matches as their text enters the viewport without searching it again", async () => {
   const root = document.body.appendChild(document.createElement("section"));
   root.style.cssText = "position:fixed;top:0;left:0;width:300px;height:40px;overflow:auto";
+  const search = watchSearch(root);
   const first = root.appendChild(document.createElement("div"));
   first.className = "chat-text";
   first.textContent = "Needle at the beginning";
@@ -114,7 +124,7 @@ it("materializes matches as their text enters the viewport without searching it 
   const releaseFirst = registerChatSearchTextBlock(first);
   const releaseLast = registerChatSearchTextBlock(last);
   onTestFinished(() => {
-    syncChatSearchHighlight(root, "");
+    search.close();
     releaseFirst();
     releaseLast();
     root.remove();
@@ -122,7 +132,7 @@ it("materializes matches as their text enters the viewport without searching it 
   });
   const highlightedNodes = () =>
     Array.from(CSS.highlights.get(CHAT_SEARCH_HIGHLIGHT) ?? [], (range) => range.startContainer);
-  syncChatSearchHighlight(root, "needle");
+  search.setQuery("needle");
   await nextFrame();
   expect(highlightedNodes()).toEqual([first.firstChild]);
   const read = vi.spyOn(document, "createTreeWalker");
@@ -137,7 +147,7 @@ it("materializes matches as their text enters the viewport without searching it 
   await nextFrame();
   expect(highlightedNodes()).toEqual([last.firstChild]);
   expect(read).not.toHaveBeenCalled();
-  syncChatSearchHighlight(root, "");
+  search.close();
   const geometry = vi.spyOn(Range.prototype, "getBoundingClientRect");
   root.scrollTop = 0;
   publishTranscriptScroll(root, {

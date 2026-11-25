@@ -1,10 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-  OpenClawAgentDatabaseLeaseActiveError,
-} from "../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
@@ -66,18 +64,18 @@ it("joins rejected question publication before closing Gateway databases and lea
     expect(closed).toBe(false);
     expect(agent.db.isOpen).toBe(true);
     expect(shared.isOpen).toBe(true);
-    expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env })).toThrow(
-      OpenClawAgentDatabaseLeaseActiveError,
-    );
+    await expect(
+      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
+    ).rejects.toThrow(OpenClawAgentDatabaseLeaseActiveError);
     release.resolve();
     await closing;
     expect(closed).toBe(true);
     expect(observation.record).toMatchObject({ status: "answered", answers });
     expect(agent.db.isOpen).toBe(false);
     expect(shared.isOpen).toBe(false);
-    expect(() =>
+    await expect(
       assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   } finally {
     release.resolve();
     await Promise.allSettled([closing]);

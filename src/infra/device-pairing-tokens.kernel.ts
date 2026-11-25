@@ -11,10 +11,8 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
-import {
-  loadDevicePairingStateForMutation,
-  normalizeDevicePairingRole,
-} from "./device-pairing-state.kernel.js";
+import { normalizeDevicePairingRole } from "./device-pairing-roles.js";
+import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   persistDevicePairingStoreState as persistState,
   updatePairedDeviceInTransaction,
@@ -61,6 +59,7 @@ export function ensureDeviceTokenInWorker(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  approval?: DeviceAuthToken["approval"];
   nowMs: number;
 }): DeviceAuthToken | null {
   return updatePairedDeviceInTransaction<DeviceAuthToken | null>(params.deviceId, (paired) => {
@@ -94,6 +93,7 @@ export function ensureDeviceTokenInWorker(params: {
       role,
       scopes: requestedScopes,
       issuer: params.issuer,
+      approval: params.approval,
       existing,
       now,
       rotatedAtMs: existing ? now : undefined,

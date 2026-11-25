@@ -41,7 +41,10 @@ import {
   isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
-import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import {
+  disposeSelectedSessionMessageSubscription,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history-subscription.ts";
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
@@ -64,7 +67,10 @@ import { retireSessionWorkspaceCheckout } from "./components/chat-session-worksp
 import { retireChatPairingQr } from "./history-merge.ts";
 import { reconcileChatRunLifecycle, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { currentInlineSessionApproval } from "./session-approval-projection.ts";
+import {
+  currentInlineSessionApproval,
+  currentParticipantSessionApproval,
+} from "./session-approval-projection.ts";
 import { retireCachedPairingQr } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
@@ -228,6 +234,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       gatewayQuestionPrompts: this.questionProjection.prompts,
       gatewayQuestionSources: this.questionProjection.sources,
       inlineApproval,
+      participantApproval: visible
+        ? currentParticipantSessionApproval(
+            state,
+            agentId,
+            this.context.gateway.snapshot.selfUser?.id,
+          )
+        : null,
       approvalBusy: snapshot?.approvalBusy,
       approvalCanGrant: snapshot?.approvalCanGrant ?? false,
       approvalErrors: snapshot?.approvalErrors,
@@ -358,6 +371,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionCompanionThreads.retire();
     }
     if (sourceChanged) {
+      if (state.chatSessionMessageSubscription) {
+        disposeSelectedSessionMessageSubscription(state);
+      }
       this.retireTranscriptReads(true);
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();

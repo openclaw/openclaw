@@ -206,8 +206,7 @@ export async function createFaceTimeRuntime(params: {
           }
         }),
       );
-    }, OUTBOUND_RECONCILE_DELAY_MS);
-    outboundReconcileTimer.unref?.();
+    }, OUTBOUND_RECONCILE_DELAY_MS).unref();
   };
   const cancelPendingOutboundCall = async (): Promise<
     | {
@@ -401,7 +400,7 @@ export async function createFaceTimeRuntime(params: {
       const request = resolveFaceTimeDialRequest({
         handle: dialParams.handle,
         mode: dialParams.mode,
-        ownerHandles: config.ownerHandles,
+        allowedCallers: config.allowedCallers,
       });
       const dialID = randomUUID();
       const requestedAt = new Date().toISOString();

@@ -16,21 +16,19 @@ import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
-  createSessionSharingLookupCaches,
   findPreparedSharingTarget,
   sessionMutationTargetChanged,
   withCurrentSessionSharingSource,
   type AuthorizedSessionMutationTarget,
-  type SessionSharingLookupCaches,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
-import {
-  authorizeOwnSessionMutation,
-  type SessionSharingTarget,
-} from "./session-sharing-policy.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import type { createSessionSharingConsumption } from "./session-sharing-read.js";
+import type {
+  createSessionSharingConsumption,
+  PreparedSessionSharingTargetFacts,
+} from "./session-sharing-read.js";
 import { captureSessionSharingStore } from "./session-sharing-source-store.js";
 import type {
   SessionMutationTarget,
@@ -79,6 +77,9 @@ export async function prepareSessionSharingSource(
       get members() {
         return [...read.readCurrent().membership];
       },
+      get memberAccess() {
+        return read.readCurrent().memberAccess;
+      },
       assertCurrent,
       async release() {
         active = false;
@@ -113,13 +114,13 @@ export async function prepareSessionSharingSource(
       throw new Error("Session sharing source changed");
     }
     const entry = result.entries.find(({ sessionKey }) => sessionKey === target.storeKey)?.entry;
+    const membership = result.sharing?.members.find((row) => row.sessionKey === target.storeKey);
     return {
       actorSource: false as const,
       source,
       target: entry ? { ...target, readSource: source, storeKeys: [target.storeKey], entry } : null,
-      members:
-        result.sharing?.members.find((row) => row.sessionKey === target.storeKey)?.identityIds ??
-        [],
+      members: membership?.identityIds ?? [],
+      memberAccess: membership?.memberAccess,
       assertCurrent,
       release: retained.release,
     };
@@ -133,19 +134,17 @@ export async function prepareSessionSharingSource(
 export function withPreparedSessionSharingSource(params: {
   targets: AuthorizedSessionMutationTarget[];
   sourceConfig: OpenClawConfig;
-  request: Pick<SessionMutationAuthorizationParams, "client" | "method" | "preparedTargets"> & {
+  request: Pick<SessionMutationAuthorizationParams, "method" | "preparedTargets"> & {
     context: Pick<SessionMutationAuthorizationParams["context"], "getRuntimeConfig">;
   };
-  ownSessionProfileId?: string;
   talk: ReturnType<typeof resolveTalkSessionTargetInput>;
   assertTalkTargetCurrent: (cfg: OpenClawConfig) => PreparedTalkSessionTarget | undefined;
   assertTargetCurrent: (
     target: SessionMutationTarget,
     expected: AuthorizedSessionMutationTarget | undefined,
     cfg: OpenClawConfig,
-    caches?: SessionSharingLookupCaches,
     ensuredSessionId?: string,
-    prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
+    prepared?: PreparedSessionSharingTargetFacts,
     currentTalkTarget?: PreparedTalkSessionTarget,
     bindSessionIdentity?: boolean,
   ) => void;
@@ -155,32 +154,21 @@ export function withPreparedSessionSharingSource(params: {
     NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>
   >();
   const targetChanged = (key: string) => sessionMutationTargetChanged(params.request.method, key);
-  const assertSource = () => {
-    const error = authorizeOwnSessionMutation({
-      client: params.request.client,
-      target: null,
-      expectedProfileId: params.ownSessionProfileId,
-    });
-    if (error) {
-      throw new SessionMutationAuthorizationChangedError(error);
-    }
-    return params.request.context.getRuntimeConfig();
-  };
+  const assertSource = () => params.request.context.getRuntimeConfig();
   const assertCurrent = () => {
     const cfg = assertSource();
     const currentTalkTarget = params.assertTalkTargetCurrent(cfg);
-    const caches = createSessionSharingLookupCaches();
     for (const target of params.targets) {
       const bound = boundSources.get(target)?.readCurrent();
       params.assertTargetCurrent(
         target,
         target,
         cfg,
-        caches,
         undefined,
         bound && {
           target: bound.target,
           members: [...bound.membership],
+          memberAccess: bound.memberAccess,
         },
         currentTalkTarget,
       );
@@ -231,9 +219,9 @@ export function withPreparedSessionSharingSource(params: {
         if (!facts) {
           read.assertCurrent();
         }
-        assertSourceCurrent();
+        const cfg = assertSourceCurrent();
         const expected = params.targets[index]!;
-        params.assertTargetCurrent(expected, expected, assertSource(), undefined, undefined, {
+        params.assertTargetCurrent(expected, expected, cfg, undefined, {
           target: facts
             ? facts.entry
               ? {
@@ -245,10 +233,10 @@ export function withPreparedSessionSharingSource(params: {
               : null
             : read.target,
           members: facts?.members ?? read.members,
+          memberAccess: facts ? undefined : read.memberAccess,
         });
       };
       const assertPreparedCurrent = () => {
-        assertSourceCurrent();
         for (let index = 0; index < prepared.length; index += 1) {
           assertPrepared(index);
         }
@@ -306,9 +294,9 @@ export function withPreparedSessionSharingSource(params: {
 
 /** Accepted input follows only its own committed lifecycle and keeps that effect's custody. */
 export function createAdmittedSessionSharingAuthority(params: {
+  onIncarnationTransition?: (previous: string | null, current: string) => void;
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
-  ownSessionProfileId?: string;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
   assertTargetCurrent: Parameters<
     typeof withPreparedSessionSharingSource
@@ -321,16 +309,17 @@ export function createAdmittedSessionSharingAuthority(params: {
   // The creation recorder owns the absent-to-created handoff; only rollover diverges.
   let admittedTarget = target;
   let isAdoptingEffectActive: (() => boolean) | undefined;
+  let effectTarget: ReturnType<typeof captureSessionTarget> | undefined;
   const bindCurrentEffect = () => {
     if (!target?.resolved) {
       return;
     }
     bindSessionEffectTransition(
-      captureSessionTarget({
+      (effectTarget ??= captureSessionTarget({
         storeScope: target.resolved.storePath,
         sessionKey: target.resolved.canonicalKey,
         agentId: target.resolved.agentId,
-      }),
+      })),
       target,
       ({ previous, current }, isActive) => {
         if (
@@ -341,6 +330,7 @@ export function createAdmittedSessionSharingAuthority(params: {
           (current.sessionId !== previous.sessionId ||
             current.lifecycleRevision !== previous.lifecycleRevision)
         ) {
+          params.onIncarnationTransition?.(admittedTarget.sessionId, current.sessionId);
           admittedTarget = {
             ...admittedTarget,
             sessionId: current.sessionId,
@@ -355,7 +345,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   const assertAdmittedTargetCurrent = (
     selected: AuthorizedSessionMutationTarget,
     cfg: OpenClawConfig,
-    prepared?: Parameters<typeof params.assertTargetCurrent>[5],
+    prepared?: Parameters<typeof params.assertTargetCurrent>[4],
   ) => {
     if (selected === target && isAdoptingEffectActive && !isAdoptingEffectActive()) {
       throw params.changed(selected.sessionKey);
@@ -365,7 +355,6 @@ export function createAdmittedSessionSharingAuthority(params: {
       selected === target ? admittedTarget : selected,
       cfg,
       undefined,
-      undefined,
       prepared,
       undefined,
       false,
@@ -374,7 +363,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   const withCurrentSessionSource = target
     ? <T>(
         consume: () => T,
-        assertCurrent = () => params.assertTargetCurrent(target, target, params.getConfig()),
+        assertCurrent = () => assertAdmittedTargetCurrent(target, params.getConfig()),
       ): Promise<T> =>
         params.withStorage(() =>
           withCurrentSessionSharingSource({
@@ -393,10 +382,9 @@ export function createAdmittedSessionSharingAuthority(params: {
           targets: [target],
           sourceConfig: params.getConfig(),
           request: params.request,
-          ownSessionProfileId: params.ownSessionProfileId,
           talk: undefined,
           assertTalkTargetCurrent: () => undefined,
-          assertTargetCurrent: (_selected, _expected, cfg, _caches, _ensured, prepared) =>
+          assertTargetCurrent: (_selected, _expected, cfg, _ensured, prepared) =>
             params.withStorage(() => {
               assertAdmittedTargetCurrent(target, cfg, prepared);
               bindCurrentEffect();

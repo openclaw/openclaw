@@ -26,6 +26,7 @@ import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runLoop = vi.hoisted(() =>
   vi.fn<
@@ -401,6 +402,27 @@ it("builds context once and advances observer note deltas across asks", async ()
   expectHistory(secondHistory[0], "second note", "third note");
 });
 
+it("returns and restores every link in a long side answer", async () => {
+  const links = Array.from(
+    { length: 28 },
+    (_, i) => "https://github.com/example/project/pull/" + (100000 + i),
+  ).join("\n");
+  expect(links.length).toBeGreaterThan(1200);
+  const harness = createHarness({ run: async () => links });
+  await expectAnswer(harness.ask("All the links?"), links);
+  expectSaved(harness.service, "All the links?", links);
+});
+
+it("marks an oversized answer without keeping part of the next URL", async () => {
+  const first = "🦞".repeat(12_000);
+  const harness = createHarness({
+    run: async () => first + "\nhttps://example.test/" + "x".repeat(2000),
+  });
+  const { answer: shortened } = await harness.ask("All links?");
+  expect(shortened).toBe(first + "\n\nSide chat shortened this answer. Ask for a smaller section.");
+  expectSaved(harness.service, "All links?", shortened);
+});
+
 it("caps replay by exchange count and UTF-8 bytes", () => {
   const exchanges = Array.from({ length: 30 }, (_, index) => ({
     question: `${index}:${"🦞".repeat(400)}`,
@@ -464,6 +486,26 @@ it("times out a pending context read and fences it from a replacement ask", asyn
   }
 });
 
+it("delivers an answer after the old one-minute deadline and keeps runner stalls retryable", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const harness = createHarness();
+  harness.run.mockImplementationOnce(async () => {
+    await vi.advanceTimersByTimeAsync(75_000);
+    return { meta: { durationMs: 75_000, finalAssistantVisibleText: answer } };
+  });
+  try {
+    await expectAnswer(harness.ask("Which pull requests?"));
+    expectSaved(harness.service, "Which pull requests?");
+  } finally {
+    vi.useRealTimers();
+  }
+  harness.run.mockResolvedValueOnce({
+    meta: { durationMs: 1, modelFallbackStopReason: "idle_timeout_circuit_breaker" },
+  });
+  await expectFailure(harness.ask("Another?"), "timeout");
+  expectSaved(harness.service, "Which pull requests?");
+});
+
 it("keeps the RPC source and busy slot through timed-out execution cleanup, then permits retry", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const harness = createHarness();
@@ -482,7 +524,7 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
         sessionKey: target.sessionKey,
         question: "Will this time out?",
       },
-      client: { connId: "conn-1" },
+      client: { ...sharingPolicyClient({ scopes: [] }), connId: "conn-1" },
       context: { sessionCompanion: harness.service, getRuntimeConfig: () => cfg },
       respond,
     } as never),
@@ -497,6 +539,9 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
     const internalTarget = { agentId, sessionId, sessionKey, storePath };
     expect(loadExactSessionEntry(internalTarget)).toBeDefined();
     await vi.advanceTimersByTimeAsync(60_000);
+    // An executing answer crosses the old wall-clock limit; the runner monitors stalls.
+    expect(run.abortSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(run.abortSignal?.aborted).toBe(true);
     // A deadline cancels execution, but must not retire its source facts before settlement.
     expect(() => run.preparedRunAdmission?.assertSourceCurrent()).not.toThrow();
@@ -528,7 +573,7 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
   }
 });
 
-it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
+it.each(["stop", "reset", "backing-reset", "disposal", "request-abort"] as const)(
   "%s cancels an active ask without committing its late result",
   async (cause) => {
     const pending = createDeferredCore<string>();
@@ -547,6 +592,7 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     await harness.ask("What is already known?");
     const active = harness.ask("Will a disconnected request commit?", {
       signal: controller.signal,
+      askId: "active-ask",
     });
     await awaitGateBeforeSettlement(
       started.promise,
@@ -555,7 +601,12 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     );
     expect(harness.run).toHaveBeenCalledTimes(2);
 
-    if (cause === "reset") {
+    if (cause === "stop") {
+      harness.service.reset({ ...target, cancelAskId: "old-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(false);
+      harness.service.reset({ ...target, cancelAskId: "active-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(true);
+    } else if (cause === "reset") {
       harness.service.reset(target);
     } else if (cause === "backing-reset") {
       notifyGatewaySessionReset(target.sessionKey, target.agentId);
@@ -566,8 +617,15 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     }
     pending.resolve("late answer");
 
-    await expectFailure(active, cause === "backing-reset" ? "context-unavailable" : "unavailable");
-    if (cause === "request-abort") {
+    await expectFailure(
+      active,
+      cause === "backing-reset"
+        ? "context-unavailable"
+        : cause === "stop"
+          ? "stopped"
+          : "unavailable",
+    );
+    if (cause === "request-abort" || cause === "stop") {
       expectSaved(harness.service, "What is already known?", "existing answer");
     } else {
       expectEmpty(harness.service);

@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { getAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -240,6 +241,78 @@ describe("runEmbeddedAttempt sessions_yield", () => {
   });
 });
 
+describe("a human turn in a kept child without wake sources", () => {
+  const sessionKey = "agent:main:subagent:kept-child";
+  const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
+
+  it("returns the rejected yield to the model and continues to its reply", async () => {
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+    let requests = 0;
+    const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+    hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
+      createSessionsYieldTool({
+        sessionId: "kept-child",
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: "direct-human-followup",
+        }),
+        onYield: options?.onYield,
+      }),
+    ]);
+    const result = await runAttempt({
+      attemptOverrides: {
+        runId: "direct-human-followup",
+        senderIsOwner: false,
+        disableTools: false,
+        config: { tools: { codeMode: false, toolSearch: false } },
+        sessionManager: SessionManager.inMemory(),
+      },
+      createSession: () =>
+        createAgentBackedAttemptSession((model, tools) => {
+          const agent = new Agent({
+            initialState: { model, tools },
+            streamFn: () => {
+              requests++;
+              if (requests === 2) {
+                expect(outcomes).toMatchObject([
+                  {
+                    toolName: "sessions_yield",
+                    result: {
+                      details: {
+                        status: "nothing_pending",
+                        message: expect.stringContaining("Reply to the user now"),
+                      },
+                    },
+                  },
+                ]);
+              }
+              return streamAttemptAssistant(
+                model,
+                requests === 1
+                  ? attemptToolCall("empty-yield", "sessions_yield")
+                  : [{ type: "text", text: "The work is complete; here is the answer." }],
+              );
+            },
+          });
+          agent.subscribe((event) => {
+            if (event.type === "tool_execution_end") {
+              outcomes.push(event);
+            }
+          });
+          return agent;
+        }),
+    });
+    expect(requests).toBe(2);
+    expect(result.yieldDetected).toBeUndefined();
+    expect(result.messagesSnapshot.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The work is complete; here is the answer." }],
+      stopReason: "stop",
+    });
+  });
+});
+
 describe("automation yield", () => {
   const sessionKey = "agent:main:cron:yield-job:run:turn";
   const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
@@ -259,7 +332,6 @@ describe("automation yield", () => {
     ]);
     const result = await runAttempt({
       attemptOverrides: {
-        contextTokenBudget: 8192,
         disableTools: false,
         config: { tools: { codeMode: false, toolSearch: false } },
         sessionManager: SessionManager.inMemory(),
@@ -338,7 +410,6 @@ describe("embedded yield tool batch", () => {
 
     const attemptResult = await runAttempt({
       attemptOverrides: {
-        contextTokenBudget: 8192,
         disableTools: false,
         abortSignal: externalAbort.signal,
         config: { tools: { codeMode: false, toolSearch: false } },
@@ -472,7 +543,6 @@ describe("conditional handoff yield at the runtime boundary", () => {
         const result = await refreshOwner.run(() =>
           runAttempt({
             attemptOverrides: {
-              contextTokenBudget: 8192,
               disableTools: false,
               config: { tools: { codeMode: false, toolSearch: false } },
               sessionManager: SessionManager.inMemory(),

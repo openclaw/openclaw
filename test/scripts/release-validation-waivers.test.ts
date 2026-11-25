@@ -1,254 +1,205 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { expect, it } from "vitest";
 import {
-  classifyReleaseSnapshot,
+  composeReleaseAttemptJobs,
   terminalPolicyPass,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { readChild } from "../../scripts/full-release-validation-state.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
-import { child, githubRun } from "./full-release-validation-state.test-support.js";
+import {
+  decodeReleaseValidationSource,
+  evaluateReleaseChildPolicy,
+  parseReleaseValidationWaivers,
+  readReleaseValidationWaivers,
+  readReleaseValidationWaiversAsync,
+  releaseQualificationExemptions,
+} from "../../scripts/lib/release-validation-waivers.mjs";
 
-const VERSION = "2026.10.19";
-const ROLE = "releaseChecksIndependent";
-const LIVE_JOB =
-  "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)";
-const PACKAGE_JOB =
-  "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
-const TOP_AGGREGATE = "Verify release checks";
-const PACKAGE_AGGREGATE = "Run package acceptance / Verify package acceptance";
-const LIVE_FAILURE_LOG =
-  "2026-10-19T00:00:00Z ##[error]live_repo_e2e_release_checks ended with failure\n" +
-  "2026-10-19T00:00:00Z ##[error]Process completed with exit code 1.\n";
-const originalWaivers = [...RELEASE_VALIDATION_WAIVERS];
-
-type Job = {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string;
-  steps: { name: string; conclusion: string }[];
-};
-
-function job(name: string, id: number, overrides: Partial<Job> = {}): Job {
-  return { id, name, status: "completed", conclusion: "failure", steps: [], ...overrides };
-}
-
-function aggregate(name = TOP_AGGREGATE, id = 2): Job {
-  return job(name, id, {
-    steps: [
-      { name: "Set up job", conclusion: "success" },
+it("authenticates the exact Q policy blob and rejects changed content or schema", () => {
+  const bytes = Buffer.from(
+    JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] }),
+  );
+  const payload = {
+    path: "scripts/lib/release-validation-waivers.json",
+    type: "file",
+    encoding: "base64",
+    content: bytes.toString("base64"),
+    size: bytes.length,
+    sha: createHash("sha1")
+      .update("blob " + bytes.length + "\0")
+      .update(bytes)
+      .digest("hex"),
+  };
+  expect(
+    parseReleaseValidationWaivers(decodeReleaseValidationSource(payload, payload.path)),
+  ).toEqual([]);
+  expect(() =>
+    decodeReleaseValidationSource(
       {
-        name:
-          name === PACKAGE_AGGREGATE
-            ? "Verify package acceptance results"
-            : "Verify release check results",
-        conclusion: "failure",
+        ...payload,
+        content: Buffer.alloc(bytes.length).toString("base64"),
       },
-      { name: "Complete job", conclusion: "success" },
-    ],
-  });
-}
-
-function grant(jobName = LIVE_JOB, childRole = ROLE) {
-  RELEASE_VALIDATION_WAIVERS.push({
-    targetVersion: VERSION,
-    childRole,
-    jobName,
-    reason: "Synthetic release-tooling approval for a known provider outage.",
-  });
-}
-
-async function observe(
-  jobs: Job[],
-  {
-    targetVersion = VERSION,
-    role = ROLE,
-    logs = { "2": LIVE_FAILURE_LOG },
-  }: { targetVersion?: string; role?: string; logs?: Record<string, string> } = {},
-) {
-  vi.stubEnv("GITHUB_REPOSITORY", "openclaw/openclaw");
-  const planned = child(role, { workflow: "openclaw-release-checks.yml" });
-  return readChild(planned, undefined, undefined, {
-    targetVersion,
-    readRun: async () =>
-      githubRun(planned, {
-        conclusion: "failure",
-        path: ".github/workflows/openclaw-release-checks.yml",
-      }),
-    readAttemptJobs: async () => jobs,
-    readJobLog: async (id: number) => {
-      const log = logs[String(id)];
-      if (log === undefined) {
-        throw new Error(`Unexpected aggregate log request: ${id}`);
-      }
-      return log;
-    },
-  });
-}
-
-afterEach(() => {
-  RELEASE_VALIDATION_WAIVERS.splice(0, RELEASE_VALIDATION_WAIVERS.length, ...originalWaivers);
-  vi.unstubAllEnvs();
+      payload.path,
+    ),
+  ).toThrow("blob mismatch");
+  expect(() => parseReleaseValidationWaivers('{"schema":"unknown","waivers":[]}')).toThrow(
+    "Invalid release waiver policy",
+  );
 });
 
-describe("checked-in release-tooling waivers", () => {
-  it("passes the aggregate decision while retaining the failed child and leaf evidence", async () => {
-    grant();
-    const observed = await observe([job(LIVE_JOB, 1), aggregate()]);
-    expect(observed.errors).toEqual([]);
-    expect(observed.conclusion).toBe("failure");
-    expect(observed.jobs).toContainEqual(
-      expect.objectContaining({ name: LIVE_JOB, status: "completed", conclusion: "failure" }),
-    );
-    expect(terminalPolicyPass(observed, VERSION)).toBe(true);
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION })).toMatchObject(
-      {
-        state: "passed",
-        blockers: [],
-        waivers: [
-          {
-            targetVersion: VERSION,
-            childRole: ROLE,
-            jobName: LIVE_JOB,
-            reason: "Synthetic release-tooling approval for a known provider outage.",
-            runId: "101",
-            runAttempt: 1,
-          },
-        ],
-      },
-    );
+const targetVersion = "2099.1.1";
+const targetSha = "a".repeat(40);
+const leaf = { name: "synthetic test", status: "completed", conclusion: "cancelled" };
+const child = { key: "normalCi", status: "completed", conclusion: "cancelled", jobs: [leaf] };
+const grant = { targetVersion, targetSha, childRole: child.key, reason: "Synthetic approval" };
+it("keeps main empty and never falls back from a missing or invalid Q ledger", async () => {
+  expect(evaluateReleaseChildPolicy({ child, targetVersion }).waivers).toEqual([]);
+  expect(terminalPolicyPass(child, targetVersion)).toBe(false);
+  expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
+  for (const message of ["HTTP 404", "HTTP 403"]) {
+    const paths: string[] = [];
+    const missing = (path: string): string => {
+      paths.push(path);
+      throw new Error(message);
+    };
+    expect(() => readReleaseValidationWaivers(missing)).toThrow(message);
+    await expect(readReleaseValidationWaiversAsync(missing)).rejects.toThrow(message);
+    expect(paths).toEqual(Array(2).fill("scripts/lib/release-validation-waivers.json"));
+  }
+  expect(() => readReleaseValidationWaivers(() => "corrupt JSON")).toThrow();
+  const source = JSON.stringify({
+    schema: "openclaw.release-validation-waivers/v1",
+    waivers: [grant],
   });
+  expect(readReleaseValidationWaivers(() => source)).toEqual([grant]);
+  await expect(readReleaseValidationWaiversAsync(async () => source)).resolves.toEqual([grant]);
+});
 
-  it("composes provider waivers with Windows-node preview advisories", async () => {
-    grant(LIVE_JOB, "releaseChecksCandidate");
-    const observed = await observe(
-      [
-        job(LIVE_JOB, 1),
-        aggregate(),
-        job("Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway", 3, {
-          conclusion: "success",
-        }),
-        job("Run Windows-node main E2E / Setup, connect, and invoke candidate gateway", 4),
+it("does not promote frozen outcome- or aggregate-specific approvals to broad grants", () => {
+  const failure = { ...leaf, conclusion: "failure" };
+  const plain = { ...grant, jobName: leaf.name };
+  const frozen = parseReleaseValidationWaivers(
+    JSON.stringify({
+      schema: "openclaw.release-validation-waivers/v1",
+      waivers: [
+        { ...plain, aggregates: [] },
+        { ...plain, aggregates: [], cancelledStep: "Run workload" },
+        { ...plain, aggregates: [], evidence: { runId: "1", runAttempt: 1 } },
+        { ...plain, aggregates: [{ jobName: "gate", stepName: "Verify", causes: [leaf.name] }] },
       ],
-      { role: "releaseChecksCandidate" },
+    }),
+  );
+  expect(terminalPolicyPass(child, targetVersion, targetSha, frozen, [leaf.name])).toBe(false);
+  const failed = { ...child, conclusion: "failure", jobs: [failure] };
+  expect(terminalPolicyPass(failed, targetVersion, targetSha, frozen.slice(1), [leaf.name])).toBe(
+    false,
+  );
+  expect(
+    evaluateReleaseChildPolicy({ child: failed, targetVersion, targetSha, waiverPolicy: frozen })
+      .waivers,
+  ).toEqual([plain]);
+});
+
+it("checks staged waiver additions without rejecting unchanged frozen selectors", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "release-waivers-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
+  const ledger = "scripts/lib/release-validation-waivers.json";
+  const frozen = {
+    ...grant,
+    jobName: "old job",
+    aggregates: [{ jobName: "gate", stepName: "Verify", causes: ["old job"] }],
+  };
+  const write = (waivers: unknown[]) =>
+    writeFileSync(
+      join(cwd, ledger),
+      JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers }),
     );
-    expect(observed.errors).toEqual([]);
-    expect(terminalPolicyPass(observed, VERSION)).toBe(true);
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION })).toMatchObject(
+  const check = () =>
+    spawnSync(
+      process.execPath,
+      [resolve("scripts/lib/release-validation-waivers.mjs"), "--check-staged"],
       {
-        state: "passed",
-        blockers: [],
-        waivers: [{ jobName: LIVE_JOB }],
-        advisoryJobs: [{ class: "windows-node-preview", conclusion: "failure" }],
+        cwd,
+        encoding: "utf8",
       },
     );
-  });
-
-  it.each<{
-    name: string;
-    targetVersion?: string;
-    role?: string;
-    leaf?: Partial<Job> | null;
-  }>([
-    { name: "another release version", targetVersion: "2026.10.20" },
-    { name: "another child role", role: "releaseChecksCandidate" },
-    { name: "another job name", leaf: { name: `${LIVE_JOB} extra` } },
-    { name: "a cancelled leaf", leaf: { conclusion: "cancelled" } },
-    { name: "a timed-out leaf", leaf: { conclusion: "timed_out" } },
-    { name: "a skipped leaf", leaf: { conclusion: "skipped" } },
-    { name: "an unfinished leaf", leaf: { status: "in_progress", conclusion: "" } },
-    { name: "a missing leaf", leaf: null },
-  ])("does not apply a grant to $name", async ({ targetVersion = VERSION, role, leaf }) => {
-    grant();
-    const jobs = [...(leaf === null ? [] : [job(LIVE_JOB, 1, leaf)]), aggregate()];
-    const observed = await observe(jobs, { targetVersion, role });
-    const decision = classifyReleaseSnapshot({ children: [observed], targetVersion });
-    expect(observed.errors).toEqual([]);
-    expect(decision.waivers).toEqual([]);
-    expect(decision.state).toBe("blocked_complete");
-  });
-
-  it.each([
-    {
-      name: "an extra evidence-integrity failure",
-      log: `${LIVE_FAILURE_LOG}::error::Advisory evidence resolution or validation failed.\n`,
-      aggregate: aggregate(),
-      error: "unwaived failure",
-    },
-    {
-      name: "an unverified Telegram dispatch identity",
-      log: `${LIVE_FAILURE_LOG}::error::Telegram dispatch identity was not verified\n`,
-      aggregate: aggregate(),
-      error: "unwaived failure",
-    },
-    {
-      name: "an unrelated failed setup step",
-      log: LIVE_FAILURE_LOG,
-      aggregate: { ...aggregate(), steps: [{ name: "Set up job", conclusion: "failure" }] },
-      error: "non-policy failure",
-    },
-    {
-      name: "an unexplained policy-step failure",
-      log: "::error::Process completed with exit code 1.\n",
-      aggregate: aggregate(),
-      error: "unwaived failure",
-    },
-    {
-      name: "a cancelled aggregate",
-      log: LIVE_FAILURE_LOG,
-      aggregate: { ...aggregate(), conclusion: "cancelled" },
-      error: "non-policy failure",
-    },
-  ])("does not excuse $name", async ({ log, aggregate: summary, error }) => {
-    grant();
-    const observed = await observe([job(LIVE_JOB, 1), summary], { logs: { "2": log } });
-    expect(observed.errors).toEqual([
-      expect.objectContaining({ message: expect.stringContaining(error) }),
-    ]);
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION }).state).toBe(
-      "orchestration_error",
+  try {
+    git("init", "-q");
+    mkdirSync(join(cwd, "scripts/lib"), { recursive: true });
+    write([frozen]);
+    git("add", ledger);
+    git(
+      "-c",
+      "user.name=Tester",
+      "-c",
+      "user.email=tester@example.org",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-qm",
+      "fixture",
     );
-  });
+    write([frozen, { ...frozen, jobName: "new job" }]);
+    git("add", ledger);
+    write([frozen, { ...grant, jobName: "new job", step: "Run" }]);
+    const rejected = check();
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("new job");
+    git("add", ledger);
+    expect(check().status).toBe(0);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
-  it("does not accept a waived leaf without its required aggregate", async () => {
-    grant();
-    const observed = await observe([job(LIVE_JOB, 1)]);
-    expect(observed.errors).toEqual([
-      expect.objectContaining({ message: expect.stringContaining("aggregate is missing") }),
-    ]);
-  });
-
-  it.each(["success", "failure"])(
-    "handles both package aggregates while package integrity is %s",
-    async (integrityConclusion) => {
-      grant(PACKAGE_JOB, "releaseChecksCandidate");
-      const observed = await observe(
-        [
-          job(PACKAGE_JOB, 1),
-          aggregate(),
-          aggregate(PACKAGE_AGGREGATE, 3),
-          job("Run package acceptance / Package integrity", 4, { conclusion: integrityConclusion }),
-        ],
-        {
-          role: "releaseChecksCandidate",
-          logs: {
-            "2": "::error::package_acceptance_release_checks ended with failure\n",
-            "3": "::error::package_telegram ended with failure\n",
-          },
-        },
-      );
-      expect(observed.errors).toEqual([]);
-      expect(observed.jobs).toContainEqual(
-        expect.objectContaining({ name: PACKAGE_JOB, conclusion: "failure" }),
-      );
-      const decision = classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION });
-      expect(decision.state).toBe(
-        integrityConclusion === "success" ? "passed" : "blocked_complete",
-      );
-      if (integrityConclusion === "failure") {
-        expect(decision.blockers).toContainEqual(
-          expect.objectContaining({ job: "Run package acceptance / Package integrity" }),
-        );
-      }
-    },
+it("waives a whole child and its cancelled and never-run descendants without rewriting evidence", () => {
+  const requiredJobs = [leaf.name, "never ran"];
+  expect(terminalPolicyPass(child, targetVersion, targetSha, [grant], requiredJobs)).toBe(true);
+  expect(terminalPolicyPass(child, targetVersion, "b".repeat(40), [grant], requiredJobs)).toBe(
+    false,
   );
+  expect(
+    terminalPolicyPass(
+      child,
+      targetVersion,
+      targetSha,
+      [{ ...grant, jobName: leaf.name }],
+      requiredJobs,
+    ),
+  ).toBe(false);
+  expect(child.jobs).toEqual([leaf]);
+  expect(child.conclusion).toBe("cancelled");
+});
+
+it("waives a named job only if its authenticated first incomplete step matches the optional selector", () => {
+  const policy = [{ ...grant, jobName: leaf.name, step: "Run workload" }];
+  for (const conclusion of ["cancelled", "failure"]) {
+    const steps = [
+      { name: "Setup", conclusion: "success" },
+      { name: "Run workload", conclusion },
+      { name: "Cleanup", conclusion: "failure" },
+    ];
+    const { jobs } = composeReleaseAttemptJobs(
+      [{ runAttempt: 1, jobs: [{ ...leaf, conclusion, steps }] }],
+      { plannedRunAttempt: 1, effectiveRunAttempt: 1 },
+    );
+    const observed = { ...child, conclusion, jobs };
+    expect(terminalPolicyPass(observed, targetVersion, targetSha, policy, [leaf.name])).toBe(true);
+    expect(
+      terminalPolicyPass(
+        observed,
+        targetVersion,
+        targetSha,
+        [{ ...policy[0]!, step: "Cleanup" }],
+        [leaf.name],
+      ),
+    ).toBe(false);
+    expect(
+      terminalPolicyPass({ ...observed, jobs: [] }, targetVersion, targetSha, policy, [leaf.name]),
+    ).toBe(false);
+  }
 });

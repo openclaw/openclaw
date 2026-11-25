@@ -22,9 +22,8 @@ import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import { measureRecords } from "./metric-store-record-measure.test-support.js";
 import {
-  MAX_PROMETHEUS_FAMILY_SERIES,
-  PROMETHEUS_FAMILY_RESERVES,
-  SHARED_PROMETHEUS_SERIES,
+  MAX_PROMETHEUS_SERIES,
+  PROMETHEUS_FAMILY_LIMITS,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
 import {
@@ -78,9 +77,7 @@ assert(!values["heap-snapshot"] || !withHttp, "Heap snapshots are a separate ret
 assert(!withHttp || httpPort, "--http-port is required with --http or --http-only");
 const startAt = values["start-at"] ? Number(values["start-at"]) : Date.now() + 30000;
 assert(Number.isSafeInteger(startAt), "--start-at must be an epoch millisecond integer");
-const capacity =
-  Object.values(PROMETHEUS_FAMILY_RESERVES).reduce((sum, reserve) => sum + reserve, 0) +
-  SHARED_PROMETHEUS_SERIES;
+const capacity = MAX_PROMETHEUS_SERIES;
 const results: Record<string, unknown> = {};
 let phaseIndex = 0;
 const session = new Session();
@@ -233,7 +230,7 @@ function parseShape(raw: unknown): Shape {
   const series = (row: unknown) => {
     shapeObject(row, "Invalid series shape");
     assert(
-      typeof row.name === "string" && Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, row.name),
+      typeof row.name === "string" && Object.hasOwn(PROMETHEUS_FAMILY_LIMITS, row.name),
       "Unknown metric name",
     );
     assert(!names.has(row.name), `Duplicate family ${row.name}`);
@@ -244,7 +241,7 @@ function parseShape(raw: unknown): Shape {
       String(row.labelSets),
       "labelSets",
       1,
-      Math.max(MAX_PROMETHEUS_FAMILY_SERIES, PROMETHEUS_FAMILY_RESERVES[name]),
+      PROMETHEUS_FAMILY_LIMITS[name],
     );
     total += labelSets;
     return { name, labelSets, finiteBuckets: row.finiteBuckets, type: row.type };
@@ -343,8 +340,7 @@ function shapeUpdater(
 }
 
 function populateCapacity(store: PrometheusMetricStore) {
-  const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
-  const maxReserve = Math.max(...Object.values(PROMETHEUS_FAMILY_RESERVES));
+  const families = Object.keys(PROMETHEUS_FAMILY_LIMITS) as PrometheusMetricName[];
   const rpcDurationBuckets = [
     0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15, 0.2,
     0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12.5, 15, 20, 25, 30,
@@ -366,15 +362,11 @@ function populateCapacity(store: PrometheusMetricStore) {
   let series = 0;
   let scalarSeries = 0;
   let histogramSeries = 0;
-  // Populate every reserve before using shared capacity, up to the loaded budget.
+  // Interleave families up to their ceilings and the hard total cap.
   for (let pass = 0; series < capacity; pass++) {
     for (const [familyIndex, name] of families.entries()) {
-      const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-      const label = pass < maxReserve ? pass : reserve + pass - maxReserve;
-      if (
-        (pass < maxReserve && pass >= reserve) ||
-        label >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve)
-      ) {
+      const label = pass;
+      if (label >= PROMETHEUS_FAMILY_LIMITS[name]) {
         continue;
       }
       if (series === capacity) {

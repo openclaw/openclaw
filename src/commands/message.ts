@@ -17,6 +17,7 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { LOCAL_HOST } from "../gateway/operator-admission.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -28,6 +29,9 @@ import {
 } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
+import { prepareCapturedTemplateToolPolicyConsent } from "../templates/tool-policy-runtime.js";
 
 export async function messageCommand(
   opts: Record<string, unknown>,
@@ -91,6 +95,12 @@ export async function messageCommand(
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
   }
+  // The CLI pins config synchronously; media policy resolution also needs the
+  // consent facts that Gateway startup normally prepares for this config.
+  if (collectTemplateToolPolicyCandidates(cfg).length > 0) {
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+    prepareCapturedTemplateToolPolicyConsent(cfg, {});
+  }
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   // Keep the gateway client identity explicit so channel plugins can distinguish
@@ -102,7 +112,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId,
-      senderIsOwner: opts.senderIsOwner !== false,
+      senderIsOwner: LOCAL_HOST.grant.owner,
       conversationReadOrigin: "direct-operator",
       broadcastAccountPlan,
       gateway: {

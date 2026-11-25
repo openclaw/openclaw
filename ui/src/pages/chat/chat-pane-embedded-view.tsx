@@ -26,10 +26,8 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import type {
-  SidebarPanelDefinition,
-  SidebarPanelHostRegistration,
-} from "./components/chat-sidebar-region-types.ts";
+import type { SidebarPanelHostRegistration } from "./components/chat-sidebar-panel-host.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
@@ -348,12 +346,17 @@ function LinkReaderPanel(props: Props) {
   );
 }
 
-function DetailPanel(props: SidebarPanelData) {
+function DetailPanel(props: SidebarPanelData & PanelHostProps) {
   const presented = usePanePresentation(() => props.detailPresentation);
   const active = usePanePresentation(() => props.detailPresented ?? props.detailPresentation);
   return (
     <Show when={presented()}>
-      <ChatDetailSlot {...props.detail} active={active()} content={props.detailContent!} />
+      <ChatDetailSlot
+        {...props.detail}
+        active={active()}
+        content={props.detailContent!}
+        registerPanelHost={props.registerPanelHost}
+      />
     </Show>
   );
 }

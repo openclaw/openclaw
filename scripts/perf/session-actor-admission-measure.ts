@@ -21,7 +21,7 @@ import { serialize } from "node:v8";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { projectSessionActorAuthority } from "../../src/config/sessions/session-actor-command.js";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -144,12 +144,7 @@ try {
   }
   await setImmediate();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   observer.observe({ entryTypes: ["gc"] });
   const iterations = 5000;

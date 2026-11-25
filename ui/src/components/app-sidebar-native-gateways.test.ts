@@ -25,8 +25,6 @@ afterEach(() => {
 
 const query = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector);
 const item = (root: ParentNode, value: string) => query(root, `[data-value="${value}"]`);
-const shortcut = (root: ParentNode) =>
-  query(root, ".oc-menu-item__details kbd")?.textContent?.replace(/\s+/gu, "").trim();
 
 function publishSnapshot(snapshot: NativeGatewaysSnapshot | null) {
   Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
@@ -105,15 +103,9 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   expect(item(menu, "command:apps")).toBeNull();
   const rows = snapshot.gateways.map(({ id }) => item(menu, `gateway:${encodeURIComponent(id)}`)!);
   expect(
-    rows.map((row) => [
-      query(row, ".sidebar-gateway-health")?.getAttribute("aria-label"),
-      shortcut(row),
-    ]),
-  ).toEqual([
-    ["Connected", "⌘1"],
-    ["Unreachable", undefined],
-    ["Unknown status", "⌘3"],
-  ]);
+    rows.map((row) => query(row, ".sidebar-gateway-health")?.getAttribute("aria-label")),
+  ).toEqual(["Connected", "Unreachable", "Unknown status"]);
+  expect(rows.map((row) => query(row, "kbd"))).toEqual([null, null, null]);
   expect(query(rows[0]!, ".sidebar-gateway-primary")?.textContent).toBe("primary");
   expect(query(rows[1]!, ".sidebar-gateway-primary")).toBeNull();
   expect(query(rows[1]!, ".sidebar-gateway-check")).not.toBeNull();
@@ -135,19 +127,6 @@ it("lists native gateways and dispatches switching, window, primary, and setting
     expect(postMessage).toHaveBeenLastCalledWith({ type, ...(id ? { id } : {}) });
   }
   expect(postMessage).toHaveBeenCalledTimes(6);
-
-  snapshot.gateways = Array.from({ length: 10 }, (_, index) => ({
-    ...snapshot.gateways[0]!,
-    id: `gateway-${index + 1}`,
-    name: `Gateway ${index + 1}`,
-  }));
-  snapshot.currentId = "gateway-1";
-  publishSnapshot(snapshot);
-  await open();
-  const manyRows = sidebar.querySelectorAll('[data-value^="gateway:"]');
-  expect(manyRows).toHaveLength(10);
-  expect(shortcut(manyRows[8]!)).toBe("⌘9");
-  expect(query(manyRows[9]!, "kbd")).toBeNull();
 });
 
 it("keeps an open gateway submenu in place while the identity menu rebuilds", async () => {

@@ -1,12 +1,14 @@
 import { basename, dirname } from "node:path";
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import type { AssistantMessage } from "../../llm/types.js";
+import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import { sleep } from "../../utils/sleep.js";
 import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
 import type { AgentSessionConfig, ExtensionBindings } from "./agent-session-types.js";
+import { createBackgroundResultPlacement } from "./background-result-placement.js";
 import { ExtensionRunner, type ToolDefinition } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { ResourceExtensionPaths } from "./resource-loader.js";
@@ -36,6 +38,8 @@ export * from "./agent-session-types.js";
  * this class while the feature layers below own session behavior.
  */
 export class AgentSession extends AgentSessionCompaction {
+  protected readonly disposeBackgroundResultPlacement: () => void;
+
   constructor(config: AgentSessionConfig) {
     super(config);
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
@@ -43,6 +47,9 @@ export class AgentSession extends AgentSessionCompaction {
     this.buildRuntime({
       activeToolNames: [...this.allowedToolNames],
     });
+    const placement = createBackgroundResultPlacement(this.sessionManager);
+    setInternalBeforeRequest(this.agent, placement.beforeRequest);
+    this.disposeBackgroundResultPlacement = placement.dispose;
   }
 
   get extensionRunner(): ExtensionRunner {
@@ -332,7 +339,7 @@ export class AgentSession extends AgentSessionCompaction {
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
    */
-  protected isRetryableError(message: AssistantMessage): boolean {
+  protected isRetryableError(message: AssistantHistoryMessage): boolean {
     if (message.stopReason !== "error" || !message.errorMessage) {
       return false;
     }
@@ -349,7 +356,7 @@ export class AgentSession extends AgentSessionCompaction {
    * Prepare a retryable error for continuation with exponential backoff.
    * @returns true if the caller should continue the agent, false otherwise
    */
-  protected async prepareRetry(message: AssistantMessage): Promise<boolean> {
+  protected async prepareRetry(message: AssistantHistoryMessage): Promise<boolean> {
     const settings = this.settingsManager.getRetrySettings();
     if (!settings.enabled) {
       return false;

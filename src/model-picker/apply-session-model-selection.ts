@@ -5,13 +5,15 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -38,8 +40,11 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
+import {
+  resolveWorkerPlacementCapabilities,
+  resolveWorkerPlacementRuntimeChangeError,
+} from "../gateway/worker-environments/placement-capabilities.js";
 import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environments/placement-session-runtime-preparation.js";
-import { resolveWorkerPlacementCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -69,9 +74,11 @@ export type ApplySessionModelSelectionParams = {
   sessionStore: Record<string, SessionEntry>;
   allowCreate?: boolean;
   defaultProvider: string;
-  defaultModel: string;
-  currentProvider: string;
-  currentModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
+  /** Undefined when the session has no model yet. */
+  currentProvider?: string;
+  currentModel?: string;
   modelPolicy?: Omit<ModelVisibilityPolicy, "catalog">;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
@@ -141,12 +148,21 @@ export async function applySessionModelSelectionInternal(
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
-  const operatorScope = params.operatorAuthority
+  const invocation = params.operatorAuthority
     ? undefined
-    : (
-        await import("../gateway/operator-invocation-authority.js")
-      ).captureOperatorToolGatewayAuthority();
-  const operatorAuthority = params.operatorAuthority ?? operatorScope?.authority;
+    : await import("../gateway/operator-invocation-authority.js");
+  const operatorAuthority = params.operatorAuthority ?? invocation?.readOperatorToolRunAuthority();
+  let admissionError: string | undefined;
+  try {
+    if (!operatorAuthority && invocation?.hasOperatorToolGatewayAuthority()) {
+      admissionError = "Operator model selection requires original Gateway authority.";
+    }
+  } catch (error) {
+    admissionError = formatErrorMessage(error);
+  }
+  if (admissionError) {
+    return { status: "rejected", reason: "not-allowed", message: admissionError };
+  }
 
   const resetToDefault = params.request.resetToDefault === true;
   const policy =
@@ -155,7 +171,9 @@ export async function applySessionModelSelectionInternal(
       cfg: params.cfg,
       catalog: [...params.modelCatalog],
       defaultProvider: params.defaultProvider,
-      defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
+      defaultModel: params.defaultModel
+        ? { provider: params.defaultProvider, model: params.defaultModel }
+        : undefined,
       agentId: params.agentId,
     });
   const selectedRef = resetToDefault
@@ -169,7 +187,6 @@ export async function applySessionModelSelectionInternal(
     : params.request;
   const validateOperatorSelection = () => {
     try {
-      operatorScope?.assertCurrent();
       assertOperatorModelAllowed(operatorAuthority, selectedRef);
       return undefined;
     } catch (error) {
@@ -181,7 +198,11 @@ export async function applySessionModelSelectionInternal(
     return {
       status: "rejected",
       reason: "not-allowed",
-      message: operatorError ?? "No model is available for this operator role and agent.",
+      message:
+        operatorError ??
+        (resetToDefault && !operatorAuthority?.modelPolicy
+          ? NO_MODEL_CONFIGURED_MESSAGE
+          : "No model is available for this operator role and agent."),
     };
   }
   const normalizedModelKey = modelKey(selectedRef.provider, selectedRef.model);
@@ -191,7 +212,8 @@ export async function applySessionModelSelectionInternal(
     model: selectedRef.model,
     isDefault:
       resetToDefault ||
-      normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
+      (params.defaultModel !== undefined &&
+        normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel)),
   };
   if (!resetToDefault && !policy.allows(request)) {
     return rejectNotAllowed(request.provider, request.model);
@@ -204,6 +226,10 @@ export async function applySessionModelSelectionInternal(
     sessionEntry: startingEntry,
     profileOverride: request.profileOverride,
     provider: request.provider,
+    previousProvider: startingEntry.agentRuntimeOverride
+      ? (resolveSessionModelRef(params.cfg, startingEntry, params.agentId)?.provider ??
+        params.currentProvider)
+      : undefined,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
     thinkingPolicyRequired: hasPendingFollowupQueueWork([params.sessionKey]),
@@ -266,29 +292,6 @@ export async function applySessionModelSelectionInternal(
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
-  const readRuntimeCapabilities = () =>
-    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
-  /**
-   * Rejects a model selection when the candidate runtime is incompatible with an
-   * active cloud-worker placement. Mirrors the sessions.patch guard so directive
-   * model changes are validated before they persist.
-   */
-  function resolveActivePlacementModelSelectionError(): string | undefined {
-    const sessionId = nextEntry.sessionId;
-    if (!sessionId) {
-      return undefined;
-    }
-    if (!placement || placement.state === "local") {
-      return undefined;
-    }
-    const { executionMode } = readRuntimeCapabilities();
-    if (executionMode === placement.executionMode) {
-      return undefined;
-    }
-    return executionMode
-      ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
-      : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
-  }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
@@ -300,7 +303,14 @@ export async function applySessionModelSelectionInternal(
       placementError = "Session placement changed; retry model selection.";
       return placementError;
     }
-    placementError = resolveActivePlacementModelSelectionError();
+    placementError =
+      nextEntry.sessionId && placement && placement.state !== "local"
+        ? resolveWorkerPlacementRuntimeChangeError(
+            placement,
+            resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry))
+              .executionMode,
+          )
+        : undefined;
     return (
       params.validateAuthProfileSelection?.() ??
       prepared.validateRuntimeSelection?.() ??
@@ -318,7 +328,6 @@ export async function applySessionModelSelectionInternal(
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       commitGuard: composeSessionSourceAssertion([
-        operatorScope?.assertCurrent,
         createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
       ]),
       validateCommit,
@@ -397,7 +406,6 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
     params.canPersistStickyModelSelection === true &&
@@ -439,7 +447,11 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
-  if (`${params.currentProvider}/${params.currentModel}` !== effectiveModelRef) {
+  const currentModelRef =
+    params.currentProvider && params.currentModel
+      ? `${params.currentProvider}/${params.currentModel}`
+      : undefined;
+  if (currentModelRef !== effectiveModelRef) {
     enqueueSystemEvent(formatModelSwitchEvent(provider, model, request.alias), {
       sessionKey: resolveSystemEventQueueKey(params.sessionKey, params.agentId),
       contextKey: `model:${effectiveModelRef}`,

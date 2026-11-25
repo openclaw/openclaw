@@ -1,5 +1,6 @@
 // Caller coverage for optional elevation reporting with real session and approval readers.
 import { expect, it } from "vitest";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import {
   withPromptFixture,
   type ElevationCase,
@@ -36,7 +37,23 @@ const cases: ElevationCase[] = [
 
 it.each(cases)("prepares sandbox prompt reporting with elevation $name", async (testCase) => {
   await withPromptFixture(testCase, async ({ prepare, tools, policyRead, approvalRead }) => {
-    const prepared = await prepare();
+    const completedPhases: string[] = [];
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name) => () => {
+        completedPhases.push(name);
+      },
+      prepare,
+    );
+    expect(completedPhases).toEqual(
+      expect.arrayContaining([
+        "attempt.system-prompt.sandbox",
+        "attempt.system-prompt.runtime-and-references",
+        "attempt.system-prompt.tool-context",
+        "attempt.system-prompt.context",
+        "attempt.system-prompt.render",
+        "attempt.system-prompt.report",
+      ]),
+    );
     expect(prepared.systemPromptReport?.sandbox).toEqual({ mode: "all", sandboxed: true });
     expect(prepared.systemPromptText).toContain("## Sandbox");
     if (testCase.elevated?.enabled) {
@@ -85,7 +102,9 @@ it.each(["abort", "close"] as const)(
       if (action === "abort") {
         await expect(refresh).rejects.toBe(reason);
       } else {
-        await expect(refresh).rejects.toThrow("admitted run authority is no longer active");
+        await expect(refresh).rejects.toThrow(
+          "This agent run is no longer active. Start a new turn to retry.",
+        );
       }
     });
   },

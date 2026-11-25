@@ -50,7 +50,7 @@ function fixture(role = "normalCi") {
   };
 }
 
-function seal(data = fixture(), runAttempt = 1) {
+function seal(data = fixture(), runAttempt = 1, targetInput = TARGET) {
   const role = data.role;
   const spec = releaseChildSpec(role);
   const root = tempDirs.make("frv-child-receipt-");
@@ -66,7 +66,7 @@ function seal(data = fixture(), runAttempt = 1) {
     JSON.stringify({
       inputs: {
         dispatch_id: `full-release-validation-77-1${spec.suffix}`,
-        target_ref: TARGET,
+        [role === "stableClientCompatibility" ? "target_sha" : "target_ref"]: targetInput,
         release_scope: "full",
       },
     }),
@@ -188,6 +188,34 @@ describe("full release child evidence producer", () => {
     );
   });
 
+  it.each(["success", "failure", "skipped"])(
+    "seals stable client role with its exact target_sha and gate (%s)",
+    (conclusion) => {
+      const data = fixture("stableClientCompatibility");
+      data.jobs[1]!.name = "Verify stable client compatibility";
+      data.jobs[1]!.conclusion = conclusion;
+      const { evidence } = sealed(data);
+      expect(evidence).toMatchObject({
+        role: "stableClientCompatibility",
+        targetSha: TARGET,
+        inputs: { target_sha: TARGET },
+        workloadConclusion: conclusion === "success" ? "success" : "failure",
+      });
+      const { result } = seal(data, 1, SHA);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("exact dispatched product source");
+    },
+  );
+
+  it("seals independent Q without substituting the dispatched C", () => {
+    const data = fixture();
+    data.run.head_sha = SHA;
+    expect(sealed(data).evidence).toMatchObject({ targetSha: TARGET, workflowSha: SHA });
+    const { result } = seal(data, 1, SHA);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact dispatched product source");
+  });
+
   it("seals a complete paginated attempt without a monolithic metadata response", () => {
     const data = fixture();
     for (let index = 0; index < 100; index++) {
@@ -201,10 +229,14 @@ describe("full release child evidence producer", () => {
   it("composes retried workloads with retained jobs and excludes publishers", () => {
     const data = fixture();
     data.run.run_attempt = 2;
+    data.run.status = "queued";
     data.run.triggering_actor.login = "release-maintainer";
     data.jobs[2]!.status = "completed";
     data.jobs[2]!.conclusion = "failure";
     data.jobs[1]!.conclusion = "failure";
+    Object.assign(data.jobs[1]!, { runner_id: 42, runner_name: "hosted-42" });
+    data.jobs.push({ ...data.jobs[1]!, id: 99, status: "queued", conclusion: null });
+    Object.assign(data.jobs.at(-1)!, { runner_id: null, runner_name: null });
     data.attempts.push([
       { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
       { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
@@ -230,14 +262,22 @@ describe("full release child evidence producer", () => {
 
   it.each<[string, (data: ReturnType<typeof fixture>) => void, string]>([
     [
-      "workflow SHA different from the target",
-      (data) => void (data.run.head_sha = SHA),
-      "does not match the target SHA",
-    ],
-    [
       "stale run attempt",
       (data) => void (data.run.run_attempt = 2),
       "current active workflow attempt",
+    ],
+    [
+      "completed aggregate with an active publisher",
+      (data) => void (data.run.status = "completed"),
+      "current active workflow attempt",
+    ],
+    [
+      "queued aggregate with an inactive publisher",
+      (data) => {
+        data.run.status = "queued";
+        data.jobs[2]!.status = "queued";
+      },
+      "publisher job identity",
     ],
     [
       "foreign child repository",
@@ -252,7 +292,7 @@ describe("full release child evidence producer", () => {
     [
       "ambiguous publisher",
       (data) => void data.jobs.push({ ...data.jobs[2]!, id: 4 }),
-      "publisher job identity",
+      "duplicate job identity",
     ],
   ])("rejects %s", (_name, mutate, error) => {
     const data = fixture();

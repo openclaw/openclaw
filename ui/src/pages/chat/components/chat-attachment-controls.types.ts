@@ -6,11 +6,15 @@ import type { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 export type ChatAttachmentControlsProps = {
+  /** Submission goes to the text-only session suggestion API. */
+  suggestionComposer?: boolean;
   uploadConfig?: ApplicationConfigCapability;
   /** Decoded-size ceilings from hello policy; absent means no client-side cap. */
   attachmentLimits?: ChatAttachmentLimits;
   /** Side chat sends selection metadata as text context, without a file payload. */
   selectionContextOnly?: boolean;
+  /** False where no transcript anchor can reopen the comment editor. */
+  commentsEditable?: boolean;
   attachmentReads?: ChatAttachmentReadLifecycle;
   attachments?: ChatAttachment[];
   disabled?: boolean;

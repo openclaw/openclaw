@@ -510,6 +510,8 @@ data class ChatSessionEntry(
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
   val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
+  /** The Gateway keeps this row at the top level of navigation despite its parent link. */
+  val sidebarRoot: Boolean? = null,
   val worktreeId: String? = null,
   val hasWorktreeMetadata: Boolean = worktreeId != null,
   val spawnDepth: Int? = null,

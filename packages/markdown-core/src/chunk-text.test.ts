@@ -1,15 +1,13 @@
 import { expect, it } from "vitest";
 import { chunkText, chunkTextRanges } from "./chunk-text.js";
 
-it("normalizes positive fractional limits without emitting empty chunks", () => {
-  expect(chunkText("abc", 0.5)).toEqual(["a", "b", "c"]);
-  expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
-});
-
-it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
+it("keeps grapheme boundaries and progress for fractional and NaN limits in each mode", () => {
   const common = [
     { text: "aaaaaaaaaa👨‍👩‍👧‍👦Z", limit: 12, expected: ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"] },
     { text: "👨‍👩‍👧‍👦", limit: 4, expected: ["👨‍", "👩‍", "👧‍", "👦"] },
+    { text: "abc", limit: 0.5, expected: ["a", "b", "c"] },
+    { text: "😀😀", limit: 0.5, expected: ["😀", "😀"] },
+    { text: "abc", limit: Number.NaN, expected: ["abc"] },
   ];
   for (const mode of ["plain", "hard", "preferred"] as const) {
     const whitespace =
@@ -31,5 +29,21 @@ it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode"
           : chunkTextRanges(text, { limit, mode }).map(({ start, end }) => text.slice(start, end));
       expect(chunks, `${mode}: ${text}`).toEqual(expected);
     }
+  }
+});
+
+it("keeps whitespace that belongs to a cluster split by an oversized-cluster cut", () => {
+  expect(chunkText("\r\nx", 1)).toEqual(["\r", "\n", "x"]);
+  expect(chunkText("\u0600 x", 1)).toEqual(["\u0600", " ", "x"]);
+});
+
+it("keeps later whole flags and joins aligned to the source after a partial cut", () => {
+  const flags = "\u0600".repeat(3) + "🇯🇵🇫🇷ab";
+  const family = "👩‍👩‍👧‍👦".repeat(2) + "!";
+  for (const [text, ends] of [
+    [flags, [5, 7, 12, 13]],
+    [family, [5, 9, 11, 16, 20, 23]],
+  ] as const) {
+    expect(chunkTextRanges(text, { limit: 5 }).map(({ end }) => end)).toEqual(ends);
   }
 });

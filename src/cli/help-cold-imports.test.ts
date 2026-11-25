@@ -157,6 +157,12 @@ vi.mock("../commands/agents.commands.identity.js", () => {
   return { agentsSetIdentityCommand: vi.fn(async () => {}) };
 });
 
+// mock-isolation: detect cold import without loading the action module.
+vi.mock("../commands/agents.commands.blobster.js", () => {
+  loaded.mark("agents-blobster-command");
+  return { agentsRenderBlobsterCommand: vi.fn(async () => {}) };
+});
+
 vi.mock("../commands/agents.commands.list.js", () => {
   loaded.mark("agents-list-command");
   return { agentsListCommand: vi.fn(async () => {}) };
@@ -294,7 +300,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("default-runtime");
   });
 
-  it.each(["agent", "agent exec", "agents"])(
+  it.each(["agent", "agent exec", "agents", "agents render-blobster"])(
     "keeps %s help out of agent action modules",
     async (command) => {
       const { registerAgentsCommands } = await import("./program/register.agent.js");
@@ -311,6 +317,7 @@ describe("subcommand help cold imports", () => {
       expect(loaded.modules).not.toContain("agents-bind-command");
       expect(loaded.modules).not.toContain("agents-delete-command");
       expect(loaded.modules).not.toContain("agents-identity-command");
+      expect(loaded.modules).not.toContain("agents-blobster-command");
       expect(loaded.modules).not.toContain("agents-list-command");
       expect(loaded.modules).not.toContain("default-runtime");
     },

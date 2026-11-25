@@ -2,14 +2,16 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as catalogPersistence from "../agents/plugin-model-catalog-save.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -18,6 +20,7 @@ import {
   listenProvider,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
+import * as sessionFacts from "./session-sharing-preparation.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createGatewayArtifactTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -41,11 +44,11 @@ const captionCases = [
 it(
   "chat.send publishes sanitized message buffers through history and authorized artifacts.download",
   { timeout: 180_000 },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-message-buffer-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
-    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory)));
+    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory, { mode: 0o700 })));
     const explicitBytes = Buffer.from("explicit source wins");
     const explicitMedia = path.join(workspace, "explicit.txt");
     const deniedMedia = path.join(root, "private.txt");
@@ -164,12 +167,49 @@ it(
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    const captured = createDeferred();
+    const saved = createDeferred();
+    const prepareSave = catalogPersistence.preparePluginModelCatalogSave;
+    const prepareFacts = sessionFacts.prepareSessionMutationFacts;
+    // Keep discovery asynchronous, but make its first independent write happen between the
+    // first chat's fact capture and consumption. A cold Gateway must already own this database.
+    let delayedSave = false;
+    const saveSpy = vi
+      .spyOn(catalogPersistence, "preparePluginModelCatalogSave")
+      .mockImplementation(async (...args) => {
+        const save = await prepareSave(...args);
+        return async (catalogs) => {
+          if (delayedSave) {
+            return save(catalogs);
+          }
+          delayedSave = true;
+          await withinTest(captured.promise, signal);
+          try {
+            await save(catalogs);
+          } finally {
+            saved.resolve();
+          }
+        };
+      });
+    const factsSpy = vi
+      .spyOn(sessionFacts, "prepareSessionMutationFacts")
+      .mockImplementation(async (params) => {
+        const facts = await prepareFacts(params);
+        if (params.sessionKey === "agent:main:buffer-ordinary" && !capturedDone) {
+          capturedDone = true;
+          captured.resolve();
+          await withinTest(saved.promise, signal);
+        }
+        return facts;
+      });
+    let capturedDone = false;
     try {
       const model = buildMockOpenAiResponsesProvider(
         await listenProvider(provider),
         "buffer-proof",
       );
-      Object.assign(model.config.models[0], { contextWindow: 16000, maxTokens: 256 });
+      // The messaging schema and system prompt project 22K tokens before the first tool call.
+      Object.assign(model.config.models[0], { contextWindow: 32768, maxTokens: 256 });
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -281,13 +321,19 @@ it(
           primaryCount,
         );
       }
+      expect(capturedDone).toBe(true);
+      expect(delayedSave).toBe(true);
     } finally {
+      captured.resolve();
+      saved.resolve();
       try {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close();
         }
       } finally {
+        saveSpy.mockRestore();
+        factsSpy.mockRestore();
         await closeProvider(provider);
         snapshot.restore();
         clearRuntimeConfigSnapshot();

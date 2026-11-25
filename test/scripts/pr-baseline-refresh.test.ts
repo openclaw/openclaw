@@ -412,7 +412,20 @@ describePosix("native correction baseline refresh", () => {
       { path: "src/runtime.ts", decision: "later fixup", outcome: "reviewed" },
     ];
     writeFileSync(path, JSON.stringify(review));
-    expect(f.run("require_prepared_review 42").status).toBe(0);
+    const preload = join(f.root, ".local/no-hash-snapshot.mjs");
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const create = fs.mkdtempSync;
+fs.mkdtempSync = function(prefix, ...options) {
+  if (String(prefix).includes('openclaw-pr-hash-')) throw new Error('Captured hashes must not spill to disk');
+  return create.call(this, prefix, ...options);
+};
+syncBuiltinESMExports();
+`,
+    );
+    pass(f.run("require_prepared_review 42", "", { NODE_OPTIONS: `--import=${preload}` }));
     appendFileSync(join(f.root, ".local/prepare-baseline.json"), "\n");
     expect(f.run("require_prepared_review 42").status).not.toBe(0);
   });

@@ -1,5 +1,5 @@
 /**
- * Synthetic schema-39 fixture; run with node --import ./scripts/tsx.mjs.
+ * Synthetic current-schema fixture; run with node --import ./scripts/tsx.mjs.
  * --database-only omits the unrelated 62,000-file workspace for SQL owner measurements.
  */
 import assert from "node:assert/strict";
@@ -81,7 +81,10 @@ const started = performance.now();
 let inserted = 0;
 let payloadBytes = 0;
 try {
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 39);
+  assert.equal(
+    db.prepare("PRAGMA user_version").get().user_version,
+    owner.OPENCLAW_AGENT_SCHEMA_VERSION,
+  );
   // Raw insertion is limited to this newly created offline synthetic fixture.
   const node = db.prepare(`INSERT INTO session_nodes
     (session_key,current_session_id,entry_json,updated_at,entry_valid,display_name)
@@ -216,7 +219,7 @@ try {
     format: "openclaw-session-read-transactions-v1",
     root,
     databasePath: database.path,
-    schemaVersion: 39,
+    schemaVersion: owner.OPENCLAW_AGENT_SCHEMA_VERSION,
     sessionCount,
     eventCount,
     populatedSessions: sessionCount,

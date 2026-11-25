@@ -14,6 +14,7 @@ import {
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
 import {
+  expectLiveReadSourceFamily,
   snapshotSourceFamily,
   writeUnreadableNewerStateSchema,
 } from "./openclaw-database-preflight.test-support.js";
@@ -180,7 +181,10 @@ it("repairs fractional trace timestamps while captured doctor migration advances
   const flexibleCreateSql = strictCreateSql.replace(/\s+STRICT$/u, "");
   expect(flexibleCreateSql).not.toBe(strictCreateSql);
   // The synthetic pre-STRICT database predates this placement index.
-  legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
+  legacy.exec(`
+    ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
+    DROP INDEX idx_worker_session_placements_environment;
+  `);
   legacy.exec(`
       DROP INDEX idx_gateway_restart_handoff_expiry;
       ALTER TABLE gateway_restart_handoff RENAME TO gateway_restart_handoff_strict;
@@ -306,6 +310,7 @@ it.each([false, true])(
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
       { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -509,7 +514,7 @@ it.each(["gateway-startup", "gateway-restart"] as const)(
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expectNewerSchema(String(failure));
-    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    expectLiveReadSourceFamily(databasePath, before);
   },
 );
 
@@ -560,6 +565,7 @@ it.each([33, 34])(
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
       { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);

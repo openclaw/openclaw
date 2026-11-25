@@ -13,6 +13,7 @@ import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import * as commandControl from "../../bash-process-control.js";
+import * as processIds from "../../bash-process-id.js";
 import {
   deleteSession,
   getFinishedSession,
@@ -127,8 +128,8 @@ function interceptPreparation(
   });
 }
 function expectEvicted(command: ProcessSession) {
-  expect(getSession(command.id)).toBeUndefined();
-  expect(getFinishedSession(command.id)).toBeUndefined();
+  expect(getSession(command.id)).not.toBe(command);
+  expect(getFinishedSession(command.id)).not.toBe(command);
 }
 function expectServiceSurvives(command: ProcessSession) {
   expect(command.exited).toBe(false);
@@ -291,7 +292,12 @@ it.each([
             deleteSession(ordinaryCommand.id);
             if (selection === "alternate-superseded") {
               await publish(successor);
+              // Friendly IDs can be reused once the original command has settled.
+              vi.spyOn(processIds, "createProcessSessionId").mockReturnValueOnce(
+                ordinaryCommand.id,
+              );
               successorCommand = (await startCommands(successor.runId, false))[0];
+              expect(successorCommand?.id).toBe(ordinaryCommand.id);
               return;
             }
             throw new Error("Synthetic freshness read failed after accepted cancellation");
@@ -367,7 +373,9 @@ it.each([
       }
       expectRetained(receipt);
       if (selection === "new-generation" || selection === "alternate-superseded") {
-        expect(expectDefined(successorCommand, "replacement command").exited).toBe(false);
+        const replacement = expectDefined(successorCommand, "replacement command");
+        expect(getSession(replacement.id)).toBe(replacement);
+        expectServiceSurvives(replacement);
         expect(subagentRuns.get(successor.runId)).toEqual(successor);
       }
     } finally {
@@ -381,7 +389,7 @@ it.each([
 );
 
 it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"] as const)(
-  "parent cancellation reports %s command cleanup and preserves an independent service",
+  "parent cancellation reports %s command cleanup; the ended task then stops its service",
   async (cleanup) => {
     const requesterSessionKey = parentKey;
     const childSessionKey = "agent:main:subagent:active-command";
@@ -597,8 +605,10 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
         expect(recordEvicted).toBe(true);
         expectEvicted(ordinary);
       }
-      expectServiceSurvives(service);
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
+      // Stop leaves the service to its owner; the hidden child's ended task then stops it.
+      await waitForExecSession(service);
+      expect(service).toMatchObject({ exited: true, exitReason: "manual-cancel" });
     } finally {
       spawnFault.mockRestore();
       controller.abort();

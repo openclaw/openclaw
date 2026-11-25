@@ -10,7 +10,7 @@ import {
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../../config/sessions/session-pending-input-snapshot.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
@@ -124,7 +124,7 @@ describe("registered chat read scope", () => {
           "pending receipt",
         );
         try {
-          receipt.finish("cancelled");
+          receipt.finish("cancelled", "failed");
           const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
           const history = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
@@ -148,7 +148,7 @@ describe("registered chat read scope", () => {
             }
           }
         } finally {
-          receipt.finish("interrupted");
+          receipt.finish("interrupted", "failed");
         }
       });
     },
@@ -189,11 +189,11 @@ describe("registered chat read scope", () => {
         const queued = expectDefined(receipts[0], "queued receipt");
         const cancelled = expectDefined(receipts[1], "cancelled receipt");
         const interrupted = expectDefined(receipts[2], "interrupted receipt");
-        cancelled.finish("cancelled");
-        interrupted.finish("interrupted");
+        cancelled.finish("cancelled", "failed");
+        interrupted.finish("interrupted", "failed");
         await interrupted.settled?.();
-        const retained = await readPendingInputSource(scope, "synthetic-page-2:user", true);
-        expect(retained?.snapshot.pending).toMatchObject({
+        const retained = await readPendingInputSnapshotForTest(scope, "synthetic-page-2:user");
+        expect(retained.pending).toMatchObject({
           state: "interrupted",
           message_json: JSON.stringify(interrupted.message),
         });
@@ -237,14 +237,14 @@ describe("registered chat read scope", () => {
           ).toThrow("Pending input ownership ended");
         }
         await queued.run(() => appendTranscriptMessage(scope, { message: queued.message }));
-        queued.finish("interrupted");
+        queued.finish("interrupted", "failed");
         expect((await history(first.nextBefore)).pendingInputs).toMatchObject({
           total: 21,
           items: [{ id: cancelled.inputId, state: "cancelled" }],
         });
         expect(
-          (await readPendingInputSource(scope, "synthetic-page-2:user", true))?.snapshot.pending,
-        ).toEqual(retained?.snapshot.pending);
+          (await readPendingInputSnapshotForTest(scope, "synthetic-page-2:user")).pending,
+        ).toEqual(retained.pending);
         await upsertSessionEntryCore(scope, {
           sessionId: "replacement-physical-session",
           updatedAt: 2,
@@ -252,7 +252,7 @@ describe("registered chat read scope", () => {
         expect((await history()).pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
       } finally {
         for (const receipt of receipts) {
-          receipt.finish("interrupted");
+          receipt.finish("interrupted", "failed");
         }
       }
     });

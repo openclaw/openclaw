@@ -57,6 +57,7 @@ it("discovers live tests without scanning source roots in-process", () => {
 
     expect(files.length).toBeGreaterThan(0);
     expect(files.every((file) => file.endsWith(".live.test.ts"))).toBe(true);
+    expect(files).not.toContain("src/gateway/gateway-thinking-probe.live.test.ts");
   });
 });
 
@@ -196,9 +197,14 @@ it("requires live shard report evidence for each selected file", () => {
   expectReport(report(1, 1), "is missing testResults file evidence.", [ACP_FILE]);
 });
 
-it("respects explicit opt-in and pass evidence", () => {
-  const reviewFile = "test/e2e/crabbox-sandbox.live.test.ts";
-  const optInEnv = "OPENCLAW_E2E_CRABBOX";
+it.each([
+  ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+  ["src/gateway/gateway-codex-subagent-shell.live.test.ts", "OPENCLAW_LIVE_CODEX_SUBAGENT_SHELL"],
+  [
+    "src/gateway/gateway-personal-native-child-abort.live.test.ts",
+    "OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP",
+  ],
+])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
   const payload = report(
     1,
     2,

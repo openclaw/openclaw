@@ -33,7 +33,7 @@ import {
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
-import { buildMSTeamsPollCard } from "./polls.js";
+import { buildMSTeamsPollCard, createMSTeamsPollStoreState } from "./polls.js";
 import {
   deleteMSTeamsActivityWithReference,
   sendMSTeamsActivityWithReference,
@@ -189,7 +189,12 @@ export async function sendMessageMSTeams(
   } = params;
   const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
+  const ctx = await resolveMSTeamsSendContext({
+    cfg,
+    accountId,
+    to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+  });
   const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   if (mediaUrl) {
@@ -428,6 +433,7 @@ export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
     cfg,
     accountId,
     to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;
 
@@ -439,13 +445,45 @@ export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
 
   const activity = buildMSTeamsAdaptiveCardActivity(pollCard.card);
 
-  const messageId = await sendProactiveActivity({
-    ctx,
-    activity,
-    errorPrefix: "msteams poll send",
-    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
-  });
+  // Teams can deliver the card action before the Connector returns the activity ID.
+  const pollStore = createMSTeamsPollStoreState({ accountId: ctx.accountId });
+  assertMSTeamsSendHandoff(params);
+  await pollStore.createPoll(
+    {
+      id: pollCard.pollId,
+      question,
+      options,
+      maxSelections: maxSelections ?? 1,
+      createdAt: new Date().toISOString(),
+      conversationId,
+    },
+    { pendingPublication: true },
+  );
+  let messageId: string;
+  try {
+    messageId = await sendProactiveActivityRaw({
+      ctx,
+      activity,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
+    });
+  } catch (error) {
+    const { kind } = classifyMSTeamsSendError(error);
+    if (
+      error instanceof PlatformMessageNotDispatchedError ||
+      kind === "auth" ||
+      kind === "permanent" ||
+      kind === "replay-safe"
+    ) {
+      await pollStore.discardPoll(pollCard.pollId);
+    }
+    throw createMSTeamsSendError("msteams poll send", error);
+  }
+
+  await finishMSTeamsSend(
+    createMSTeamsSendResult({ conversationId, messageId, kind: "poll" }),
+    () => pollStore.setPollMessageId(pollCard.pollId, messageId),
+  );
 
   return {
     pollId: pollCard.pollId,
@@ -463,6 +501,7 @@ export async function sendAdaptiveCardMSTeams(
     cfg,
     accountId,
     to,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;
 

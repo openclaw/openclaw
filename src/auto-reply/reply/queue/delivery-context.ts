@@ -1,5 +1,6 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../../agents/internal-runtime-context.js";
 import { resolveRequesterPrincipalKey } from "../../../agents/requester-origin.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
@@ -10,6 +11,7 @@ import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingr
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
+import { replyCallbackCustody } from "../reply-callback-custody.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,
@@ -35,14 +37,6 @@ const queuedAdmissionOwnerState = resolveGlobalSingleton(
   }),
 );
 
-function hasExclusiveTurnAdmission(
-  lifecycle: FollowupRun["turnAdoptionLifecycle"],
-): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
-  admission: "exclusive";
-} {
-  return lifecycle?.admission === "exclusive";
-}
-
 function resolveTurnAdoptionLifecycleDeliveryKey(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): string {
@@ -52,7 +46,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
   const explicitOwnerKey = lifecycle.ownerKey ?? "";
   // Closed admission marker — never infer exclusive from onAbandoned presence.
   // Cancel-only owners share collect identity via ownerKey alone.
-  if (!hasExclusiveTurnAdmission(lifecycle)) {
+  if (lifecycle.admission !== "exclusive") {
     return explicitOwnerKey;
   }
   let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
@@ -78,6 +72,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
       operatorAuthority: run.operatorAuthority,
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    stableStringify(run.operatorAuthority?.participationCeiling ?? null),
     execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
@@ -186,7 +181,6 @@ export async function prepareNextDeliveryGroup(
   const assertCurrent = () => {
     assertDrainCurrent();
     for (const item of items) {
-      item.operatorAuthority?.assertCurrent();
       if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
@@ -263,7 +257,7 @@ export function collectCurrentInboundContext(
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length <= 1) {
+  if (items.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -284,10 +278,14 @@ export function collectCurrentInboundContext(
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
+    fragments: contexts.flatMap(({ context, index }) => {
+      const fragments: RuntimeContextFragment[] = [
+        { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
+      ];
+      return fragments.concat(
+        context.fragments ?? [{ kind: "conversation-data", text: context.text }],
+      );
+    }),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
@@ -347,6 +345,10 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       : [],
   );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const callbackCustodies = items.flatMap((item) => {
+    const custody = item[replyCallbackCustody];
+    return custody ? [custody] : [];
+  });
   const explicitSkillSelections = [
     ...new Map(
       items
@@ -379,6 +381,19 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    [replyCallbackCustody]:
+      callbackCustodies.length > 0
+        ? {
+            retain: () => {
+              const releases = callbackCustodies.map((custody) => custody.retain());
+              return () => {
+                for (const release of releases) {
+                  release();
+                }
+              };
+            },
+          }
+        : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
@@ -422,6 +437,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,
@@ -448,6 +464,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
     deliveryCorrelations: source.deliveryCorrelations,
+    [replyCallbackCustody]: source[replyCallbackCustody],
     onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,

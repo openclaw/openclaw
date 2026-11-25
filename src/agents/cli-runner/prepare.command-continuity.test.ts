@@ -233,7 +233,6 @@ describe("direct CLI command continuity", () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }));
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
@@ -246,6 +245,7 @@ describe("direct CLI command continuity", () => {
       mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
       revokeMcpLoopbackClientGrant: () => true,
+      revokeMintedMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackScopedTools,
     });
     const cliSessionBindingFacts = {

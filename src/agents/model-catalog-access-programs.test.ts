@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   projectModelCatalogAccessPrograms,
+  resolveCyberAccessProgramForProvider,
   resolveModelCatalogAccessPrograms,
 } from "./model-catalog-access-programs.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -156,3 +157,41 @@ it.each(["openclaw", "codex"])(
     ).toEqual({});
   },
 );
+
+it("defaults a model that cannot run at Standard to its one advertised program", () => {
+  const project = (
+    cyber: (typeof observation)["cyber"] | readonly ["daybreak_red"] | readonly [],
+    config: Parameters<typeof projectModelCatalogAccessPrograms>[0]["config"] = {},
+  ) =>
+    projectModelCatalogAccessPrograms({
+      snapshot: {
+        ...snapshot,
+        providerOutcomes: [{ ...outcome, modelAccessPrograms: [{ ...observation, cyber }] }],
+      },
+      entry,
+      evaluation,
+      runtimeId: "openclaw",
+      isCurrent: () => true,
+      config,
+    }).cyberAccessProgramDefault;
+  expect(project(["daybreak_red"])).toBe("daybreak_red");
+  expect(project(["standard", "daybreak_blue"])).toBe("standard");
+  expect(project([])).toBe("standard");
+  expect(
+    project(["daybreak_red"], {
+      agents: { defaults: { params: { accessPrograms: { cyber: "standard" } } } },
+    }),
+  ).toBe("standard");
+});
+
+it.each([
+  ["daybreak_blue", "anthropic", "standard"],
+  ["daybreak_red", "claude-cli", "standard"],
+  ["daybreak_blue", "OpenAI", "daybreak_blue"],
+  // Codex CLI is still an OpenAI model; its runtime keeps the explicit unsupported error.
+  ["daybreak_blue", "codex-cli", "daybreak_blue"],
+  ["standard", "anthropic", "standard"],
+  [undefined, "anthropic", undefined],
+] as const)("applies saved Access %s on %s as %s", (program, provider, expected) => {
+  expect(resolveCyberAccessProgramForProvider(program, provider).program).toBe(expected);
+});

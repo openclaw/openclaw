@@ -23,6 +23,8 @@ export type OpenClawAgentDatabaseValidation = {
   integrityVerifiedAt?: number;
   /** Shared with admitted workers so owner invalidation revokes borrowed proof. */
   valid: SharedArrayBuffer;
+  /** Index into AGENT_VALIDATION_REVOKERS, written before `valid` clears, so a borrower names it. */
+  revokedBy: SharedArrayBuffer;
   /** First full canonical proof; subsequent changes remain visible through the pending table. */
   canonicalReady: SharedArrayBuffer;
   /** Canonical admission, separately revoked by local DDL without discarding integrity proof. */
@@ -37,8 +39,15 @@ export const agentDatabaseValidationKey: SqliteDatabaseAdmissionKey<OpenClawAgen
     name: "agent.completed-validation",
     lifetime: "process",
     read(value) {
+      if (!isRecord(value)) {
+        return undefined;
+      }
       // SAFETY: Only the admitted agent schema owner publishes this private fact key.
-      return isRecord(value) ? (value as OpenClawAgentDatabaseValidation) : undefined;
+      const validation = value as OpenClawAgentDatabaseValidation;
+      // A receipt sealed by an older release at clean close has no revoker cell; give the
+      // restored record one so revocation and refusal reports work after upgrade.
+      validation.revokedBy ??= new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      return validation;
     },
   };
 
@@ -53,6 +62,70 @@ export function matchesAgentDatabaseValidation(
     validation.birthtime === identity?.birthtime &&
     Atomics.load(new Int32Array(validation.valid), 0) === 1
   );
+}
+
+/** Every owner that can revoke a receipt; a refused borrower reports which one did. */
+const AGENT_VALIDATION_REVOKERS = [
+  "not revoked",
+  "a lease release without a confirmed close",
+  "a failed close",
+  "agent database disposal",
+  "a maintenance write",
+  "a refused open",
+  "registration without an admitted connection",
+  "agent database unregistration",
+  "a failed schema refresh",
+  "a successor receipt",
+  "agent removal",
+  "a validation cache reset",
+  "a reopen that must converge",
+  "a failed open",
+  "an open that retained its database",
+  "execution cleanup",
+  "execution retirement",
+  "a missing database file",
+  "a database file identity change",
+  "connection replacement",
+  "a refused admission handoff",
+  "a superseded alias",
+] as const;
+export type AgentValidationRevoker = Exclude<
+  (typeof AGENT_VALIDATION_REVOKERS)[number],
+  "not revoked"
+>;
+
+export function revokeAgentDatabaseValidation(
+  validation: Pick<OpenClawAgentDatabaseValidation, "valid" | "revokedBy">,
+  revoker: AgentValidationRevoker,
+): void {
+  // The first revoker owns the report; later revocations of a dead receipt change nothing.
+  if (Atomics.load(new Int32Array(validation.valid), 0) === 1) {
+    Atomics.store(
+      new Int32Array(validation.revokedBy),
+      0,
+      AGENT_VALIDATION_REVOKERS.indexOf(revoker),
+    );
+  }
+  Atomics.store(new Int32Array(validation.valid), 0, 0);
+}
+
+/** Why a borrowed receipt no longer matches the connection a reader opened. */
+export function describeAgentDatabaseValidationMismatch(
+  database: { db: EngineConnection; agentId: string },
+  validation: Pick<
+    OpenClawAgentDatabaseValidation,
+    "agentId" | "identity" | "birthtime" | "valid" | "revokedBy"
+  >,
+): string {
+  if (Atomics.load(new Int32Array(validation.valid), 0) !== 1) {
+    const index = Atomics.load(new Int32Array(validation.revokedBy), 0);
+    return `the receipt was revoked by ${index > 0 ? AGENT_VALIDATION_REVOKERS[index] : "an unknown owner"}`;
+  }
+  if (validation.agentId !== database.agentId) {
+    return `the receipt belongs to agent ${validation.agentId}, not ${database.agentId}`;
+  }
+  const identity = findOpenClawAgentDatabaseIdentity(database);
+  return `the open file is ${identity?.identity ?? "unidentified"}/${identity?.birthtime ?? "?"}, the receipt names ${validation.identity}/${validation.birthtime}`;
 }
 
 export function createOpenClawAgentDatabaseValidationReceipt(
@@ -72,6 +145,7 @@ export function createOpenClawAgentDatabaseValidationReceipt(
       ? undefined
       : readSqliteDatabaseIntegrityVerification(database.db)?.verifiedAt,
     valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    revokedBy: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
     canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
   };
   if (canonicalReady) {

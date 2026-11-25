@@ -122,6 +122,30 @@ describe("cli credentials", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("recovers credential discovery after ENOTDIR", () => {
+    const credentialPath = path.join(tempHome, ".gemini", "oauth_creds.json");
+    const targetPath = path.join(tempHome, "gemini.json");
+    writeJson(targetPath, {
+      access_token: "gemini-access",
+      refresh_token: "gemini-refresh",
+      expiry_date: 2_000_000_000_000,
+    });
+    fs.mkdirSync(path.dirname(credentialPath));
+    fs.symlinkSync(path.join(targetPath, "oauth_creds.json"), credentialPath);
+    const read = () => credentials.readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
+    expect(read()).toBeNull();
+
+    fs.unlinkSync(credentialPath);
+    fs.symlinkSync(targetPath, credentialPath);
+    expect(read()).toEqual({
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "gemini-access",
+      refresh: "gemini-refresh",
+      expires: 2_000_000_000_000,
+    });
+  });
+
   it("falls back when Codex keychain JWT expiry is outside Date range", () => {
     const lastRefresh = Date.parse("2026-01-01T00:00:00Z");
     const fallbackExpiry = lastRefresh + 60 * 60 * 1000;
@@ -314,15 +338,9 @@ describe("cli credentials", () => {
     vi.stubGlobal("fetch", fetchFn);
     for (const backendId of ["google-gemini-cli", "codex-cli"]) {
       expect(await credentials.resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
-      expect(credentials.readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
     }
     expect(fetchFn).not.toHaveBeenCalled();
-    // The Claude backend attests the same login, and only then answers the local check.
-    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
     expect((await credentials.resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe(
-      "uuid:uuid-a",
-    );
-    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe(
       "uuid:uuid-a",
     );
   });

@@ -664,14 +664,18 @@ describe("OpenClawTerminalPanel", () => {
       } else {
         await waitForFast(() => {
           expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
-            "Could not attach terminal session",
+            "Couldn’t connect to this terminal session. Try again.",
           );
         });
         expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
       }
       expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
-      // Restoration and attach reconciliation are independent of dock catalog discovery.
-      expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
+      // Transient attach failures never adopt a session ID for dock discovery.
+      await waitForFast(() =>
+        expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(
+          failure === "missing" ? 3 : 2,
+        ),
+      );
       expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
       expect(controller.write).not.toHaveBeenCalled();
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
@@ -848,7 +852,7 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.querySelector(".tp-session")).not.toBeNull());
     panel.querySelector<HTMLButtonElement>(".tp-session")!.click();
     await waitForFast(() =>
-      expect(panel.textContent).toContain("Could not attach terminal session"),
+      expect(panel.textContent).toContain("Couldn’t connect to this terminal session. Try again."),
     );
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["current-1"]),

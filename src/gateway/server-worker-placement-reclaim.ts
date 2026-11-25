@@ -239,16 +239,11 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     };
     const assertCurrent = Object.assign(
       () => {
-        authorize?.();
+        (authorize?.assertWorkerLifetime ?? authorize)?.();
         assertTargetCurrent();
       },
       {
-        // Transport waits keep caller custody; both write grants check the retained generation.
         assertWorkerLifetime: () => (authorize?.assertWorkerLifetime ?? authorize)?.(),
-        assertWorkerGrant: () => {
-          (authorize?.assertWorkerGrant ?? authorize)?.();
-          assertTargetCurrent();
-        },
       },
     );
     const placement = await params.placements.getAsync(sessionId);
@@ -368,10 +363,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           }
           assertBindingCurrent();
           using resolved = await resolveReclaimTarget();
-          // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
-          // immediately before drain so revoked callers cannot commit stale placement authority.
+          // Keep the captured binding through the lifecycle wait and drain.
           assertBindingCurrent();
-          // Eligibility ends at this operation's drain, unlike caller authority during teardown.
           beforeDrain?.();
           resolved.assertCurrent(getRuntimeConfig());
           const assertDrainCurrent = () => {
@@ -380,10 +373,32 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           };
           const placement = await begin(assertDrainCurrent);
           assertDrainCurrent();
+          const assertReclaimCurrent = () => {
+            if (
+              resolved.workspace.kind !== "repository" ||
+              !resolved.workspace.repository.diskAuthority
+            ) {
+              assertDrainCurrent();
+              return;
+            }
+            // This held lifecycle may replace its own repository binding with a managed
+            // worktree. Keep caller/session generation here; prepared recovery retains
+            // the writer independently, rather than retaining the pre-handoff cwd.
+            authorize?.();
+            const entry = context.readCurrentTarget().entry;
+            if (
+              entry?.sessionId !== sessionId ||
+              entry.lifecycleRevision !== resolved.entry.lifecycleRevision
+            ) {
+              throw new WorkerDispatchTargetChangedError(
+                "Repository disk move session owner changed",
+              );
+            }
+          };
           const reclaimedPlacement = await reclaim(
             resolved.workspace,
             placement,
-            assertDrainCurrent,
+            assertReclaimCurrent,
           );
           params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
           return reclaimedPlacement;
@@ -415,8 +430,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
             `Session ${sessionKey} changed before failed cloud worker cleanup. Retry.`,
           );
         }
-        // Failed teardown is still a session mutation: reauthorize inside the shared lifecycle
-        // fence before provider cleanup or the failed-to-local transition becomes durable.
+        // Keep the retained session lifetime through cleanup and durable completion.
         authorize?.();
       };
       return await runSessionMutation({

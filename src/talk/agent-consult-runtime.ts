@@ -47,8 +47,9 @@ const REALTIME_VOICE_YIELD_ACK_FALLBACK =
 /**
  * Sender-auth contract revision for official realtime voice plugins.
  *
- * Revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged. Ingress
- * owns authentication; consumers that require this handoff must fail closed on other revisions.
+ * Revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged. A sender
+ * listed in `commands.ownerAllowFrom` is also the owner. Ingress owns authentication; consumers
+ * that require this handoff must fail closed on other revisions.
  */
 export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
 
@@ -82,8 +83,8 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(
   }
 }
 
-/** Gateway consults read lock state through the worker-backed session reader. */
-async function assertConsultModelSelectionUnlocked(
+/** Read current model locks through the existing session worker. */
+export async function assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(
   params: RealtimeVoiceAgentConsultModelLockParams,
 ): Promise<void> {
   for (const candidate of collectModelSelectionLockCandidates(params)) {
@@ -262,10 +263,18 @@ export async function consultRealtimeVoiceAgent(params: {
     | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
-  const [{ beginSessionEffect }, { resolveSessionWorkStartError }] = await Promise.all([
-    import("../sessions/session-controller.lifecycle.js"),
-    import("../config/sessions/lifecycle.js"),
-  ]);
+  const [{ beginSessionEffect }, { resolveSessionWorkStartError }, { readIngressSenderAdmission }] =
+    await Promise.all([
+      import("../sessions/session-controller.lifecycle.js"),
+      import("../config/sessions/lifecycle.js"),
+      import("../gateway/operator-admission.js"),
+    ]);
+  const senderIsOwner =
+    params.senderIsOwner === true ||
+    readIngressSenderAdmission(params.cfg, {
+      messageChannel: params.messageProvider,
+      senderId: params.senderId,
+    }).grant.owner;
   params.abortSignal?.throwIfAborted();
   const agentId =
     params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
@@ -344,7 +353,7 @@ export async function consultRealtimeVoiceAgent(params: {
     spawnedBy: params.spawnedBy,
     storePath,
   };
-  await assertConsultModelSelectionUnlocked(modelLockParams);
+  await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -371,7 +380,7 @@ export async function consultRealtimeVoiceAgent(params: {
       if (archivedSessionError) {
         throw new Error(archivedSessionError);
       }
-      await assertConsultModelSelectionUnlocked(modelLockParams);
+      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
     },
   });
   const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
@@ -398,8 +407,7 @@ export async function consultRealtimeVoiceAgent(params: {
       // The consult session stores normal session metadata so subsequent voice turns can keep
       // routing and, in fork mode, recover useful conversation context from the requester.
       const sessionEntry = await (async () => {
-        const { cfg, sessionKey, spawnedBy, senderIsOwner, contextMode, agentRuntime, logger } =
-          params;
+        const { cfg, sessionKey, spawnedBy, contextMode, agentRuntime, logger } = params;
         const now = Date.now();
         const deliveryFields = resolveDeliverySessionFields(resolvedDeliveryContext);
         const requesterSessionKey = spawnedBy?.trim();
@@ -508,11 +516,12 @@ export async function consultRealtimeVoiceAgent(params: {
         resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
       const toolAuthorityOverlay = buildRealtimeVoiceAgentToolAuthorityOverlay({
         ...params,
+        senderIsOwner,
         sessionEntry,
         deliveryContext: consultDeliveryContext,
       });
       const sessionId = sessionEntry.sessionId;
-      await assertConsultModelSelectionUnlocked(modelLockParams);
+      await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
 
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
@@ -524,7 +533,7 @@ export async function consultRealtimeVoiceAgent(params: {
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
         abortSignal.throwIfAborted();
-        await assertConsultModelSelectionUnlocked(modelLockParams);
+        await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
         abortSignal.throwIfAborted();
         // Voice consults suppress verbose/reasoning output because the bridge needs a short,
         // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.

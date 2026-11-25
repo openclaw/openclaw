@@ -43,9 +43,13 @@ async function load(root, side) {
     path.join(root, "src/agents/tool-source-reply-completion.ts"),
     "utf8",
   );
+  // Baseline revisions can predate the move into agent-core.
+  const provenanceModule = source.includes('from "./runtime/internal-hooks.js";')
+    ? "./runtime/internal-hooks.js"
+    : "../../packages/agent-core/src/internal-hooks.js";
   const imports = [
     'import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";',
-    'import {\n  attachInternalToolResultProvenance,\n  getInternalToolResultProvenance,\n} from "./runtime/internal-hooks.js";',
+    `import {\n  attachInternalToolResultProvenance,\n  getInternalToolResultProvenance,\n} from "${provenanceModule}";`,
   ];
   let transformed = source;
   for (const statement of imports) {

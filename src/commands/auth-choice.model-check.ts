@@ -1,8 +1,11 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,18 +24,20 @@ type DefaultModelAuthOptions = {
   pendingAuthProfiles?: ProviderAuthResult["profiles"];
 };
 
-type DefaultModelAuthStatus = {
-  provider: string;
-  model: string;
-} & (
-  | { status: "ready" }
-  | {
-      status: "missing";
-      authRequirement?: ProviderModelRouteAuthRequirement;
-    }
-  | { status: "indeterminate" }
-  | { status: "incompatible"; message: string }
-);
+type DefaultModelAuthStatus =
+  | { status: "unconfigured" }
+  | ({
+      provider: string;
+      model: string;
+    } & (
+      | { status: "ready" }
+      | {
+          status: "missing";
+          authRequirement?: ProviderModelRouteAuthRequirement;
+        }
+      | { status: "indeterminate" }
+      | { status: "incompatible"; message: string }
+    ));
 
 /**
  * Resolve the default model ref and its auth readiness. A catalog observation
@@ -48,6 +53,9 @@ export async function resolveDefaultModelAuthStatus(
     cfg: config,
     agentId: options?.agentId,
   });
+  if (!ref) {
+    return { status: "unconfigured" };
+  }
   const store = await ensureAuthProfileStoreAsync(options?.agentDir, {
     allowKeychainPrompt: false,
     config,
@@ -124,6 +132,9 @@ export function resolveDefaultModelCatalogFacts(
   options?: { agentId?: string; routeVariants?: readonly ModelCatalogEntry[] },
 ): DefaultModelCatalogFacts {
   const ref = resolveDefaultModelForAgent({ cfg: config, agentId: options?.agentId });
+  if (!ref) {
+    return {};
+  }
   const provider = normalizeProviderIdForAuth(ref.provider);
   const modelId = canonicalizeProviderModelId(provider, ref.model);
   const matches = (entry: ModelCatalogEntry) =>
@@ -145,7 +156,9 @@ export async function warnIfModelConfigLooksOff(
 ) {
   let warning: string | undefined;
   const authStatus = await resolveDefaultModelAuthStatus(config, options);
-  if (authStatus.status === "missing") {
+  if (authStatus.status === "unconfigured") {
+    warning = NO_MODEL_CONFIGURED_MESSAGE;
+  } else if (authStatus.status === "missing") {
     warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
       {
         provider: authStatus.provider,

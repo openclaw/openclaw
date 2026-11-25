@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { getEventListeners, once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -23,6 +22,7 @@ import {
 } from "../state/user-profile-writes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   authorizeControlUiSessionOwnerReadRequestOrReply,
@@ -30,12 +30,17 @@ import {
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-auth-utils.js";
+import { bindHttpOperatorAccessAuthority } from "./http-operator-access.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-const { authorize, ensureOwner } = vi.hoisted(() => ({ authorize: vi.fn(), ensureOwner: vi.fn() }));
+const { authorize, ensureOwner, ensureMember } = vi.hoisted(() => ({
+  authorize: vi.fn(),
+  ensureOwner: vi.fn(),
+  ensureMember: vi.fn(),
+}));
 vi.mock("./auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./auth.js")>()),
   authorizeHttpGatewayConnect: authorize,
@@ -47,7 +52,12 @@ vi.mock("../infra/host-account-name.js", () => ({
 vi.mock("../state/user-profile-writes.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/user-profile-writes.js")>();
   ensureOwner.mockImplementation(actual.ensureCanonicalGatewayOwnerProfile);
-  return { ...actual, ensureCanonicalGatewayOwnerProfile: ensureOwner };
+  ensureMember.mockImplementation(actual.ensureCanonicalUserProfileForOpenClawIdIdentity);
+  return {
+    ...actual,
+    ensureCanonicalGatewayOwnerProfile: ensureOwner,
+    ensureCanonicalUserProfileForOpenClawIdIdentity: ensureMember,
+  };
 });
 
 const roles = {
@@ -117,7 +127,12 @@ async function registerPersonAccessFixture() {
   const person = await ensureCanonicalUserProfileForEmail(email);
   const catalog = await prepareUserProfileCatalog();
   onTestFinished(catalog.release);
-  const access: { grant?: AbortController; inapplicable?: boolean; onAuthorize?: () => void } = {};
+  const access: {
+    grant?: AbortController;
+    inapplicable?: boolean;
+    onAuthorize?: () => void;
+    onAssert?: () => void;
+  } = {};
   registerVirtualTestPlugin({
     registry,
     config,
@@ -134,7 +149,13 @@ async function registerPersonAccessFixture() {
           if (!current || !profile.emails.includes(email)) {
             throw new Error("Current access required");
           }
-          return { signal: current.signal, assertCurrent: () => current.signal.throwIfAborted() };
+          return {
+            signal: current.signal,
+            assertCurrent: () => {
+              access.onAssert?.();
+              current.signal.throwIfAborted();
+            },
+          };
         },
       });
     },
@@ -154,6 +175,46 @@ afterEach(() => {
 });
 
 describe("HTTP gateway owner profiles", () => {
+  it.each(["onAuthorize", "onAssert"] as const)(
+    "returns retryable HTTP 503 for %s failures without revoking the person",
+    inState(async (callback: "onAuthorize" | "onAssert") => {
+      const { cfg, email, access } = await registerPersonAccessFixture();
+      access.grant = new AbortController();
+      const admitted = await authenticate("trusted-proxy", cfg, email);
+      assert(admitted.ok && admitted.requestAuth.operatorAccessAuthority);
+      const authority = admitted.requestAuth.operatorAccessAuthority;
+      access[callback] = () => {
+        throw new Error("synthetic policy outage");
+      };
+      const response = makeMockHttpResponse();
+      const bound = makeMockHttpResponse();
+      try {
+        authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
+        expect(
+          await authorizeGatewayHttpRequestOrReply({ req, res: response.res, auth: noAuth }),
+        ).toBeNull();
+        expect(response.res.statusCode).toBe(503);
+        const body = response.end.mock.calls[0]?.[0];
+        assert(typeof body === "string");
+        expect(JSON.parse(body)).toMatchObject({
+          error: { type: "service_unavailable", retryable: true },
+        });
+        if (callback === "onAssert") {
+          expect(bindHttpOperatorAccessAuthority(bound.res, authority)).toBe(false);
+          expect(bound.res.statusCode).toBe(503);
+        }
+        expect(authority.signal.aborted).toBe(false);
+        expect(access.grant.signal.aborted).toBe(false);
+        access[callback] = undefined;
+        expect(authority.assertCurrent).not.toThrow();
+        expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
+      } finally {
+        response.res.destroy();
+        bound.res.destroy();
+      }
+    }),
+  );
+
   it.each(["missing", "disabled", "failed", "inapplicable", "unrelated"] as const)(
     "translates required %s access policy denial to HTTP authentication failure",
     inState(async (availability: string) => {
@@ -213,7 +274,7 @@ describe("HTTP gateway owner profiles", () => {
       const control = new WeakRef({ unowned: true });
       // Leave the creation job before collecting; dereferencing first would retain the capture.
       await nextTurn();
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       for (const [name, reference] of Object.entries(retired)) {
         expect(reference.deref(), `completed HTTP ${name} should collect`).toBeUndefined();
@@ -232,7 +293,7 @@ describe("HTTP gateway owner profiles", () => {
   );
 
   it(
-    "binds revocation to an active response and releases completed keep-alive responses",
+    "ends active HTTP responses on revocation without cancelling retained admitted work",
     inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       setRuntimeConfigSnapshot(cfg);
@@ -275,7 +336,7 @@ describe("HTTP gateway owner profiles", () => {
 
         await admitResponse(aliasStreaming, email);
         // The child keeps its source after the parent releases it and its response disconnects.
-        const captured = await captureGatewayOperatorRunAuthority({
+        const captured = await prepareGatewayOperatorRunAuthority({
           client: {
             connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
@@ -291,16 +352,16 @@ describe("HTTP gateway owner profiles", () => {
         next.res.destroy();
         await disconnected;
         expect(nextAuthority.signal.aborted).toBe(false);
-        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
         setDisplayName(person.id, "Updated during retained work");
         await linkCanonicalUserProfileEmail("added@example.test", person.id);
         expect(aliasStreaming.res.destroyed).toBe(false);
-        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
 
         await linkCanonicalUserProfileEmail(email, replacement.id);
         await linkCanonicalUserProfileEmail(email, person.id);
         expect(aliasStreaming.res.destroyed).toBe(true);
-        expect(captured.authority.signal?.aborted).toBe(true);
+        expect(captured.authority.signal?.aborted).not.toBe(true);
         expect(nextAuthority.signal.aborted).toBe(true);
         expect(access.grant.signal.aborted).toBe(false);
         expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
@@ -343,6 +404,30 @@ describe("HTTP gateway owner profiles", () => {
         }
         expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
       }
+    }),
+  );
+
+  it(
+    "refuses member HTTP profile failures even without a role catalog",
+    inState(async () => {
+      const cfg = { gateway: { openclawId: { enabled: true } } };
+      setRuntimeConfigSnapshot(cfg);
+      authorize.mockResolvedValueOnce({
+        ok: true,
+        method: "trusted-proxy",
+        user: "member@example.test",
+        openclawId: {
+          kind: "member",
+          peerKey: `iroh:${"ab".repeat(32)}`,
+          accountId: "member",
+          role: "operator",
+        },
+      });
+      ensureMember.mockRejectedValueOnce(new Error("profile storage unavailable"));
+      expect(await checkAuth(cfg)).toEqual({
+        ok: false,
+        authResult: { ok: false, reason: "user_profile_unavailable" },
+      });
     }),
   );
 

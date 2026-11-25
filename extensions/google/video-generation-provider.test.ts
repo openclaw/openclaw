@@ -291,7 +291,7 @@ describe("google video generation provider", () => {
     expect(clientOptions.apiKey).toBe("google-key");
     const httpOptions = recordField(clientOptions.httpOptions, "httpOptions");
     expect(httpOptions).not.toHaveProperty("baseUrl");
-    expect(httpOptions).not.toHaveProperty("apiVersion");
+    expect(httpOptions.apiVersion).toBe("v1beta");
   });
 
   it.each([
@@ -388,24 +388,48 @@ describe("google video generation provider", () => {
 
   it.each([
     {
-      name: "strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK",
+      name: "preserves a configured /v1beta endpoint without appending a second version",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiVersion: "",
       prompt: "A tiny robot watering a windowsill garden",
     },
     {
       name: "does NOT strip /v1beta when it appears mid-path (end-anchor proof)",
       baseUrl: "https://proxy.example.com/v1beta/route",
       expectedBaseUrl: "https://proxy.example.com/v1beta/route",
+      apiVersion: "",
       prompt: "test",
     },
     {
-      name: "passes baseUrl unchanged when no /v1beta suffix is present",
+      name: "normalizes the official API origin to its v1beta endpoint",
       baseUrl: "https://generativelanguage.googleapis.com",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiVersion: "",
       prompt: "test",
     },
-  ])("$name", async ({ baseUrl, expectedBaseUrl, prompt }) => {
+    {
+      name: "preserves an explicitly configured v1alpha endpoint",
+      baseUrl: "https://proxy.example.com/v1alpha",
+      expectedBaseUrl: "https://proxy.example.com/v1alpha",
+      apiVersion: "",
+      prompt: "test",
+    },
+    {
+      name: "preserves an explicitly configured v1 endpoint",
+      baseUrl: "https://proxy.example.com/v1",
+      expectedBaseUrl: "https://proxy.example.com/v1",
+      apiVersion: "",
+      prompt: "test",
+    },
+    {
+      name: "pins v1beta for an unversioned custom endpoint",
+      baseUrl: "https://proxy.example.com/google",
+      expectedBaseUrl: "https://proxy.example.com/google",
+      apiVersion: "v1beta",
+      prompt: "test",
+    },
+  ])("$name", async ({ baseUrl, expectedBaseUrl, apiVersion, prompt }) => {
     mockGoogleApiKeyAuth();
     generateVideosMock.mockResolvedValue(
       completedVideo({ videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" }),
@@ -418,6 +442,7 @@ describe("google video generation provider", () => {
     });
 
     expect(firstGoogleClientHttpOptions().baseUrl).toBe(expectedBaseUrl);
+    expect(firstGoogleClientHttpOptions().apiVersion).toBe(apiVersion);
   });
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
@@ -670,6 +695,42 @@ describe("google video generation provider", () => {
     expect(downloadMock).not.toHaveBeenCalled();
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
+
+  it.each([
+    [undefined, "https://generativelanguage.googleapis.com/v1beta"],
+    ["https://proxy.example.com/v1alpha", "https://proxy.example.com/v1alpha"],
+    ["https://proxy.example.com/v1", "https://proxy.example.com/v1"],
+  ])(
+    "preserves base URL %s in the text-only SDK 404 REST fallback",
+    async (baseUrl, restBaseUrl) => {
+      mockGoogleApiKeyAuth();
+      generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(completedRestVideoResponse())
+        .mockResolvedValueOnce(videoDownloadResponse("rest-video"));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await generateVideo({
+        model: "google/models/veo-3.1-fast-generate-preview",
+        durationSeconds: 3,
+        cfg: baseUrl ? { models: { providers: { google: { baseUrl, models: [] } } } } : {},
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchInputUrl(fetchMock, 0)).toBe(
+        `${restBaseUrl}/models/veo-3.1-fast-generate-preview:predictLongRunning`,
+      );
+      expect(parseFetchJsonBody(fetchMock, 0)).toEqual({
+        instances: [{ prompt: "A tiny robot watering a windowsill garden" }],
+        parameters: { durationSeconds: 4 },
+      });
+      expect(fetchInputUrl(fetchMock, 1)).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
+      );
+      expect(downloadMock).not.toHaveBeenCalled();
+      expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
+    },
+  );
 
   it.each(["headers", "body"] as const)(
     "bounds REST %s waits by the operation deadline",

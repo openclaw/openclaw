@@ -110,14 +110,16 @@ describe("normalizePluginsConfig", () => {
     [
       "valid flags and timeouts",
       {
-        allowPromptInjection: false,
+        allowPromptModification: false,
         allowConversationAccess: true,
+        allowModelRequest: true,
         timeoutMs: 250,
         timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
       {
-        allowPromptInjection: false,
+        allowPromptModification: false,
         allowConversationAccess: true,
+        allowModelRequest: true,
         timeoutMs: 250,
         timeouts: { before_prompt_build: 90_000, agent_end: 60_000 },
       },
@@ -125,8 +127,9 @@ describe("normalizePluginsConfig", () => {
     [
       "invalid flags and timeouts",
       {
-        allowPromptInjection: "nope",
+        allowPromptModification: "nope",
         allowConversationAccess: "nope",
+        allowModelRequest: "yes",
         timeoutMs: 0,
         timeouts: { before_prompt_build: 900_000 },
       },

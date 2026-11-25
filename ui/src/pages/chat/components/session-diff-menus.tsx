@@ -138,23 +138,17 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
     void props.menu;
     return "";
   });
-  const [jumpSearching, setJumpSearching] = createSignal(() => {
-    void props.menu;
-    return false;
-  });
   const jumpSearch: MenuEntry = {
     kind: "content",
     id: "jump-search",
     content: (
       <HeaderSearch
-        title={t("chat.sessionDiff.jumpToFile")}
         label={t("chat.sessionDiff.searchFiles")}
         inputClass="session-diff-menu__search"
         query={jumpQuery()}
-        open={jumpSearching()}
+        autofocus="menu"
         controlRef={() => controls.ref()}
         inputProps={{ "data-search": "", "data-form-control": "" }}
-        onOpenChange={setJumpSearching}
         onQueryChange={setJumpQuery}
       />
     ),

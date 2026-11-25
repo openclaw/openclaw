@@ -17,6 +17,7 @@ import {
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 
 const enabled = isLiveTestEnabled() && process.env.OPENCLAW_LIVE_SESSION_EVENT_WAKE === "1";
 const describeLive = enabled ? describe : describe.skip;
@@ -40,7 +41,14 @@ async function readMessages(config: OpenClawConfig, sessionKey: string): Promise
 }
 
 function messagesWithRole(messages: unknown[], role: string): string {
-  return JSON.stringify(messages.filter((message) => asOptionalRecord(message)?.role === role));
+  return messages
+    .map(asOptionalRecord)
+    .filter((message) => message?.role === role)
+    .map(
+      (message) =>
+        extractTextFromChatContent(message?.content, { normalizeText: (text) => text }) ?? "",
+    )
+    .join("\n");
 }
 
 async function sendChatTurn(client: GatewayClient, sessionKey: string, message: string) {
@@ -289,7 +297,7 @@ describeLive("session event wake through a live Gateway", () => {
           "user",
         );
         expect(completionUsers).toMatch(
-          new RegExp(`Exec completed \\([^)]*, code ${exitCode}\\) :: ${completionReply}`),
+          new RegExp(`Exec completed \\([^)]*, code ${exitCode}, [^)]+\\):\\s*${completionReply}`),
         );
         expect(completionUsers).not.toContain(monitorPrompt);
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(
