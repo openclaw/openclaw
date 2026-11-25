@@ -46,9 +46,8 @@ beforeEach(() => {
 
 it("keeps model auth scoped to each registration on concurrent first use", async () => {
   const checks = [true, false].map((configured) => {
-    const provider = createImageProvider(configured);
     const isConfigured = expectDefined(
-      provider.isConfiguredAsync,
+      createImageProvider(configured).isConfiguredAsync,
       "OpenAI image configuration hook",
     );
     return isConfigured({});
