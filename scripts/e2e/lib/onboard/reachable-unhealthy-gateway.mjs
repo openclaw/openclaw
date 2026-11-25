@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, request as requestHttp } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
 const port = Number(process.env.OPENCLAW_ONBOARD_FIXTURE_PORT);
@@ -10,7 +10,23 @@ if (!Number.isInteger(backendPort) || backendPort < 1 || backendPort > 65535) {
   throw new Error("OPENCLAW_ONBOARD_BACKEND_PORT must be a valid TCP port");
 }
 
-const server = createServer();
+const server = createServer((front, reply) => {
+  const upstream = requestHttp(
+    {
+      hostname: "127.0.0.1",
+      port: backendPort,
+      method: front.method,
+      path: front.url,
+      headers: front.headers,
+    },
+    (response) => {
+      reply.writeHead(response.statusCode ?? 502, response.headers);
+      response.pipe(reply);
+    },
+  );
+  upstream.on("error", () => reply.writeHead(502).end());
+  front.pipe(upstream);
+});
 const sockets = new WebSocketServer({ server });
 const peers = new Set();
 
@@ -18,13 +34,19 @@ sockets.on("connection", (front) => {
   const back = new WebSocket(`ws://127.0.0.1:${backendPort}`);
   const peer = { front, back };
   const pending = [];
+  let clientMode;
   peers.add(peer);
 
   front.on("message", (raw) => {
     const request = JSON.parse(
       Array.isArray(raw) ? Buffer.concat(raw).toString("utf8") : Buffer.from(raw).toString("utf8"),
     );
-    if (request.type === "req" && request.method === "health") {
+    if (request.type === "req" && request.method === "connect") {
+      clientMode = request.params?.client?.mode;
+    }
+    // Startup probes use probe mode; only fail Classic finalization's CLI request.
+    if (request.type === "req" && request.method === "health" && clientMode === "cli") {
+      console.log("QA_ONBOARD_HEALTH_FAULT");
       front.send(
         JSON.stringify({
           type: "res",

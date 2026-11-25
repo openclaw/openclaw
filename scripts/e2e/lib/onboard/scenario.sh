@@ -106,7 +106,8 @@ wait_for_skills_prompt_or_ready() {
 
 start_gateway() {
   GATEWAY_BACKEND_PID=""
-  GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
+  GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")" || return $?
+  gw_pid="$GATEWAY_PID"
 }
 
 start_reachable_unhealthy_gateway() {
@@ -115,7 +116,8 @@ start_reachable_unhealthy_gateway() {
       "$OPENCLAW_ENTRY" \
       18790 \
       "$GATEWAY_BACKEND_LOG_PATH"
-  )"
+  )" || return $?
+  gw_backend_pid="$GATEWAY_BACKEND_PID"
   if ! wait_for_gateway 18790 "$GATEWAY_BACKEND_LOG_PATH"; then
     return 1
   fi
@@ -132,8 +134,8 @@ start_reachable_unhealthy_gateway() {
 start_wizard_gateway() {
   local outcome="$1"
   case "$outcome" in
-    healthy) start_gateway ;;
-    reachable-unhealthy) start_reachable_unhealthy_gateway ;;
+    healthy) start_gateway || return $? ;;
+    reachable-unhealthy) start_reachable_unhealthy_gateway || return $? ;;
     none) return 0 ;;
     *)
       echo "Unknown onboarding Gateway outcome: $outcome" >&2
@@ -327,6 +329,8 @@ send_guided_health_flow() {
   wait_for_log "Test AI access now with a live completion?" 120 || return $?
   start_wizard_gateway "$gateway_outcome" || return $?
   send $'\r' 0.8
+  wait_for_log "Set up memory embeddings?" 120 || return $?
+  send $'n\r' 0.8
 }
 
 validate_guided_skip_ui_log() {
@@ -370,24 +374,20 @@ validate_guided_health_log() {
     echo "Guided onboarding did not report the reachable Gateway"
     return 1
   }
-  if log_contains "Opening the Control UI dashboard"; then
-    echo "Guided skip-UI onboarding attempted a browser handoff"
+  log_contains "Skipping Control UI/TUI prompts." || {
+    echo "Classic onboarding did not report skipped UI handoff"
     return 1
-  fi
-  if log_contains "Your browser is ready"; then
-    echo "Guided skip-UI onboarding completed a browser handoff"
-    return 1
-  fi
-  if log_contains "Hatching your agent now"; then
-    echo "Guided skip-UI onboarding attempted a terminal handoff"
-    return 1
-  fi
+  }
   grep -q '"/v1/responses"' "$mock_request_log" || {
     echo "Guided onboarding did not verify the configured model through /v1/responses"
     return 1
   }
   case "$expected_outcome" in
     healthy)
+      log_contains "Gateway check duration:" || {
+        echo "Healthy Classic onboarding did not complete its health RPC"
+        return 1
+      }
       log_contains "OpenClaw is ready." || {
         echo "Guided onboarding did not report its healthy completion"
         return 1
@@ -398,6 +398,10 @@ validate_guided_health_log() {
       fi
       ;;
     reachable-unhealthy)
+      grep -q "QA_ONBOARD_HEALTH_FAULT" "$GATEWAY_LOG_PATH" || {
+        echo "The intended diagnostic health RPC never reached the fault proxy"
+        return 1
+      }
       log_contains "Onboarding complete, but the gateway health check failed." || {
         echo "Guided onboarding did not report its reachable-but-unhealthy completion"
         return 1
