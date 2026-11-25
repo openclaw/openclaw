@@ -283,10 +283,32 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func normalize(_ raw: String) -> String {
-        var output = raw
-        output = output.replacingOccurrences(of: "\r\n", with: "\n")
-        output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        let markdown = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        guard markdown.contains("\n\n\n") else {
+            return markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func normalizeProse(_ prose: Substring) -> String {
+            prose.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+                .replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+
+        let sourceMap = MarkdownSourceMap(markdown)
+        var remaining = markdown[...]
+        var output = ""
+        func preserveCode(in node: any Markup) {
+            if node is Markdown.CodeBlock, let source = node.range, let range = sourceMap.range(for: source) {
+                output += normalizeProse(remaining[..<range.lowerBound])
+                output += markdown[range]
+                remaining = markdown[range.upperBound...]
+                return
+            }
+            for child in node.children {
+                preserveCode(in: child)
+            }
+        }
+        preserveCode(in: Document(parsing: markdown))
+        output += normalizeProse(remaining)
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
