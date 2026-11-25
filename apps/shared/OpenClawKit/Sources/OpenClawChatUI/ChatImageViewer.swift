@@ -18,13 +18,17 @@ struct ChatImageViewerItem: Equatable {
     /// The original's pixel size from the message, when the Gateway sent it.
     let pixelSize: CGSize?
 
-    /// The message's images that can be fetched, in order.
-    static func gallery(in contents: [OpenClawChatMessageContent]) -> [ChatImageViewerItem] {
+    /// The message's images that can be fetched, in order. A user's message also pages through its
+    /// sent photos, keyed as their transcript tiles are (`ChatUserImageSource.pageID`).
+    static func gallery(in contents: [OpenClawChatMessageContent], sentPhotos: Bool = false) -> [ChatImageViewerItem] {
         contents.compactMap { content in
             guard content.mediaKind == .image else { return nil }
-            let artifactId = content.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !artifactId.isEmpty, OpenClawChatMediaKind.image.acceptsManagedArtifactID(artifactId)
-            else { return nil }
+            let managedID = content.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var artifactId = OpenClawChatMediaKind.image.acceptsManagedArtifactID(managedID) ? managedID : ""
+            #if os(iOS)
+            if sentPhotos, artifactId.isEmpty { artifactId = ChatUserImageSource.pageID(content) ?? "" }
+            #endif
+            guard !artifactId.isEmpty else { return nil }
             let alt = Self.nonEmpty(content.alt)
             let fileName = Self.nonEmpty(content.fileName)
             let pixelSize: CGSize? = if let width = content.width, let height = content.height,

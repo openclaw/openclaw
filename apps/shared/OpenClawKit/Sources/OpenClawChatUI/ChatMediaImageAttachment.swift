@@ -54,10 +54,72 @@ enum ChatMediaImageMemory {
         self.sizes[artifactId]
     }
 
+    static func storeSize(_ size: CGSize, for artifactId: String) {
+        self.sizes[artifactId] = size
+    }
+
     static func store(_ image: UIImage, for artifactId: String) {
         let pixels = image.size.width * image.scale * image.size.height * image.scale
         self.images.setObject(image, forKey: artifactId as NSString, cost: Int(pixels) * 4)
         self.sizes[artifactId] = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+    }
+}
+
+/// A user's sent image, drawn as the Control UI draws it: from the bytes the phone still holds while
+/// the message is on its way, then from the upload history names (`media://inbound/<id>`, read
+/// through the Gateway's assistant-media route). Both share one memory entry (file name and size),
+/// so the confirmed message keeps the picture already on screen.
+struct ChatUserImageSource {
+    let loadID: String
+    let memoryAlias: String?
+    let local: OpenClawChatMediaData?
+
+    static func isRenderable(_ att: OpenClawChatMessageContent) -> Bool {
+        self.pageID(att) != nil
+    }
+
+    /// The photo's key in the memory cache and the viewer: its upload source once history names
+    /// it, else the alias of the bytes the phone holds.
+    static func pageID(_ att: OpenClawChatMessageContent) -> String? {
+        guard att.mediaKind == .image else { return nil }
+        if let source = OpenClawChatInboundMedia.canonicalSource(att.url) { return source }
+        return att.content?.stringValue?.isEmpty == false ? self.alias(att) : nil
+    }
+
+    private static func alias(_ att: OpenClawChatMessageContent) -> String {
+        "sent:\(att.fileName ?? ""):\(att.sizeBytes ?? -1)"
+    }
+
+    @MainActor
+    init?(_ att: OpenClawChatMessageContent) {
+        guard att.mediaKind == .image else { return nil }
+        let alias = Self.alias(att)
+        if let source = OpenClawChatInboundMedia.canonicalSource(att.url) {
+            self.loadID = source
+            self.memoryAlias = alias
+            self.local = nil
+        } else if let encoded = att.content?.stringValue, let data = Data(base64Encoded: encoded) {
+            self.loadID = alias
+            self.memoryAlias = nil
+            self.local = OpenClawChatMediaData(data: data, mimeType: att.mimeType ?? "image/jpeg")
+            // The box takes its size before the first frame, from the header alone.
+            if ChatMediaImageMemory.size(for: alias) == nil, let size = Self.pixelSize(data) {
+                ChatMediaImageMemory.storeSize(size, for: alias)
+            }
+        } else {
+            return nil
+        }
+    }
+
+    private static func pixelSize(_ data: Data) -> CGSize? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        // EXIF orientations 5 to 8 turn the image a quarter.
+        let turned = ((properties[kCGImagePropertyOrientation] as? Int) ?? 1) >= 5
+        return turned ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
     }
 }
 
@@ -134,6 +196,7 @@ struct ChatMediaImageAttachment: View {
         width: Int?,
         height: Int?,
         tileSide: CGFloat? = nil,
+        memoryAlias: String? = nil,
         resolverReady: Bool,
         gallery: [ChatImageViewerItem] = [],
         load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)
@@ -150,8 +213,11 @@ struct ChatMediaImageAttachment: View {
         } else {
             self.gatewaySize = nil
         }
-        self._rememberedSize = State(initialValue: ChatMediaImageMemory.size(for: artifactId))
-        self._state = State(initialValue: ChatMediaImageMemory.image(for: artifactId).map(LoadState.loaded) ?? .loading)
+        let alias = memoryAlias
+        self._rememberedSize = State(initialValue: ChatMediaImageMemory.size(for: artifactId)
+            ?? alias.flatMap(ChatMediaImageMemory.size(for:)))
+        let remembered = ChatMediaImageMemory.image(for: artifactId) ?? alias.flatMap(ChatMediaImageMemory.image(for:))
+        self._state = State(initialValue: remembered.map(LoadState.loaded) ?? .loading)
         #else
         self._state = State(initialValue: .loading)
         #endif

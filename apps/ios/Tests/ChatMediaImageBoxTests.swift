@@ -33,6 +33,23 @@ struct ChatMediaImageBoxTests {
         #expect(ChatImageBox(pixelSize: CGSize(width: 4000, height: 1000)).size == CGSize(width: 400, height: 100))
     }
 
+    @Test func `a sent photo reads from the Control UI's inbound media route`() throws {
+        let source = "media://inbound/photo-63DF6636---5553a37d.jpg"
+        #expect(OpenClawChatInboundMedia.canonicalSource(" \(source) ") == source)
+        #expect(OpenClawChatInboundMedia.canonicalSource("media://inbound/a/b.jpg") == nil)
+        #expect(OpenClawChatInboundMedia.canonicalSource("media://inbound/..") == nil)
+        #expect(OpenClawChatInboundMedia.canonicalSource("/api/chat/media/outgoing/main/x/full") == nil)
+
+        let context = try OpenClawChatSourceContext(
+            gatewayURL: #require(URL(string: "https://gateway.example:8443")),
+            basePath: "/control")
+        let url = try #require(OpenClawChatInboundMedia.thumbnailURL(
+            source: source, context: context, sessionKey: "agent:main:ios-1", agentID: "main"))
+        #expect(url.absoluteString == "https://gateway.example:8443/control/__openclaw__/assistant-media"
+            + "?source=media%3A%2F%2Finbound%2Fphoto-63DF6636---5553a37d.jpg"
+            + "&sessionKey=agent%3Amain%3Aios-1&agentId=main&variant=thumbnail&width=960&v=4")
+    }
+
     @Test func `arriving bytes keep the row height and a second appearance does not load again`() async throws {
         let artifactId = "artifact_managed_image_\(UUID().uuidString.lowercased())"
         let release = AsyncStream<Void>.makeStream()
