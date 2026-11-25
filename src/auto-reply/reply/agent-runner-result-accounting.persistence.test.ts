@@ -4,7 +4,13 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
+import { captureSessionGoalBudget } from "../../config/sessions/goals-transitions.js";
+import { createSessionGoal } from "../../config/sessions/goals.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
@@ -29,6 +35,7 @@ import { registerAccountingReplacementRaceCases } from "./agent-runner-result-ac
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import * as followupExecution from "./followup-turn-execution.js";
+import { isGoalContinuationCurrent } from "./goal-continuation.js";
 import * as followupAdmission from "./reply-agent-turn-preparation.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -90,6 +97,154 @@ function setTerminalReply(
     context.execution.result.meta.error = { kind: "hook_block", message };
   }
 }
+
+it("charges a budgeted Goal once per settled turn even when context stays flat", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const sessionKey = context.sessionKey!;
+  await fixture.patch({
+    totalTokens: 20_000,
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+  });
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  const continuation = { goalId: goal.id, sessionId: fixture.sessionId };
+  // Last-call usage represents the current context, not the sum of calls in the turn.
+  fixture.setMeta({
+    agentHarnessId: "openclaw",
+    usage: { input: 40_000, output: 5_000 },
+    lastCallUsage: { input: 15_000, output: 5_000 },
+  });
+  const settle = () => withAccountingProvider(() => finalizeReplyAgentRun(context));
+
+  for (const [index, spent] of [45_000, 90_000, 135_000].entries()) {
+    if (index > 0) {
+      context.replyOperation.complete();
+      context.replyOperation = createReplyOperation({
+        sessionId: fixture.sessionId,
+        sessionKey,
+        resetTriggered: false,
+      });
+      operations.push(context.replyOperation);
+      context.replyOperation.setPhase("running");
+    }
+    context.runId = "poems-" + index;
+    context.activeSessionEntry = await fixture.patch({ activeWriterRunId: context.runId });
+    context.admittedGoalBudget = captureSessionGoalBudget(context.activeSessionEntry.goal);
+    await settle();
+    const row = fixture.read();
+    expect(row).toMatchObject({ totalTokens: 20_000, totalTokensFresh: true });
+    expect(row?.goal?.tokensUsed).toBe(spent);
+    expect(isGoalContinuationCurrent(continuation, row)).toBe(spent < 100_000);
+    if (index === 0) {
+      await settle();
+      expect(fixture.read()?.goal?.tokensUsed).toBe(spent);
+    }
+  }
+  expect(fixture.read()?.goal?.status).toBe("budget_limited");
+});
+
+it.each([
+  [undefined, "usage_limited"],
+  [{ total: 0, usageReport: { state: "available" } }, "active"],
+] as const)("distinguishes unavailable usage from measured zero (%s)", async (usage, status) => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey: context.sessionKey!,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  // A context observation alone is not proof of either spend or measured zero.
+  context.admittedGoalBudget = captureSessionGoalBudget(goal);
+  fixture.setMeta({ agentHarnessId: "openclaw", usage, lastCallUsage: { input: 20_000 } });
+  await withAccountingProvider(() => finalizeReplyAgentRun(context));
+  const row = fixture.read();
+  expect(row?.goal).toMatchObject({ status, tokensUsed: 0 });
+  expect(isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row)).toBe(
+    status === "active",
+  );
+});
+
+it("records why a budgeted Goal stops after an unmetered CLI fallback", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey: context.sessionKey!,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  context.admittedGoalBudget = captureSessionGoalBudget(goal);
+  fixture.setMeta({ usage: undefined, lastCallUsage: { input: 40_000 } });
+  context.execution.result.meta.executionTrace = { runner: "cli", fallbackUsed: true };
+  context.execution.result.meta.stopReason = "end_turn";
+  setRuntimeConfigSnapshot(context.cfg);
+  try {
+    await withAccountingProvider(() => finalizeReplyAgentRun(context));
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+  const row = fixture.read();
+  expect(row).toMatchObject({
+    goal: {
+      id: goal.id,
+      status: "usage_limited",
+      tokensUsed: 0,
+      lastStatusNote: expect.stringContaining("resum"),
+    },
+  });
+  expect(isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row)).toBe(
+    false,
+  );
+});
+
+it("meters a budgeted Goal from usage a CLI backend reports", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const sessionKey = context.sessionKey!;
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  fixture.setMeta({ usage: { input: 40_000, output: 5_000 } });
+  context.execution.result.meta.executionTrace = { runner: "cli", fallbackUsed: false };
+  setRuntimeConfigSnapshot(context.cfg);
+  try {
+    for (const [index, spent] of [45_000, 90_000, 135_000].entries()) {
+      if (index > 0) {
+        context.replyOperation.complete();
+        context.replyOperation = createReplyOperation({
+          sessionId: fixture.sessionId,
+          sessionKey,
+          resetTriggered: false,
+        });
+        operations.push(context.replyOperation);
+        context.replyOperation.setPhase("running");
+      }
+      context.runId = "cli-poems-" + index;
+      context.activeSessionEntry = await fixture.patch({ activeWriterRunId: context.runId });
+      context.admittedGoalBudget = captureSessionGoalBudget(context.activeSessionEntry.goal);
+      await withAccountingProvider(() => finalizeReplyAgentRun(context));
+      const row = fixture.read();
+      expect(row?.goal).toMatchObject({ id: goal.id, tokensUsed: spent });
+      expect(
+        isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row),
+      ).toBe(spent < 100_000);
+    }
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+  expect(fixture.read()?.goal?.status).toBe("budget_limited");
+});
 
 async function finalizeWithMedia(fixture: Fixture, prepare: () => Promise<unknown>) {
   const { context } = fixture;

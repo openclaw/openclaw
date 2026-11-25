@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { toDiagnosticUsage, type NormalizedUsage } from "../../agents/usage.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
@@ -24,13 +25,23 @@ function normalizeTokenBudget(value: number | undefined): number | undefined {
 }
 
 export function accountSessionGoalUsage(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
+  entry: Pick<
+    SessionEntry,
+    "goal" | "agentHarnessId" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion"
+  >,
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
   const goal = entry.goal;
   if (!goal) {
     return undefined;
+  }
+  // Built-in budgets use committed consumption, not the latest context size.
+  if (
+    goal.tokenBudget !== undefined &&
+    (entry.agentHarnessId === undefined || entry.agentHarnessId === "openclaw")
+  ) {
+    return limitSessionGoalBudget(goal, now);
   }
   const totalTokens = resolveEntryFreshTotalTokens(entry);
   const hasFreshStart = goal.tokenStartFresh !== false;
@@ -46,22 +57,79 @@ export function accountSessionGoalUsage(
     totalTokens === undefined || shouldAdoptFreshStart || shouldHoldStaleStart
       ? goal.tokensUsed
       : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart));
-  const next: SessionGoal = {
-    ...goal,
-    tokenStart,
-    tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
-    tokensUsed,
-  };
+  return limitSessionGoalBudget(
+    {
+      ...goal,
+      tokenStart,
+      tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
+      tokensUsed,
+    },
+    now,
+  );
+}
+
+function limitSessionGoalBudget(goal: SessionGoal, now: number): SessionGoal {
   if (
-    next.status === "active" &&
-    next.tokenBudget !== undefined &&
-    tokensUsed >= next.tokenBudget
+    goal.status === "active" &&
+    goal.tokenBudget !== undefined &&
+    goal.tokensUsed >= goal.tokenBudget
   ) {
-    next.status = "budget_limited";
-    next.budgetLimitedAt = now;
-    next.updatedAt = now;
+    return { ...goal, status: "budget_limited", budgetLimitedAt: now, updatedAt: now };
   }
-  return next;
+  return goal;
+}
+
+export type SessionGoalBudgetAdmission = Pick<SessionGoal, "id" | "tokensUsed">;
+
+/** Aggregate model consumption, not the context observation from the last call. */
+export function resolveSettledSessionGoalTokens(
+  usage: NormalizedUsage | undefined,
+): number | undefined {
+  if (!usage || usage.usageReport?.state === "unavailable") {
+    return undefined;
+  }
+  const total = toDiagnosticUsage(usage).total;
+  return total > 0 || usage.usageReport?.state === "available" ? total : undefined;
+}
+
+export function captureSessionGoalBudget(
+  goal?: SessionGoal,
+): SessionGoalBudgetAdmission | undefined {
+  return goal?.status === "active" && goal.tokenBudget !== undefined
+    ? { id: goal.id, tokensUsed: goal.tokensUsed }
+    : undefined;
+}
+
+export function applySettledSessionGoalUsage(
+  goal: SessionGoal | undefined,
+  admitted: SessionGoalBudgetAdmission,
+  tokens: number | undefined,
+  now: number,
+): SessionGoal | undefined {
+  // The turn owner fences the writer. The admission tally makes applying the same
+  // settlement again a no-op, without introducing a second durable receipt.
+  if (
+    goal?.id !== admitted.id ||
+    goal.tokenBudget === undefined ||
+    goal.tokensUsed !== admitted.tokensUsed
+  ) {
+    return undefined;
+  }
+  if (tokens === undefined) {
+    return goal.status === "active"
+      ? {
+          ...goal,
+          status: "usage_limited",
+          usageLimitedAt: now,
+          updatedAt: now,
+          lastStatusNote:
+            "Goal token usage was unavailable. Choose a built-in model that reports usage, then resume the Goal.",
+        }
+      : undefined;
+  }
+  return tokens > 0
+    ? limitSessionGoalBudget({ ...goal, tokensUsed: goal.tokensUsed + tokens }, now)
+    : undefined;
 }
 
 export function buildCreatedSessionGoal(
@@ -140,6 +208,9 @@ export function buildUpdatedSessionGoalStatus(
     next.tokensUsed = 0;
     delete next.budgetLimitedAt;
     delete next.usageLimitedAt;
+    if (accounted.status === "usage_limited" && options.note === undefined) {
+      delete next.lastStatusNote;
+    }
   }
   if (
     next.status === "active" &&

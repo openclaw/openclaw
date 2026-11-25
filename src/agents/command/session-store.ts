@@ -8,6 +8,10 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
+import {
+  applySettledSessionGoalUsage,
+  type SessionGoalBudgetAdmission,
+} from "../../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionUsageSnapshot } from "../../config/sessions/session-entry-usage.js";
@@ -40,6 +44,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   result: RunResult;
+  goalUsage?: {
+    admitted: SessionGoalBudgetAdmission;
+    tokens: number | undefined;
+    writerRunId: string;
+  };
   /** Private committed owner and ordered context; an unknown snapshot invalidates older usage. */
   compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
@@ -210,6 +219,24 @@ export async function updateSessionStoreAfterAgentRun(params: {
         patch.totalTokens = next.totalTokens;
         patch.totalTokensFresh = next.totalTokensFresh;
         patch.totalTokensVersion = next.totalTokensVersion;
+      }
+      if (
+        params.goalUsage &&
+        context.existingEntry &&
+        isSameSessionLifecycleOwner(currentEntry, {
+          ...expectedSession,
+          activeWriterRunId: params.goalUsage.writerRunId,
+        })
+      ) {
+        const goal = applySettledSessionGoalUsage(
+          currentEntry.goal,
+          params.goalUsage.admitted,
+          params.goalUsage.tokens,
+          now,
+        );
+        if (goal) {
+          patch.goal = goal;
+        }
       }
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.

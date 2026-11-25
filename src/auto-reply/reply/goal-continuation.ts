@@ -1,7 +1,10 @@
 import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
-import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
+import {
+  accountSessionGoalUsage,
+  resolveSettledSessionGoalTokens,
+} from "../../config/sessions/goals-transitions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -199,6 +202,14 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.reader,
   );
   if (!eligible() || !entry?.goal) {
+    return false;
+  }
+  // No unmetered CLI successor, even if the Goal was not active at turn admission.
+  if (
+    entry.goal.tokenBudget !== undefined &&
+    params.result.meta.executionTrace?.runner === "cli" &&
+    resolveSettledSessionGoalTokens(params.result.meta.agentMeta?.usage) === undefined
+  ) {
     return false;
   }
   const codexPlacement =

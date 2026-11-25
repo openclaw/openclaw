@@ -261,11 +261,13 @@ export function resolveGatewaySessionGoal(
     | Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">
     | undefined = entry,
 ) {
-  // Listing is read-only; only goal commands may adopt and persist a fresh baseline.
+  // Listing is read-only; legacy context baselines are not adopted here.
   return entry?.goal
-    ? resolveSessionGoalDisplayState({ ...usage, goal: entry.goal }, now, {
-        adoptFreshBaseline: false,
-      })
+    ? resolveSessionGoalDisplayState(
+        { ...usage, goal: entry.goal, agentHarnessId: entry.agentHarnessId },
+        now,
+        { adoptFreshBaseline: false },
+      )
     : undefined;
 }
 

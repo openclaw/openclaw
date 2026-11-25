@@ -140,8 +140,9 @@ clear that goal explicitly; completion allows the next goal to start.
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
-- `usage_limited`: reserved for a future usage-limit stop state. `/goal
-  resume` restarts pursuit the same way.
+- `usage_limited`: settled token usage is unavailable for the Goal, for example
+  after a CLI turn that reports no usage. Choose a built-in model that reports usage before
+  explicitly resuming it.
 - `complete`: the goal was achieved. It stays complete until you explicitly use
   `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
   Resuming preserves its identity, creation time, and conversation history. Token
@@ -164,11 +165,14 @@ start fresh session context.
 ## Token budgets
 
 Goals can have an optional positive token budget, set through the
-`create_goal` tool's `token_budget` parameter. The budget is measured from the
-session's fresh token count at goal-creation time. If the session only has a
-stale or unknown token snapshot when the goal starts, OpenClaw waits for the
-next fresh snapshot and uses that as the baseline, so tokens spent before the
-goal existed are not charged to it.
+`create_goal` tool's `token_budget` parameter. Built-in chat Goals count
+settled model tokens for turns that start with the Goal active, including the
+usage a CLI backend reports for its turns. The turn that
+calls `create_goal` is not included: its usage also covers work before the Goal
+existed. Repeated or shrinking context still uses tokens. If a turn may have used
+tokens but no settled count is available, automatic pursuit stops with
+`usage_limited` rather than continuing on an assumed zero. Existing Goals keep
+their recorded tally; OpenClaw does not estimate or backfill historical spend.
 
 The model should omit `token_budget` unless you explicitly request a budget.
 Transports that require every tool argument can pass `null` for no budget.
@@ -176,8 +180,7 @@ Transports that require every tool argument can pass `null` for no budget.
 When usage reaches the budget, the goal moves to `budget_limited`. This does
 not delete the goal or erase the objective. It tells the operator and the
 agent that the goal is no longer actively being pursued until it is resumed or
-cleared. Resuming starts a new budget window at the current fresh token
-count.
+cleared. Resuming a limited Goal starts a new budget window.
 
 Token budgets are a session-goal guardrail, not a billing cap. Provider
 quota, cost reporting, and context-window behavior still use the normal
@@ -308,8 +311,9 @@ the same runtime and lifecycle requirements. Start and Resume still require an
 idle session. Parent links and spawn depths stay intact. Hidden subagents remain
 unsupported by these direct chat controls.
 
-Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
-and continuation queue. Codex's separate autonomous Goal engine stays disabled;
+Codex worker Goals use the same OpenClaw Goal ID, history, budget controls,
+and continuation queue. Codex retains its context-based Goal accounting.
+Codex's separate autonomous Goal engine stays disabled;
 the core `get_goal`, `create_goal`, and `update_goal` tools remain available when
 native shell tools are enabled, subject to normal tool policy.
 Continuation retains the operator's current authority; it does not replay old

@@ -165,7 +165,10 @@ it(
         const body = JSON.parse(text) as { input?: Array<{ type?: string; output?: unknown }> };
         const output = body.input?.findLast((item) => item.type === "function_call_output")?.output;
         if (scenario.parentCalls === 1) {
-          writeToolCall(response, "create_goal", { objective: scenario.prompt });
+          writeToolCall(response, "create_goal", {
+            objective: scenario.prompt,
+            ...(scenario.name === "current" ? { token_budget: 100 } : {}),
+          });
         } else if (scenario.parentCalls === 2) {
           expect(JSON.stringify(output)).toContain("created");
           writeToolCall(response, "sessions_spawn", {
@@ -209,6 +212,10 @@ it(
         } else if (scenario.parentCalls === 6) {
           expect(scenario.revoke).toBe(false);
           expect(text).toContain("Advance the active goal");
+          expect(
+            loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal
+              ?.tokensUsed,
+          ).toBe(14);
           writeToolCall(response, "update_goal", { status: "complete" });
         } else if (scenario.parentCalls === 7) {
           expect(scenario.revoke).toBe(false);
@@ -415,7 +422,7 @@ it(
             ? { status: "paused", continuationTurns: 0 }
             : scenario.revoke
               ? { status: "active", continuationTurns: 0 }
-              : { status: "complete", continuationTurns: 1 },
+              : { status: "complete", continuationTurns: 1, tokensUsed: 28 },
         );
         if (!scenario.revoke && !scenario.stop) {
           await wait(scenario.finalReceived.promise);

@@ -59,7 +59,7 @@ function recordGoalChange(
 }
 
 export function resolveSessionGoalDisplayState(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
+  entry: Parameters<typeof accountSessionGoalUsage>[0],
   now?: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {

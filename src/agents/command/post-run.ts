@@ -1,8 +1,12 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { recordGoalContinuationSettlement } from "../../auto-reply/reply/goal-continuation-return.js";
+import {
+  readAdmittedGoalContinuationBudget,
+  recordGoalContinuationSettlement,
+} from "../../auto-reply/reply/goal-continuation-return.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { resolveSettledSessionGoalTokens } from "../../config/sessions/goals-transitions.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
@@ -172,6 +176,20 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const effectiveSessionId =
       compactionFact?.target.sessionId ?? internalSessionTarget?.sessionId ?? sessionId;
     if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
+      const admittedGoalBudget =
+        result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+          ? readAdmittedGoalContinuationBudget(runId, sessionKey)
+          : undefined;
+      const goalTokens = admittedGoalBudget
+        ? resolveSettledSessionGoalTokens(result.meta.agentMeta?.usage)
+        : undefined;
+      const goalUsage =
+        admittedGoalBudget &&
+        (goalTokens !== undefined ||
+          (classifyAgentRunTerminalOutcome(terminal.outcome) === "success" &&
+            result.meta.providerStarted !== false))
+          ? { admitted: admittedGoalBudget, tokens: goalTokens, writerRunId: runId }
+          : undefined;
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
         agentId: sessionAgentId,
@@ -186,6 +204,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         fallbackProvider,
         fallbackModel,
         result,
+        goalUsage,
         compactionAccounting: compactionFact,
         touchInteraction:
           params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,

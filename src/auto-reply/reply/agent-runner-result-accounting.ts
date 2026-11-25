@@ -7,6 +7,10 @@ import { prepareLiveModelSwitchAfterRun } from "../../agents/live-model-switch.j
 import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-persisted.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  resolveSettledSessionGoalTokens,
+  type SessionGoalBudgetAdmission,
+} from "../../config/sessions/goals-transitions.js";
 import type { SessionActorReducer } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -38,6 +42,7 @@ const modelFallbackLog = createSubsystemLogger("model-fallback");
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
   | "activeSessionEntry"
+  | "admittedGoalBudget"
   | "activeSessionStore"
   | "blockReplyPipeline"
   | "cfg"
@@ -434,6 +439,28 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   } satisfies Parameters<typeof prepareSessionUsageUpdate>[0];
   if (completion) {
+    const { admittedGoalBudget } = context;
+    const cliRun = runResult.meta.executionTrace?.runner === "cli";
+    if (
+      admittedGoalBudget &&
+      (usageParams.agentHarnessId === "openclaw" || cliRun) &&
+      !preserveUserFacingSessionState &&
+      !followupRun.run.scheduledAutomation
+    ) {
+      // A CLI turn that reports usage is metered; one that reports none stops the Goal.
+      const tokens = resolveSettledSessionGoalTokens(usage);
+      if (
+        tokens !== undefined ||
+        (execution.status === "ok" && (cliRun || runResult.meta.providerStarted !== false))
+      ) {
+        completion.patch({
+          kind: "goal-usage",
+          admitted: admittedGoalBudget,
+          tokens,
+          updatedAt: Date.now(),
+        });
+      }
+    }
     completion.patch((entry) => {
       try {
         const prepared = prepareSessionUsageUpdate(usageParams);
@@ -511,6 +538,7 @@ export async function accountFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
   execution: FollowupExecutionResult;
+  admittedGoalBudget?: SessionGoalBudgetAdmission;
   completion?: AgentTurnCompletion;
 }) {
   const { turn, defaults, execution, completion } = params;
@@ -537,6 +565,7 @@ export async function accountFollowupTurn(params: {
     ) ?? "off";
   const accounting = await accountAgentTurn({
     activeSessionEntry: turn.session.current(),
+    admittedGoalBudget: params.admittedGoalBudget,
     activeSessionStore: turn.sessionStore,
     blockReplyPipeline: null,
     cfg: turn.config,

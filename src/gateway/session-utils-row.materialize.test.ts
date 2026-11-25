@@ -245,9 +245,9 @@ test.each([-1, 0, 1])(
   },
 );
 
-test.each([50, 150])(
-  "projects goal accounting at presentation time for %i tokens without committing it",
-  (totalTokens) => {
+test.each(["openclaw", "codex"])(
+  "projects %s Goal accounting without mistaking built-in context for usage",
+  (agentHarnessId) => {
     const goal: NonNullable<SessionEntry["goal"]> = {
       schemaVersion: 1,
       id: "goal",
@@ -263,8 +263,9 @@ test.each([50, 150])(
     };
     const { inputs, presentation } = read({
       ...BASE_ENTRY,
+      agentHarnessId,
       goal,
-      totalTokens,
+      totalTokens: 150,
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
@@ -272,11 +273,11 @@ test.each([50, 150])(
     for (const now of TIMES) {
       const projected = presentSessionRow(materialized, { ...presentation, now }).goal;
       expect(projected).toMatchObject({
-        tokensUsed: totalTokens - 20,
-        status: totalTokens < 100 ? "active" : "budget_limited",
-        updatedAt: totalTokens < 100 ? START : now,
+        tokensUsed: agentHarnessId === "openclaw" ? 5 : 130,
+        status: agentHarnessId === "openclaw" ? "active" : "budget_limited",
+        updatedAt: agentHarnessId === "openclaw" ? START : now,
       });
-      expect(projected?.budgetLimitedAt).toBe(totalTokens < 100 ? undefined : now);
+      expect(projected?.budgetLimitedAt).toBe(agentHarnessId === "openclaw" ? undefined : now);
     }
     expect(goal).toMatchObject({ status: "active", updatedAt: START, tokensUsed: 5 });
   },

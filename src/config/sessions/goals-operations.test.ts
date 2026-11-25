@@ -20,7 +20,7 @@ import type {
   SessionGoalOperation,
   SessionTranscriptTurnMutation,
 } from "./goals-operations.types.js";
-import { createSessionGoal, clearSessionGoal, updateSessionGoalStatus } from "./goals.js";
+import { createSessionGoal, clearSessionGoal } from "./goals.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -368,8 +368,11 @@ describe("typed Goal operation persistence", () => {
 
   it("commits Resume with its hidden continuation and the shared fresh budget window", async () => {
     const goal = await createGoal("finish", 20);
-    await updateSessionGoalStatus({ ...scope(), status: "paused" });
-    await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, totalTokens: 130 });
+    await upsertSessionEntryCore(scope(), {
+      ...loadSessionEntry(scope())!,
+      totalTokens: 130,
+      goal: { ...goal, status: "budget_limited", tokensUsed: 25, budgetLimitedAt: now },
+    });
     const mutation: SessionTranscriptTurnMutation = {
       kind: "goal",
       operation: { ...identity("resume-1"), action: "resume", goalId: goal.id },

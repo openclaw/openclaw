@@ -105,6 +105,7 @@ test("unchanged goal searches normalize only the query and refresh with the entr
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: createSessionGoalFixture(`goal-${index}`, "Investigate 日本語 🦞 MiXeD", {
         tokenBudget: 2000,
+        tokensUsed: 1200,
       }),
     },
   ]);
@@ -119,7 +120,10 @@ test("unchanged goal searches normalize only the query and refresh with the entr
     expect(lower.mock.calls).toEqual([[search], [search.toLowerCase()]]);
   }
   const [key, previous] = rows[0]!;
-  rows[0] = [key, { ...previous, totalTokens: 2500 }];
+  rows[0] = [
+    key,
+    { ...previous, goal: { ...previous.goal!, status: "budget_limited", tokensUsed: 2500 } },
+  ];
   targets.set(key, searchTargets([rows[0]]).get(key)!);
   params.opts = { search: "Goal unmet (2.5k/2k)" };
   expect(searchKeys(params)).toEqual([key]);

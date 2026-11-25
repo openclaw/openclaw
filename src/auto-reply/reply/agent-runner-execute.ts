@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureSessionGoalBudget } from "../../config/sessions/goals-transitions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
@@ -229,6 +230,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   const runStartedAt = Date.now();
   await admitUserTurn(followupRun.userTurnTranscriptRecorder);
   activeSessionEntry = getActiveSessionEntry();
+  const admittedGoalBudget = captureSessionGoalBudget(activeSessionEntry?.goal);
   // Adoption transfers the accepted input into ordinary execution custody.
   await admitFollowupRunLifecycle(followupRun);
   const runWithGoalReturn = createGoalContinuationReturn(
@@ -356,6 +358,7 @@ async function executePreparedReplyAgentRunWithCompletion(
       ...context,
       opts: executionOpts,
       activeSessionEntry,
+      admittedGoalBudget,
       preflightCompactionApplied,
       runFollowupTurn,
       execution,

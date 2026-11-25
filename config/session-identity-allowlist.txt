@@ -591,7 +591,7 @@ src/auto-reply/reply/dispatch-session-refresh-error.ts	1
 src/auto-reply/reply/get-reply-run-admission.ts	2
 src/auto-reply/reply/get-reply-run-execute.ts	1
 src/auto-reply/reply/get-reply-run-helpers.ts	3
-src/auto-reply/reply/goal-continuation-return.ts	20
+src/auto-reply/reply/goal-continuation-return.ts	16
 src/auto-reply/reply/goal-continuation.ts	2
 src/auto-reply/reply/model-selection.ts	2
 src/auto-reply/reply/queue/drain.ts	3
