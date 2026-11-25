@@ -599,8 +599,10 @@ posixIt.for([125, "hang"] satisfies FetchResult[])(
   async (failure, { signal }) => {
     const report = await runDocs(signal, docsCommit, {
       fetchResults: [failure, 0],
+      readyFetchClockAdvanceSeconds: 120,
     });
     expect(report.code, report.output).toBe(0);
+    expect(report.fetchClockAdvancedSeconds).toBe(failure === "hang" ? 120 : 0);
     expect(report.pushes).toEqual([]);
     expect(backoffs(report)).toEqual([]);
     expect(
