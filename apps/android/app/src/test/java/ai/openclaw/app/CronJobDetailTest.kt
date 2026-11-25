@@ -39,6 +39,27 @@ class CronJobDetailTest {
   }
 
   @Test
+  fun modelCatalogUsesJobOwnerThenScopedSessionAndLeavesAmbientResolutionToGateway() {
+    val job =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          JsonObject(
+            parseJob() +
+              mapOf(
+                "agentId" to kotlinx.serialization.json.JsonPrimitive("writer"),
+                "sessionKey" to kotlinx.serialization.json.JsonPrimitive("agent:planner:main"),
+              ),
+          ),
+        ),
+      )
+    assertEquals("writer", job.agentId)
+    assertEquals("agent:planner:main", job.sessionKey)
+    assertEquals(Json.parseToJsonElement("""{"view":"configured","agentId":"writer"}"""), Json.parseToJsonElement(cronJobModelParams(job)))
+    assertEquals(Json.parseToJsonElement("""{"view":"configured","agentId":"planner"}"""), Json.parseToJsonElement(cronJobModelParams(job.copy(agentId = null))))
+    assertEquals(Json.parseToJsonElement("""{"view":"configured"}"""), Json.parseToJsonElement(cronJobModelParams(job.copy(agentId = null, sessionKey = null))))
+  }
+
+  @Test
   fun preservesWholeMinutesWhenProjectingIntervalSchedules() {
     val cases =
       listOf(

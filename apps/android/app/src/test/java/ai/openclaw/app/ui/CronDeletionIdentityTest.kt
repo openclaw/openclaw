@@ -125,6 +125,8 @@ class CronDeletionIdentityTest {
       ClawDesignTheme {
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
           CronJobManagementPanel(
+            models = ai.openclaw.app.GatewayCronModelChoices(),
+            onRefreshModels = {},
             job = job,
             editorDraft = CronEditorDraftState.from(job),
             onEditorDraftChange = {},

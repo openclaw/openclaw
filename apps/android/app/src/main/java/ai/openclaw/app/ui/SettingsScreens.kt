@@ -396,7 +396,8 @@ private fun CronJobDetailSettingsScreen(
     }
   }
 
-  val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
+  val loaded = (detailState as? GatewayCronJobDetailState.Loaded)?.takeIf { it.job.id == jobId }
+  val current = loaded?.job
   var editorDraft by remember(viewModel, jobId) {
     mutableStateOf(viewModel.cronEditorDraftMemory.get(jobId))
   }
@@ -478,28 +479,30 @@ private fun CronJobDetailSettingsScreen(
         SettingsMessagePanel(text = errorText.resolveNativeTextResource(), color = ClawTheme.colors.warning)
       }
 
-      current == null -> {
+      loaded == null -> {
         SettingsMessagePanel(text = if (loading) nativeString("Loading automation…") else nativeString("Automation not loaded."))
       }
 
       else -> {
         CronJobManagementPanel(
-          job = current,
-          editorDraft = editorDraft ?: CronEditorDraftState.from(current),
+          job = loaded.job,
+          editorDraft = editorDraft ?: CronEditorDraftState.from(loaded.job),
           onEditorDraftChange = ::updateEditorDraft,
           historyState = historyState,
           actionState = actionState,
           runPending = jobId in pendingCronRunJobIds,
           operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-          onRun = { viewModel.runCronJob(current.id) },
+          onRun = { viewModel.runCronJob(loaded.job.id) },
           onToggleEnabled = {
-            viewModel.setCronJobEnabled(id = current.id, enabled = !current.enabled)
+            viewModel.setCronJobEnabled(id = loaded.job.id, enabled = !loaded.job.enabled)
           },
-          onSave = { edit -> viewModel.updateCronJob(original = current, edit = edit) },
-          onRefreshHistory = { viewModel.refreshCronRunHistory(current.id) },
-          onDelete = { viewModel.deleteCronJob(current.id) },
+          onSave = { edit -> viewModel.updateCronJob(original = loaded.job, edit = edit) },
+          onRefreshHistory = { viewModel.refreshCronRunHistory(loaded.job.id) },
+          models = loaded.models,
+          onRefreshModels = { viewModel.refreshCronModels(loaded.job.id) },
+          onDelete = { viewModel.deleteCronJob(loaded.job.id) },
         )
-        CronJobDetailPanel(job = current)
+        CronJobDetailPanel(job = loaded.job)
       }
     }
   }

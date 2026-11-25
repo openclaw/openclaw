@@ -1452,6 +1452,8 @@ class MainViewModel internal constructor(
 
   fun refreshCronRunHistory(id: String): Unit = ensureRuntime().refreshCronRunHistory(id)
 
+  fun refreshCronModels(id: String): Unit = ensureRuntime().refreshCronModels(id)
+
   fun clearCronJobDetail(): Unit = ensureRuntime().clearCronJobDetail()
 
   fun dismissCronActionNotice(id: String): Unit = ensureRuntime().dismissCronActionNotice(id)
