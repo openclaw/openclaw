@@ -1,17 +1,13 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
-import { CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { isOperatorOnlyBrowserPageUrl } from "./cdp-target-filter.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserError, BrowserTabNotFoundError } from "./errors.js";
-import {
-  getBrowserProfileCapabilities,
-  isExternallyManagedCdpProfile,
-} from "./profile-capabilities.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   CLOSE_TAB_VERIFY_POLL_MS,
@@ -73,7 +69,6 @@ export function createProfileSelectionOps({
 }: SelectionDeps): SelectionOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
-  const externallyManagedCdp = isExternallyManagedCdpProfile(profile);
 
   const ensureTabAvailable = async (
     targetId?: string,
@@ -85,9 +80,9 @@ export function createProfileSelectionOps({
     let sawSuccessfulList = false;
     let openedTab: BrowserTab | undefined;
 
-    const readTabs = async (listOptions = options): Promise<BrowserTab[]> => {
+    const readTabs = async (): Promise<BrowserTab[]> => {
       try {
-        const tabs = await listTabs(listOptions);
+        const tabs = await listTabs(options);
         options?.signal?.throwIfAborted();
         sawSuccessfulList = true;
         if (tabs.length > 0) {
@@ -124,17 +119,7 @@ export function createProfileSelectionOps({
       return resolved.ok || resolved.reason === "ambiguous";
     };
 
-    // A named remote target gets a short first attempt and a full-budget
-    // recovery read. Slow healthy enumeration can still succeed, while an
-    // unavailable connection consumes at most one full action timeout.
-    const firstListOptions =
-      externallyManagedCdp && targetId !== undefined
-        ? {
-            ...options,
-            timeoutMs: Math.min(options?.timeoutMs ?? Infinity, CDP_WS_HANDSHAKE_TIMEOUT_MS),
-          }
-        : options;
-    const tabs1 = await readTabs(firstListOptions);
+    const tabs1 = await readTabs();
     await openWhenConfirmedEmpty(tabs1);
 
     let listedTabs = await readTabs();

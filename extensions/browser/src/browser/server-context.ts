@@ -11,10 +11,7 @@ import {
   BrowserTabNotFoundError,
   toBrowserErrorResponse,
 } from "./errors.js";
-import {
-  getBrowserProfileCapabilities,
-  isExternallyManagedCdpProfile,
-} from "./profile-capabilities.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
@@ -93,8 +90,6 @@ function createProfileContext(
     return runtimeState;
   };
 
-  const externallyManagedCdp = isExternallyManagedCdpProfile(profile);
-
   const rawTabOps = createProfileTabOps({
     profile,
     state,
@@ -116,6 +111,9 @@ function createProfileContext(
     openTab: rawTabOps.openTab,
   });
   const capabilities = getBrowserProfileCapabilities(profile);
+  // External CDP endpoints may be attached on loopback as well as over a network.
+  const externallyManagedCdp =
+    capabilities.isRemote || (profile.driver === "openclaw" && profile.attachOnly);
 
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
