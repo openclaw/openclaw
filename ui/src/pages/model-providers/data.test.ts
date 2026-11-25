@@ -430,6 +430,9 @@ it("reads string and object defaults and preserves disabled utility", () => {
   });
   expect(read({ model: "openai/main" }).defaults).toEqual(modelSelection("openai/main"));
   expect(read({ utilityModel: "" }).defaults.utilityModel).toBe("");
+  expect(read({ subagents: { model: "openai/runner" } }).defaults.subagentModel).toBe(
+    "openai/runner",
+  );
 });
 
 it("offers only unconfigured providers with quick API-key setup", () => {

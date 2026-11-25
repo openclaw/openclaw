@@ -241,7 +241,7 @@ describe("actions on the imported original PR", () => {
         withGatewayToolCallerIdentity(caller, () =>
           createGitHubPublishTool().execute("native-read-control", { action: "edit" }),
         ),
-      ).rejects.toThrow("verified linked GitHub account");
+      ).rejects.toThrow("no Gateway operator identity");
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
     } finally {

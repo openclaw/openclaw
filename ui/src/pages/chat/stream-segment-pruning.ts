@@ -1,13 +1,13 @@
 import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import type { ToolStreamReconciliationState } from "./stream-reconciliation.ts";
 import type { ToolStreamState } from "./tool-stream-contract.ts";
 import {
+  createSegmentToolRefReader,
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
@@ -73,7 +73,7 @@ export function prunePersistedToolStreamMessages(
       return identity === undefined || !persistedToolIds.has(identity);
     });
   });
-  let toolIndexedSegmentIndex = 0;
+  const readToolRef = createSegmentToolRefReader(liveToolRefs);
   state.chatStreamSegments = pruneAccumulatedStreamSegments(
     state.chatStreamSegments,
     state.chatRunId,
@@ -81,22 +81,10 @@ export function prunePersistedToolStreamMessages(
       if (segment.persisted === true) {
         return false;
       }
-      const explicitToolCallId = normalizeOptionalString(segment.toolCallId);
-      const usesItemId = streamSegmentHasItemId(segment);
-      const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
-      if (!usesItemId) {
-        toolIndexedSegmentIndex += 1;
-      }
-      const segmentRunId = normalizeOptionalString(segment.runId);
-      const toolIdentity = explicitToolCallId
-        ? resolveMatchingLiveToolIdentity(
-            {
-              id: explicitToolCallId,
-              ...(segmentRunId ? { runId: segmentRunId } : {}),
-            },
-            liveToolRefs,
-          )
-        : indexedToolRef?.identity;
+      const { callId, runId, indexed } = readToolRef(segment);
+      const toolIdentity = callId
+        ? resolveMatchingLiveToolIdentity({ id: callId, runId }, liveToolRefs)
+        : indexed?.identity;
       return Boolean(toolIdentity && persistedToolIds.has(toolIdentity));
     },
   );

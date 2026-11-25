@@ -5,6 +5,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { decideTurnGrant } from "../operator-admission.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { captureChatSendQuestionReplacement } from "./chat-send-question-replacement.js";
@@ -31,6 +32,10 @@ it.each([
   "released-requester",
   "other-requester-first",
   "without-display-run-id",
+  "reconnect-resume",
+  "native-app",
+  "system-input",
+  "read-only",
 ] as const)("keeps composer replacement at the question owner: %s", async (kind) => {
   const ordinary = requestParams.questions[0]!;
   const questions: Question[] =
@@ -99,13 +104,19 @@ it.each([
     rawMessage: "Use another approach",
     inboundMessage: "Use another approach",
     chatSendReceivedAtMs: performance.now(),
-    clientInfo: client.connect.client,
+    clientInfo:
+      kind === "native-app"
+        ? { ...client.connect.client, id: "openclaw-ios" }
+        : client.connect.client,
+    ...(kind === "system-input"
+      ? { systemInputProvenance: { kind: "internal_system" as const, sourceTool: "test" } }
+      : {}),
     supportsTaskSuggestions: false,
     suppressCommandInterpretation: false,
     stopCommand: false,
     turnKind: "main",
     normalizedAttachments: [],
-    reconnectResumeRequested: false,
+    reconnectResumeRequested: kind === "reconnect-resume",
   };
   const cfg = {};
   const replace = captureChatSendQuestionReplacement(
@@ -121,13 +132,18 @@ it.each([
     kind === "child" ? "agent:main:parent" : requestParams.sessionKey,
     requestParams.runId,
     kind === "command",
+    decideTurnGrant(kind === "read-only" ? ["operator.read"] : ["operator.admin"]),
   );
   const replaced =
     kind === "multiple" ||
     kind === "manual" ||
     kind === "secret" ||
     kind === "other-requester-first" ||
-    kind === "without-display-run-id";
+    kind === "without-display-run-id" ||
+    kind === "reconnect-resume" ||
+    // One grant answers every client and start: same person, same answer.
+    kind === "native-app" ||
+    kind === "system-input";
   expect(Boolean(replace)).toBe(replaced);
   await replace?.(() => {});
   expect(manager.get(id)).toMatchObject(

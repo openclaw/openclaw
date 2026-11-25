@@ -90,7 +90,23 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
     ).stdout
       .trim()
       .split(/\r?\n/u);
-    await fs.symlink(git, path.join(bin, "git"));
+    const gitPath = (process.env.PATH ?? "")
+      .split(path.delimiter)
+      .filter((entry) => entry !== bin)
+      .join(path.delimiter);
+    // Git wrappers need their own tools without exposing host pnpm to the updater.
+    await executable(
+      "git",
+      `
+const { spawnSync } = require('node:child_process');
+const result = spawnSync(${JSON.stringify(git)}, process.argv.slice(2), {
+  env: { ...process.env, PATH: ${JSON.stringify(gitPath)} },
+  stdio: 'inherit',
+});
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+`,
+    );
     vi.stubEnv("PATH", bin);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });

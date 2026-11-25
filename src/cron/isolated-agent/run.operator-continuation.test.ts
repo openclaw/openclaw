@@ -921,9 +921,7 @@ it.each([
       } else {
         expect(admittedOperator).toBe(scenario === "cron-scoped operator");
         expect(rejected).toContain(
-          scopedOperator
-            ? "missing scope: operator.write"
-            : "require full operator write permission",
+          scopedOperator ? "missing scope: operator.write" : "needs operator write permission",
         );
       }
       if (scenario === "role revoked during merge") {

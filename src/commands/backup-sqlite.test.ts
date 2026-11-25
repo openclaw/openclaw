@@ -240,7 +240,12 @@ describe("SQLite backup commands", () => {
 
     await expect(
       backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
-    ).rejects.toThrow(/cannot be snapshotted safely/u);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        `SQLite database cannot be snapshotted safely: ${databasePath}.`,
+      ),
+      cause: expect.objectContaining({ message: "file is not a database" }),
+    });
 
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
       `Warning: the backup outcome could not be recorded: Cannot admit backup.recordOutcome for backup outcome ledger in state root ${path.dirname(path.dirname(databasePath))}: failed to acquire gateway state ownership | file is not a database | ERR_SQLITE_ERROR. No local mutation was attempted. Inspect openclaw gateway status. Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command. | ERR_SQLITE_ERROR`,
