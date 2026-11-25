@@ -1,6 +1,7 @@
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
 import "openclaw/plugin-sdk/provider-http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
@@ -44,9 +45,14 @@ beforeEach(() => {
 });
 
 it("keeps model auth scoped to each registration on concurrent first use", async () => {
-  const checks = [true, false].map((configured) =>
-    createImageProvider(configured).isConfiguredAsync?.({}),
-  );
+  const checks = [true, false].map((configured) => {
+    const provider = createImageProvider(configured);
+    const isConfigured = expectDefined(
+      provider.isConfiguredAsync,
+      "OpenAI image configuration hook",
+    );
+    return isConfigured({});
+  });
   expect(await Promise.all(checks)).toEqual([true, false]);
 });
 
