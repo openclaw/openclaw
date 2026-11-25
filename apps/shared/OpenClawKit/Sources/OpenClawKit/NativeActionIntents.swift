@@ -211,9 +211,6 @@ struct OpenRunIntent: OpenIntent {
     }
 
     init() {}
-    init(target: OpenClawRunEntity) {
-        self.target = target
-    }
 
     init(target: OpenClawRunEntity, continuing id: UUID) {
         self.target = target

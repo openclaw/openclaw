@@ -29,11 +29,13 @@ struct NativeActionIntentsTests {
         let target = try OpenClawRunEntity(run: run)
         let host = ObservingNativeActionHost()
         OpenClawNativeActionServices.install(host: host)
-        let explicit = OpenRunIntent(target: target)
+        var explicit = OpenRunIntent()
+        explicit.target = target
         try #require(explicit.automatic == false && explicit.presentationID == nil)
         _ = try await explicit.perform()
         try #require(host.requests == [.inspect(run)])
-        var omittedAutomatic = OpenRunIntent(target: target)
+        var omittedAutomatic = OpenRunIntent()
+        omittedAutomatic.target = target
         omittedAutomatic.automatic = nil
         try #require(omittedAutomatic.presentationID == nil)
         _ = try await omittedAutomatic.perform()
