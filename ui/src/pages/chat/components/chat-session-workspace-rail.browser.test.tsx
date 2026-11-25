@@ -598,7 +598,11 @@ it.each(["mobile", "desktop"] as const)(
         files: [],
         browser: {
           path: "",
-          entries: [name, ordinary].map((name) => ({ name, path: name, kind: "file" as const })),
+          entries: [name, ordinary].map((entry) => ({
+            name: entry,
+            path: entry,
+            kind: "file" as const,
+          })),
         },
       },
     });
