@@ -248,6 +248,19 @@ describe("OpenClaw rescue message", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "logs",
+    "read file package.json",
+    "gateway status deep",
+    "channels status probe",
+    "models status",
+    "skills check",
+    "plugins doctor",
+  ])("keeps %s out of remote rescue", async (command) => {
+    await expectReply(`/openclaw ${command}`, "I can run doctor/status/health");
+    await expectReply("/openclaw yes", noPending, true);
+  });
+
   it("refuses doctor repairs without creating a pending approval", async () => {
     const reply = await runRescue("/openclaw doctor fix", {});
     expect(reply).toContain("machine running OpenClaw");

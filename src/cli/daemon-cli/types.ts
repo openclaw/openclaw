@@ -1,5 +1,6 @@
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts as SharedGatewayRpcOpts } from "../gateway-rpc.types.js";
 
 export type GatewayRpcOpts = Omit<SharedGatewayRpcOpts, "expectFinal"> & {
@@ -13,6 +14,13 @@ export type DaemonStatusOptions = {
   json: boolean;
   runtimeIntentOnly?: boolean;
 } & FindExtraGatewayServicesOptions;
+
+export type DaemonStatusPrintOptions = {
+  json: boolean;
+  deep?: boolean;
+  showProcessArguments?: boolean;
+  runtime?: Pick<RuntimeEnv, "log" | "error">;
+};
 
 export type DaemonInstallOptions = {
   port?: string | number;

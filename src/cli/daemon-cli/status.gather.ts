@@ -151,6 +151,7 @@ async function gatherDaemonStatusImpl(
     signal?: AbortSignal;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
+    includeLogExcerpt?: boolean;
     pluginVersionTarget?: "running" | "restart";
   } & FindExtraGatewayServicesOptions,
 ) {
@@ -466,6 +467,7 @@ async function gatherDaemonStatusImpl(
 
   let lastError: string | undefined;
   if (
+    opts.includeLogExcerpt !== false &&
     shouldInspectLocalGateway &&
     loaded &&
     portStatus &&
