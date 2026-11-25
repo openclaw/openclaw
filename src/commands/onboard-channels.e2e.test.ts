@@ -459,4 +459,79 @@ describe("setupChannels", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(multiselect).not.toHaveBeenCalled();
   });
+
+  describe("with a credential the source config cannot resolve", () => {
+    const storeRef = { source: "store", provider: "default", id: "DISCORD_BOT_TOKEN" } as const;
+    const channels: OpenClawConfig["channels"] = {
+      discord: { enabled: true, token: storeRef, allowFrom: ["987654321098765432"] },
+    };
+
+    function registerStrictDiscord() {
+      const configure = async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg, accountId: "default" });
+      registerDiscord(
+        {
+          channel: "discord",
+          getStatus: async () => ({ channel: "discord", configured: true, statusLines: [] }),
+          configure,
+          configureInteractive: configure,
+        },
+        {
+          resolveAccount: () => {
+            throw new Error(
+              `channels.discord.token: unresolved SecretRef "store:default:DISCORD_BOT_TOKEN"`,
+            );
+          },
+          inspectAccount: (cfg) => ({
+            accountId: "default",
+            enabled: cfg.channels?.discord?.enabled !== false,
+            configured: true,
+            tokenStatus: "configured_unavailable",
+          }),
+        },
+      );
+    }
+
+    it("lists the channel on the selection screen", async () => {
+      registerStrictDiscord();
+      const select = vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Select a channel") {
+          return "__done__";
+        }
+        throw new Error(`unexpected selection: ${message}`);
+      });
+      const prompter = createPrompter({ select: select as unknown as WizardPrompter["select"] });
+
+      const next = await runSetupChannels({ channels }, prompter);
+
+      expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+      expect(next.channels).toEqual(channels);
+    });
+
+    it("offers the channel for owner setup", async () => {
+      registerStrictDiscord();
+      const prompter = createPrompter({
+        select: vi.fn(async ({ message, options }: Parameters<WizardPrompter["select"]>[0]) => {
+          if (message === "Set up administration from your own chat account?") {
+            return options.find((option) => option.label === "Set up my operator account")?.value;
+          }
+          throw new Error(`unexpected selection: ${message}`);
+        }) as WizardPrompter["select"],
+        text: vi.fn(async () => "123456789012345678"),
+        confirm: vi.fn(async () => true),
+      });
+
+      const next = await runSetupChannels({ channels }, prompter, {
+        initialSelection: ["discord"],
+        finishAfterInitialSelection: true,
+        skipDmPolicyPrompt: true,
+      });
+
+      expect(prompter.note).not.toHaveBeenCalledWith(
+        expect.stringContaining("Status unavailable"),
+        expect.anything(),
+      );
+      expect(next.commands?.ownerAllowFrom).toEqual(["discord:123456789012345678"]);
+      expect(next.channels?.discord?.token).toEqual(storeRef);
+    });
+  });
 });
