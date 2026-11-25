@@ -37,7 +37,7 @@ function expectFenceChunkInvariant(text: string, cuts: readonly number[]) {
     state = scanned.state;
     offset += chunk.length;
   }
-  expect(state?.open !== undefined).toBe(covers(oneShot, text.length - 1));
+  expect(state?.open).toEqual(scanFenceSpans(text).state.open);
 }
 
 const seeded = (seed: number) => {
@@ -65,6 +65,7 @@ describe("scanFenceSpans chunk invariance", () => {
   it("closes a fence whose closing marker is split mid-run", () => {
     // Without the carried run the fence stays open and swallows the trailing paragraph.
     expectFenceChunkInvariant("```\ncode\n```\ntail\n", [10]);
+    expectFenceChunkInvariant("~~~\ncode\n~~~", [10]);
     expectFenceChunkInvariant("```\ncode\n```\ntail\n", [9, 11]);
   });
 

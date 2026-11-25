@@ -30,6 +30,8 @@ beforeEach(() => {
   setNoAbort();
 });
 
+const fencedDirective = "~~~\n[[tts:sample]]\n~~~";
+
 it.each([
   {
     name: "opening bracket pair",
@@ -40,6 +42,12 @@ it.each([
     name: "closing tag bracket pair",
     chunks: ["Intro [[tts:text]]hidden speech[", "[/tts:text]] visible"],
     visible: "Intro  visible",
+  },
+  { name: "one complete tilde fence", chunks: [fencedDirective], visible: fencedDirective },
+  {
+    name: "tilde fence split after the first marker",
+    chunks: [fencedDirective.slice(0, 1), fencedDirective.slice(1)],
+    visible: fencedDirective,
   },
   { name: "hidden end", chunks: ["[[tts:text]]hidden speech["], visible: "" },
 ])("dispatchReplyFromConfig settles $name once", async ({ chunks, visible }) => {
