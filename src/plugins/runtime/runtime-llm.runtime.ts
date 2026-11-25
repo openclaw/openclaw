@@ -196,6 +196,7 @@ export function createRuntimeLlm(
       const pluginPolicy = resolvePluginLlmPolicy(cfg, pluginPolicyId);
       const authorityPolicy = resolveAuthorityModelPolicy(authority);
       const preferredProfile = normalizeOptionalString(authority?.preferredProfile);
+      const requiredAuthProfileId = normalizeOptionalString(authority?.requiredAuthProfileId);
       const audit = {
         caller,
         ...(params.purpose ? { purpose: params.purpose } : {}),
@@ -257,6 +258,16 @@ export function createRuntimeLlm(
         );
       }
 
+      if (
+        requiredAuthProfileId &&
+        ((executionProfile && executionProfile !== requiredAuthProfileId) ||
+          (requestedModelProfile && requestedModelProfile !== requiredAuthProfileId))
+      ) {
+        throw completionError(
+          "LLM_COMPLETION_NOT_AUTHORIZED",
+          "Plugin LLM completion cannot replace the session authentication profile.",
+        );
+      }
       if (isolatedRequest) {
         // Direct completions preserve the shipped model@profile contract under model
         // override authority. Isolated credential routing requires separate authority.
@@ -274,7 +285,11 @@ export function createRuntimeLlm(
           // Request-authorized profiles win, then the host/session binding. Only
           // an unbound call may fall back to the agent's configured selection.
           authProfileId:
-            executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
+            requiredAuthProfileId ??
+            executionProfile ??
+            requestedModelProfile ??
+            preferredProfile ??
+            modelProfile,
           operatorAuthority,
           assertCurrent,
         });
@@ -313,10 +328,12 @@ export function createRuntimeLlm(
         const preparation = await acquireSimpleCompletionModelForAgent({
           cfg,
           agentId,
-          modelRef: params.model,
+          modelRef: requiredAuthProfileId
+            ? `${resolvedModelRef}@${requiredAuthProfileId}`
+            : params.model,
           preferredProfile,
-          profileFailover: true,
-          ...(requestedModelProfile ? { bindAuthOwner: true } : {}),
+          profileFailover: !requiredAuthProfileId,
+          ...(requiredAuthProfileId || requestedModelProfile ? { bindAuthOwner: true } : {}),
           allowBundledStaticCatalogFallback: true,
           allowMissingApiKeyModes: ["aws-sdk"],
           skipAgentDiscovery: true,
@@ -378,7 +395,8 @@ export function createRuntimeLlm(
                       "Plugin LLM completion selected a credential with the wrong authentication mode.",
                     );
                   }
-                  if (requestedModelProfile && current.auth.profileId !== requestedModelProfile) {
+                  const exactProfile = requiredAuthProfileId ?? requestedModelProfile;
+                  if (exactProfile && current.auth.profileId !== exactProfile) {
                     throw completionError(
                       "LLM_COMPLETION_NOT_AUTHORIZED",
                       "Plugin LLM completion selected a different authentication profile.",

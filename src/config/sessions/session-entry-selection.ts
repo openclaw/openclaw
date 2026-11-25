@@ -113,7 +113,10 @@ export function inheritSessionSelection(
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
     ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
     ...(inheritAuthProfile && authProfileOverrideSource && parentEntry.authProfileOverride
-      ? { authProfileOverride: parentEntry.authProfileOverride }
+      ? {
+          authProfileOverride: parentEntry.authProfileOverride,
+          ...(parentEntry.authProfileOverrideRequired ? { authProfileOverrideRequired: true } : {}),
+        }
       : {}),
     ...(inheritAuthProfile && authProfileOverrideSource ? { authProfileOverrideSource } : {}),
   };

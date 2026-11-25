@@ -181,34 +181,51 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it("binds context-engine completions to the active session agent", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "agent:ada:session:abc",
-      authProfileId: "openai:configured",
-      purpose: "context-engine.after-turn",
-    });
+  it.each([false, true])(
+    "binds context-engine account selection (required=%s)",
+    async (required) => {
+      const prepared = createPreparedModel();
+      prepared.auth.profileId = "openai:configured";
+      hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(prepared);
+      const runtimeContext = resolveContextEngineCapabilities({
+        config: cfg,
+        sessionKey: "agent:ada:session:abc",
+        authProfileId: "openai:configured",
+        requiredAuthProfileId: required ? "openai:configured" : undefined,
+        purpose: "context-engine.after-turn",
+      });
 
-    const result = await runtimeContext.llm!.complete({
-      messages: [{ role: "user", content: "summarize" }],
-      purpose: "memory-maintenance",
-    });
+      const result = await runtimeContext.llm!.complete({
+        messages: [{ role: "user", content: "summarize" }],
+        purpose: "memory-maintenance",
+      });
 
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      cfg,
-      agentId: "ada",
-      preferredProfile: "openai:configured",
-      allowBundledStaticCatalogFallback: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-      skipAgentDiscovery: true,
-    });
-    expect(result.agentId).toBe("ada");
-    expectFields(requireRecord(result.audit, "audit"), {
-      caller: { kind: "context-engine", id: "context-engine.after-turn" },
-      purpose: "memory-maintenance",
-      sessionKey: "agent:ada:session:abc",
-    });
-  });
+      expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+        cfg,
+        agentId: "ada",
+        preferredProfile: "openai:configured",
+        profileFailover: !required,
+        ...(required ? { bindAuthOwner: true, modelRef: "openai/gpt-5.5@openai:configured" } : {}),
+        allowBundledStaticCatalogFallback: true,
+        allowMissingApiKeyModes: ["aws-sdk"],
+        skipAgentDiscovery: true,
+      });
+      if (required) {
+        prepared.auth.profileId = "openai:other";
+        hoisted.completeWithPreparedSimpleCompletionModel.mockClear();
+        await expect(
+          runtimeContext.llm!.complete({ messages: [{ role: "user", content: "summarize" }] }),
+        ).rejects.toThrow("different authentication profile");
+        expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      }
+      expect(result.agentId).toBe("ada");
+      expectFields(requireRecord(result.audit, "audit"), {
+        caller: { kind: "context-engine", id: "context-engine.after-turn" },
+        purpose: "memory-maintenance",
+        sessionKey: "agent:ada:session:abc",
+      });
+    },
+  );
 
   it.each([
     new PreparedModelRuntimeOwnerNotPublishedError(

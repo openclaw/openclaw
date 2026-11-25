@@ -1,2 +1,2 @@
-# #120185: shared account-lifecycle regressions distinguish same-profile reauthentication/reselection from explicit replacement.
-11
+# #120185: same-account lifecycle, inherited fork binding, and context-engine host-completion refusal regressions.
+36

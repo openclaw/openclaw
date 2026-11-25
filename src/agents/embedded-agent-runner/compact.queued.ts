@@ -539,6 +539,7 @@ async function compactEmbeddedAgentSessionImpl(
           sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
           explicitAgentId: contextEngineAgentId,
           authProfileId: preparedParams.authProfileId,
+          requiredAuthProfileId: preparedParams.requiredAuthProfileId,
           contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
           purpose: "context-engine.compaction",
         }),

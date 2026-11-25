@@ -36,6 +36,7 @@ function buildContextEngineMaintenanceRuntimeContext(
       sessionKey: params.sessionKey,
       explicitAgentId: params.contextEngineAgentId,
       authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
+      requiredAuthProfileId: normalizeOptionalString(params.runtimeContext?.requiredAuthProfileId),
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
       purpose: `context-engine.${params.reason}.maintenance`,
     }),

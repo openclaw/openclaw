@@ -454,6 +454,7 @@ export function buildAfterTurnRuntimeContext(params: {
       sessionKey: params.attempt.sessionKey,
       explicitAgentId: params.attempt.contextEngineAgentId,
       authProfileId: params.attempt.authProfileId,
+      requiredAuthProfileId: params.attempt.requiredAuthProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),
