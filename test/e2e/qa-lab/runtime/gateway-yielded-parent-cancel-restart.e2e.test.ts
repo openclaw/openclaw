@@ -1,5 +1,4 @@
-// Real-Gateway regression for #153271: stopping an ownerless yielded parent
-// must close its held child and stay terminal across restart.
+// Real-Gateway regression for #153271: Stop closes a yielded parent and child across restart.
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -99,7 +98,6 @@ async function startProofProvider() {
   const firstChildStarted = createDeferred();
   const firstChildClosed = createDeferred();
   const releaseFirstChild = createDeferred();
-  const requests: Array<{ kind: "parent" | "child" | "title"; afterCancel: boolean }> = [];
   const errors: unknown[] = [];
   let afterCancel = false;
   let childRequestCount = 0;
@@ -135,7 +133,6 @@ async function startProofProvider() {
         : body.model === "qa-yield-child"
           ? "child"
           : "parent";
-      requests.push({ kind, afterCancel });
       sequence += 1;
       const reply = (text: string) =>
         writeOpenAiResponsesText(response, {
@@ -212,7 +209,6 @@ async function startProofProvider() {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     errors,
-    requests,
     spawnCompleted: spawnCompleted.promise,
     firstChildStarted: firstChildStarted.promise,
     firstChildClosed: firstChildClosed.promise,
@@ -354,10 +350,15 @@ describe("yielded parent cancellation across Gateway restart", () => {
     expect(stop).toMatchObject({ ok: true, status: "aborted", abortedRunId: null });
     await provider.firstChildClosed;
 
-    const beforeRestartSessions = (await gateway.call("sessions.list", {
-      agentId: "qa",
-      limit: 100,
-    })) as SessionsListResult;
+    const listSessions = async () =>
+      (await gateway.call("sessions.list", { agentId: "qa", limit: 100 })) as SessionsListResult;
+    const beforeRestartSessions = await listSessions();
+    expect(
+      beforeRestartSessions.sessions.find((session) => session.key === PARENT_KEY),
+    ).toMatchObject({
+      lastRunId: parentRunId,
+      status: "killed",
+    });
     const cancelledChild = beforeRestartSessions.sessions.find(
       (session) => session.key === spawn.childSessionKey,
     );
@@ -365,54 +366,35 @@ describe("yielded parent cancellation across Gateway restart", () => {
 
     await gateway.restartAfterStateMutation(async () => {});
 
-    await transport.sendInbound({
+    const afterRestartSessions = await listSessions();
+    expect(
+      afterRestartSessions.sessions.find((session) => session.key === PARENT_KEY),
+    ).toMatchObject({
+      lastRunId: parentRunId,
+      status: "killed",
+    });
+    const retainedChild = afterRestartSessions.sessions.find(
+      (session) => session.key === spawn.childSessionKey,
+    );
+
+    const freshInbound = await transport.sendInbound({
       accountId: "default",
       conversation: CONVERSATION,
       senderId: CONVERSATION.id,
       text: FRESH_PROMPT,
     });
-    await state.waitFor({
-      kind: "message-text",
-      direction: "outbound",
-      textIncludes: FRESH_MARKER,
-      timeoutMs: 60_000,
-    });
+    await transport.waitForCompletedReply({ inbound: freshInbound, timeoutMs: 60_000 });
 
-    const afterRestartSessions = (await gateway.call("sessions.list", {
-      agentId: "qa",
-      limit: 100,
-    })) as SessionsListResult;
-    const retainedChild = afterRestartSessions.sessions.find(
-      (session) => session.key === spawn.childSessionKey,
-    );
     await gateway.stop();
     const outbound = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound" && !message.deleted);
-    console.log(
-      JSON.stringify({
-        phase: "gateway-yielded-parent-cancel-restart",
-        stop,
-        yielded,
-        cancelledChild,
-        retainedChild,
-        childRequestCount: provider.childRequestCount,
-        freshRequestCount: provider.freshRequestCount,
-        unexpectedWakeRequestCount: provider.unexpectedWakeRequestCount,
-        requests: provider.requests,
-        outbound: outbound.map((message) => message.text),
-      }),
-    );
     expect(provider.errors).toEqual([]);
     expect(provider.childRequestCount).toBe(1);
     expect(provider.freshRequestCount).toBe(1);
     expect(provider.unexpectedWakeRequestCount).toBe(0);
     expect(retainedChild).toMatchObject({ lastRunId: spawn.runId, status: "killed" });
-    expect(outbound.filter((message) => message.text.includes(FRESH_MARKER))).toHaveLength(1);
-    expect(
-      outbound.filter(
-        (message) => message.text.includes(CHILD_MARKER) || message.text.includes(WAKE_MARKER),
-      ),
-    ).toHaveLength(0);
+    expect(outbound).toMatchObject([{ replyToId: freshInbound.id, text: FRESH_MARKER }]);
+    expect(outbound).toHaveLength(1);
   }, 180_000);
 });
