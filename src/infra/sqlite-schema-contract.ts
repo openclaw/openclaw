@@ -4,6 +4,7 @@ import {
   readGeneratedSqliteFingerprint,
 } from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
+import { isCompatibleAdditiveColumnDefinition } from "./sqlite-additive-column.js";
 import {
   getSqlitePinnedReadSnapshot,
   runSqliteSchemaReadSnapshotSync,
@@ -674,18 +675,6 @@ function compareTableDefinitions(
     add("table-constraint-drift", tableName);
   }
   return issues;
-}
-
-const SQLITE_STRICT_DATATYPES = new Set(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]);
-
-function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
-  const name = readSqlToken(definition, 0);
-  const type = name ? readSqlToken(definition, name.end) : null;
-  return Boolean(
-    type?.keyword &&
-    SQLITE_STRICT_DATATYPES.has(type.keyword) &&
-    definition.slice(type.end).trim().length === 0,
-  );
 }
 
 function collectSqliteIndexContract(

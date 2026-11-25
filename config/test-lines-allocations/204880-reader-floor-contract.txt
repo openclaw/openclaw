@@ -1,7 +1,7 @@
-# Reader-floor contract #204880, measured against main b86dd69342:
-# 510 net test lines after consolidating 57 lines of setup and repeated assertions,
-# less the 400-line allowance. Approved by the maintainer after consolidation.
-# The excess proves SQLite state, SQLite agent and PostgreSQL admission; malformed
-# and raised floors; nullable versus constrained catalogs; transactional rollback;
-# warm-cache/invalidation boundaries, ownership-optional agent floors, and native snapshots.
-110
+# Reader-floor contract #204880, measured against main 8aaf3820112a:
+# 527 net test lines after consolidation, less the 400-line allowance.
+# Approved allocation 127: the requested real step-44 NULL-safe CHECK contract
+# and six non-additive negatives add 17 beyond the previous allocation of 110.
+# The excess proves three-engine admission, malformed/raised floors, catalogs,
+# atomic publication/rollback, warm-cache invalidation and optional ownership.
+127

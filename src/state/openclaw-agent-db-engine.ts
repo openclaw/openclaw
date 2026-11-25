@@ -65,6 +65,7 @@ import {
 import {
   AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
   AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  getAgentMemberAccessMinReader,
   withoutAgentPostgresMemberAccess,
 } from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
@@ -427,6 +428,9 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
     },
     {
       version: AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+      get minReader() {
+        return getAgentMemberAccessMinReader();
+      },
       fromSchema: {
         postgres: agentPostgresV43Sql,
         postgresVectorDecoderVersion: 2,
