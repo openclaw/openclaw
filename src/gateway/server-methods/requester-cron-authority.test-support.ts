@@ -151,7 +151,6 @@ export async function inRun<T>(
         admitted.managementEntitlement,
         admitted.isCurrent,
         undefined,
-        admitted.requesterOwner,
         admitted.callerScopedCreation,
       ),
       "admitted cron capability",

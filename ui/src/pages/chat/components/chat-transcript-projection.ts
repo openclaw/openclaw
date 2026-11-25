@@ -499,7 +499,11 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
   ]);
   transcript.entryAnimations.project(chatItems);
-  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
+  transcript.syncMessageRows(
+    messageRowKeysById,
+    transcriptMessageKeys,
+    search.open ? { query: search.query.trim(), empty: searchFiltering && isEmpty } : null,
+  );
   const contentRows: PlacedContentRow[] = [];
   const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
     contentRows.push({

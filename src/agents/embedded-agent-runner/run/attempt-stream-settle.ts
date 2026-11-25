@@ -362,7 +362,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
-  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  /** Hidden catalog entries that a direct call hydrates in this run (directory or on-demand). */
   getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;

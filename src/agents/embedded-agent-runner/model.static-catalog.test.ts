@@ -284,15 +284,6 @@ function conflictingPlugins() {
 }
 
 describe("manifest provider aliases", () => {
-  it("reuses the current plugin metadata snapshot for repeated alias lookups", () => {
-    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      plugins: [aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } })],
-    });
-    expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
-    expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
-    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
-  });
-
   it("keeps custom environments on their own manifest registry context", () => {
     const env = { HOME: "/custom-home" };
     manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });

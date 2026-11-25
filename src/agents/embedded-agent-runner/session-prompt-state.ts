@@ -145,7 +145,14 @@ export async function prepareSessionToolUsageRanking(params: {
   catalogIds: readonly string[];
   inherited?: ToolUsageRankingSnapshot;
   now: number;
-  readRankedIds: () => Promise<readonly string[]>;
+  /**
+   * Agent-wide learned order and the first time the agent offered each catalog tool.
+   * `sightings` carries this session's own first-seen time for every catalog tool.
+   */
+  readUsage: (sightings: Readonly<Record<string, number>>) => Promise<{
+    rankedIds: readonly string[];
+    firstSeen: Readonly<Record<string, number>>;
+  }>;
 }): Promise<ToolUsageRankingSnapshot | undefined> {
   const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
@@ -173,19 +180,19 @@ export async function prepareSessionToolUsageRanking(params: {
   if (!sameBoundary && params.enabled) {
     const inherited = !data && !historyId ? params.inherited : undefined;
     const allowed = new Set(params.catalogIds);
-    const orderedToolIds = (
-      inherited ? inherited.orderedToolIds : [...(await params.readRankedIds())]
-    ).filter((id) => allowed.has(id));
-    const firstSeen =
-      inherited?.newcomers ??
-      previous?.snapshot?.newcomers ??
-      params.state.persistedUsageRanking?.newcomers;
+    // Tools admitted by a catalog refresh keep their in-session sighting time.
+    const seen = previous?.snapshot?.newcomers ?? params.state.persistedUsageRanking?.newcomers;
+    const usage = inherited
+      ? { rankedIds: inherited.orderedToolIds, firstSeen: inherited.newcomers }
+      : await params.readUsage(
+          Object.fromEntries(params.catalogIds.map((id) => [id, seen?.[id] ?? params.now])),
+        );
     snapshot = {
       version: 1,
       at: inherited?.at ?? params.now,
-      orderedToolIds,
+      orderedToolIds: usage.rankedIds.filter((id) => allowed.has(id)),
       newcomers: Object.fromEntries(
-        params.catalogIds.map((id) => [id, firstSeen?.[id] ?? params.now]),
+        params.catalogIds.map((id) => [id, usage.firstSeen?.[id] ?? params.now]),
       ),
     };
   } else if (
@@ -244,6 +251,35 @@ function resolveSessionToolSurface(params: ToolSurfaceInput) {
   // A restored pin rides along with later combined checkpoints.
   params.state.toolSurface = params.state.pendingToolSurface ? params.state.toolSurface : known;
   return { known, historyId };
+}
+
+/** Tool names the series' current pin sends; on-demand tools among them stay direct. */
+export function readSessionPinnedToolNames(
+  params: Omit<ToolSurfaceInput, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    resolveSessionToolSurface({ ...params, tools: [] }).known?.tools?.map((t) => t.name),
+  );
+}
+
+/**
+ * Appends an on-demand tool, first called by name in this series, after the pinned definitions,
+ * so the provider tool list changes once, at the next turn. Compaction, `/new`, `/reset` and a
+ * model change start a new pin without it.
+ */
+export function promoteSessionTool(
+  state: EmbeddedSessionPromptState,
+  tool: Pick<AnyAgentTool, "name" | "description" | "parameters">,
+): boolean {
+  const surface = state.pendingToolSurface ?? state.toolSurface;
+  if (!surface?.tools || surface.tools.some((pin) => pin.name === tool.name)) {
+    return false;
+  }
+  state.pendingToolSurface = {
+    ...surface,
+    tools: [...surface.tools, describeSessionToolDefinition(tool)],
+  };
+  return true;
 }
 
 /** Async discovery cannot rewrite an established listing before a config/tool refresh. */
@@ -319,8 +355,10 @@ export function prepareSessionToolSurface(
       ? params.tools.filter(
           (tool) =>
             !previous.has(tool.name) ||
-            // Computer discovery supplies live facts, never a new session definition.
+            // Computer discovery supplies live facts, never a new session definition. A promoted
+            // on-demand tool keeps the definition its first direct call sent.
             (tool.name !== "computer" &&
+              tool.catalogMode !== "on-demand" &&
               !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters)),
         )
       : [];

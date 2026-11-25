@@ -161,3 +161,23 @@
   margin: 4px 0 8px;
   font-size: var(--control-ui-text-xs);
 }
+
+.subagent-list-name {
+  display: flex;
+  min-width: 0;
+  white-space: pre;
+}
+
+.subagent-list-name__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-list-name__tail {
+  flex: none;
+  max-width: 75%;
+  overflow: hidden;
+  direction: rtl;
+  unicode-bidi: plaintext;
+}

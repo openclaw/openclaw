@@ -59,13 +59,18 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     const event = readSessionChangedEvent(payload);
     const states = new Map(this.collaboration.sharingStates);
-    for (const cacheKey of states.keys()) {
+    for (const [cacheKey, current] of states) {
       const [agentId, sessionKey] = cacheKey.split("\0");
       if (event && !uiConversationMatches(state, sessionKey, event.key, event.agentId, agentId)) {
         continue;
       }
-      // Removing the request slot also fences reads started before the change.
-      states.delete(cacheKey);
+      // A fresh slot fences reads started before the change; the roster stays until its reload.
+      states.set(cacheKey, {
+        loading: false,
+        sessionId: current.sessionId,
+        result: current.result,
+        publicUrl: current.publicUrl,
+      });
       this.sessionSharingHydrationTargets.delete(cacheKey);
     }
     this.collaboration.sharingStates = states;
@@ -93,8 +98,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       return;
     }
     this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
+    // Only this generation's roster stays visible until its reload replaces it.
     const states = new Map(this.collaboration.sharingStates);
-    if (states.delete(cacheKey)) {
+    if (states.get(cacheKey)?.sessionId !== sessionId && states.delete(cacheKey)) {
       this.collaboration.sharingStates = states;
     }
     // Selecting a new generation under the same key must supersede an older
