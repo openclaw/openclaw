@@ -41,7 +41,7 @@ export function reportGatewayServiceConfigAudit(
   const sourceCheckoutWarning = layout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${layout.packageRootReal ?? layout.packageRoot ?? layout.entrypointReal ?? layout.entrypoint}.`,
-        `Run \`${formatCliCommand("openclaw gateway install --force")}\` from the intended package install to replace the gateway service definition.`,
+        `No action is needed if this is intentional. If you expected the service to use a different installation, run \`${formatCliCommand("openclaw gateway install --force")}\` from that installation.`,
       ].join("\n")
     : null;
   const sourceCheckoutWarningToShow = audit.issues.some(

@@ -738,8 +738,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
       await runRepair();
       configNote("resolves to a source checkout");
       configNote(
-        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
+        "No action is needed if this is intentional. If you expected the service to use a different installation, run `openclaw gateway install --force` from that installation.",
       );
+      expectNoNoteContaining("to replace the gateway service definition", "Gateway service config");
       expectNoNoteContaining("openclaw doctor --fix", "Gateway service config");
       expect(mocks.install).not.toHaveBeenCalled();
     });
