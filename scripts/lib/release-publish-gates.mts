@@ -142,9 +142,14 @@ export function evaluateReleasePublishGates(input: {
       ? "Runtime waiver and known-flaky inputs are no longer accepted."
       : "";
   try {
-    validateReleaseManifestAdvisoryJobs(manifest, {
-      waiverPolicy: readReleaseManifestWaivers(manifest, input.readWorkflowSource),
-    });
+    validateReleaseManifestAdvisoryJobs(
+      manifest,
+      // The successful publisher already applied this manifest's Q policy. Closeout must not
+      // re-judge published evidence under a later evaluator, which can retire grant shapes.
+      consumer === "stable-closeout"
+        ? { deferWaiverPolicy: true }
+        : { waiverPolicy: readReleaseManifestWaivers(manifest, input.readWorkflowSource) },
+    );
   } catch (error) {
     selectedLanesError ||= error instanceof Error ? error.message : String(error);
   }

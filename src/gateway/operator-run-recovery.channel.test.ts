@@ -13,6 +13,30 @@ import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-sour
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 
+it.each([
+  { role: "admin", identityScopes: ["operator.read"], expected: ["operator.read"] },
+  {
+    role: "member",
+    identityScopes: ["operator.admin"],
+    expected: ["operator.read", "operator.write"],
+  },
+] as const)("caps a linked channel sender with the $role role by both grants", (testCase) =>
+  withAdminIngress(async ({ admins, context, activatePolicy }) => {
+    const linked = expectDefined(admins[0], "linked sender");
+    setUserProfileRole(linked.profile.id, testCase.role);
+    await activatePolicy({
+      auth: { identityScopes: { "ada@example.test": [...testCase.identityScopes] } },
+    });
+    const turn = await context(linked.identity.senderId);
+    const authority = expectDefined(
+      prepareInternalGetReplyOptions(undefined, turn)?.operatorAuthority,
+      "verified channel authority",
+    );
+    expect(authority.profileId).toBe(linked.profile.id);
+    expect(authority.scopes).toEqual(testCase.expected);
+  }),
+);
+
 it.each(["unlink", "reassign"] as const)(
   "refuses persisted channel member recovery after %s",
   (change) =>

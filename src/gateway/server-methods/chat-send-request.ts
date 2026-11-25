@@ -214,8 +214,7 @@ export function normalizeChatSendRequest(params: {
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.fastAutoOnSeconds !== undefined ||
-      p.timeoutMs !== undefined ||
-      controlUiReconnectResume.resumeRequested)
+      p.timeoutMs !== undefined)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
     return reject(

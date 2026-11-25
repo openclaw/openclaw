@@ -9,6 +9,7 @@ import type {
   AgentTurnStartOwner,
   RequesterSettleWakeReplay,
 } from "./agent-turn/internal-facade.types.js";
+import type { PreparedSessionRun } from "./in-process-session-run.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -21,6 +22,8 @@ import type {
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 export type PrepareInProcessAgentExecutionOptions = {
+  /** Captured by the host from an authorized existing fork source; never a wire field. */
+  sessionRun?: PreparedSessionRun;
   agentId: string;
   pluginRuntimeOwnerId: string;
   resolveGatewayContext?: GatewayContextResolver;
