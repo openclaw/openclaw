@@ -106,6 +106,11 @@ final class RemindersService: RemindersServicing {
             from: dueDate)
         components.calendar = calendar
         components.timeZone = timeZone
+        let offset = timeZone.secondsFromGMT(for: dueDate)
+        if let reconstructed = components.date, timeZone.secondsFromGMT(for: reconstructed) != offset {
+            // Pin the offset when the named zone resolves a repeated wall time to its other occurrence.
+            components.timeZone = TimeZone(secondsFromGMT: offset)
+        }
         // EventKit requires a Gregorian due calendar and a matching start date on iOS.
         reminder.startDateComponents = components
         reminder.dueDateComponents = components
