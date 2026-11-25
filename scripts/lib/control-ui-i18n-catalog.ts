@@ -22,7 +22,6 @@ import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
-import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -162,7 +161,6 @@ const sourceFiles = [
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
-  "en-chat-failed-message-edit.ts",
   "en-chat-move-to-project.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
@@ -594,7 +592,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
-        ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
         workspaceConflict,

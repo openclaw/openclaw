@@ -34,8 +34,6 @@ export type ChatNoticeProps = {
       | "runWorking"
       | "onRetryRun"
       | "onStartNewSession"
-      | "failedMessageEditSource"
-      | "onFocusComposer"
       | "onDismissPendingInput"
     >;
 };
