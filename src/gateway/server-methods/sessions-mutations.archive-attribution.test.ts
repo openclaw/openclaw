@@ -55,11 +55,13 @@ const replyOperation = (key: string, sessionId = key) =>
     }),
     resetTriggered: false,
   });
-const organizationExpectation = {
+const organizationTarget = (key: string, expectedSessionId = key) => ({
+  key,
+  expectedSessionId,
   expectedSidebarRoot: false,
   expectedCategory: null,
   expectedArchived: false,
-};
+});
 const expectUnarchived = (key: string, operation: ReturnType<typeof replyOperation>) =>
   expect([readSession(key)?.archivedAt, operation.abortSignal.aborted]).toEqual([undefined, false]);
 const expectChanged = (responses: Parameters<RespondFn>[]) => {
@@ -175,10 +177,8 @@ it.each([
   const key = "agent:main:dashboard:archive-cas";
   const entry = { sessionId: "archive-cas", updatedAt: 1, lifecycleRevision: "unchanged" };
   const patch = {
-    key,
-    expectedSessionId: entry.sessionId,
+    ...organizationTarget(key, entry.sessionId),
     expectedLifecycleRevision: entry.lifecycleRevision,
-    ...organizationExpectation,
     archived: true,
   };
   const operation = replyOperation(key, entry.sessionId);
@@ -222,9 +222,7 @@ it.each([{ sidebarRoot: true }, { category: "Independent" }, { archivedAt: 42 }]
     await seedSession(key, { label: "Original", ...change });
     const before = readSession(key);
     const responses = await invokePatchSession({
-      key,
-      expectedSessionId: key,
-      ...organizationExpectation,
+      ...organizationTarget(key),
       label: "Must not overwrite",
     });
     expectChanged(responses);
@@ -326,11 +324,7 @@ it("keeps an inactive transcript eligible for cold storage after a guarded batch
 
   const responses = await invokePatchSession(
     {
-      targets: targets.map(({ sessionKey: key, sessionId: expectedSessionId }) => ({
-        key,
-        expectedSessionId,
-        ...organizationExpectation,
-      })),
+      targets: targets.map((target) => organizationTarget(target.sessionKey, target.sessionId)),
       patch: { archived: true },
     },
     client(),
@@ -353,11 +347,7 @@ it("returns per-target batch outcomes without acquiring independently archived r
   }
   const responses = await invokePatchSession(
     {
-      targets: keys.map((key) => ({
-        key,
-        expectedSessionId: key,
-        ...organizationExpectation,
-      })),
+      targets: keys.map((key) => organizationTarget(key)),
       patch: { archived: true },
     },
     client(),
