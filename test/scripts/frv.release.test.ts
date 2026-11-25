@@ -804,8 +804,6 @@ describe("publication status real CLI", () => {
                           childRole: "normalCi",
                           jobName: failedJob.name,
                           reason: "Synthetic joined status grant",
-                          evidence: { runId: "101", runAttempt: 1 },
-                          aggregates: [],
                         },
                       ]
                     : [],
@@ -2024,8 +2022,6 @@ describe("publication status real CLI", () => {
                   childRole: "normalCi",
                   jobName: "synthetic failure",
                   reason: "Synthetic Q status grant",
-                  aggregates: [],
-                  evidence: { runId: "101", runAttempt: 1 },
                 },
               ]
             : [],

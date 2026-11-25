@@ -63,13 +63,13 @@ import {
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "./ci-proof-test-inventory.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "./ci-proof-test-inventory.mts";
+} from "./ci-test-tier-policy.mts";
 import {
   readCompactGroupTimings,
   readRepoE2eFileTimings,
@@ -452,6 +452,18 @@ const DECLARED_BEHAVIOR_TESTS = [
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
   "src/cron/session-context-accounting.gateway.integration.test.ts",
 ];
+// Owed results are delivered by background exec completion in src/agents, past the two-import
+// walk: #204265 changed src/sessions/owed.ts with green PR CI while these tests went red on main.
+// A change here selects only this declared set, not its directory's importers.
+const OWED_RESULT_OWNERS = /^src\/sessions\/owed\.ts$/u;
+const OWED_RESULT_BEHAVIOR_TESTS = [
+  "src/agents/bash-process-durable.test.ts",
+  "src/agents/bash-tools.exec-notify.store-failure.test.ts",
+  "src/agents/bash-tools.exec-runtime.test.ts",
+  "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
+  "src/agents/bash-tools.notify-on-exit-ack.test.ts",
+  "src/agents/bash-tools.test.ts",
+];
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -518,13 +530,18 @@ export function resolveChangedNodeTestTargets(
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   // A test-only edit runs itself; only owner source selects the declared behavior set.
-  const behaviorOwners = paths.filter(
-    (file) => TRANSITIVE_IMPORTER_OWNERS.test(file) && !isTestFileTarget(file),
-  );
-  const declaredBehavior = aggressive && behaviorOwners.length > 0 ? DECLARED_BEHAVIOR_TESTS : [];
+  const sourcePaths = paths.filter((file) => !isTestFileTarget(file));
+  const behaviorOwners = sourcePaths.filter((file) => TRANSITIVE_IMPORTER_OWNERS.test(file));
+  const owedOwners = sourcePaths.filter((file) => OWED_RESULT_OWNERS.test(file));
+  const declaredBehavior = aggressive
+    ? [
+        ...(behaviorOwners.length > 0 ? DECLARED_BEHAVIOR_TESTS : []),
+        ...(owedOwners.length > 0 ? OWED_RESULT_BEHAVIOR_TESTS : []),
+      ]
+    : [];
   recordSelection({
     rule: "declared-behavior",
-    input: behaviorOwners.join(", "),
+    input: [...behaviorOwners, ...owedOwners].join(", "),
     targets: declaredBehavior,
   });
   const owners = [

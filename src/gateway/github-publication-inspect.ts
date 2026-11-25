@@ -154,7 +154,9 @@ export async function inspectOwnGitHubPullRequest(params: {
   assertRequester();
   const actor = params.requester.snapshot.actor;
   if (!authority.operatorWrite && actor.kind !== "operator") {
-    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    throw new Error(
+      "This conversation has no Gateway operator identity, so it cannot inspect PRs. A Gateway owner adds this sender to commands.ownerAllowFrom; anyone else asks an admin to link this channel account to their Gateway profile, then retries.",
+    );
   }
   // Updating an imported PR must not create guest author eligibility.
   const published = await readSharedGitHubPublication(params.session, {

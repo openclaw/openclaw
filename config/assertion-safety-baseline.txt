@@ -973,7 +973,6 @@ packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
 packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
-packages/net-policy/src/ip.ts	1
 packages/normalization-core/src/error-coercion.ts	1
 packages/normalization-core/src/json-schema.ts	1
 packages/normalization-core/src/promise-like.ts	1
@@ -2334,7 +2333,6 @@ ui/src/pages/chat/input-history.ts	1
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	1
