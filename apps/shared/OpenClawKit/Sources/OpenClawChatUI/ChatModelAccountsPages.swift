@@ -224,7 +224,11 @@ private struct ChatModelAccountSections: View {
             self.facts
         }
         if let step = self.runningStep {
-            ChatModelSignInStepSection(model: self.model, step: step, onNeedsRoom: self.onNeedsRoom)
+            ChatModelSignInStepSection(
+                model: self.model,
+                step: step,
+                providerName: self.account.name,
+                onNeedsRoom: self.onNeedsRoom)
         } else if !self.account.options.isEmpty, !self.account.isSignedIn || self.account.notice != nil {
             self.options
         } else if !self.account.isSignedIn {
@@ -297,9 +301,8 @@ private struct ChatModelAccountSections: View {
                 .accessibilityIdentifier("model-auth-option-\(option.id)")
             }
         } header: {
-            if self.account.isSignedIn {
-                Text(ChatModelAccountsCopy.signInAgain).font(OpenClawChatTypography.settingsSectionHeader)
-            }
+            Text(self.account.isSignedIn ? ChatModelAccountsCopy.signInAgain : ChatModelAccountsCopy.signInWith)
+                .font(OpenClawChatTypography.settingsSectionHeader)
         } footer: {
             if let problem, let attempt {
                 ChatModelSignInProblem(text: problem) {
@@ -360,6 +363,7 @@ private struct ChatModelAccountSections: View {
 private struct ChatModelSignInStepSection: View {
     let model: ChatModelSignInModel
     let step: WizardStep
+    let providerName: String
     let onNeedsRoom: () -> Void
     @FocusState private var fieldFocused: Bool
 
@@ -404,6 +408,8 @@ private struct ChatModelSignInStepSection: View {
             ChatModelSignInButtonRow(
                 title: ChatModelAccountsCopy.continueTitle,
                 isBusy: self.model.busy,
+                // While the server waits on the provider, Continue's box says so; it never grows for it.
+                busyTitle: answers ? nil : ChatModelAccountsCopy.waiting(self.providerName),
                 id: "model-auth-continue")
             {
                 await self.model.answer()
@@ -496,6 +502,8 @@ enum ChatModelSignInMetrics {
 private struct ChatModelSignInButtonRow: View {
     let title: String
     let isBusy: Bool
+    /// Said next to the spinner when the wait is someone else's, such as the provider's.
+    var busyTitle: String?
     let id: String
     let action: () async -> Void
 
@@ -508,12 +516,20 @@ private struct ChatModelSignInButtonRow: View {
                     .font(OpenClawChatTypography.settingsBody)
                     .opacity(self.isBusy ? 0 : 1)
                 if self.isBusy {
-                    ProgressView()
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        if let busyTitle = self.busyTitle {
+                            Text(verbatim: busyTitle)
+                                .font(OpenClawChatTypography.settingsBody)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .accessibilityLabel(Text(self.title))
+        .accessibilityLabel(Text(verbatim: self.isBusy ? self.busyTitle ?? self.title : self.title))
         .accessibilityValue(self.isBusy ? Text(ChatModelAccountsCopy.inProgress) : Text(verbatim: ""))
         .accessibilityIdentifier(self.id)
     }
@@ -647,6 +663,14 @@ enum ChatModelAccountsCopy {
 
     static var inProgress: String {
         String(localized: "In progress")
+    }
+
+    static var signInWith: String {
+        String(localized: "Sign in with")
+    }
+
+    static func waiting(_ provider: String) -> String {
+        String(format: String(localized: "Waiting for %@…"), provider)
     }
 
     static var unsupported: String {
