@@ -2377,7 +2377,7 @@
   align-self: center;
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon {
   flex: 0 0 36px;
   border: 0;
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
@@ -2385,7 +2385,7 @@
   color: var(--muted-strong);
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon svg {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon svg {
   width: 16px;
   height: 16px;
 }

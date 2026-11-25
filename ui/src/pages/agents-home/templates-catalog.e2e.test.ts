@@ -574,69 +574,93 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await personality.getByText("Short excerpt.", { exact: true }).waitFor();
   });
 
-  it("opens automation instructions from the template row and describes the schedule in both views", async () => {
-    const { page, gateway } = await fixture(
-      { width: 1440, height: 900, timezoneId: "America/Los_Angeles" },
-      undefined,
-      undefined,
-      false,
-      "dark",
-    );
-    await gateway.setMethodResponse("templates.catalog.detail", {
-      detail: {
-        ...workflowOperator,
-        version: "1.2.0",
-        agentId: "workflow-operator",
-        contents: {
-          instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
-          skills: [],
-          integrations: [],
-          automations: weeklyAutomations,
+  it.each([viewports[0], viewports[3]])(
+    "opens automation instructions from catalog and preview rows at $name width",
+    async (viewport) => {
+      const { page, gateway } = await fixture(
+        { ...viewport, timezoneId: "America/Los_Angeles" },
+        undefined,
+        undefined,
+        false,
+        "dark",
+      );
+      const longMessage = weeklyAutomations[1]!.message + "\n\n" + "reference_".repeat(80);
+      await gateway.setMethodResponse("templates.catalog.detail", {
+        detail: {
+          ...workflowOperator,
+          version: "1.2.0",
+          agentId: "workflow-operator",
+          contents: {
+            instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
+            skills: [],
+            integrations: [],
+            automations: [
+              weeklyAutomations[0],
+              { ...weeklyAutomations[1], enabled: true, message: longMessage },
+            ],
+          },
         },
-      },
-    });
-    const weeklySchedule = "Monday at 9:00 AM · America/Los_Angeles · Disabled";
-    const detail = await openDetail(page);
-    expect((await gateway.getRequests("connect")).at(-1)).toMatchObject({
-      params: { client: { timeZone: "America/Los_Angeles" } },
-    });
-    const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    const row = automations.locator("summary").filter({ hasText: "Weekly brief" });
-    await row.getByText(weeklySchedule, { exact: true }).waitFor();
-    await capture(page, "paused-automation-detail", automations);
-    await row.click();
-    const prompt = automations.getByText(
-      "Summarize last week's work. List anything still waiting on a decision.",
-      { exact: true },
-    );
-    await prompt.waitFor();
-    expect(await page.getByRole("dialog").count()).toBe(0);
-    const title = await row.getByText("Weekly brief", { exact: true }).boundingBox();
-    const schedule = await row.getByText(weeklySchedule, { exact: true }).boundingBox();
-    expect(title).not.toBeNull();
-    expect(schedule?.x).toBe(title!.x);
-    await capture(page, "paused-automation-inline", automations);
-    await row.click();
-    await prompt.waitFor({ state: "hidden" });
-    const midweek = automations.locator("summary").filter({ hasText: "Midweek nudge" });
-    await midweek
-      .getByText("Wednesday at 9:00 PM · America/Los_Angeles · Disabled", { exact: true })
-      .waitFor();
-    await midweek.click();
-    await automations
-      .getByText("Remind me of anything due before Friday.", { exact: true })
-      .waitFor();
-    await page.goto(`${server.baseUrl}chat/main`);
-    await page.locator("a.markdown-template-link").first().click();
-    const shell = page.getByRole("dialog", { name: "Template details", exact: true });
-    await shell.getByRole("button", { name: /Automations/ }).click();
-    const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
-    await previewRow.getByText(weeklySchedule, { exact: true }).waitFor();
-    await previewRow.click();
-    await shell.getByText(weeklySchedule, { exact: true }).waitFor();
-    await capture(page, "paused-automation-preview", shell);
-    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
-  });
+      });
+      const weekly = weeklyAutomations[0]!;
+      const weeklySchedule = "Monday at 9:00 AM · America/Los_Angeles · Disabled";
+      const detail = await openDetail(page);
+      expect((await gateway.getRequests("connect")).at(-1)).toMatchObject({
+        params: { client: { timeZone: "America/Los_Angeles" } },
+      });
+      const row = detail.getByRole("button", { name: /Weekly brief/ });
+      const dialog = page.getByRole("dialog", { name: weekly.name, exact: true });
+      const close = dialog.getByRole("button", { name: "Close", exact: true });
+      const checkDialog = async () => {
+        await dialog.getByRole("heading", { name: weekly.name, exact: true }).waitFor();
+        await dialog.getByText(weeklySchedule, { exact: true }).waitFor();
+        expect(await dialog.locator(".template-automation-message").textContent()).toBe(
+          weekly.message,
+        );
+        expect(await close.count()).toBe(1);
+        expect(await dialog.evaluate((element) => element.matches(":focus-within"))).toBe(true);
+        expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+      };
+      await row.getByText(weeklySchedule, { exact: true }).waitFor();
+      await row.press("Enter");
+      await checkDialog();
+      await capture(page, `automation-dialog-${viewport.name}`, dialog);
+      await page.keyboard.press("Tab");
+      expect(await close.evaluate((element) => element.matches(":focus"))).toBe(true);
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      expect(await row.evaluate((element) => element.matches(":focus"))).toBe(true);
+      const midweek = detail.getByRole("button", { name: /Midweek nudge/ });
+      await midweek
+        .getByText("Wednesday at 9:00 PM · America/Los_Angeles · Enabled", { exact: true })
+        .waitFor();
+      await midweek.click();
+      const second = page.getByRole("dialog", { name: "Midweek nudge", exact: true });
+      const message = second.locator(".template-automation-message");
+      expect(await message.textContent()).toBe(longMessage);
+      expect(await message.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      await second.getByRole("button", { name: "Close", exact: true }).click();
+      await second.waitFor({ state: "hidden" });
+      expect(await midweek.evaluate((element) => element.matches(":focus"))).toBe(true);
+
+      await page.goto(`${server.baseUrl}chat/main`);
+      await page.locator("a.markdown-template-link").first().click();
+      const shell = page.getByRole("dialog", { name: "Template details", exact: true });
+      await shell.getByRole("button", { name: /Automations/ }).click();
+      const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
+      await previewRow.getByText(weeklySchedule, { exact: true }).waitFor();
+      await previewRow.click();
+      await checkDialog();
+      await capture(page, `automation-preview-${viewport.name}`, dialog);
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      expect(await previewRow.evaluate((element) => element.matches(":focus"))).toBe(true);
+      expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+    },
+  );
 
   it("keeps the inline preview shell stable through category and file navigation", async () => {
     const { page, gateway } = await fixture();

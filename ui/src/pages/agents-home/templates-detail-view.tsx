@@ -18,7 +18,7 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
+import { createTemplateAutomationDialog } from "./template-automation-dialog.tsx";
 import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/sidebar-markdown.css";
@@ -193,7 +193,7 @@ function TemplatePersonality(props: {
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const contents = createMemo(() => props.view.readDetail()!.contents);
-  const automationSummary = createTemplateAutomationSummary();
+  const automation = createTemplateAutomationDialog();
   // SOUL.md reads as the Template's personality; the page lists no other workspace files.
   const soul = createMemo(() =>
     contents().instructions.find((file) => file.name === "SOUL.md" && file.excerpt),
@@ -274,14 +274,14 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: automationSummary(item),
-          // The prompt opens in place under its row.
-          details: <p class="template-automation-message">{item.message}</p>,
+          description: automation.summary(item),
+          onOpen: () => automation.open(item),
         })),
         () => (
           <Icon name="clock" />
         ),
       )}
+      <automation.Dialog />
     </>
   );
 }
