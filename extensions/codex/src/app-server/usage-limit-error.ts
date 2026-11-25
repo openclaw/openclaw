@@ -18,6 +18,7 @@ import {
 } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  readCodexRateLimitReachedType,
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
@@ -86,12 +87,14 @@ type CodexUsageLimitErrorResult = {
 };
 
 // HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
+// `code` is Codex's typed rateLimitReachedType; the OpenAI provider classifies it.
 export class CodexUsageLimitPromptError extends Error {
   readonly status = 429;
 
   constructor(
     message: string,
     readonly nativeMessage?: string | null,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -103,7 +106,11 @@ export function resolveCodexPromptError(
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
-    return new CodexUsageLimitPromptError(usageLimitMessage, source.message);
+    return new CodexUsageLimitPromptError(
+      usageLimitMessage,
+      source.message,
+      readCodexRateLimitReachedType(source.rateLimits),
+    );
   }
   // Native retry exhaustion is not a permanent model/configuration failure.
   // Preserve the provider facts before terminal projection drops the native envelope.
@@ -324,7 +331,12 @@ async function refreshCodexUsageLimitError(params: {
   return message
     ? {
         message,
-        promptError: new CodexUsageLimitPromptError(message, params.source.message),
+        promptError: new CodexUsageLimitPromptError(
+          message,
+          params.source.message,
+          readCodexRateLimitReachedType(params.source.rateLimits) ??
+            readCodexRateLimitReachedType(rateLimits),
+        ),
         ...(rateLimits || params.source.rateLimitsTrustedForProfile
           ? { rateLimitsForProfile: rateLimits || params.source.rateLimits }
           : {}),
