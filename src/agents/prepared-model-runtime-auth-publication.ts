@@ -1,6 +1,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import type { RuntimeAuthProfileStoreMutation } from "./auth-profiles/runtime-snapshot-selection.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
@@ -15,18 +16,14 @@ import {
   prepareModelRuntimeOwner,
   resolveConfiguredOwner,
 } from "./prepared-model-runtime.owner.js";
+import { deferCommittedProviderCatalogRefresh } from "./prepared-model-runtime.refresh-scope.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeReplacementGateId,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 
-export type PreparedModelRuntimeAuthMutation = {
-  agentDir?: string;
-  affectsInheritedStores: boolean;
-  profileSetChanged: boolean;
-  availabilityOnly?: boolean;
-};
+export type PreparedModelRuntimeAuthMutation = RuntimeAuthProfileStoreMutation;
 
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
@@ -507,6 +504,9 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
     if (previous && previous !== owner) {
       retirePreparedModelRuntimeGeneration(previous);
     }
+  }
+  if (event.snapshotsSettled) {
+    deferCommittedProviderCatalogRefresh(invalidatedOwners, event.snapshotsSettled);
   }
   return { invalidatedOwners, invalidatedConfiguredAgentIds };
 }

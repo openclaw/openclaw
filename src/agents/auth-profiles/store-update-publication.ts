@@ -4,6 +4,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
 import { fenceAuthProfileAuthorizationWrite } from "./authorization-observation.js";
@@ -189,6 +190,10 @@ export async function publishAuthProfileStoreUpdate(
     ...(current ? [current] : []),
     ...listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner, mutation),
   ];
+  // Credential invalidation is immediate; automatic discovery can wait for the
+  // derived snapshots from this same committed write.
+  const snapshotsSettled = !installed && entries.length > 0 ? createDeferredCore() : undefined;
+  using _ = snapshotsSettled ? { [Symbol.dispose]: snapshotsSettled.resolve } : undefined;
   // A credential-only publication must not advance a derived snapshot while
   // retaining state that this committed update has not reconciled yet.
   if (mutation.stateChanged && !mutation.availabilityOnly) {
@@ -206,7 +211,7 @@ export async function publishAuthProfileStoreUpdate(
       mutation,
       owner,
       undefined,
-      { store: currentStore, env: owner.env },
+      { store: currentStore, env: owner.env, snapshotsSettled: snapshotsSettled?.promise },
     );
   }
   const sharedRevision = recordedRevision;

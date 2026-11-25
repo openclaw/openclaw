@@ -390,6 +390,13 @@ export function runtimeAuthMetadataState(
   };
 }
 
+export function authProfilesChanged(
+  previous: RuntimeAuthProfileStore | undefined,
+  next: RuntimeAuthProfileStore | undefined,
+): boolean {
+  return !isDeepStrictEqual(previous?.profiles ?? {}, next?.profiles ?? {});
+}
+
 /** Composed ownership and catalog facts must match before a mutation can preserve plugins. */
 export function classifyRuntimeAuthProfileSnapshotChange(
   previous:

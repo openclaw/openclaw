@@ -26,12 +26,40 @@ import type {
 
 const CATALOG_RECOVERY_DEMAND_COOLDOWN_MS = 5_000;
 const log = createSubsystemLogger("agents/prepared-model-runtime");
+const pendingCatalogRefresh = new WeakMap<PreparedModelRuntimeOwner, Promise<unknown>>();
+
+export function deferCommittedProviderCatalogRefresh(
+  owners: readonly PreparedModelRuntimeOwner[],
+  snapshotsSettled: Promise<void>,
+): void {
+  for (const owner of owners) {
+    if (owner.provenance !== "configured") {
+      continue;
+    }
+    const previous = pendingCatalogRefresh.get(owner);
+    const pending = previous ? Promise.all([previous, snapshotsSettled]) : snapshotsSettled;
+    pendingCatalogRefresh.set(owner, pending);
+    void runInDetachedAsyncContext(() =>
+      pending.then(() => {
+        if (pendingCatalogRefresh.get(owner) === pending) {
+          pendingCatalogRefresh.delete(owner);
+          refreshCommittedProviderCatalogs([owner]);
+        }
+      }),
+    );
+  }
+}
 
 export function refreshCommittedProviderCatalogs(
   owners: Iterable<PreparedModelRuntimeOwner>,
 ): void {
   for (const owner of owners) {
-    if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
+    if (
+      owner.provenance !== "configured" ||
+      owner.pending ||
+      owner.needsRefresh ||
+      pendingCatalogRefresh.has(owner)
+    ) {
       continue;
     }
     owner.catalogRecovery = undefined;

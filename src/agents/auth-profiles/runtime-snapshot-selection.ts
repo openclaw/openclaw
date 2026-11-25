@@ -28,6 +28,20 @@ export type OwnedRuntimeSnapshot = {
   legacyCandidates?: RuntimeAuthProfileLegacyCandidates;
 };
 
+export type RuntimeAuthProfileStoreMutation = {
+  agentDir?: string;
+  affectsInheritedStores: boolean;
+  profileSetChanged: boolean;
+  availabilityOnly?: boolean;
+  snapshotsSettled?: Promise<void>;
+};
+
+export type PersistedAuthProfileStoreFacts = {
+  store: AuthProfileStore | null;
+  env: NodeJS.ProcessEnv;
+  snapshotsSettled?: Promise<void>;
+};
+
 export type SharedAuthProfileStoreMutation = {
   credentialsChanged: boolean;
   profileSetChanged?: boolean;

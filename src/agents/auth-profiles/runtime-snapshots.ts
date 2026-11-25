@@ -32,6 +32,7 @@ import {
   runtimeAuthSharedOwnerRebound,
   resolveRuntimeAuthSharedOwnerPath,
   classifyRuntimeAuthProfileSnapshotChange,
+  authProfilesChanged,
   type RuntimeAuthSharedOwner,
   type RuntimeAuthProfileLegacyCandidates,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
@@ -42,6 +43,8 @@ import {
   prepareRuntimeAuthProfileSharedOwnerHandoff,
   sharedMutationAffectsSnapshot,
   type OwnedRuntimeSnapshot,
+  type PersistedAuthProfileStoreFacts,
+  type RuntimeAuthProfileStoreMutation,
   type SharedAuthProfileStoreMutation,
 } from "./runtime-snapshot-selection.js";
 import { registerFreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
@@ -71,13 +74,9 @@ export const {
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
 );
 
-type RuntimeAuthProfileStoreMutationListener = (event: {
-  agentDir?: string;
-  affectsInheritedStores: boolean;
-  profileSetChanged: boolean;
-  availabilityOnly: boolean;
-}) => void;
-const runtimeAuthStoreMutationListeners = new Set<RuntimeAuthProfileStoreMutationListener>();
+const runtimeAuthStoreMutationListeners = new Set<
+  (event: RuntimeAuthProfileStoreMutation) => void
+>();
 let pendingSnapshotNotifications: Array<() => void> | undefined;
 let runtimeAuthStoreCredentialsRevision = 0;
 let runtimeAuthStoreSnapshotsRevision = 0;
@@ -245,12 +244,14 @@ function notifyRuntimeAuthStoreMutation(
   agentDir?: string,
   profileSetChanged = false,
   availabilityOnly = false,
+  snapshotsSettled?: Promise<void>,
 ): void {
   const event = {
     ...(agentDir ? { agentDir } : {}),
     affectsInheritedStores: agentDir === undefined,
     profileSetChanged,
     availabilityOnly,
+    ...(snapshotsSettled ? { snapshotsSettled } : {}),
   };
   const notify = () => {
     for (const listener of runtimeAuthStoreMutationListeners) {
@@ -262,13 +263,6 @@ function notifyRuntimeAuthStoreMutation(
   } else {
     notify();
   }
-}
-
-function authProfilesChanged(
-  previous: RuntimeAuthProfileStore | undefined,
-  next: RuntimeAuthProfileStore | undefined,
-): boolean {
-  return !isDeepStrictEqual(previous?.profiles ?? {}, next?.profiles ?? {});
 }
 
 function authProfileSetChanged(
@@ -283,7 +277,7 @@ function authProfileSetChanged(
 
 /** Observes credential, ownership, and availability changes, excluding usage bookkeeping. */
 export function registerRuntimeAuthProfileStoreMutationListener(
-  listener: RuntimeAuthProfileStoreMutationListener,
+  listener: (event: RuntimeAuthProfileStoreMutation) => void,
 ): () => void {
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
@@ -604,7 +598,7 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   mutation: SharedAuthProfileStoreMutation,
   owner?: AuthProfileStoreOwner,
   prepared?: ReadonlyMap<string, OwnedRuntimeSnapshot>,
-  persisted?: { store: AuthProfileStore | null; env: NodeJS.ProcessEnv },
+  persisted?: PersistedAuthProfileStoreFacts,
 ): number {
   const ownerKey = owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
   noteAuthProfileFileWrite(ownerKey);
@@ -652,7 +646,12 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
     }
   }
   if (mutation.credentialsChanged || mutation.profileSetChanged) {
-    notifyRuntimeAuthStoreMutation(agentDir, mutation.profileSetChanged === true);
+    notifyRuntimeAuthStoreMutation(
+      agentDir,
+      mutation.profileSetChanged === true,
+      false,
+      persisted?.snapshotsSettled,
+    );
   }
   return revision;
 }
