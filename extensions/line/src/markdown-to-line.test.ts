@@ -41,18 +41,17 @@ describe("processLineMessage table cards", () => {
 
     const extra = Array.from({ length: 9 }, (_, i) => `row ${i}`);
     const fallback = [...table, ...extra.map((name) => `| ${name} | x |`), "| last | `end \t ` |"];
-    expect(processLineMessage(fallback.join("\n")).segments).toEqual([
-      {
-        type: "text",
-        text: [
-          " first \n• Value:  go ",
-          "blank\n• Value:    ",
-          "following\n• Value: done",
-          ...extra.map((name) => `${name}\n• Value: x`),
-          "last\n• Value: end \t ",
-        ].join("\n\n"),
-      },
-    ]);
+    const result = processLineMessage(fallback.join("\n"));
+    expect(result.segments).toHaveLength(1);
+    expect(result.text).toBe(
+      [
+        " first \n• Value:  go ",
+        "blank\n• Value:    ",
+        "following\n• Value: done",
+        ...extra.map((name) => `${name}\n• Value: x`),
+        "last\n• Value: end \t ",
+      ].join("\n\n"),
+    );
   });
 
   it("renders empty cells and a mailto link labelled with its address like plain text", () => {

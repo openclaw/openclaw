@@ -1,5 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import {
+  chunkTextRanges,
   markdownToIRWithMeta,
   stripMarkdown,
   type MarkdownIR,
@@ -17,7 +18,55 @@ type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
 type FlexSpan = messagingApi.FlexSpan;
 
-type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
+type LineTextPart = { text: string; table?: boolean };
+type LineTextSegment = { type: "text"; text: string; parts?: LineTextPart[] };
+type LineMessageSegment = LineTextSegment | { type: "flex"; message: FlexMessage };
+
+/** Prose uses LINE's Markdown chunker. A projected table needs contiguous, lossless slices. */
+export function chunkLineText(
+  segment: LineTextSegment,
+  limit: number,
+  chunkMarkdown: (text: string, limit: number) => string[],
+): Array<{ text: string; pushText?: string }> {
+  if (!segment.parts) {
+    return chunkMarkdown(segment.text, limit).map((text) => ({ text }));
+  }
+  const chunks: Array<{ text: string; pushText?: string }> = [];
+  let text = "";
+  let firstTable = Infinity;
+  let lastTable = 0;
+  const flush = () => {
+    // The raw push sender trims prose. Limit that trim to bytes outside the prepared table.
+    const start = Math.min(text.length - text.trimStart().length, firstTable);
+    const end = Math.max(text.trimEnd().length, lastTable);
+    const pushText = text.slice(start, end);
+    if (pushText) {
+      chunks.push(pushText === text.trim() ? { text } : { text, pushText });
+    }
+    text = "";
+    firstTable = Infinity;
+    lastTable = 0;
+  };
+  for (const part of segment.parts) {
+    const pieces = part.table
+      ? chunkTextRanges(part.text, { limit, mode: "preferred" }).map(({ start, end }) =>
+          part.text.slice(start, end),
+        )
+      : chunkMarkdown(part.text, limit);
+    for (const [index, piece] of pieces.entries()) {
+      if ((!part.table && index > 0) || (limit > 0 && text.length + piece.length > limit)) {
+        flush();
+      }
+      if (part.table) {
+        firstTable = Math.min(firstTable, text.length);
+        lastTable = text.length + piece.length;
+      }
+      text += piece;
+    }
+  }
+  flush();
+  return chunks;
+}
 
 const LINE_MARKDOWN_OPTIONS = {
   assistantTranscriptRoleHeaders: true,
@@ -40,7 +89,7 @@ function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block
 
 type PlainTextInsertion =
   | { position: number; text: string }
-  | { position: number; tableText: string }
+  | { position: number; tableText: string; preserveTableSpaces: boolean }
   | { position: number; message: FlexMessage };
 
 function rangesOverlap(
@@ -128,14 +177,18 @@ function projectPlainText(
   );
 
   let output = "";
-  let throughLastTable = "";
+  let parts: LineTextPart[] = [];
   const flushText = () => {
-    const text = throughLastTable ? throughLastTable + output.trimEnd() : output.trim();
+    const tail = parts.length ? output.trimEnd() : output.trim();
+    if (parts.length && tail) {
+      parts.push({ text: tail });
+    }
+    const text = parts.length ? parts.map((part) => part.text).join("") : tail;
     if (text) {
-      onSegment?.({ type: "text", text });
+      onSegment?.({ type: "text", text, ...(parts.some((part) => part.table) ? { parts } : {}) });
     }
     output = "";
-    throughLastTable = "";
+    parts = [];
   };
   let cursor = 0;
   let insertionIndex = 0;
@@ -152,8 +205,13 @@ function projectPlainText(
         } else if ("tableText" in insertion) {
           // Trim surrounding layout without trimming the first or last cell of a table.
           output += "\n\n";
-          throughLastTable +=
-            (throughLastTable ? output : output.trimStart()) + insertion.tableText;
+          const preceding = parts.length ? output : output.trimStart();
+          if (preceding) {
+            parts.push({ text: preceding });
+          }
+          if (insertion.tableText) {
+            parts.push({ text: insertion.tableText, table: insertion.preserveTableSpaces });
+          }
           output = "\n\n";
         } else if (onSegment) {
           flushText();
@@ -375,6 +433,11 @@ export function processLineMessage(text: string): LineMessageSegment[] {
   for (const table of tables) {
     const bubble = convertTableToFlexBubble(table);
     if (!bubble || !fitsLineFlexBubble(bubble)) {
+      const hasPaddedCode = (cell: MarkdownTableCell) =>
+        cell.styles.some(
+          ({ style, start, end }) =>
+            style === "code" && /^\s|\s$/u.test(cell.text.slice(start, end)),
+        );
       const markdownCell = (cell: MarkdownTableCell) =>
         projectPlainText(cell)
           .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
@@ -395,6 +458,9 @@ export function processLineMessage(text: string): LineMessageSegment[] {
       plainTextInsertions.push({
         position: table.placeholderOffset,
         tableText: projectPlainText(parseLineMarkdown(markdown, "bullets").ir),
+        preserveTableSpaces:
+          table.headerCells.some(hasPaddedCode) ||
+          table.rowCells.some((row) => row.some(hasPaddedCode)),
       });
       continue;
     }
