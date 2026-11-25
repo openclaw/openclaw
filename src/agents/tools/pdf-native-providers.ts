@@ -11,11 +11,13 @@ import {
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import "../../llm/ai-transport-host.js";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import type { Model } from "../../llm/types.js";
 import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../../media-understanding/shared.js";
+import { assertProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -34,6 +36,7 @@ type NativePdfProviderRequestConfig = {
 };
 
 type NativePdfAnalysisParams = {
+  model?: Model;
   apiKey: string;
   modelId: string;
   prompt: string;
@@ -44,6 +47,7 @@ type NativePdfAnalysisParams = {
 };
 
 type NativePdfJsonRequest = {
+  model?: Model;
   provider: string;
   api: string;
   label: string;
@@ -90,6 +94,7 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
+    beforeRequest: () => assertProviderAuthAuthority(params.model),
     allowPrivateNetwork,
     ssrfPolicy: resolveProviderTransportSsrFPolicy({
       baseUrl,
@@ -166,6 +171,7 @@ export async function anthropicAnalyzePdf(
   const requestHeaders = identity?.headers ?? Object.fromEntries(headers);
 
   const json = await postNativePdfJson({
+    model: params.model,
     provider: "anthropic",
     api: "anthropic-messages",
     label: "Anthropic",
@@ -230,6 +236,7 @@ export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise
     },
   }) ?? { baseUrl: params.baseUrl };
   const json = await postNativePdfJson({
+    model: params.model,
     provider: "google",
     api: "google-generative-ai",
     label: "Gemini",

@@ -203,6 +203,12 @@ describe("operator model discovery at registered reads", () => {
         refreshFailed: true,
       };
       const f = createFixture(diagnostics);
+      expectDefined(f.cfg.models?.providers, "configured providers")["hidden-family"] = {
+        baseUrl: "https://hidden.example.invalid",
+        models: [],
+        name: "Private model-less provider",
+        icon: { source: "builtin", name: "server" },
+      };
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -223,6 +229,7 @@ describe("operator model discovery at registered reads", () => {
         expect(result.pendingProviders).toEqual(["example"]);
         expect(result.providerOutcomes).toEqual([{ provider: "example", status: "ready" }]);
         expect(result.refreshFailed).toBe(false);
+        expect(result.providerPresentations?.["hidden-family"]).toBeUndefined();
       }
       expect((await read("chat.metadata")).models.map(({ id }) => id).toSorted()).toEqual([
         "fallback",

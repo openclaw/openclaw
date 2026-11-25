@@ -105,8 +105,12 @@ and stops rather than selecting a local model. Fix the reported problem and
 retry, or choose another available provider manually. A missing Codex executable
 or login still allows the remaining connections to be tried.
 If none works, OpenClaw installs or enables the official Codex plugin and uses
-its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
-is a utility option and is never chosen as the primary model.
+its existing login, or offers ChatGPT sign-in. If a connection failed for a reason
+other than credentials, setup shows **Couldn’t connect your AI** and the failed
+attempts instead of presenting sign-in as the diagnosis. You can still choose
+ChatGPT sign-in as another connection. Missing or expired credentials without
+other failures keep the sign-in prompt. Apple Foundation Models is a utility
+option and is never chosen as the primary model.
 
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
@@ -130,8 +134,8 @@ without automatic setup use the existing native AI setup flow.
 
 Gemini CLI remains available as an explicitly configured runtime after setup,
 but Gemini CLI and Antigravity are not offered as detected inference routes.
-Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for guided setup. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 
@@ -175,7 +179,15 @@ classic wizard also retains its custom-provider setup.
 If the endpoint refuses the connection or its hostname cannot be found, setup
 reports the failed connection immediately instead of waiting through normal
 chat retries. Start the server or correct the URL and network settings on the
-Gateway host, then retry. Ordinary agent sessions keep their connection retries.
+Gateway host, then retry. Server errors, rate limits, and overload responses
+are also reported after the first attempt, so retry setup once the provider
+recovers. Ordinary agent sessions keep their retries.
+
+While the check runs, the dialog shows how long it has been waiting, and you
+can cancel at any time without changing your configuration. A remote API that
+has not answered after 30 seconds fails the check. Local model servers, CLI
+runtimes, and native harnesses get up to 90 seconds because they may need to
+start or load a model first.
 
 ## Related
 

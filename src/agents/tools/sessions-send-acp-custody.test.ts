@@ -8,7 +8,7 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 it.each(["allowed", "revoked", "replaced"] as const)(
-  "admits a delayed ACP result only under current parent custody: %s",
+  "finishes delayed ACP results under admitted policy and fences replaced requesters: %s",
   async (boundary) => {
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
@@ -150,7 +150,7 @@ it.each(["allowed", "revoked", "replaced"] as const)(
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
@@ -208,7 +208,11 @@ it.each(["allowed", "revoked", "replaced"] as const)(
                     operatorAuthority: source.authority,
                     operationalRunInstance:
                       createOperationalRunInstanceRef("acp-custody-invocation"),
-                    receiptAuthority: () => invocationOpen,
+                    receiptAuthority: () => {
+                      if (!invocationOpen) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                   },
                   () =>
                     createSessionsSendTool({
@@ -242,7 +246,7 @@ it.each(["allowed", "revoked", "replaced"] as const)(
           releaseChild.resolve();
           await finished.promise;
           await work.drain();
-          if (boundary === "allowed") {
+          if (boundary !== "replaced") {
             expect(admissions).toEqual([expect.stringContaining(resultText)]);
           } else {
             expect(admissions).toEqual([]);

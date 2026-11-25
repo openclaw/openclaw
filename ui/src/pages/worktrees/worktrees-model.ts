@@ -24,6 +24,7 @@ registerSessionOrganizationEnglish();
 export class WorktreesModel {
   records: WorktreeRecord[] = [];
   listLoaded = false;
+  listFailed = false;
   listRead: { result: Promise<void> } = { result: Promise.resolve() };
   private presentationLifetime = Promise.withResolvers<void>();
   error: string | null = null;
@@ -45,6 +46,7 @@ export class WorktreesModel {
       this.listLoaded = true;
     },
     onError: (error) => {
+      this.listFailed = true;
       this.error = formatUiError(error);
     },
   });
@@ -91,6 +93,10 @@ export class WorktreesModel {
       >
     >,
   ) {
+    // Replacing the error also replaces its failed-read provenance.
+    if ("error" in values) {
+      this.listFailed = false;
+    }
     Object.assign(this, values);
     this.publish();
   }
@@ -101,6 +107,7 @@ export class WorktreesModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
+    this.listFailed = false;
     this.update({ operation: null });
   }
 
@@ -125,6 +132,7 @@ export class WorktreesModel {
     if (!scope || this.operation !== null || this.listRequest.pending) {
       return;
     }
+    this.listFailed = false;
     if (!options.preserveError) {
       this.error = null;
     }
@@ -168,7 +176,7 @@ export class WorktreesModel {
     ) {
       return;
     }
-    // The force retry belongs to the same Gateway epoch as the initial removal.
+    // Any retry belongs to the same Gateway epoch as the initial removal.
     this.update({ operation: "row" });
     await this.runOperation(scope, async () => {
       const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
@@ -177,26 +185,27 @@ export class WorktreesModel {
       if (!this.gateway.isCurrent(scope) || result.removed) {
         return;
       }
-      const reason = result.snapshotError ?? "";
-      const force = await showConfirmDialog({
-        title: t("worktrees.confirmForceDeleteTitle"),
-        message: t("worktrees.confirmForceDelete", { error: reason }),
-        confirmLabel: t("common.delete"),
+      const retryPreserved = Boolean(result.preserved);
+      const reason = result.preserved?.reason ?? result.snapshotError ?? "";
+      const retry = await showConfirmDialog({
+        title: retryPreserved ? t("common.retry") : t("worktrees.confirmForceDeleteTitle"),
+        message: retryPreserved ? reason : t("worktrees.confirmForceDelete", { error: reason }),
+        confirmLabel: retryPreserved ? t("common.retry") : t("common.delete"),
         danger: true,
       });
       if (!this.gateway.isCurrent(scope) || !this.operatorAccess.canAdmin) {
         return;
       }
-      if (!force) {
+      if (!retry) {
         this.update({ error: reason || null });
         return;
       }
-      const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+      const retried = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
         id: record.id,
-        force: true,
+        ...(retryPreserved ? { retryPreserved: true } : { force: true }),
       });
       if (this.gateway.isCurrent(scope)) {
-        this.update({ error: forced.snapshotError ?? null });
+        this.update({ error: retried.preserved?.reason ?? retried.snapshotError ?? null });
       }
     });
   }
@@ -260,6 +269,15 @@ export class WorktreesModel {
       const defaultAgent = agents?.agents.find((agent) => agent.id === agents.defaultId);
       this.update({ createRepoRoot: defaultAgent?.workspace ?? "" });
       void this.loadCreateBranches();
+    }
+  }
+
+  setCreateRepository(repoRoot: string) {
+    if (repoRoot.trim() !== this.createRepoRoot.trim()) {
+      this.branchesRequest.cancel();
+      this.update({ createRepoRoot: repoRoot, createBaseRef: "", createBranches: [] });
+    } else {
+      this.update({ createRepoRoot: repoRoot });
     }
   }
 

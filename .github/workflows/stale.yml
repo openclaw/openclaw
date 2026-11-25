@@ -56,7 +56,7 @@ jobs:
       pull-requests: read
     outputs:
       remaining-closures: ${{ steps.evaluate.outputs.remaining-closures }}
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -138,8 +138,8 @@ jobs:
           key: barnacle-lifecycle-scan-v2-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Verify issue/PR scan checkpoint persistence
         if: ${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.item_numbers == '' }}
-        # Blacksmith redirects actions/cache to its own backend. Verify through
-        # the same runtime-token/ref scope, not GitHub's unrelated REST cache list.
+        # Verify through the same runtime-token/ref scope used to save the cache,
+        # not GitHub's separate REST cache list.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/barnacle-lifecycle-scan.json

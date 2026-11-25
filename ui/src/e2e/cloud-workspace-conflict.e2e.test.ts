@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -130,7 +130,6 @@ suite.define(() => {
       await page.setViewportSize({ width: 390, height: 844 });
       const composer = page.locator(".agent-chat__composer-shell");
       const title = notice.locator(".chat-composer-neighbor-card__copy strong");
-      const summary = notice.locator(".chat-composer-neighbor-card__copy > span");
       const dismiss = notice.getByRole("button", { name: "Dismiss workspace conflict notice" });
       await expect
         .poll(async () => {
@@ -148,9 +147,22 @@ suite.define(() => {
           ),
         )
         .toEqual(["nowrap", "nowrap"]);
-      for (const item of [title, summary, dismiss]) {
-        const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
-        assert(itemBox && noticeBox, "expected mobile conflict notice layout boxes");
+      // Read the card and its children in one frame while the resized composer settles.
+      const { noticeBox, itemBoxes } = await notice.evaluate((node) => {
+        const bounds = (element: Element) => {
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return { x, y, width, height };
+        };
+        return {
+          noticeBox: bounds(node),
+          itemBoxes: [
+            ".chat-composer-neighbor-card__copy strong",
+            ".chat-composer-neighbor-card__copy > span",
+            ".chat-error__dismiss",
+          ].map((selector) => bounds(node.querySelector(selector)!)),
+        };
+      });
+      for (const itemBox of itemBoxes) {
         expect(itemBox.x).toBeGreaterThanOrEqual(noticeBox.x);
         expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(noticeBox.x + noticeBox.width);
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
@@ -215,7 +227,7 @@ suite.define(() => {
   });
 
   it.each(["failed", "reclaimed", "request"])(
-    "exposes the full %s diagnostic with keyboard and clipboard access",
+    "preserves the full %s diagnostic on its owning error surface",
     async (failedState) => {
       await suite.withPage(
         { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] },
@@ -249,11 +261,34 @@ suite.define(() => {
           await alert.waitFor({ timeout: 10_000 });
           expect(await alert.textContent()).toContain("provider reported lease destroyed");
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
-          const summary = alert.locator("summary");
+          if (failedState !== "request") {
+            const notice = page.locator(".chat-error--reply");
+            const message = notice.locator(".app-toast__message");
+            for (const width of [1440, 320]) {
+              await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+              expect(await message.textContent()).toBe(workerFailureDiagnostic);
+              expect(
+                await notice
+                  .locator(
+                    "img, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(await message.evaluate((node) => getComputedStyle(node).textOverflow)).toBe(
+                "ellipsis",
+              );
+              expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+                true,
+              );
+            }
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            return;
+          }
+          const toggle = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-          const diagnostic = alert.locator("pre");
-          const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
-          expect(await summary.count()).toBe(1);
+          const diagnostic = alert.locator(".lazy-view-error__detail");
+          const expected = workerFailureDiagnostic;
+          expect(await toggle.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {
             await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
@@ -271,7 +306,7 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
-            await summary.press("Enter");
+            await toggle.press("Enter");
             await diagnostic.waitFor({ state: "visible" });
             expect(await diagnostic.textContent()).toBe(expected);
             expect(await alert.locator("img").count()).toBe(0);
@@ -286,21 +321,12 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            const compact = width === 320 && failedState !== "request";
-            const firstAction = compact
-              ? alert.getByRole("button", { name: "Refresh", exact: true })
-              : copy;
-            await page.keyboard.press("Tab");
-            expect(await firstAction.evaluate((node) => node === document.activeElement)).toBe(
-              true,
-            );
-            await page.keyboard.press("Tab");
-            expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
-            if (compact) {
+            const focusOrder = [diagnostic, copy];
+            for (const target of focusOrder) {
               await page.keyboard.press("Tab");
-              expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
-              await page.keyboard.press("Shift+Tab");
+              expect(await target.evaluate((node) => node === document.activeElement)).toBe(true);
             }
+            await page.keyboard.press("Shift+Tab");
             await page.keyboard.press("PageDown");
             await expect
               .poll(() => diagnostic.evaluate((node) => node.scrollTop))
@@ -323,7 +349,7 @@ suite.define(() => {
               window.getSelection()?.removeAllRanges();
               node.scrollTop = node.scrollHeight;
             });
-            await summary.press("Space");
+            await toggle.press("Space");
             await expect.poll(() => diagnostic.isVisible()).toBe(false);
             await alert
               .getByRole("button", { name: "Copy error", exact: true, includeHidden: true })

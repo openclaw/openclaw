@@ -172,3 +172,35 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     );
   }
 });
+
+it.each([
+  [true, "page"],
+  [false, null],
+])(
+  "marks a parent listed alone for a child's open page only when it stands for its section (%s)",
+  async (section, current) => {
+    const registration = registrations({
+      // Each board has its own path, as Workboard's boards do.
+      pageHref: ({ id, params }) => `/${id}${params?.board ? `/${params.board}` : ""}`,
+    });
+    const entries = [
+      registration("boards"),
+      registration("alpha", {
+        parent: "boards",
+        page: { id: "boards", params: { board: "alpha" } },
+      }),
+    ];
+    const provider = providerFor(entries);
+    const parent = Object.assign(contribution("boards"), {
+      navigationChildren: false,
+      navigationSection: section,
+    });
+    provider.append(parent);
+    window.history.replaceState(null, "", "/boards/alpha");
+    document.body.append(provider);
+    await parent.updateComplete;
+
+    expect(parent.querySelectorAll("a")).toHaveLength(1);
+    expect(parent.querySelector("a")?.getAttribute("aria-current")).toBe(current);
+  },
+);

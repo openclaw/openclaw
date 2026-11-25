@@ -19,9 +19,8 @@ it("loads route subtitles with command-palette search", async () => {
   expect(manager.t("subtitles.appearance")).toBe("subtitles.appearance");
   await manager.setLocale("de");
 
-  const { getStaticCommandPaletteCatalogItems } =
-    await import("../components/command-palette-catalog-search.ts");
-  expect(getStaticCommandPaletteCatalogItems(true)).toContainEqual(
+  const catalog = await import("../components/command-palette-catalog-search.ts");
+  expect(catalog.getStaticCommandPaletteCatalogItems(true)).toContainEqual(
     expect.objectContaining({
       id: "settings-appearance",
       description: "Theme and UI settings.",
@@ -29,7 +28,8 @@ it("loads route subtitles with command-palette search", async () => {
   );
   expect(en.subtitles).toBe(subtitles);
   expect(manager.t("subtitles.appearance")).toBe("Darstellung");
-  expect(manager.t("subtitles.connection")).toBe("Gateway connection and browser sign-in.");
+  const connection = manager.t("subtitles.connection");
+  expect(connection).toBe("Manage how this browser connects to the Gateway.");
 });
 
 it("loads executor-only copy when a slash command is executed", async () => {

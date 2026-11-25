@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import { resolveRawAssistantAnswerText as rawText } from "../shared/assistant-answer-text.js";
 import { prepareAgentRunTerminalReply as prepareReply } from "./agent-run-terminal-reply.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -45,7 +45,7 @@ it.each([
     );
     const { session, sessionManager } = await createTestSession();
     const subscription = subscribeEmbeddedAgentSession({ session, runId: "completed-delivery" });
-    let raw: AssistantMessage | undefined;
+    let raw: AssistantHistoryMessage | undefined;
     const stopObserve = session.subscribe((event) => {
       if (event.type === "message_end" && event.message.role === "assistant") {
         raw = structuredClone(event.message);
@@ -82,3 +82,16 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["google-generative-ai", "Q2lNAQ==", "silent"],
+  ["openai-responses", "msg_final", "empty"],
+] as const)("selects %s answer text around a signed empty part", (api, signature, disposition) => {
+  const content = [
+    { type: "text", text: "NO_REPLY" },
+    { type: "text", text: "", textSignature: signature },
+  ];
+  expect(
+    prepareReply({ rawText: rawText({ role: "assistant", api, content }) }).terminalReply,
+  ).toMatchObject({ disposition });
+});

@@ -39,6 +39,7 @@ import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
+import { resolveSpawnBillingRoute } from "../subagents/spawn/subagent-spawn-billing-route.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
@@ -92,13 +93,16 @@ export async function maybeSpawnVisibleSession(
   ) {
     throw new ToolInputError(
       'Omit placement for local execution or use {kind: "local"} with no cloud selectors. ' +
-        'For a configured cloud profile, use {kind: "profile", profileId, os?, machineClass?} with non-empty selectors, visible=true, and worktree=true.',
+        'For a configured cloud profile, use {kind: "profile", profileId, os?, machineClass?} with non-empty selectors; for a paired device, use {kind: "device", deviceId}. Both need visible=true and worktree=true.',
     );
   }
-  const placement = requestedPlacement?.kind === "profile" ? requestedPlacement : undefined;
+  const placement =
+    requestedPlacement?.kind === "profile" || requestedPlacement?.kind === "device"
+      ? requestedPlacement
+      : undefined;
   if (placement && (params.raw.visible !== true || !worktree)) {
     throw new ToolInputError(
-      `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
+      `Cloud and device placement require visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
   // Hidden native checkout selectors only apply when worktree is explicitly enabled.
@@ -201,8 +205,6 @@ export async function maybeSpawnVisibleSession(
     cfg,
     agentId: params.options?.requesterAgentIdOverride,
   });
-  const maxDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
     return {
       status: "error",
@@ -250,10 +252,9 @@ export async function maybeSpawnVisibleSession(
     requesterSessionKey: requesterKey,
     context: params.options,
   });
-  const delegatedToolPolicy = delegation.policy;
   assertDelegationCurrent = delegation.assertCurrent;
   assertActive();
-  if (placement && delegatedToolPolicy) {
+  if (placement && delegation.policy) {
     return {
       status: "forbidden",
       error:
@@ -332,12 +333,8 @@ export async function maybeSpawnVisibleSession(
     childModel: resolvedModel,
   });
   const { authProfileOverride } = initialSessionPatch;
-  // A sandbox-classified visible child must not dispatch to a host-executed CLI
-  // backend: the CLI runs as the Gateway OS user outside the configured sandbox
-  // while the child session would still be reported sandboxed. The admission
-  // above only sees the config-derived classification; re-check once the child
-  // model is resolved, mirroring the cron seam guard. The run seam enforces the
-  // same invariant for fallback candidates and post-spawn runtime overrides.
+  // Sandboxed children cannot run host CLI backends. Check the resolved model here;
+  // the run-entry owner also enforces this for fallbacks and later overrides.
   if (childRuntimeSandboxed) {
     const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
       config: cfg,
@@ -356,6 +353,18 @@ export async function maybeSpawnVisibleSession(
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
+  // A cloud-placed child runs on its worker's credentials, which this Gateway cannot see.
+  const billingRoute = placement
+    ? undefined
+    : await resolveSpawnBillingRoute({
+        cfg,
+        agentId: targetAgentId,
+        workspaceDir: spawnedWorkspaceDir,
+        provider: modelPlan.modelRef.provider,
+        model: modelPlan.modelRef.model,
+        authProfileId: authProfileOverride,
+      });
+  assertActive();
   const spawnModelAutoSelection =
     initialSessionPatch.modelOverrideSource === "auto"
       ? {
@@ -413,7 +422,7 @@ export async function maybeSpawnVisibleSession(
               version: 1,
               allow: [...(params.options?.inheritedToolAllowlist ?? [])],
               deny: [...(params.options?.inheritedToolDenylist ?? [])],
-              ...(delegatedToolPolicy ? { delegatedToolPolicy } : {}),
+              ...(delegation.policy ? { delegatedToolPolicy: delegation.policy } : {}),
             },
             ...(inheritedModel ? { resolvedModel: inheritedModel } : {}),
           },
@@ -437,7 +446,8 @@ export async function maybeSpawnVisibleSession(
           task: params.task,
           spawnMode: "session",
           childDepth: callerDepth + 1,
-          maxSpawnDepth: maxDepth,
+          maxSpawnDepth:
+            cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
         });
     try {
       const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
@@ -476,7 +486,6 @@ export async function maybeSpawnVisibleSession(
             })
           : independent
             ? createGatewayCall("sessions.create", createParams, {
-                revalidateOnCompletion: false,
                 requesterCommitGuard: assertActive,
                 timeoutMs: null,
               })
@@ -532,9 +541,14 @@ export async function maybeSpawnVisibleSession(
           cfg,
           key: childSessionKey,
           sessionId,
-          profileId: placement.profileId,
-          os: placement.os,
-          machineClass: placement.machineClass,
+          target:
+            placement.kind === "device"
+              ? { deviceId: placement.deviceId }
+              : {
+                  profileId: placement.profileId,
+                  ...(placement.os ? { os: placement.os } : {}),
+                  ...(placement.machineClass ? { machineClass: placement.machineClass } : {}),
+                },
           task: taskMessage,
           runTimeoutSeconds,
           callGateway: cloudGatewayCall,
@@ -574,10 +588,7 @@ export async function maybeSpawnVisibleSession(
       ? summarizeVisibleSessionSpawnError(response.runError)
       : "Visible session run failed";
     if (!childSessionKey) {
-      return {
-        status: "error",
-        error: runError,
-      };
+      return { status: "error", error: runError };
     }
     if (independent) {
       // Unsupervised: no run registration or completion route, and a failed
@@ -620,13 +631,11 @@ export async function maybeSpawnVisibleSession(
       };
     }
     try {
-      if (placement) {
-        params.options?.assertActive?.();
-      }
       await (params.options?.registerRun ?? registerSubagentRun)(
         {
           runId,
           requesterTurnRunId: params.options?.requesterTurnRunId,
+          gatewayContextResolver: resolveGatewayContext,
           childSessionKey,
           childAgentId: targetAgentId,
           sessionEntry: { sessionId, lifecycleRevision },
@@ -698,6 +707,7 @@ export async function maybeSpawnVisibleSession(
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
       publicRead: response.publicRead === true,
+      ...billingRoute,
       ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
       ...(params.label ? { label: params.label } : {}),
       owner: resolveVisibleSessionOwner(response.entry, requesterAgentId, ownerLabel, cfg),

@@ -8,6 +8,7 @@ import type {
   PluginDiscoveryResult,
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -29,6 +30,15 @@ const toolsPerGroup = 25;
 const catalogPageSize = 100;
 const pluginQuery = "Data plugin 09";
 const skillQuery = "Data skill 0999";
+const cardContent =
+  "# Data skill 0999 instructions\n\nCheck the local skill requirements before use.\n";
+export const dataCatalogSkillCard = {
+  schema: "openclaw.skills.skill-card.v1",
+  skillKey: "data-skill-0999",
+  path: "/synthetic/skills/data-skill-0999/skill-card.md",
+  sizeBytes: Buffer.byteLength(cardContent),
+  content: cardContent,
+} as const;
 const skillScrollRowSelector =
   "css:light=.agent-skills-group:last-child .agent-skill-row:last-child";
 
@@ -39,9 +49,9 @@ function suffix(index: number) {
 function createDataCatalogInventory(revision = 1) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    catalogId: `data-catalog-${suffix(index)}`,
+    catalogId: `installed-data-catalog-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
-    packageName: `@synthetic/data-plugin-${suffix(index)}`,
+    packageName: `@synthetic/installed-data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
     origin: "global",
     kind: ["tool"],
@@ -50,6 +60,7 @@ function createDataCatalogInventory(revision = 1) {
     state: "enabled",
     removable: true,
   }));
+  // Browsing hides installed plugins; keep discovery separate from the Settings inventory.
   const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
     id: `data-catalog-${suffix(index)}`,
     catalog: {
@@ -62,15 +73,17 @@ function createDataCatalogInventory(revision = 1) {
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: plugin.id,
-      present: true,
-      installed: true,
-      enabled: true,
-      state: "enabled",
-      action: "manage",
+      present: false,
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      action: "install",
     },
   }));
-  return { plugins, entries };
+  return {
+    plugins,
+    entries,
+  };
 }
 
 function catalogPage(
@@ -215,6 +228,15 @@ function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
             bundled: index % 4 === 0,
             primaryEnv: undefined,
             description: `Synthetic skill ${index} with availability diagnostics.`,
+            ...(index === 999
+              ? {
+                  skillCard: {
+                    present: true,
+                    path: dataCatalogSkillCard.path,
+                    sizeBytes: dataCatalogSkillCard.sizeBytes,
+                  },
+                }
+              : {}),
             missing: { bins: ["synthetic-tool"], anyBins: [], env: [], config: [], os: [] },
             eligible: false,
           }),
@@ -321,6 +343,8 @@ async function agentRowCounts(page: Page) {
 async function revealAgentOption(page: Page, agentId: string) {
   const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
   if (agentId === "data-agent-0299") {
+    // End edits a focused search field; the list's own surface jumps to the last row.
+    await picker.locator('[role="listbox"]').focus();
     await page.keyboard.press("End");
     await waitForAgentOptions(page);
     await page.waitForFunction((id) => {
@@ -333,10 +357,17 @@ async function revealAgentOption(page: Page, agentId: string) {
           document.activeElement?.getAttribute("aria-activedescendant") === option.id)
       );
     }, agentId);
-  } else if (await picker.locator(".header-search__toggle").count()) {
-    await picker.locator(".header-search__toggle").click();
-    await picker.locator("input.picker-select__search").fill(agentId);
-    await waitForAgentOptions(page, 1);
+  } else {
+    // Bundles with a collapsed header search expose a Search action first.
+    const toggle = picker.locator(".header-search__toggle");
+    if (await toggle.count()) {
+      await toggle.click();
+    }
+    const search = picker.locator("input.picker-select__search");
+    if (await search.count()) {
+      await search.fill(agentId);
+      await waitForAgentOptions(page, 1);
+    }
   }
   const option = picker.locator(`[data-agent-option][value="${agentId}"]`);
   await option.waitFor({ state: "visible" });
@@ -666,7 +697,11 @@ function pluginsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
         exactParams: true,
       });
       await waitSyntheticResponse(roundTripMs);
-      await gateway.resolveDeferred("plugins.list");
+      await page.evaluate(() => {
+        window.openclawEngineMarkGatewayInput?.();
+        // SAFETY: The scenario installs the typed mock Gateway before navigation.
+        (window as MockGatewayWindow).openclawControlUiE2eGateway!.resolveDeferred("plugins.list");
+      });
       await page
         .locator('[data-plugin-id="data-plugin-0000"] .settings-row__title')
         .getByText("Data plugin 0000 updated", { exact: true })
@@ -718,7 +753,7 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
         match: { agentId: "main" },
         exactParams: true,
       });
-      const pending = section.getByRole("button", { name: "Loading…", exact: true });
+      const pending = section.getByRole("button", { name: "Refreshing…", exact: true });
       await pending.waitFor();
       if (!(await pending.isDisabled())) {
         throw new Error("Skills refresh did not expose its pending state");
@@ -950,6 +985,50 @@ function catalogScenario(
 }
 
 export const dataCatalogScenarios: readonly InteractionScenario[] = [
+  {
+    ...fixture,
+    id: "data-catalog-inventory-readiness",
+    explicitOnly: true,
+    route: pathForRoute("plugins"),
+    expected: "Catalog search works before installed inventory permits installation.",
+    prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
+    run: async (page) => {
+      const search = page.getByRole("searchbox", { name: "Search plugins" });
+      if (!(await search.isEditable())) {
+        throw new Error("Catalog search must be editable");
+      }
+      const inputReadyAtMs = await page.evaluate(() => performance.now());
+      await search.fill(pluginQuery);
+      await catalogCount(page, 100);
+      const install = page.getByRole("button", { name: "Install Data plugin 0900", exact: true });
+      await install.waitFor({ state: "visible" });
+      const inventoryPendingAtSearch = await install.isDisabled();
+      const inventoryLoadingVisible = await page
+        .locator('#plugins-hub-panel > [role="status"]')
+        .isVisible();
+      if ((await search.inputValue()) !== pluginQuery) {
+        throw new Error("Catalog search lost its accepted query");
+      }
+      const searchReadyAtMs = await page.evaluate(() => performance.now());
+      await page.waitForFunction(() => {
+        const button = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Install Data plugin 0900"]',
+        );
+        return button?.checkVisibility() && !button.disabled;
+      });
+      await frames(page);
+      return {
+        searchAccepted: true,
+        inputReadyAtMs,
+        searchReadyAtMs,
+        inventoryPendingAtSearch,
+        inventoryLoadingVisible,
+        inventoryReadyAtMs: await page.evaluate(() => performance.now()),
+        matchingPlugins: 100,
+        installedPlugins: inventorySize,
+      };
+    },
+  },
   catalogEntryScenario(0),
   catalogEntryScenario(100),
   {

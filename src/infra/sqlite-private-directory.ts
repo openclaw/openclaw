@@ -58,7 +58,8 @@ function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
     path.join(resolveRequiredOsHomeDir(env), platformRoot);
   // Cache roots can serve several installations. Only this namespace is eligible
   // for automatic retirement; older shared-cache staging remains operator-owned.
-  const installation = createHash("sha256").update(resolveStateDir(env)).digest("hex").slice(0, 24);
+  const stateDir = resolveStateDir(env);
+  const installation = createHash("sha256").update(stateDir).digest("hex").slice(0, 24);
   // Admission needs the preferred root's parent; otherwise only the first
   // allocation falls back and its abandoned copies disappear from later sweeps.
   fsSync.mkdirSync(cacheRoot, { recursive: true, mode: SQLITE_DIRECTORY_MODE });
@@ -66,8 +67,15 @@ function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,
   });
+  // Doctor inspects a private state copy staged in its installation's namespace.
+  // Copies taken through it stay there, where that installation's sweep finds them.
+  const [enclosing = "", ...inside] = path.relative(admittedRoot, stateDir).split(path.sep);
+  const namespace =
+    inside.length > 0 && /^sqlite-[a-f0-9]{24}$/u.test(enclosing)
+      ? enclosing
+      : `sqlite-${installation}`;
   // Apply the namespace after root admission, including Windows and safe fallbacks.
-  const directory = path.join(admittedRoot, `sqlite-${installation}`);
+  const directory = path.join(admittedRoot, namespace);
   fsSync.mkdirSync(directory, { recursive: true, mode: SQLITE_DIRECTORY_MODE });
   const stat = fsSync.lstatSync(directory);
   if (

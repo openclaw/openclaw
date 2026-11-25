@@ -68,6 +68,31 @@ describe.skipIf(process.platform === "win32")("private creation adapter on the n
     }
   });
 
+  it("keeps a private state copy in its enclosing namespace but hashes any other cache path", () => {
+    const root = tempDirs.make("sqlite-private-state-cache-");
+    const env = { XDG_CACHE_HOME: path.join(root, "cache") };
+    const resolve = (stateDir: string) =>
+      resolvePrivateSqliteSnapshotStagingRoot({ ...env, OPENCLAW_STATE_DIR: stateDir });
+    const first = resolve(path.join(root, "first"));
+    const cache = path.dirname(first);
+    // Doctor's private state copy stays in its installation's swept namespace.
+    const copy = [
+      "openclaw-sqlite-readonly-v2-aB3dE6",
+      "openclaw-sqlite-readonly-v2-fG7hI9",
+    ] as const;
+    expect(resolve(path.join(first, ...copy, "openclaw-state"))).toBe(first);
+    // A state dir that is a namespace, or sits outside one, still gets its own hash.
+    const others = [first, path.join(cache, copy[0], "openclaw-state")].map(resolve);
+    for (const other of others) {
+      expect(path.dirname(other)).toBe(cache);
+      expect(path.basename(other)).toMatch(/^sqlite-[a-f0-9]{24}$/u);
+    }
+    expect(new Set([first, ...others]).size).toBe(3);
+    expect(fs.readdirSync(cache).toSorted()).toEqual(
+      [first, ...others].map((directory) => path.basename(directory)).toSorted(),
+    );
+  });
+
   it.each(["parent-file", "existing-directory"] as const)(
     "preserves the semantic %s error and records a confirmed refusal",
     (kind) => {

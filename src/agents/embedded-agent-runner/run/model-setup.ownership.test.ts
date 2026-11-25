@@ -13,7 +13,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
-import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -354,7 +354,6 @@ describe("model chat and native model ownership", () => {
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
         const prepared = prepareSessionUsageUpdate({
-          cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
@@ -377,9 +376,9 @@ describe("model chat and native model ownership", () => {
               if (!completion || !prepared) {
                 throw new Error("Missing usage completion owner");
               }
-              completion.patch((entry) => ({
+              completion.patch(() => ({
                 kind: "usage",
-                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                update: prepared,
                 updatedAt: Date.now(),
               }));
             },
@@ -636,7 +635,7 @@ describe("model chat and native model ownership", () => {
       previousSessionId: "initial-predecessor",
     }));
     const admission = await assertAgentHarnessRunAdmission(fixture.runParams);
-    const workerRead = vi.spyOn(projectionLane.pool, "run");
+    const workerRead = vi.spyOn(sessionStoreLane.pool, "run");
     let setup: Awaited<ReturnType<typeof fixture.resolve>>;
     try {
       setup = await fixture.resolve(undefined, undefined, admission);

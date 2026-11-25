@@ -27,6 +27,9 @@ Windows Gateway. On Linux, it:
   OpenClaw Bun fork, without requiring a global CLI install; release builds
   install their matching stable version, while development builds use
   Development for automatic setup
+- exposes a qualified app-managed local CLI in new terminals before baseline or
+  Gateway service setup, preserving existing terminal selections and profiles;
+  a terminal PATH error leaves the CLI installed and reports the incomplete step
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
@@ -691,12 +694,38 @@ and queues. This changes the launch process, not execution intent: durable
 `systemctl` helpers remain Gateway work, while durable commands themselves remain
 independent systemd user services.
 
-The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
-relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
-reuses the host exec memory allowance: the smaller of one quarter of available
-host/container memory and half that memory remaining after Gateway RSS.
-Existing per-exec memory limits and child-first OOM policy still apply.
-`memory.high` applies reclaim pressure; it is not a hard memory limit.
+The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`;
+these are relative shares during contention, not a fixed CPU cap. Memory uses the
+[shared host-exec budget](/tools/exec#host-memory-protection). Existing delegated
+I/O installations retain their hierarchy and use sampled memory enforcement.
+Before ordinary exec starts, the Gateway applies the full shared RAM allowance
+as the aggregate `memory.high` soft limit, replacing the former quarter-capacity
+throttle. This also reclaims file cache; the sampler owns command cancellation.
+Operator-supplied service resource limits remain in effect.
+
+When host exec finishes, OpenClaw reclaims cache from its empty session cgroup
+before removing the directory. Cleanup checks both `cgroup.events` and
+`cgroup.procs`; active sessions are left alone. Reclaim runs asynchronously, one
+session at a time, with a 250 ms retry budget and 50 ms pauses between requests.
+An individual kernel reclaim write can exceed that retry budget. If
+`memory.reclaim` is unavailable, OpenClaw logs a warning and removes the empty
+directory; its remaining cache stays charged to the parent. The shared
+`unscoped` fallback and aggregate resource policy remain in place.
+
+If a command finishes while a sibling, descendant, or its anchor still occupies
+the leaf, OpenClaw watches `cgroup.events` and retries when it becomes empty.
+There is one watch per leaf, capped at 256; watches close on removal or Gateway
+shutdown. A shallow sweep after startup admission settles and on the existing
+15-minute idle maintenance cadence catches old leaves, missed notifications,
+and watch overflow. Each pass considers at most 256 leaves and rotates through
+larger inventories. Active Gateway work can defer an idle pass. No process is
+killed or moved to make a leaf empty.
+
+The `agent exec cgroup cleanup: source=...` log reports `reclaimed`, `removed`,
+`skippedPopulated`, `errors`, and current `watching` counts. `reclaimed` counts
+leaves with a successful reclaim request, not bytes reclaimed; `removed` confirms
+directory removal. A helper or daemon that remains alive keeps its leaf populated
+and is intentionally skipped.
 
 An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
 Gateway state directory. Non-rotational devices receive **250 MiB/s in each
@@ -704,12 +733,14 @@ direction and 40,960 read/write operations per second**, independent of RAM or
 device count. Classification uses the logical device's `queue/rotational` value,
 including md/dm devices, rather than separately throttling their members.
 Rotational devices, or devices without that attribute, retain the conservative
-pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
-direction, with that rate divided by `4096` operations per second. These are
+I/O sizing basis divided by `600 * deviceCount` bytes per second in each
+direction, with that rate divided by `4096` operations per second. The I/O sizing
+basis remains the smaller of one quarter of effective host RAM and half the RAM
+remaining after Gateway RSS; it does not limit command memory. These are
 policy ceilings, not measured disk bandwidth. The non-rotational ceiling balances
 agent IO throughput against Gateway WAL commit latency on btrfs, rather than
 device utilization; the IOPS ceiling remains fixed at the measured 40,960.
-For example, a 4 GiB memory allowance on one SSD gives 250 MiB/s per direction; on a rotational device it
+For example, a 4 GiB I/O sizing basis on one SSD gives 250 MiB/s per direction; on a rotational device it
 gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
 corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
 applied at Gateway startup.
@@ -752,6 +783,14 @@ Covered child process surfaces:
 - MCP stdio server children
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
+- The directory watch helper, and SQLite read-only helpers that the Gateway
+  spawns directly. These helpers recover on their own: lost watches fall back
+  to scans, and a reader that is killed fails only the reads it is serving.
+
+The spawn brokers keep the Gateway's own score. A killed native-resource broker
+leaves plugin native resources unusable until the Gateway restarts, and repeated
+kills of the command broker use up its restarts. In both cases, a clean Gateway
+restart is the better outcome.
 
 Sandbox backend transports keep their prepared environment and inherited OOM
 score instead of receiving this wrapper. Workload resource policy belongs to

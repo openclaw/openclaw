@@ -14,6 +14,7 @@ import {
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
@@ -43,6 +44,7 @@ type ConnectCommandOptions = {
   ephemeral?: boolean;
   sessionHost?: boolean;
   targetFile?: string;
+  discoveryUrl?: string;
   displayName?: string;
   commands?: string[];
   allCommands?: boolean;
@@ -135,7 +137,15 @@ async function fetchJoinPayload(
     if (error instanceof Error && error.message.startsWith("Gateway ")) {
       throw error;
     }
-    throw new Error("Could not fetch the Gateway join payload securely.", { cause: error });
+    // fetch rejects with a bare "fetch failed"; the cause names the network failure.
+    const reason =
+      error instanceof TypeError && error.message === "fetch failed"
+        ? (readErrorCause(error) ?? error)
+        : error;
+    throw new Error(
+      `Could not fetch the Gateway join payload securely: ${formatErrorMessage(reason)}`,
+      { cause: error },
+    );
   } finally {
     await release();
   }
@@ -229,7 +239,7 @@ export function registerConnectCli(program: Command): void {
   addNodeCommandOptions(
     program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
   )
-    .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
+    .argument("[target]", "openclaw-node URL, oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
     .option(
@@ -239,6 +249,7 @@ export function registerConnectCli(program: Command): void {
     )
     .option("--target-file <path>", "Read the connect target from a private file and remove it")
     .option("--display-name <name>", "Override the node display name")
+    .option("--discovery-url <url>", "Discovery API origin for an openclaw-node invitation")
     .addHelpText(
       "after",
       () =>
@@ -265,6 +276,26 @@ export function registerConnectCli(program: Command): void {
         const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
         if (!resolvedTarget) {
           throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
+        }
+        // Route node invitations before legacy setup decoding or Gateway credential lookup.
+        if (URL.parse(resolvedTarget)?.protocol === "openclaw-node:") {
+          if (opts.ephemeral || opts.sessionHost) {
+            throw new Error(
+              "OpenClaw ID node invitations do not support --ephemeral or --session-host.",
+            );
+          }
+          const { runNodeJoin } = await import("../node-host/openclaw-id-join.js");
+          await runNodeJoin(resolvedTarget, {
+            service: opts.service,
+            discoveryUrl: opts.discoveryUrl,
+            displayName: opts.displayName,
+            commands: opts.commands,
+            allCommands: opts.allCommands,
+          });
+          return;
+        }
+        if (opts.discoveryUrl !== undefined) {
+          throw new Error("--discovery-url requires an openclaw-node invitation link.");
         }
         const joinTarget = parseJoinTarget(resolvedTarget);
         const signal = joinTarget ? getAsyncWorkSignal() : undefined;

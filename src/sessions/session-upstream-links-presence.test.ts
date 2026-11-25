@@ -125,15 +125,19 @@ it.for(["not-entered", "unknown"] as const)(
         createSqliteWorkerWriteAdmission(() => {}, [source.context.admission.databasePath]),
         source.context,
       )({ settled: Promise.resolve({ kind: outcome, error }) });
+      let finishing: void | Promise<void> = undefined;
       try {
-        retained.admission.finish(outcome === "not-entered" ? "not-entered" : undefined);
+        finishing = retained.admission.finish(
+          outcome === "not-entered" ? "not-entered" : undefined,
+        );
         if (outcome === "not-entered") {
           expectPresence(prepared, true);
         } else {
           expect(() => prepared.current()).toThrow("Session upstream source is unavailable");
         }
       } finally {
-        retained.admission.finish();
+        await finishing;
+        await retained.admission.finish();
       }
     });
   },

@@ -137,7 +137,6 @@ final class IngressTestHarness {
     var probeGate: AsyncStream<Void>?
     var probeRequiresManagedGrant = false
     var probeStarted = false
-    var probeDidStart: (() -> Void)?
     var pendingProbes = 0
     var probeFailure: URLError?
     var preauthenticated = false
@@ -145,21 +144,26 @@ final class IngressTestHarness {
     var preauthenticatedStableIDs = Set<String>()
     var applicationsByStableID: [String: CloudflareAccessApplication] = [:]
     var beforeManagedProbe: ((URLRequest) async throws -> Void)?
+    var probeDidStart: (() -> Void)?
     var revoked = false
     var retirements = 0
     var release = AsyncStream<Void>.makeStream()
-    let stableID = "manual|gateway.example.test|8443"
+    let stableID: String
 
-    init() throws {
-        self.tokens = try CloudflareAccessTestTokens()
-        self.application = try CloudflareAccessTestTokens.application()
-        self.nextSession = try self.tokens.session()
+    init(port: Int = 8443) throws {
+        let tokens = try CloudflareAccessTestTokens()
+        let application = try CloudflareAccessTestTokens.application(port: port)
+        let stableID = "manual|gateway.example.test|\(port)"
+        self.tokens = tokens
+        self.application = application
+        self.stableID = stableID
+        self.nextSession = try tokens.session(application: application)
         self.profileRows = [.init(
-            stableID: self.stableID,
+            stableID: stableID,
             kind: .manual,
             name: "Gateway",
             host: "gateway.example.test",
-            port: 8443,
+            port: port,
             useTLS: true,
             lastConnectedAtMs: nil)]
     }
@@ -406,7 +410,6 @@ extension GatewayIngressControllerTests {
         #expect(ingress.sessionOrigin(stableID: fixture.stableID) == replacementOrigin)
     }
 }
-
 @MainActor
 private final class IngressNativeTraffic {
     let gate = IngressTestGate()
@@ -1778,21 +1781,30 @@ struct GatewayIngressControllerTests {
         try await waitForIngress { !authorization.isCurrent() }
         // Registration already points to P; its media drain still precedes revocation of O.
         #expect(ingress.hasSession(stableID: fixture.stableID))
+        let signOut = Task {
+            await ingress.signOut(stableID: fixture.stableID)
+        }
+        defer { signOut.cancel() }
         let checkpoint = ingress.admissionCheckpoint()
-        let signedOut = Task { await ingress.signOut(stableID: fixture.stableID) }
-        defer { signedOut.cancel() }
         try await waitForIngress { ingress.admissionCheckpoint() > checkpoint }
+        try await waitForIngress {
+            ingress.attention?.message.hasPrefix("Signing out of Cloudflare Access") == true
+        }
         #expect(storage.values[fixture.application.origin] != nil)
         #expect(storage.values[replacementOrigin] == replacementBytes)
         #expect(storage.deleted.isEmpty)
         #expect(!ingress.hasSession(stableID: fixture.stableID))
         media.release()
-        if case .success = await download.result { Issue.record("Retired media returned a result") }
-        await signedOut.value
-        #expect(try await replacement.value == nil)
+        await signOut.value
         #expect(storage.values[fixture.application.origin] == nil)
         #expect(storage.values[replacementOrigin] == replacementBytes)
+        #expect(ingress.attention?.origin == fixture.application.origin)
+        #expect(try await replacement.value == nil)
         #expect(storage.deleted == [fixture.application.origin, fixture.application.origin])
+        if case .success = await download.result { Issue.record("Retired media returned a result") }
+        // Once replacement settles, lookup follows P and sees only P's preexisting grant.
+        #expect(ingress.hasSession(stableID: fixture.stableID) == replacementHasGrant)
+        #expect(storage.values[replacementOrigin] == replacementBytes)
     }
 
     @Test(arguments: [false, true]) @MainActor
@@ -1829,20 +1841,43 @@ struct GatewayIngressControllerTests {
         #expect(storage.deleted == [fixture.application.origin, fixture.application.origin])
         storage.deletionSucceeds = true
         if cold {
+            fixture.profileRows[0].contextPath = "/saved-gateway"
             let restarted = fixture.controller(persistence: storage.persistence)
             #expect(restarted.hasSession(stableID: fixture.stableID))
             await restarted.signOut(stableID: fixture.stableID)
             #expect(restarted.attention?.origin == fixture.application.origin)
             #expect(!restarted.hasSession(stableID: fixture.stableID))
+            let coldAttention = try #require(restarted.attention)
+            fixture.preauthenticated = false
+            let signIn = Task {
+                try await restarted.signIn(
+                    for: coldAttention,
+                    admissionCheckpoint: restarted.admissionCheckpoint())
+            }
+            defer {
+                fixture.release.continuation.finish()
+                signIn.cancel()
+            }
+            try await waitForIngress { fixture.browser.presented.count == 1 }
+            let route = try #require(fixture.requestRoutes.last)
+            #expect(route.stableID == fixture.stableID)
+            #expect(route.url.host == "gateway.example.test")
+            #expect(route.url.port == 8443)
+            #expect(route.url.path == "/saved-gateway")
+            #expect(route.tls?.required == true)
+            #expect(route.tls?.allowTOFU == false)
+            fixture.release.continuation.yield()
+            try await signIn.value
+            #expect(restarted.attention == nil)
         } else {
             try await ingress.signIn(for: attention, admissionCheckpoint: ingress.admissionCheckpoint())
             #expect(fixture.profileRows[0].accessOrigin == nil)
             #expect(ingress.attention == nil)
         }
-        #expect(storage.values[fixture.application.origin] == nil)
+        #expect((storage.values[fixture.application.origin] == nil) == !cold)
         #expect(storage.values[replacementOrigin] == before[replacementOrigin])
         #expect(storage.deleted.allSatisfy { $0 == fixture.application.origin })
-        #expect(fixture.browser.presented.isEmpty)
+        #expect(fixture.browser.presented.count == (cold ? 1 : 0))
     }
 
     @Test @MainActor
@@ -2304,6 +2339,33 @@ struct GatewayIngressControllerTests {
         #expect(fixture.persisted == nil)
     }
 
+    @Test @MainActor
+    func `Dashboard Access cookie admission tracks owner revision and distinguishes Gateway auth denial`() async throws {
+        let fixture = try IngressTestHarness(port: 443)
+        fixture.persisted = try String(data: JSONEncoder().encode(fixture.nextSession), encoding: .utf8)
+        let ingress = fixture.controller()
+        let admitted = try #require(await ingress.prepare(
+            route: fixture.route,
+            userInitiated: false,
+            admissionCheckpoint: ingress.admissionCheckpoint()))
+        let pageURL = try #require(URL(string: "https://gateway.example.test/settings"))
+        let cookie = try #require(admitted.dashboardCookie(pageURL))
+        #expect(cookie.name == "CF_Authorization")
+        #expect(admitted.isCurrent())
+
+        let gatewayDenial = try #require(HTTPURLResponse(
+            url: pageURL,
+            statusCode: 401,
+            httpVersion: nil,
+            headerFields: ["WWW-Authenticate": "Bearer realm=\"gateway\""]))
+        try await admitted.checkResponse(gatewayDenial)
+        #expect(admitted.isCurrent())
+        #expect(admitted.dashboardCookie(pageURL) != nil)
+
+        await ingress.signOut(stableID: fixture.stableID)
+        #expect(!admitted.isCurrent())
+        #expect(admitted.dashboardCookie(pageURL) == nil)
+    }
     @Test(arguments: ["forget", "replacement"], ["before-browser", "queued-browser", "committed"]) @MainActor
     func `creator departure preserves a coalesced browser and its terminal waiters`(
         departure: String, stage: String) async throws

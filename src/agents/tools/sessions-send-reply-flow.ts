@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -47,10 +48,13 @@ export function startSessionsSendReplyFlow(
   const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
     params.replyMode === "peer"
-      ? runWithGatewayToolContinuationContext(run, { retainRequester: true })
+      ? runWithGatewayToolContinuationContext(run, {
+          retainRequester: true,
+          agentId: params.requesterAgentId,
+        })
       : completion
         ? completion.request.custody.run(run)
-        : runWithGatewayToolContinuationContext(run);
+        : runWithGatewayToolContinuationContext(run, { agentId: params.requesterAgentId });
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const requesterCompletion = params.replyMode === "peer" ? undefined : completion;
@@ -260,13 +264,11 @@ export function prepareSessionsSendReplyContext(params: {
     : undefined;
   const requesterDeliveryGeneration =
     requesterSessionEntry && requesterSession
-      ? {
+      ? chatRef({
           agentId: params.requesterTarget.agentId,
           storePath: params.requesterTarget.storePath,
           sessionKey: params.requesterTarget.canonicalKey,
-          ...requesterSession,
-          lifecycleRevision: requesterSession.lifecycleRevision ?? null,
-        }
+        })
       : undefined;
   const persistentParent =
     params.targetAcpMode === "persistent" &&
@@ -306,7 +308,8 @@ export async function finishSessionsSendReply(params: {
   requesterAgentId: string;
   promptedAt: number;
   timeoutSeconds: number;
-  timeoutMs: number;
+  deadlineAtMs: number;
+  signal?: AbortSignal;
   targetIsSubagent: boolean;
   isIsolatedCronRequester: boolean;
 }) {
@@ -321,7 +324,6 @@ export async function finishSessionsSendReply(params: {
     requesterAgentId,
     promptedAt,
     timeoutSeconds,
-    timeoutMs,
     targetIsSubagent,
     isIsolatedCronRequester,
   } = params;
@@ -375,11 +377,15 @@ export async function finishSessionsSendReply(params: {
       delivery: delayedDelivery,
       ...watchField,
     });
-  const startReplyFlow = (notifyRequesterOnWaitFailure: boolean) =>
+  const startReplyFlow = (
+    notifyRequesterOnWaitFailure: boolean,
+    reply?: Parameters<typeof startSessionsSendReplyFlow>[0]["reply"],
+  ) =>
     startSessionsSendReplyFlow({
       ...replyContext,
       runId,
       completion,
+      reply,
       skip: registryCompletion || delayedDelivery.status === "skipped",
       targetSessionKey: acceptedTargetSessionKey,
       targetSession: start.a2aSession ?? replyContext.targetSession,
@@ -387,21 +393,38 @@ export async function finishSessionsSendReply(params: {
       displayKey: start.a2aSessionKey ?? replyContext.displayKey,
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });
+  const remainingMs = Math.max(0, params.deadlineAtMs - Date.now());
   const result =
     // An active turn has no final-response identity correlated to this accepted input.
-    timeoutSeconds === 0 || start.targetDisposition === "steered"
+    timeoutSeconds === 0 || start.targetDisposition === "steered" || remainingMs === 0
       ? undefined
       : completion
-        ? await completion.take(timeoutMs)
-        : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
+        ? await completion.take(remainingMs)
+        : await waitForAgentRunReply({
+            runId,
+            timeoutMs: remainingMs,
+            callGateway: replyContext.callGateway,
+          });
   if (!result || result.yielded === true || result.status === "pending") {
     await startReplyFlow(true);
     return accepted();
   }
-  completion?.close();
+  const finishInline = async (
+    response: ReturnType<typeof jsonResult>,
+    reply: NonNullable<typeof result> = result,
+  ) => {
+    // A deadline can win during reply materialization; the accepted result still needs a consumer.
+    if (params.signal?.aborted && delayedDelivery.status === "pending" && !registryCompletion) {
+      await startReplyFlow(true, reply);
+    } else {
+      completion?.close();
+    }
+    return response;
+  };
 
   if (result.status === "timeout") {
     if (result.pendingError === true && result.error?.trim()) {
+      completion?.close();
       await startReplyFlow(targetIsSubagent);
       return jsonResult({
         runId,
@@ -414,6 +437,7 @@ export async function finishSessionsSendReply(params: {
       });
     }
     if (!isTerminalAgentWaitTimeout(result)) {
+      completion?.close();
       await startReplyFlow(true);
       return accepted();
     }
@@ -438,14 +462,17 @@ export async function finishSessionsSendReply(params: {
     });
   }
   if (result.status === "timeout" || result.status === "error") {
-    return jsonResult({
-      runId,
-      status: result.status,
-      error: result.error ?? (result.status === "timeout" ? "agent run timed out" : "agent error"),
-      sentBeforeError: true,
-      sessionKey: replyContext.displayKey,
-      ...watchField,
-    });
+    return finishInline(
+      jsonResult({
+        runId,
+        status: result.status,
+        error:
+          result.error ?? (result.status === "timeout" ? "agent run timed out" : "agent error"),
+        sentBeforeError: true,
+        sessionKey: replyContext.displayKey,
+        ...watchField,
+      }),
+    );
   }
   const reply = await resolveSessionsSendReply(result, {
     runId,
@@ -453,8 +480,11 @@ export async function finishSessionsSendReply(params: {
     agentId: replyContext.targetAgentId,
     callGateway: replyContext.callGateway,
   });
-  return sendReplyResult(
-    { runId, sessionKey: replyContext.displayKey, ...watchField },
+  return finishInline(
+    sendReplyResult(
+      { runId, sessionKey: replyContext.displayKey, ...watchField },
+      { ...result, ...reply },
+    ),
     { ...result, ...reply },
   );
 }

@@ -174,7 +174,6 @@ export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
 export const withPluginDiagnosticsReportForInspectionMock =
   vi.fn<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReportForInspection"]>();
-export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
@@ -238,6 +237,9 @@ const { defaultRuntime, pluginsCliRuntimeLogs, runtimeErrors, resetRuntimeCaptur
       resetRuntimeCapture: () => {
         runtimeLogsLocal.length = 0;
         runtimeErrorsLocal.length = 0;
+        for (const mock of Object.values(defaultRuntimeLocal)) {
+          mock.mockReset();
+        }
       },
     };
   },
@@ -247,33 +249,6 @@ export { runtimeErrors, pluginsCliRuntimeLogs };
 
 export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
   mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-}
-
-function restoreRuntimeCaptureMocks() {
-  defaultRuntime.log.mockReset();
-  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
-    pluginsCliRuntimeLogs.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.error.mockReset();
-  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
-    runtimeErrors.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.writeStdout.mockReset();
-  defaultRuntime.writeStdout.mockImplementation((value: string) => {
-    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-  });
-
-  defaultRuntime.writeJson.mockReset();
-  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
-    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-  });
-
-  defaultRuntime.exit.mockReset();
-  defaultRuntime.exit.mockImplementation((code: number) => {
-    throw new Error(`__exit__:${code} ${runtimeErrors.join("\n")}`);
-  });
 }
 
 vi.mock("../runtime.js", () => ({
@@ -520,20 +495,14 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
-// mock-isolation: CLI report fixtures own registry leases and cleanup without activating installed plugins.
+// mock-isolation: CLI formatting fixtures avoid installed plugins; status.runtime-inspection owns real custody proof.
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReportAsync: async (
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) => buildPluginSnapshotReportMock(...args),
   withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
-  ) => {
-    try {
-      return await withPluginDiagnosticsReportForInspectionMock(...args);
-    } finally {
-      await retirePluginDiagnosticsMock();
-    }
-  },
+  ) => await withPluginDiagnosticsReportForInspectionMock(...args),
   buildPluginSnapshotReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) =>
@@ -564,11 +533,7 @@ vi.mock("../plugins/status.js", () => ({
     params: Parameters<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReport"]>[0],
     consume: (report: import("../plugins/status.js").PluginStatusReport) => T | Promise<T>,
   ): Promise<T> => {
-    try {
-      return await consume(invokeMock(buildPluginDiagnosticsReportMock, params));
-    } finally {
-      await retirePluginDiagnosticsMock();
-    }
+    return await consume(invokeMock(buildPluginDiagnosticsReportMock, params));
   },
   buildPluginCompatibilityNotices: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>
@@ -858,7 +823,6 @@ export function expectNoPluginCliCalls(...mocks: unknown[]) {
 
 export function resetPluginsCliTestState() {
   resetRuntimeCapture();
-  restoreRuntimeCaptureMocks();
   pluginCliConfigMock.mockReset();
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotForWriteMock.mockReset();
@@ -887,7 +851,6 @@ export function resetPluginsCliTestState() {
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
     formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),
   );
-  retirePluginDiagnosticsMock.mockReset();
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();

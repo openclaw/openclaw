@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
@@ -6,6 +7,8 @@ import {
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({
@@ -97,6 +100,8 @@ export function rawManifest({
   };
 }
 
+// Historical producer data remains useful for parsers, artifact I/O, and rejection tests.
+// Qualification/publication acceptance must use candidatePublicationFixture with P admission.
 export function trustedMainPackageFixture({
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
@@ -164,6 +169,7 @@ export function trustedMainPackageFixture({
   if (!child) {
     throw new Error("missing release checks child fixture");
   }
+  const steps: { name: string; conclusion: string }[] = [];
   const parentJob = {
     completed_at: "2026-07-10T01:10:00Z",
     conclusion: "success",
@@ -172,7 +178,7 @@ export function trustedMainPackageFixture({
     run_attempt: 1,
     started_at: "2026-07-10T01:00:00Z",
     status: "completed",
-    steps: [],
+    steps,
   };
   const childRun = {
     actor: { login: "github-actions[bot]" },
@@ -208,14 +214,49 @@ export function trustedMainPackageFixture({
       status: base === head ? "identical" : "ahead",
     };
   };
+  const unsupported = () => {
+    throw new Error("Historical fixture does not contain candidate or reused artifacts");
+  };
   const client = {
+    readWorkloadIdentity: unsupported,
+    validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
+    getRunAttempt: unsupported,
+    getRunAttemptJobs: unsupported,
+    loadExecutionPlan: unsupported,
+    verifyRetainedPublicationArtifacts: unsupported,
+    downloadArtifactArchive: unsupported,
+    getRunArtifacts: unsupported,
+    getArtifact: unsupported,
+    getCommit: unsupported,
+    resolveQualificationAdmissionDescriptor: unsupported,
+    loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
+    },
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority("openclaw/openclaw", producer);
     },
     revalidateQualificationAdmissionAuthority: () => {
       throw new Error("historical fixture must not request candidate admission authority");
     },
-    getWorkflowSource: (_sha: string) => "name: Full Release Validation\n",
+    getCandidateFileNames: () => [],
+    getSourceFiles(requests: Array<{ sha: string; path: string }>): Map<string, string> {
+      return new Map(
+        requests.map(({ sha, path }) => [sha + ":" + path, this.getSourceFile(sha, path)]),
+      );
+    },
+    getSourceFile: (_sha: string, _path: string): string => {
+      throw new Error("Fixture has no beta-to-final source delta");
+    },
+    getWorkflowSource: (_sha: string, path?: string) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? readFileSync(
+            new URL("../../scripts/lib/release-validation-waivers.json", import.meta.url),
+            "utf8",
+          )
+        : "name: Full Release Validation\n",
     compareCommitLineage: compareCommits,
     compareCommits,
     getJobLog(jobId: number) {
@@ -266,8 +307,8 @@ export function trustedMainPackageFixture({
   };
 }
 
-export function trustedMainFullFixture() {
-  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
+function trustedMainFullFixture(targetSha?: string) {
+  const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",
   );
@@ -328,16 +369,24 @@ export function trustedMainFullFixture() {
   return { ...fixture, client, manifest, runs };
 }
 
-export function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
-  const fixture = trustedMainFullFixture();
+export function trustedMainNpmFixture(
+  releaseProfile: "beta" | "stable" = "beta",
+  options: { targetSha?: string; targetVersion?: string } = {},
+) {
+  const fixture = trustedMainFullFixture(options.targetSha);
   const beta = releaseProfile === "beta";
-  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
-  const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
+  const targetVersion = options.targetVersion ?? (beta ? "2026.8.28-beta.1" : "2026.8.28");
+  const parsedVersion = parseReleaseVersion(targetVersion);
+  const coveragePolicy = beta
+    ? "npm-beta-v1"
+    : parsedVersion && classifyReleaseTrain(parsedVersion) === "stable"
+      ? "npm-stable-v1"
+      : undefined;
   Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
   Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy,
+    ...(coveragePolicy ? { coveragePolicy } : {}),
     skipPackageTelegramE2e: String(beta),
-    targetContextRef: "release/2026.8.28",
+    targetContextRef: "release/" + targetVersion.split("-")[0],
     targetVersion,
   });
   fixture.manifest.controls.performanceBlocking = !beta;
@@ -433,7 +482,8 @@ export function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta"
   const client = {
     ...fixture.client,
     getJobLog: vi.fn(
-      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+      (jobId: number) =>
+        `${originalLog(jobId)}\nCI_RELEASE_SCOPE: ${coveragePolicy ? `npm-${releaseProfile}` : "full"}`,
     ),
     getRunAttemptJobs: vi.fn((runId: string) =>
       jobsForChild(

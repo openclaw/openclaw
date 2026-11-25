@@ -1,2 +1,0 @@
-# Assert the registered Codex authority proof config in the exact Knip root inventory.
-1

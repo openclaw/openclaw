@@ -3,8 +3,12 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { SandboxBackendHandle } from "../agents/sandbox/backend-handle.types.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { bindSandboxPersistentExecCapability } from "../agents/sandbox/persistent-exec.types.js";
-import { bindStreamSandboxContext } from "../agents/sandbox/stream-context.js";
+import {
+  bindStreamSandboxContext,
+  captureCronStreamSandboxTarget,
+} from "../agents/sandbox/stream-context.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
@@ -12,6 +16,8 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
+import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -21,6 +27,8 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { commitBackgroundResultToSession } from "../sessions/background-session-result.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { linkCanonicalOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.js";
 import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
@@ -28,7 +36,17 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authority.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import { migrateSharedOpenClawIdMemberSources } from "./openclaw-id/member-source-role-import-shared.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import {
+  invalidateOperatorRolePolicy,
+  publishOperatorRoleConfigChange,
+} from "./operator-role-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const mocks = vi.hoisted(() => ({
@@ -42,10 +60,10 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecutionAsync> => {
+      const owned = await actual.captureOpenClawAgentDatabaseExecutionAsync(...args);
       return {
         ...owned,
         get fileIdentity() {
@@ -145,10 +163,10 @@ function sandboxFixture(
 async function withAuthorityFixture(
   run: (fixture: {
     job: CronStoredJob;
+    storePath: string;
     config: OpenClawConfig;
     profileId: string;
     grant: AbortController;
-    resume: ReturnType<typeof vi.fn>;
     target: ReturnType<typeof makeCronStreamSandboxTarget>;
     replaceSession: (patch: Partial<SessionEntry>) => void;
     prepare: () => ReturnType<typeof prepareCronStreamSandboxAuthority>;
@@ -157,6 +175,18 @@ async function withAuthorityFixture(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const profile = ensureProfileForEmail("sandbox-stream@example.test");
     const config: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "operator",
+          definitions: {
+            operator: {
+              scopes: ["operator.write"],
+              agents: "*",
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
       agents: {
         defaults: {
           workspace: state.workspaceDir,
@@ -192,14 +222,13 @@ async function withAuthorityFixture(
       signal: grant.signal,
       assertCurrent: () => grant.signal.throwIfAborted(),
     };
-    const resume = vi.fn(() => access);
-    const authorize = vi.fn(() => undefined);
+    const authorize = vi.fn(() => access);
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "stream-access" }));
     registry.gatewayAccessPolicies.push({
       pluginId: "stream-access",
       source: "/fixture/stream-access",
-      policy: { authorize, resume },
+      policy: { authorize },
     });
     const previousRegistry =
       getPluginRegistryState()?.activeRegistry ?? createEmptyPluginRegistry();
@@ -211,10 +240,10 @@ async function withAuthorityFixture(
     try {
       await run({
         job,
+        storePath: state.statePath("cron", "jobs.json"),
         config,
         profileId: profile.id,
         grant,
-        resume,
         target,
         replaceSession: (patch) =>
           replaceSessionEntrySync(
@@ -249,60 +278,66 @@ it.each([
   "sandbox default allow provenance",
   "permission mode",
   "exec host",
-] as const)("revokes retained sandbox execution after its original %s changes", async (change) => {
-  await withAuthorityFixture(async (fixture) => {
-    const retained = await fixture.prepare();
-    retained.assertCurrent();
-    expect(mocks.sandbox.mock.lastCall?.[1]?.gatewayAccessGrant).toEqual(
-      fixture.job.streamSandbox?.operator?.gatewayAccessGrant,
-    );
-    if (change === "grant") {
-      const replacement = new AbortController();
-      fixture.resume.mockReturnValue({
-        grantId: "original-grant",
-        signal: replacement.signal,
-        assertCurrent: () => {},
-      });
-      fixture.grant.abort(new Error("original grant revoked"));
-    } else if (change === "role") {
-      await setCanonicalUserProfileRole(fixture.profileId, "changed");
-      invalidateOperatorRolePolicy(fixture.profileId);
-    } else if (change === "email binding") {
-      const other = ensureProfileForEmail("other-stream@example.test");
-      await linkCanonicalUserProfileEmail("sandbox-stream@example.test", other.id);
-      await linkCanonicalUserProfileEmail("sandbox-stream@example.test", fixture.profileId);
-    } else if (change === "sandbox default allow provenance") {
-      const { allow, deny } = resolveSandboxConfigForAgent(fixture.config, "main").tools;
-      fixture.config.tools = {
-        sandbox: { tools: { allow: [...(allow ?? [])], deny: [...(deny ?? [])] } },
-      };
+] as const)(
+  "keeps started sandbox work after a %s edit until its data owner retires",
+  async (change) => {
+    await withAuthorityFixture(async (fixture) => {
+      const retained = await fixture.prepare();
+      retained.assertCurrent();
+      if (change === "grant") {
+        fixture.grant.abort(new Error("original grant revoked"));
+      } else if (change === "role") {
+        fixture.config.gateway!.roles!.definitions.changed = {
+          scopes: ["operator.read"],
+          agents: "*",
+          sessions: { others: "none" },
+        };
+        await setCanonicalUserProfileRole(fixture.profileId, "changed");
+        invalidateOperatorRolePolicy(fixture.profileId);
+      } else if (change === "email binding") {
+        const other = ensureProfileForEmail("other-stream@example.test");
+        await linkCanonicalUserProfileEmail("sandbox-stream@example.test", other.id);
+        await linkCanonicalUserProfileEmail("sandbox-stream@example.test", fixture.profileId);
+      } else if (change === "sandbox default allow provenance") {
+        const { allow, deny } = resolveSandboxConfigForAgent(fixture.config, "main").tools;
+        fixture.config.tools = {
+          sandbox: { tools: { allow: [...(allow ?? [])], deny: [...(deny ?? [])] } },
+        };
+      } else {
+        const patches: Record<typeof change, Partial<SessionEntry>> = {
+          skills: {
+            skillLibrarySelections: [
+              {
+                skillId: "changed-skill",
+                revision: "a".repeat(64),
+                name: "changed",
+                ownerProfileId: fixture.profileId,
+              },
+            ],
+          },
+          "permission mode": { permissionMode: "read-only" },
+          "exec host": { execHost: "gateway" },
+          "sandbox mode": { sandboxMode: "off" },
+        };
+        fixture.replaceSession(patches[change]);
+      }
+      if (change === "skills") {
+        expect(retained.signal.aborted).toBe(true);
+        expect(retained.assertCurrent).toThrow();
+      } else {
+        expect(retained.signal.aborted).toBe(false);
+        expect(retained.assertCurrent).not.toThrow();
+        if (change !== "email binding" && change !== "sandbox default allow provenance") {
+          await expect(fixture.prepare()).rejects.toThrow();
+        }
+      }
+      retained.release();
+      retained.release();
+      expect(retained.sandbox[Symbol.dispose]).toHaveBeenCalledOnce();
       expect(retained.assertCurrent).toThrow();
-    } else {
-      const patches: Record<typeof change, Partial<SessionEntry>> = {
-        skills: {
-          skillLibrarySelections: [
-            {
-              skillId: "changed-skill",
-              revision: "a".repeat(64),
-              name: "changed",
-              ownerProfileId: fixture.profileId,
-            },
-          ],
-        },
-        "permission mode": { permissionMode: "read-only" },
-        "exec host": { execHost: "gateway" },
-        "sandbox mode": { sandboxMode: "off" },
-      };
-      fixture.replaceSession(patches[change]);
-    }
-    expect(retained.signal.aborted).toBe(true);
-    expect(retained.assertCurrent).toThrow();
-    retained.release();
-    retained.release();
-    expect(retained.sandbox[Symbol.dispose]).toHaveBeenCalledOnce();
-    expect(retained.assertCurrent).toThrow();
-  });
-});
+    });
+  },
+);
 
 it.each<[string, NonNullable<OpenClawConfig["tools"]>]>([
   ["explicit deny", { exec: { mode: "deny" } }],
@@ -311,14 +346,14 @@ it.each<[string, NonNullable<OpenClawConfig["tools"]>]>([
   ["tool profile", { profile: "minimal" }],
   ["provider policy", { byProvider: { openai: { deny: ["exec"] } } }],
 ])(
-  "enforces current %s before renewal and before another sandbox is prepared",
+  "applies current %s at the next sandbox start, not to admitted work",
   async (_restriction, tools) => {
     await withAuthorityFixture(async (fixture) => {
       const retained = await fixture.prepare();
       retained.assertCurrent();
       fixture.config.tools = tools;
-      expect(retained.assertCurrent).toThrow();
-      expect(retained.signal.aborted).toBe(true);
+      expect(retained.assertCurrent).not.toThrow();
+      expect(retained.signal.aborted).toBe(false);
       await expect(fixture.prepare()).rejects.toThrow();
       expect(mocks.sandbox).toHaveBeenCalledOnce();
     });
@@ -356,9 +391,11 @@ it.each(["reset", "compaction"] as const)(
           lifecycleRevision: target.lifecycleRevision,
         });
         if (mutationKind === "reset") {
-          expect(retained.assertCurrent).toThrow("authority changed");
+          expect(retained.assertCurrent).toThrow("Sandbox stream session or resource changed");
           expect(retained.signal.aborted).toBe(true);
-          await expect(fixture.prepare()).rejects.toThrow("authority changed");
+          await expect(fixture.prepare()).rejects.toThrow(
+            "Sandbox stream session or resource changed",
+          );
           expect(mocks.sandbox).toHaveBeenCalledOnce();
         } else {
           retained.assertCurrent();
@@ -385,10 +422,6 @@ it("keeps sandbox source authority through a real background notification commit
     const result = await commitBackgroundResultToSession({
       agentId: target.agentId,
       sessionKey: target.sessionKey,
-      expectedGeneration: {
-        sessionId: target.sessionId,
-        lifecycleRevision: target.lifecycleRevision,
-      },
       text: "Watcher found a new error.",
       idempotencyKey: "watcher-result:1",
       provenance: { kind: "cron", jobId: fixture.job.id, runId: "watcher-run:1" },
@@ -414,7 +447,7 @@ it("keeps sandbox source authority through a real background notification commit
   });
 });
 
-it("preserves sandbox streams across native read markers and concurrent run projections but revokes mixed permission changes", async () => {
+it("preserves admitted sandbox streams across read markers, projections and later permission edits", async () => {
   await withAuthorityFixture(async (fixture) => {
     const { target } = fixture;
     const { sessionMutationHandlers } = await import("./server-methods/sessions-mutations.js");
@@ -482,8 +515,9 @@ it("preserves sandbox streams across native read markers and concurrent run proj
         { key: target.sessionKey, unread: false, permissionMode: "read-only" },
         { permissionMode: "read-only" },
       );
-      expect(retained.signal.aborted).toBe(true);
-      expect(retained.assertCurrent).toThrow();
+      expect(retained.signal.aborted).toBe(false);
+      expect(retained.assertCurrent).not.toThrow();
+      await expect(fixture.prepare()).rejects.toThrow();
     } finally {
       mocks.afterSessionEntryResult = undefined;
       retained.release();
@@ -508,7 +542,7 @@ it("retains saved sandbox consent with guarded execution and an independently re
   });
 });
 
-it("preserves explicit independent access and rejects an unclassified grant", async () => {
+it("admits current access independently of the historical grant and rejects an incomplete target", async () => {
   await withAuthorityFixture(async (fixture) => {
     const operator = fixture.target.operator;
     if (!operator) {
@@ -516,8 +550,6 @@ it("preserves explicit independent access and rejects an unclassified grant", as
     }
     operator.gatewayAccessGrant = null;
     const retained = await fixture.prepare();
-    expect(fixture.resume).not.toHaveBeenCalled();
-    expect(mocks.sandbox.mock.lastCall?.[1]?.gatewayAccessGrant).toBeNull();
     retained.assertCurrent();
     retained.release();
     Reflect.deleteProperty(operator, "gatewayAccessGrant");
@@ -527,7 +559,7 @@ it("preserves explicit independent access and rejects an unclassified grant", as
 });
 
 it.each(["grant revocation", "target replacement"] as const)(
-  "rejects %s during awaited sandbox provisioning before publishing a runtime",
+  "retains admitted policy but fences target identity during provisioning: %s",
   async (change) => {
     await withAuthorityFixture(async (fixture) => {
       const entered = createDeferredCore();
@@ -548,18 +580,139 @@ it.each(["grant revocation", "target replacement"] as const)(
         return sandbox;
       });
       const pending = fixture.prepare();
-      const rejection = expect(pending).rejects.toThrow(
-        change === "grant revocation" ? "original grant revoked" : "authority changed",
-      );
+      const rejection =
+        change === "target replacement" ? expect(pending).rejects.toThrow() : undefined;
       await entered.promise;
       if (change === "grant revocation") {
         fixture.grant.abort(new Error("original grant revoked"));
       }
       resume.resolve();
-      await rejection;
-      expect(sandbox?.[Symbol.dispose]).toHaveBeenCalledOnce();
-      expect(authority?.signal?.aborted).toBe(true);
-      expect(authority?.assertCurrent).toThrow();
+      if (rejection) {
+        await rejection;
+        expect(sandbox?.[Symbol.dispose]).toHaveBeenCalledOnce();
+        expect(authority?.signal?.aborted).toBe(true);
+      } else {
+        const retained = await pending;
+        expect(retained.signal.aborted).toBe(false);
+        expect(retained.assertCurrent).not.toThrow();
+        await expect(fixture.prepare()).rejects.toThrow();
+      }
+    });
+  },
+);
+
+it.each(["member", "owner", "definition", "legacy member", "catalog member"] as const)(
+  "restores a serialized OCID %s sandbox stream with its original peer dependency",
+  async (scenario) => {
+    const kind = scenario === "owner" ? "owner" : "member";
+    await withAuthorityFixture(async (fixture) => {
+      let principal: OpenClawIdTunnelPrincipal | undefined = {
+        ...(kind === "member"
+          ? { kind, accountId: "stream-member", role: "operator" as const }
+          : { kind }),
+        peerKey: `iroh:${"cd".repeat(32)}`,
+        authority: {
+          clawId: "stream-claw",
+          rootPub: "stream-root",
+          listedSeq: 3,
+          ...(kind === "owner" ? { ownerDevice: "stream-owner" } : {}),
+        },
+      };
+      fixture.target.operator!.openclawIdPrincipal = principal;
+      if (kind === "member") {
+        await linkCanonicalOpenClawIdUserProfile({
+          profileId: fixture.profileId,
+          accountId: "stream-member",
+          email: null,
+        });
+        setOpenClawIdMemberAccountLookup(
+          (accountId) => principal?.kind === "member" && principal.accountId === accountId,
+        );
+        await setCanonicalUserProfileRole(fixture.profileId, "operator");
+        if (scenario !== "legacy member") {
+          fixture.target.operator!.assignedRole = "operator";
+        }
+        fixture.config.gateway = {
+          openclawId: { enabled: true },
+          roles: {
+            ...(scenario === "catalog member" ? {} : { default: "reader" }),
+            definitions: {
+              ...MEMBER_ROLE_PRESETS,
+              reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        };
+      }
+      setRuntimeConfigSnapshot(fixture.config);
+      if (scenario === "legacy member") {
+        await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [fixture.job] });
+        await migrateSharedOpenClawIdMemberSources(
+          {
+            profileId: fixture.profileId,
+            accountId: "stream-member",
+            role: "operator",
+            policy: MEMBER_ROLE_PRESETS.operator,
+          },
+          () => {},
+        );
+        await closeOpenClawStateDatabaseAsync();
+        const restored = (await loadCronJobsStore(fixture.storePath)).jobs[0]!;
+        expect(restored.streamSandbox).toEqual({
+          ...fixture.target,
+          operator: { ...fixture.target.operator, assignedRole: "operator" },
+        });
+        Object.assign(fixture.job, restored);
+      }
+      const savedTarget = JSON.stringify(fixture.target);
+      const serialized = JSON.parse(savedTarget);
+      expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
+      if (scenario !== "legacy member") {
+        fixture.job.streamSandbox = serialized;
+      }
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const retained = await fixture.prepare();
+        retained.assertCurrent();
+        const authority = mocks.sandbox.mock.lastCall?.[1];
+        expect(authority?.openclawIdPrincipal).toEqual(principal);
+        const captured = captureCronStreamSandboxTarget({
+          sandbox: retained.sandbox,
+          agentId: fixture.target.agentId,
+          sessionKey: fixture.target.sessionKey,
+          entry: {
+            sessionId: fixture.target.sessionId,
+            updatedAt: 1,
+            lifecycleRevision: fixture.target.lifecycleRevision,
+          },
+        });
+        expect(captured.operator?.openclawIdPrincipal).toEqual(principal);
+        if (scenario === "definition") {
+          fixture.config.gateway!.roles!.definitions.operator = MEMBER_ROLE_PRESETS.viewer;
+          setRuntimeConfigSnapshot(fixture.config);
+          publishOperatorRoleConfigChange({});
+          expect(retained.signal.aborted).toBe(false);
+          expect(retained.assertCurrent).not.toThrow();
+          await expect(fixture.prepare()).rejects.toThrow();
+          return;
+        }
+        const original = structuredClone(principal);
+        principal = undefined;
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        expect(retained.signal.aborted).toBe(false);
+        expect(retained.assertCurrent).not.toThrow();
+        const calls = mocks.sandbox.mock.calls.length;
+        await expect(fixture.prepare()).rejects.toThrow();
+        expect(mocks.sandbox.mock.calls.length).toBe(calls);
+        principal = { ...original, authority: { ...original.authority!, listedSeq: 4 } };
+        await expect(fixture.prepare()).rejects.toThrow();
+        principal = original;
+        const recovered = await fixture.prepare();
+        recovered.assertCurrent();
+        expect(retained.assertCurrent).not.toThrow();
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
+      }
     });
   },
 );

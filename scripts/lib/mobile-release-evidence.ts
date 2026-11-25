@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
@@ -29,9 +30,39 @@ function git(source: Source, ...args: string[]): string {
     cwd: source.rootDir,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: Math.min(30_000, remaining),
+    // History transfers share the generation budget; local Git reads remain bounded.
+    timeout: args[0] === "fetch" ? remaining : Math.min(30_000, remaining),
     maxBuffer: 32 * 1024 * 1024,
   });
+}
+
+function completeRangeHistory(source: Source, baseline: string): void {
+  const shallowPath = path.resolve(
+    source.rootDir,
+    git(source, "rev-parse", "--git-path", "shallow").trim(),
+  );
+  let deepen = 128;
+  while (existsSync(shallowPath)) {
+    const boundaries = new Set(readFileSync(shallowPath, "utf8").trim().split("\n"));
+    const unique = git(source, "rev-list", `${baseline}...${source.source}`).trim().split("\n");
+    // Hidden parents behind shared ancestors cannot affect baseline..source. A unique
+    // shallow root can hide changes or invent path changes by comparing to an empty tree.
+    if (!unique.some((sha) => boundaries.has(sha))) {
+      return;
+    }
+    git(
+      source,
+      "fetch",
+      "--no-tags",
+      "--refmap=",
+      "--filter=blob:none",
+      `--deepen=${deepen}`,
+      "origin",
+      source.source,
+      baseline,
+    );
+    deepen *= 2;
+  }
 }
 
 function roots(platform: Platform): string[] {
@@ -164,6 +195,9 @@ export function collectReleaseInventory(source: Source): ReleaseInventory {
   }
   if (JSON.stringify(files).length > 80_000) {
     throw new Error("Release-note file inventory exceeds its selection budget.");
+  }
+  if (source.baseline && files.length) {
+    completeRangeHistory(source, source.baseline);
   }
   // History is a discovery hint only. Selected claims must survive the endpoint diff.
   const commits =

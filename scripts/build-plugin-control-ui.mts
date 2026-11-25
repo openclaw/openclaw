@@ -1,16 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  buildPluginControlUi,
-  writePluginBuildManifest,
-} from "../src/cli/plugins-control-ui-build.js";
-import { controlUiSource, normalizeManifestControlUi } from "../src/plugins/manifest-control-ui.js";
-import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
-import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
-import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 async function buildBundledPluginControlUi(
@@ -19,8 +10,6 @@ async function buildBundledPluginControlUi(
 ): Promise<void> {
   const rootDir = path.resolve(packageDir);
   const packageManifest = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
-  const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   if (options.copy) {
     const generatedManifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "dist/openclaw.plugin.json"), "utf8"),
@@ -43,6 +32,11 @@ async function buildBundledPluginControlUi(
       { recursive: true },
     );
   } else {
+    const { readPluginAuthoringJson } = await import("../src/cli/plugins-authoring-json.js");
+    const manifest = readPluginAuthoringJson(path.join(rootDir, "openclaw.plugin.json"), true);
+    const { buildPluginControlUi, writePluginBuildManifest } =
+      await import("../src/cli/plugins-control-ui-build.js");
+    const { controlUiSource } = await import("../src/plugins/manifest-control-ui.js");
     assertRealOutputRoot(path.join(rootDir, "dist"));
     const source = controlUiSource(packageManifest);
     if (!source) {
@@ -56,6 +50,12 @@ async function buildBundledPluginControlUi(
 
 /** UI-only commands need static Settings presenters even without a runtime build. */
 async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
+  const { controlUiSource, normalizeManifestControlUi } =
+    await import("../src/plugins/manifest-control-ui.js");
+  const { copyBundledPluginMetadata } = await import("./copy-bundled-plugin-metadata.mts");
+  const { collectSourceCheckoutPluginBuildEntries } =
+    await import("./lib/bundled-plugin-build-entries.mjs");
+  const { isRecord } = await import("./lib/record-shared.mjs");
   const selected: string[] = [];
   for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })) {
     if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
@@ -87,6 +87,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     throw new Error("Pass the plugin package directory to build its Control UI assets.");
   }
   if (packageDir === "--prepare-settings") {
+    const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
     const repoRoot = path.resolve(process.argv[3] ?? ".");
     await withDistArtifactOwnership(repoRoot, () => prepareBundledSettingsControlUi(repoRoot));
   } else {

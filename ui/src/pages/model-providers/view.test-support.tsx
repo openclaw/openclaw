@@ -19,6 +19,7 @@ export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderC
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
+    configKeys: [],
     configApiKeys: [],
     modelCount: 1,
     availableModelCount: 1,
@@ -36,11 +37,14 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     providerUsageFailed: false,
     updatedAt: 1,
     onOpenUsage: () => undefined,
+    onOpenAgent: () => undefined,
+    basePath: "",
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     decisionModels: [],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
+    modelRequired: false,
     thinkingLevel: "off",
     thinkingOverridden: true,
     fastMode: false,
@@ -64,6 +68,8 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
+    addStartChat: null,
+    onAddStartChat: () => undefined,
     installedAgents: undefined,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
@@ -81,12 +87,18 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onUtilityChange: () => undefined,
     onUtilityFallbackChange: () => undefined,
     onDecisionChange: () => undefined,
+    onSubagentChange: () => undefined,
     onThinkingChange: () => undefined,
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
     onCatalogRetry: () => undefined,
-    onConnectProvider: () => undefined,
+    catalogProviders: [],
+    agentModelRef: null,
+    onCatalogConnect: () => undefined,
+    onDiscover: () => undefined,
+    discoverDisabled: false,
+    catalogSearchRef: () => undefined,
     onConnect: () => undefined,
     canConnect: () => false,
     loginBusy: false,
@@ -110,6 +122,14 @@ export function mount(viewProps: ModelProvidersViewProps, container?: HTMLElemen
 
 export function text(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+/** Opens the folded defaults (fallback, utility and decision models). */
+export function openMoreSettings(container: Element): void {
+  container
+    .querySelector<HTMLButtonElement>('[data-models-more-settings][aria-expanded="false"]')
+    ?.click();
+  flush();
 }
 
 export function settingsRow(container: Element, label: string): HTMLElement {

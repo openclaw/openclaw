@@ -87,14 +87,14 @@ export function registerCompactionSafeguardTests({
 
     let safeguard: typeof import("../agent-hooks/compaction-safeguard.js").default;
     let setSafeguardRuntime: typeof import("../agent-hooks/compaction-safeguard-runtime.js").setCompactionSafeguardRuntime;
-    let summaryBridge: typeof import("../sessions/index.js").generateSummary;
+    let summaryBridge: typeof import("../sessions/compaction/compaction.js").generateSummary;
 
     beforeAll(async () => {
       // Share the reset harness registry while retaining the real session fixture.
       safeguard = (await import("../agent-hooks/compaction-safeguard.js")).default;
       setSafeguardRuntime = (await import("../agent-hooks/compaction-safeguard-runtime.js"))
         .setCompactionSafeguardRuntime;
-      summaryBridge = (await import("../sessions/index.js")).generateSummary;
+      summaryBridge = (await import("../sessions/compaction/compaction.js")).generateSummary;
     });
 
     afterEach(() => {
@@ -228,6 +228,7 @@ export function registerCompactionSafeguardTests({
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
+      ["provider quota 429", "Provider API error (429): daily token quota exhausted", "fallback"],
       ["intentional quality rejection", undefined, "degrade"],
       ["explicit model timeout", "request timed out", "cancel"],
       // A corrective failure reuses the successful earlier summary on the same model.

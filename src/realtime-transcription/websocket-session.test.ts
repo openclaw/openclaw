@@ -359,18 +359,30 @@ it("lets providers mark ready after a JSON handshake", async () => {
   ]);
 });
 
-it.each(["connected", "closed", "superseded"] as const)(
+it.each(["connected", "closed", "superseded", "revoked"] as const)(
   "resolves async credentials: %s",
   async (phase) => {
     const url = createDeferred<string>();
+    const onError = vi.fn();
+    let revoked = false;
     let attempts = 0;
     const state: Awaited<ReturnType<typeof setup>> = await setup({
       url: () => (++attempts === 1 ? url.promise : state.url),
       headers: async () => ({ Authorization: "Bearer resolved-token" }),
+      callbacks: {
+        onError,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("transcription authority revoked");
+          }
+        },
+      },
     });
     const { session, connections } = state;
     const connecting = session.connect();
-    if (phase !== "connected") {
+    if (phase === "revoked") {
+      revoked = true;
+    } else if (phase !== "connected") {
       session.close();
     }
     if (phase === "superseded") {
@@ -382,8 +394,14 @@ it.each(["connected", "closed", "superseded"] as const)(
       await delay(20);
       expect(connections).toHaveLength(1);
     }
-    expect(state.authHeaders).toEqual(phase === "closed" ? [] : ["Bearer resolved-token"]);
-    expect(session.isConnected()).toBe(phase !== "closed");
+    const stopped = phase === "closed" || phase === "revoked";
+    expect(state.authHeaders).toEqual(stopped ? [] : ["Bearer resolved-token"]);
+    expect(session.isConnected()).toBe(!stopped);
+    if (phase === "revoked") {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "transcription authority revoked" }),
+      );
+    }
   },
 );
 

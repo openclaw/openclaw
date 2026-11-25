@@ -56,6 +56,46 @@ const device = {
   pollAfterMs: 1_000,
 };
 suite.define(() => {
+  it("opens the GitHub accounts section from Settings search without manual scrolling", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1280, height: 700 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodDelays: { "users.listModelAccounts": 300 },
+        });
+        await page.goto(suite.server.baseUrl + "settings/appearance");
+        await page.locator(".settings-sidebar__search-input").fill("GitHub accounts");
+        await page.locator('a[href$="#settings-profile-github-connections"]').click();
+        await expect(page).toHaveURL(/\/settings\/profile#settings-profile-github-connections$/);
+        const heading = page
+          .locator("#settings-profile-github-connections")
+          .getByRole("heading")
+          .first();
+        await expect(heading).toBeInViewport({ ratio: 1 });
+        await expect
+          .poll(() =>
+            heading.evaluate((node) =>
+              Math.round(
+                node.getBoundingClientRect().top -
+                  node.closest("main")!.getBoundingClientRect().top,
+              ),
+            ),
+          )
+          .toBe(16);
+        const hero = page.locator(".profile-hero");
+        await hero.scrollIntoViewIfNeeded();
+        const identityReads = (await gateway.getRequests("users.self")).length;
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.self")).length)
+          .toBeGreaterThan(identityReads);
+        await heading.waitFor();
+        await expect(hero).toBeInViewport();
+      },
+    );
+  });
+
   it("copies the personal device code and connects only the signed-in reader's GitHub", async () => {
     await suite.withPage(
       {
@@ -86,11 +126,11 @@ suite.define(() => {
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);
         await expect(connection("system")).toContainText("@system-octocat");
-        await expect(button("Change system GitHub")).toHaveCount(0);
+        await expect(button("Change shared agent account")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
-        await button("Connect my GitHub").click();
+        await button("Connect My GitHub").click();
         await expect(connection("personal").locator("[data-github-setup]")).toBeVisible();
         await expect(connection("system").locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Use a PAT instead")).toHaveCount(0);
@@ -121,7 +161,7 @@ suite.define(() => {
         await expect(section.locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Continue with GitHub")).toHaveCount(0);
         await gateway.setMethodResponse("users.github.status", status);
-        await button("Change my GitHub").click();
+        await button("Change My GitHub").click();
         await button("Disconnect").click();
         expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
         await expect(connection("personal")).toContainText("Disconnected");

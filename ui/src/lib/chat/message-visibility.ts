@@ -4,6 +4,7 @@ import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { MessageGroup, NormalizedMessage } from "./chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -25,6 +26,9 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
+  if (messageSubagentCompletions(message).length) {
+    return "text";
+  }
   if (readTranscriptMediaEntries(message).length > 0) {
     return "non-text";
   }

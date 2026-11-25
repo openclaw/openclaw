@@ -397,13 +397,13 @@ describe("buildGatewayInstallPlan", () => {
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: [bunPath, "/opt/openclaw/dist/index.js", "gateway"],
     });
-    await buildGatewayInstallPlan({ env: { HOME: isolatedHome }, port: 3000, runtime: "bun" });
-    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
-      env: { HOME: isolatedHome },
-      runtime: "bun",
-    });
+    const env = isolatedPlanEnv();
+    await buildGatewayInstallPlan({ env, port: 3000, runtime: "bun" });
+    expect(env).toEqual({ HOME: isolatedHome });
+    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({ env, runtime: "bun" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
+      env,
       port: 3000,
       allowUnconfigured: false,
       dev: false,
@@ -452,7 +452,8 @@ describe("buildGatewayInstallPlan", () => {
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     const originalArgv = process.argv;
-    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    // Outside the temp dir: temp folders are disposable and stay off the service PATH.
+    const openclawBinPath = path.resolve("/home/test/.npm-global/bin/openclaw");
     process.argv = ["node", openclawBinPath, "gateway", "install"];
     try {
       await buildNodePlan({

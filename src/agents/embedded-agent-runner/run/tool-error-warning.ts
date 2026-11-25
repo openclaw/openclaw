@@ -31,6 +31,7 @@ export function buildFailureWarning(params: {
     return undefined;
   }
   const includeDetails = params.verboseLevel === "full";
+  const toolName = params.lastToolError.dispatchedToolName ?? params.lastToolError.toolName;
   const validationErrorSummary = summarizeToolValidationError(params.lastToolError);
   const failureVerb =
     params.lastToolError.executionStarted === false && !validationErrorSummary
@@ -38,7 +39,7 @@ export function buildFailureWarning(params: {
       : "failed";
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
   if (terminalDiagnostic?.kind === "timeout") {
-    const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
+    const toolLabel = resolveToolDisplay({ name: toolName }).label;
     const count = terminalDiagnostic.partialResults;
     const partialSuffix = count
       ? `; ${count} partial ${count === 1 ? "result is" : "results are"} available`
@@ -73,8 +74,8 @@ export function buildFailureWarning(params: {
       : validationErrorSummary
         ? ": invalid arguments"
         : "";
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
-    const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
+  if (isExecLikeToolName(toolName)) {
+    const toolLabel = resolveToolDisplay({ name: toolName }).label;
     const subject = includeDetails
       ? formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown)
       : "";
@@ -85,7 +86,7 @@ export function buildFailureWarning(params: {
   }
 
   const toolSummary = formatWarningToolLabel(
-    params.lastToolError.toolName,
+    toolName,
     includeDetails && params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
     params.useMarkdown,
   );

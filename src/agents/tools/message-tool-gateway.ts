@@ -61,7 +61,7 @@ export function createMessageToolGateway(
           invocation?.resolveConfig,
           () =>
             bindAgentToolGatewayRequest({
-              revalidateOnCompletion: !invocation?.preserveWriteOutcome,
+              forwardAbortSignal: !invocation?.preserveWriteOutcome,
             }),
         )
       : undefined;

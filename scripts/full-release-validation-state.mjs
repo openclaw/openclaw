@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -54,18 +54,19 @@ import {
   buildReleaseValidationManifest,
   manifestContextFromEnvironment,
   releaseManifestChildEvidence,
+  releaseManifestRootPublication,
 } from "./lib/full-release-manifest.mjs";
-import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
-  evaluateReleaseChildPolicy,
-  validateReleaseWaiverAggregates,
-} from "./lib/release-validation-waivers.mjs";
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionSourceIdentity,
+} from "./lib/release-beta-promotion.mjs";
+import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
+import { isWaived } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
-const execFileAsync = promisify(execFile);
 const RELEASE_SUMMARY_PATH =
   process.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR ??
   fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url));
@@ -128,7 +129,7 @@ async function runGh(args, options = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const result = await execFileAsync("gh", args, {
+      const result = await promisify(childProcess.execFile)("gh", args, {
         encoding: "utf8",
         env: process.env,
         killSignal: "SIGKILL",
@@ -255,6 +256,15 @@ export async function readChild(child, previous, signal, options = {}) {
   if (!child.selected) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
+  if (
+    isWaived({
+      childRole: child.key,
+      targetVersion: options.targetVersion,
+      targetSha: options.targetSha,
+    })
+  ) {
+    return { ...child, errors: [], jobs: [], status: "missing" };
+  }
   if (!child.runId || !child.runAttempt) {
     const error = issue("dispatch_missing", child, `${child.key} omitted its exact run identity`);
     return { ...child, errors: [error], jobs: [], status: "missing" };
@@ -313,33 +323,11 @@ export async function readChild(child, previous, signal, options = {}) {
       },
       run,
     });
-    const snapshot = validateChildBinding(child, run, {
+    return validateChildBinding(child, run, {
       jobs: evidence.jobs,
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
-    if (snapshot.status === "completed") {
-      const policy = evaluateReleaseChildPolicy({
-        child: snapshot,
-        targetVersion: options.targetVersion,
-      });
-      const jobs = evidence.jobs.map((job) =>
-        attempts
-          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-          .jobs.find((raw) => raw.name === job.name),
-      );
-      await validateReleaseWaiverAggregates({
-        policy,
-        jobs,
-        getJobLog:
-          options.readJobLog ??
-          ((id) =>
-            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
-              signal,
-            })),
-      });
-    }
-    return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
@@ -480,6 +468,10 @@ async function validateReuse(executionPlan, signal) {
         validateReusableReleaseChild(selection, {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
+          policyTargetVersion: executionPlan.targetVersion,
+          requiredJobs: executionPlan.qualificationCoverage?.children.find(
+            ({ key }) => key === role,
+          )?.requiredJobs,
           workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,
@@ -560,7 +552,7 @@ async function validateReuse(executionPlan, signal) {
         }),
       );
     }
-    const result = await execFileAsync(process.execPath, args, {
+    const result = await promisify(childProcess.execFile)(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
       killSignal: "SIGKILL",
@@ -593,13 +585,26 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence manifest differs from the immutable plan");
     }
-    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    const promotion = evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    // The frozen admitted coverage is checked above. Only its version-derived
+    // npm-stable label differs between the beta and final candidates.
+    if (!promotion) {
+      validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    }
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
     });
     if (
-      JSON.stringify(publicationSourceReuseIdentity(source)) !==
-      JSON.stringify(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(source))
+          : publicationSourceReuseIdentity(source),
+      ) !==
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+          : publicationSourceReuseIdentity(executionPlan.sourceAdmission),
+      )
     ) {
       throw new Error("reused source admission differs from the requested publication source");
     }
@@ -775,6 +780,22 @@ function publicationKnownBudget(record, evidenceReuse, reusedManifest) {
     resolveTargetResult: "success",
     evidenceReuse: evidenceReuse?.requested === true,
   };
+  // Build-only plans require the admitted coverage the sealed plan will carry.
+  if (context.rerunGroup === "build-only") {
+    const event = readArtifact(
+      requiredString(process.env.GITHUB_EVENT_PATH, "workflow event path"),
+      "workflow event",
+    );
+    inputs.qualificationInputs = event.inputs;
+    inputs.qualificationCoverage = verifyQualificationAdmission({
+      descriptor: source.qualificationAdmission,
+      repository: source.repository,
+      candidateSha: source.candidateSha,
+      qualificationSha: source.workflow.sha,
+      workflowRef: context.workflowRef,
+      inputs: event.inputs,
+    }).coverage;
+  }
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildReleaseExecutionPlanArtifact({
     ...record,
@@ -1040,7 +1061,26 @@ async function publicationMode(mode) {
       throw new Error("invalid publication upload action digest");
     }
     uploaded.digest = `sha256:${uploaded.digest}`;
-    const metadata = createReleaseEvidenceClient(source.repository).getArtifact(uploaded.id);
+    const client = createReleaseEvidenceClient(source.repository);
+    let metadata;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        metadata = client.getArtifact(uploaded.id);
+        break;
+      } catch (error) {
+        // A successful upload can precede metadata visibility. Retry only its exact ID;
+        // authentication errors and invalid metadata remain fatal, without a name fallback.
+        if (attempt >= 4 || !(error instanceof Error) || !/HTTP 404\b/u.test(error.message)) {
+          throw error;
+        }
+        const delay = 1000 * 2 ** attempt;
+        console.warn(
+          `Publication artifact ${uploaded.id} is not visible yet; retrying in ${delay}ms`,
+        );
+        await abortableSleep(delay);
+      }
+    }
+
     const descriptor = validatePublicationObservationArtifactIdentity(metadata, source, uploaded);
     admission = createPublicationAdmission(
       source,
@@ -1060,9 +1100,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-async function writeManifestMode() {
-  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
-  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+async function reuseManifestForPlan(plan) {
   let reusedManifest = plan.evidenceReuse.sourceManifest;
   if (plan.evidenceReuse.requested && !reusedManifest) {
     const reuse = await validateReuse(plan);
@@ -1071,13 +1109,23 @@ async function writeManifestMode() {
     }
     reusedManifest = reuse.sourceManifest;
   }
+  return reusedManifest;
+}
+
+async function writeManifestMode() {
+  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
+  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+  const reusedManifest = await reuseManifestForPlan(plan);
   const manifest = buildReleaseValidationManifest({
     plan,
     drain,
     context: manifestContextFromEnvironment(plan.sourceAdmission),
     reusedManifest,
   });
-  if (manifest.sourceAdmission?.validationPurpose === "publish" && manifest.rerunGroup === "all") {
+  if (
+    manifest.sourceAdmission?.validationPurpose === "publish" &&
+    ["all", "build-only"].includes(manifest.rerunGroup)
+  ) {
     const outputDir = mkdtempSync(
       join(
         requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
@@ -1276,6 +1324,7 @@ async function planMode() {
     sourceAdmission: planInputs.sourceAdmission,
     publicationAdmissionContract: planInputs.publicationAdmissionContract,
     publicationAdmission: planInputs.publicationAdmission,
+    publicationArtifactSource: planInputs.publicationArtifactSource,
     qualificationCoverage: planInputs.qualificationCoverage,
     qualificationInputs: planInputs.qualificationInputs,
     candidate,
@@ -1392,6 +1441,7 @@ async function collectMode(mode) {
   const abortController = new AbortController();
   let decisionReuse = { blockers: [], children: plan, errors: [] };
   let transport = { status: "certain" };
+  const qualificationCoverage = executionPlan.qualificationCoverage;
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
@@ -1428,7 +1478,9 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1489,17 +1541,21 @@ async function collectMode(mode) {
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         }),
       ),
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
+    const extraErrors = [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors,
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1527,16 +1583,25 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
+          qualificationCoverage,
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         });
       }
     }
+    // The displayed errors are capped; drain admission uses every fatal input.
+    const hasFatalError =
+      extraErrors.length > 0 ||
+      snapshots.some(
+        (child) =>
+          child.selected && child.errors.some((error) => error.kind !== "dispatch_missing"),
+      );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          (decision.state === "orchestration_error" ||
+          ((decision.state === "orchestration_error" && hasFatalError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
@@ -1580,7 +1645,7 @@ function readStateCandidates(root, prefix, runId, maxParentRunAttempt, filename)
   return candidates;
 }
 
-async function validateManifestMode() {
+async function validateManifestMode({ preserveValidationOutcome = false } = {}) {
   const expected = stateArtifactExpected();
   const manifestPath = requiredString(
     process.env.RELEASE_VALIDATION_MANIFEST_PATH,
@@ -1593,23 +1658,46 @@ async function validateManifestMode() {
   const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
   const verified =
     executionPlan.attemptEvidenceVersion !== undefined
-      ? verifyReleaseStateArtifacts(
-          executionPlanPayload,
-          readArtifact(
+      ? (() => {
+          const decision = readArtifact(
             requiredString(process.env.RELEASE_DECISION_PATH, "release decision path"),
             "release decision",
-          ),
-          readArtifact(
+          );
+          const drain = readArtifact(
             requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
             "diagnostic drain",
-          ),
-          { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
-        )
+          );
+          const stateExpected = {
+            ...expected,
+            effectiveGates: effectiveReleasePlanGates(executionPlan.gates),
+          };
+          // Retain failed validation honestly, without weakening state identity,
+          // plan binding, or monotonic decision-to-drain evidence checks.
+          return preserveValidationOutcome
+            ? selectReleaseStateArtifacts(
+                executionPlanPayload,
+                [
+                  {
+                    name: `full-release-decision-${executionPlan.parentRunId}-${decision.parentRunAttempt}`,
+                    payload: decision,
+                  },
+                ],
+                [
+                  {
+                    name: `full-release-diagnostics-${executionPlan.parentRunId}-${drain.parentRunAttempt}`,
+                    payload: drain,
+                  },
+                ],
+                stateExpected,
+              )
+            : verifyReleaseStateArtifacts(executionPlanPayload, decision, drain, stateExpected);
+        })()
       : undefined;
   const drain = verified?.drain;
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    deferWaiverPolicy: preserveValidationOutcome,
     sourceAdmissionContract: expected.sourceAdmissionContract,
     candidateBinding: executionPlan.candidate ?? null,
     repository: expected.repository,
@@ -1647,6 +1735,10 @@ async function validateManifestMode() {
       child.selected ? stringValue(child.runId) : "",
     ]),
   );
+  const rootPublication = releaseManifestRootPublication(
+    await reuseManifestForPlan(executionPlan),
+    executionPlan.evidenceReuse,
+  );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {
         changedPaths: executionPlan.evidenceReuse.changedPaths,
@@ -1654,6 +1746,7 @@ async function validateManifestMode() {
         policy: executionPlan.evidenceReuse.policy,
         runId: executionPlan.evidenceReuse.rootRunId,
         selectedRunId: executionPlan.evidenceReuse.selectedRunId,
+        ...(rootPublication ? { publication: rootPublication } : {}),
       }
     : undefined;
   const expectedChildEvidence = drain
@@ -1747,6 +1840,8 @@ function main() {
       return selectMode();
     case "validate-manifest":
       return validateManifestMode();
+    case "validate-manifest-evidence":
+      return validateManifestMode({ preserveValidationOutcome: true });
     case "decision":
     case "drain":
       return collectMode(mode);

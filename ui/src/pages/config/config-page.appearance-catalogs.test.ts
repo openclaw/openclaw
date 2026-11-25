@@ -155,11 +155,11 @@ describe("ConfigPage model catalog lifecycle", () => {
         "manage plugins link",
       );
       await waitForSolid(() => expect(pluginRequests).toBe(1));
-      await waitForSolid(() => expect(section.textContent).toContain("Loading…"));
+      await waitForSolid(() => expect(section.querySelector('[aria-busy="true"]')).not.toBeNull());
 
       first.reject(new Error("catalog unavailable"));
       await waitForSolid(() =>
-        expect(section.textContent).toContain("Session source settings are unavailable."),
+        expect(section.textContent).toContain("Couldn’t load session sources."),
       );
       expect(section.querySelector("a")).toBe(manage);
       source.publish({ ...source.gateway.snapshot, hello: hello() });

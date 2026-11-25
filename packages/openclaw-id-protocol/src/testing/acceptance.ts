@@ -8,7 +8,7 @@ export type AcceptanceOwner = "loader" | "gateway" | "tunnel-child" | "discovery
 export type AcceptanceCase = {
   id: number;
   title: string;
-  /** Protocol-level coverage in src/acceptance/*.test.ts (empty when only the full system can show it). */
+  /** Protocol-level coverage in this package (false when only the full system can show it). */
   protocol: boolean;
   /** Tests that need the full system, with the component that owns them. */
   integration: { name: string; owner: AcceptanceOwner; asserts: string }[];
@@ -121,7 +121,7 @@ export const SPEC_11_ACCEPTANCE: readonly AcceptanceCase[] = [
   },
   {
     id: 9,
-    title: "a claw's root never changes: no statement or descriptor replaces the pinned root",
+    title: "only an owner reset vouched for by K_gw replaces a claw's root, and no pin moves to it",
     protocol: true,
     integration: [
       {

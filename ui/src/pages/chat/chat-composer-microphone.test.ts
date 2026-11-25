@@ -18,6 +18,11 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discover = vi.fn();
+const { navigateToModelProvider } = vi.hoisted(() => ({ navigateToModelProvider: vi.fn() }));
+vi.mock(import("../model-providers/navigation.ts"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  navigateToModelProvider,
+}));
 const copy = (key: string) => t(`chat.composer.${key}`);
 const emptyDevices = { devices: [], issue: "none-found" };
 const studio = { deviceId: "studio-mic", label: "Studio microphone" };
@@ -272,6 +277,55 @@ it.each([
   },
 );
 
+it("points a sign-in without voice to its provider's API key", async () => {
+  discover.mockResolvedValue(emptyDevices);
+  const openai = { id: "openai", label: "OpenAI", configured: false, apiKeyRequired: true };
+  const request = vi.fn(async (method: string) => {
+    if (method === "talk.config") {
+      return { config: {} };
+    }
+    if (method === "talk.catalog") {
+      return {
+        speech: { providers: [] },
+        realtime: { ready: false, activeProvider: "openai", providers: [openai] },
+        transcription: { ready: false, activeProvider: "openai", providers: [openai] },
+      };
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const onToggleRealtimeTalk = vi.fn();
+  const onOpenModelProvider = navigateToModelProvider.mockReset();
+  const v = await mountPicker({
+    gatewayClient: { request } as unknown as GatewayBrowserClient,
+    onToggleRealtimeTalk,
+    onOpenTalkSettings: vi.fn(),
+    onOpenDictationSettings: vi.fn(),
+  });
+  const voice = "Talk and Dictation need an OpenAI API key.";
+  const talk = "Talk needs an OpenAI API key.";
+  // Tapping Talk explains the missing key in place instead of opening the picker.
+  await waitForSolid(() => {
+    button(v.root, copy("startVoiceInput")).click();
+    expect(v.root.querySelector(".agent-chat__composer-alert")?.textContent ?? "").toContain(talk);
+  });
+  expect(v.dropdown.hasAttribute("open")).toBe(false);
+  v.root.querySelector<HTMLButtonElement>(".agent-chat__composer-alert .btn")!.click();
+  expect(onOpenModelProvider).toHaveBeenLastCalledWith(expect.anything(), "main", "openai");
+  // Talk and dictation miss the same key, so the picker names one fix.
+  onOpenModelProvider.mockClear();
+  await v.open();
+  const rows = await waitForSolid(() => {
+    const found = v.all("[data-chat-talk-capability]");
+    expect(found.map((row) => row.textContent)).toEqual([expect.stringContaining(voice)]);
+    return found;
+  });
+  rows[0]!.click();
+  await waitForSolid(() =>
+    expect(onOpenModelProvider).toHaveBeenCalledWith(expect.anything(), "main", "openai"),
+  );
+  expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+});
+
 it.each([
   ["none-found", "microphoneNoneFound", false, false],
   ["list-unsupported", "microphoneListUnsupported", false, false],
@@ -287,23 +341,23 @@ it.each([
   if (hasInputs) {
     await v.count(2);
     expect(v.checked()).toEqual(["true", "false"]);
-    expect(v.part("warning")?.textContent?.trim()).toBe(copy(messageKey));
+    expect(v.part("alert")?.textContent?.trim()).toBe(copy(messageKey));
     expect(v.part("empty")).toBeNull();
     expect(v.part("hint")?.textContent).toContain(copy("microphoneAppliesNextSession"));
     await v.escape();
   } else {
     const empty = await waitForSolid(() => {
-      const node = v.part("empty");
+      const node = v.part(fault ? "alert" : "empty");
       expect(node?.textContent?.trim()).toBe(copy(messageKey));
       return node;
     });
     expect(v.items()).toHaveLength(0);
-    for (const name of ["note", "warning", "hint"]) {
+    for (const name of ["note", "hint"]) {
       expect(v.part(name)).toBeNull();
     }
-    expect(v.all(".chat-talk-input-picker__empty")).toHaveLength(1);
+    expect(v.all(`.chat-talk-input-picker__${fault ? "alert" : "empty"}`)).toHaveLength(1);
     expect(empty?.getAttribute("role")).toBe("status");
-    expect(empty?.classList.contains("chat-talk-input-picker__empty--fault")).toBe(fault);
+    expect(empty?.classList.contains("warn")).toBe(fault);
   }
 });
 

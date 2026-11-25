@@ -58,6 +58,7 @@ describe("talk.config contract fixtures", () => {
       }
 
       if (!fixture.expectedSelection) {
+        expect(payload.config.talk?.resolved).toBeUndefined();
         return;
       }
 

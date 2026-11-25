@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
@@ -109,7 +109,7 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
     });
     // The admin request source lives through admission, then closes before the job's tool call.
     const source = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client, context }),
+      await prepareGatewayOperatorRunAuthority({ client, context }),
       "operator request source",
     );
     client.internal = { operatorRunAuthority: source.authority };

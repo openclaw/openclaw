@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { Header } from "tar";
+import { Header } from "tar/raw";
 import { expect, vi, type Mock } from "vitest";
 
 type InvokeNode = OpenClawPluginNodeInvokePolicyContext["invokeNode"];

@@ -32,6 +32,51 @@ const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
+it.each(["(params) {", "(e) {", "(e){"])(
+  "injects the upgrade deadline into a built plugin owner %s",
+  (signature) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-deadline-"));
+    try {
+      const dist = join(root, "dist");
+      mkdirSync(dist);
+      writeFileSync(
+        join(dist, "update-command-plugins-fixture.mjs"),
+        `export async function updatePluginsAfterCoreUpdate${signature} return "uninterrupted"; }`,
+      );
+      const error = "Update finalization timed out in plugins after 15000ms";
+      writeFileSync(
+        join(dist, "writer.mjs"),
+        `function mutateConfigFileWithRetry() { throw new Error(${JSON.stringify(error)}); }
+export { mutateConfigFileWithRetry as write };`,
+      );
+      execFileSync(testNodeExecPath, [
+        "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs",
+        "deadline-hook",
+        root,
+        root,
+      ]);
+      const driver = join(root, "driver.mjs");
+      writeFileSync(
+        driver,
+        `import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+globalThis.setTimeout = callback => queueMicrotask(callback);
+await import(pathToFileURL(${JSON.stringify(join(root, "repair-deadline-hook.mjs"))}).href);
+const { updatePluginsAfterCoreUpdate } = await import(pathToFileURL(${JSON.stringify(join(dist, "update-command-plugins-fixture.mjs"))}).href);
+await assert.rejects(updatePluginsAfterCoreUpdate({ configWriteOptions: {} }), { message: ${JSON.stringify(error)} });`,
+      );
+      execFileSync(testNodeExecPath, [driver, "update", "repair"]);
+      expect(JSON.parse(readFileSync(join(root, "deadline-write-refused.json"), "utf8"))).toEqual({
+        phase: "plugins",
+        deadlineMs: 15_000,
+        refused: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
@@ -263,6 +308,105 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      { step: "activating", status: "completed" },
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "activating", status: "failed" }] },
+      status: 1,
+    },
+  ])("classifies lifecycle receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each([true, false])(
+    "requires serving Gateway verification for resident restart: %s",
+    (ready) => {
+      const version = lifecycle.after.version;
+      const buildId = "fixture-build";
+      const result = runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...lifecycle,
+          target: { version },
+          after: { version, buildId },
+          verification: {
+            runningVersion: version,
+            runningBuildId: buildId,
+            booted: true,
+            coreReady: ready,
+            serviceRunning: true,
+            versionMatch: true,
+          },
+        },
+        version,
+        "",
+        "1",
+      );
+      expect(result.status, result.stderr).toBe(ready ? 0 : 1);
+      expect(result.stdout).toBe(ready ? "resident" : "");
+    },
+  );
+
+  it.each([
+    { name: "skipped startup", patch: {}, succeeds: true },
+    { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },
+    { name: "unclassified skip", patch: { advisory: undefined }, succeeds: false },
+    { name: "another step", patch: { name: "database migration" }, succeeds: false },
+    { name: "timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed process", patch: { killed: true }, succeeds: false },
+    { name: "truncated output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "failure facts",
+      patch: { failureFacts: [{ code: "startup-failed" }] },
+      succeeds: false,
+    },
+  ])("classifies activated Gateway $name", ({ patch, succeeds }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      {
+        status: "ok",
+        after: { version: "2026.11.5" },
+        steps: [
+          {
+            name: "activated-gateway-startup",
+            exitCode: null,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message:
+                "This profile does not configure a local Gateway; the activated release was not started.",
+            },
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      },
+      "2026.11.5",
+    );
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+    if (!succeeds) {
+      expect(result.stderr).toContain("successful update contained a failed core step");
+    }
+  });
+
   it.each<{
     name: string;
     patch?: Record<string, unknown>;
@@ -753,12 +897,13 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     writeSharedRuntimeCaches(stateDir);
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
+      version: "2026.11.5-beta.1",
     });
     writeJson(join(stateDir, "plugins", "installs.json"), {
       installRecords: {
         matrix: {
           source: "clawhub",
-          spec: "clawhub:@openclaw/matrix",
+          spec: "clawhub:@openclaw/matrix@beta",
           installPath: matrixInstallDir,
           clawhubPackage: "@openclaw/matrix",
           clawhubChannel: "official",
@@ -772,16 +917,21 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
       acceptedIntents: ["configured-plugin-installs"],
     });
 
-    execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
-      },
-      stdio: "pipe",
-    });
+    for (const args of [
+      ["assert-baseline-plugin", "2026.11.5-beta.1", "matrix", "beta"],
+      ["assert-state"],
+    ]) {
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, ...args], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
+        },
+        stdio: "pipe",
+      });
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -975,6 +1125,7 @@ function assertCompanionPluginRecords(
       for (const file of [
         "release-version.mjs",
         "sqlite-transcript-payload.mjs",
+        "update-receipt.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {
@@ -1362,12 +1513,6 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ) as string[];
 
-    expect(scenarios).toContain("base");
-    expect(scenarios).toContain("codex-allowlist-survival");
-    expect(scenarios).toContain("mobile-pairing-reconnect");
-    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
-    expect(scenarios).toContain("prerelease-plugin-registry");
-    expect(scenarios).toContain("sqlite-volume");
     expect(scenarios).toEqual(UPGRADE_SURVIVOR_ASSERTION_SCENARIOS);
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
@@ -2126,7 +2271,8 @@ process.stdout.write(JSON.stringify(result));
     ).toThrow(/retained retired sessionFile metadata/);
   });
 
-  it("rejects ClawHub npm-pack installs outside the managed extensions root", () => {
+  it("accepts ClawHub npm-pack installs only inside the managed extensions root", () => {
+    expect(() => assertConfiguredPluginState()).not.toThrow();
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-outside-"));
     try {
       expect(() =>

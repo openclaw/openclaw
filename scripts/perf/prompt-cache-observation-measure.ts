@@ -8,6 +8,8 @@
 // allocations separately, including collected objects. --measure promotion with
 // --trace-gc-nvp brackets the warm workload for a separate promotion pass.
 // --replacements also replays owner-recorded truncations. CPU includes request preparation.
+// --allow-eviction permits tracker-capacity stress; trackerReleasedBytes measures
+// diagnostic baselines after all transcript/request sources have been released.
 // All fixtures are synthetic; identity probes run separately from measured calls.
 // --hydration retained reprojects the same writable startup history each request.
 // --boundary-owner /absolute/base.ts selects the baseline request-boundary module.
@@ -31,7 +33,7 @@ import {
   recordToolResultPromptProjection,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../../src/agents/embedded-agent-runner/tool-result-projection-key.js";
-import { replayToolResultPromptProjections } from "../../src/agents/embedded-agent-runner/tool-result-projection-replay.js";
+import { projectToolResultMessages } from "../../src/agents/embedded-agent-runner/tool-result-truncation.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
@@ -43,6 +45,7 @@ const { values } = parseArgs({
   options: {
     envelopes: { type: "string", default: "sealed" },
     "reuse-view": { type: "boolean", default: false },
+    "allow-eviction": { type: "boolean", default: false },
     hydration: { type: "string", default: "shared" },
     "boundary-owner": { type: "string" },
     "observer-owner": { type: "string" },
@@ -207,13 +210,14 @@ function hydrate(session: ReturnType<typeof createSession>) {
   session.messages = convertToLlm(
     values.envelopes === "projected"
       ? normalizeMessagesForLlmBoundary(
-          replayToolResultPromptProjections(
-            bindToolResultPromptProjectionKeys(
+          projectToolResultMessages({
+            messages: bindToolResultPromptProjectionKeys(
               messages,
               createToolResultPromptProjectionState(session.projections),
             ),
-            session.projections,
-          ),
+            // Replay the admitted bytes without advancing the session's pruning state.
+            projectionState: createToolResultPromptProjectionState(session.projections),
+          }).messages,
           { sessionVersion: 4, appendOnlyRuntimeContext: true, includeTimestamp: false },
         )
       : messages,
@@ -388,7 +392,9 @@ if (inspector) {
   await writeFile(values.output, JSON.stringify(profile));
   inspector.disconnect();
 }
-assert.equal(stablePrefixes, calls);
+if (!values["allow-eviction"]) {
+  assert.equal(stablePrefixes, calls);
+}
 const firstViewsAliveAfterReplacement = firstViews.filter((ref) => ref.deref()).length;
 const currentViews = sessions.flatMap(({ messages }) =>
   messages.map((message) => new WeakRef(message)),
@@ -421,8 +427,11 @@ for (const session of sessions) {
   session.entries.length = 0;
   session.retainedMessages = undefined;
 }
+await collect();
+const trackerRetainedBytes = process.memoryUsage().heapUsed;
 clearPromptCacheObservations();
 await collect();
+const trackerReleasedBytes = trackerRetainedBytes - process.memoryUsage().heapUsed;
 const viewsAliveAfterSourceRelease = currentViews.filter((ref) => ref.deref()).length;
 const residentMessages = sessionCount * messageCount;
 console.log(
@@ -431,6 +440,7 @@ console.log(
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     replacements: values.replacements,
+    trackerReleasedBytes,
     sampledBytes,
     fingerprintSampledBytes,
     viewsAliveAfterSourceRelease,
@@ -463,6 +473,7 @@ console.log(
     warmCpuMsPerCall: cpuMicros / 1000 / calls,
     warmMsPerCall: observationMs / calls,
     warmCalls: calls,
+    stablePrefixes,
     gc,
     fixtureDigest,
   }),

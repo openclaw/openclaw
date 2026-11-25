@@ -8,12 +8,14 @@ import {
 } from "./test-helpers/plugin-registration-contract.js";
 
 export {
+  registerProviderPlugins as registerProviders,
+  requireRegisteredProvider as requireProvider,
+} from "../test-utils/plugin-registration.js";
+export {
   assertNoImportTimeSideEffects,
   createPluginRegistryFixture,
-  registerProviders,
   registerTestPlugin,
   registerVirtualTestPlugin,
-  requireProvider,
 } from "./test-helpers/contracts-testkit.js";
 export { describePackageManifestContract } from "./test-helpers/package-manifest-contract.js";
 export { pluginRegistrationContractCases } from "./test-helpers/plugin-registration-contract-cases.js";

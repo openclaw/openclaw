@@ -53,7 +53,12 @@ function evaluate(options: Options = {}) {
       rollout: { "pull-request": rolloutNumber },
       exclude: {},
       categories: { test: { description: "Test", review: "Check", paths: ["test/**"] } },
-      dependencies: { manifests: ["package.json"], lockfiles: ["lock"], other: ["patch"] },
+      dependencies: {
+        manifests: ["package.json"],
+        "release-manifests": ["package.json"],
+        lockfiles: ["lock"],
+        other: ["patch"],
+      },
       ...options.policy,
     }),
   );

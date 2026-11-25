@@ -3,6 +3,7 @@ import { sql, type RawBuilder } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
 export type TranscriptPayloadAlias = "transcript_events" | "event" | "te" | "parent";
@@ -23,23 +24,37 @@ function registerDecoder(database: DatabaseSync): void {
 }
 
 function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): string {
-  if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength === 0 ||
-    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-    typeof rawBytes !== "number" ||
-    !Number.isSafeInteger(rawBytes) ||
-    rawBytes < 1 ||
-    rawBytes > MAX_COMPRESSED_EVENT_BYTES
-  ) {
-    throw new Error("Invalid compressed transcript payload bounds");
+  if (bytes === null) {
+    throw new SessionTranscriptColdError();
   }
-  const codec = resolveZstdCodec();
-  const decoded = codec.decompress(bytes, rawBytes);
-  if (decoded.byteLength !== rawBytes) {
-    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
+  try {
+    if (
+      !(bytes instanceof Uint8Array) ||
+      bytes.byteLength === 0 ||
+      bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
+      typeof rawBytes !== "number" ||
+      !Number.isSafeInteger(rawBytes) ||
+      rawBytes < 1 ||
+      rawBytes > MAX_COMPRESSED_EVENT_BYTES
+    ) {
+      throw new Error("Invalid compressed transcript payload bounds");
+    }
+    const decoded = resolveZstdCodec().decompress(bytes, rawBytes);
+    if (decoded.byteLength !== rawBytes) {
+      throw new Error(
+        "Compressed transcript payload length does not match its recorded UTF-8 size",
+      );
+    }
+    return utf8Decoder.decode(decoded);
+  } catch (cause) {
+    throw Object.assign(
+      new Error(
+        `Corrupt transcript body: ${cause instanceof Error ? cause.message : String(cause)}. Restore a verified backup and run openclaw doctor.`,
+        { cause },
+      ),
+      { name: "SessionTranscriptCorruptionError", code: "TRANSCRIPT_CORRUPT" },
+    );
   }
-  return utf8Decoder.decode(decoded);
 }
 
 /** Decode selected rows without copying expanded payloads back through SQLite. */

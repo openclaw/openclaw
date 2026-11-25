@@ -1,0 +1,9 @@
+# Participate split, part 1 (member access storage and protocol), measured against
+# origin/main 7651c99: 518 net test lines, less the 400-line allowance.
+# The excess proves the v44 member-access migration on SQLite and PostgreSQL,
+# independent worker persistence and commit publication of access changes,
+# session actor memory storage, and the new protocol contracts (setAccess,
+# member-access evidence, mention access options, participant approval events),
+# reusing existing shared fixtures, plus refusals of access levels that
+# member add and mentions cannot enforce yet.
+118

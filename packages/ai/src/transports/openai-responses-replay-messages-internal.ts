@@ -3,9 +3,10 @@ import {
   isRuntimeContextMessage,
   runtimeContextContentToText,
   type Api,
-  type AssistantMessage,
+  type AssistantHistoryMessage,
   type Context,
   type Model,
+  type PreparedSystemPrompt,
 } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
@@ -14,7 +15,7 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
-import { getAiTransportHost } from "../host.js";
+import { getAiTransportHost, type AiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { preparedRequestSuffix } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
@@ -25,8 +26,11 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
+import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
+import { anchorRuntimeContextCarriers } from "./openai-responses-carrier-anchoring.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
+  readOpenAIResponsesItemRecoveryAnchor,
   isSafeResponsesReplayItemId,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -36,6 +40,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
   RESPONSES_RETAINED_USER,
+  RESPONSES_SYSTEM_PROMPT,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
@@ -44,7 +49,7 @@ import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoi
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import {
   normalizeOpenAIResponsesReasoningReplayItem,
-  resolveReplayableResponsesMessageId,
+  replayOpenAIResponsesToolArguments,
 } from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
@@ -139,19 +144,9 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   );
 }
 
-function normalizeResponsesReplayItemId(id: string | undefined): string | undefined {
-  if (!id) {
-    return undefined;
-  }
-  if (id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
-    return id;
-  }
-  return `msg_${shortHash(id)}`;
-}
-
 export { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
-function responsesAssistantTurnKey(message: AssistantMessage) {
+function responsesAssistantTurnKey(message: AssistantHistoryMessage) {
   // Early fragments keep this identity when the provider ID arrives at completion.
   const id = message.turnId || message.responseId;
   return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
@@ -199,43 +194,6 @@ function orderResponsesAsyncToolResults(source: Context["messages"]): Context["m
   return ordered;
 }
 
-function parseOpenAIResponsesTextSignature(
-  signature: string | undefined,
-): { id?: string; phase?: "commentary" | "final_answer"; sources?: string } | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as {
-        v?: unknown;
-        id?: unknown;
-        phase?: unknown;
-        sources?: unknown;
-      };
-      if (parsed.v === 1) {
-        const id = typeof parsed.id === "string" ? parsed.id : undefined;
-        const phase =
-          parsed.phase === "commentary" || parsed.phase === "final_answer"
-            ? parsed.phase
-            : undefined;
-        // A reasoning-dropped replay keeps the phase but omits the paired id.
-        if (id !== undefined || phase !== undefined) {
-          return {
-            id,
-            phase,
-            ...(typeof parsed.sources === "string" ? { sources: parsed.sources } : {}),
-          };
-        }
-        return undefined;
-      }
-    } catch {
-      // Keep legacy plain-string behavior below.
-    }
-  }
-  return { id: signature };
-}
-
 const responsesInputSource = Symbol("openclaw.responsesInputSource");
 
 /** Source identity survives payload spreads but never enters serialized provider input. */
@@ -270,18 +228,31 @@ export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
-  authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
+  onItemRecovery?: () => void;
 };
 
 // Weak source keys release projections with history. Keep a bounded set of route/position
 // variants so interleaved requests reuse their own result without retaining every route.
-const responsesMessageProjections = new WeakMap<
-  Context["messages"][number],
-  Map<string, ResponseInput>
->();
+type ResponsesMessageSource = Context["messages"][number] | PreparedSystemPrompt;
+const messageProjections = new WeakMap<ResponsesMessageSource, Map<string, ResponseInput>>();
+
+function publishResponsesProjection(
+  source: ResponsesMessageSource,
+  key: string,
+  output: ResponseInput,
+  immutable: NonNullable<AiTransportHost["immutableData"]>,
+): void {
+  const projections = messageProjections.get(source) ?? new Map<string, ResponseInput>();
+  const oldest = projections.size >= 8 ? projections.keys().next().value : undefined;
+  if (oldest !== undefined) {
+    projections.delete(oldest);
+  }
+  projections.set(key, immutable.freezeJsonSnapshot(output));
+  messageProjections.set(source, projections);
+}
 
 /** Detach hook-editable JSON containers while retaining scalar strings. */
 export function cloneResponsesInputForPayloadHook<T>(value: T): T {
@@ -312,7 +283,6 @@ function convertResponsesMessagesWithStyle(
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
   });
   const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const sanitizeIdPart = (part: string) => {
@@ -357,9 +327,11 @@ function convertResponsesMessagesWithStyle(
   };
   const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
+  if (replayPlan.itemRecovery) {
+    options?.onItemRecovery?.();
+  }
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
@@ -373,18 +345,9 @@ function convertResponsesMessagesWithStyle(
   const transformedMessages = orderResponsesAsyncToolResults(
     transformMessages(replayPlan.messages),
   );
-  const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-  if (includeSystemPrompt && context.systemPrompt) {
-    messages.push(
-      buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
-        {
-          type: "input_text",
-          text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
-            .instructions,
-        },
-      ]),
-    );
-  }
+  const nativeOpenAI = supportsNativeOpenAIResponsesEndpoint(model);
+  const immutable = getAiTransportHost().immutableData;
+  const instructionRole = resolveResponsesInstructionRole(model);
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
@@ -397,42 +360,51 @@ function convertResponsesMessagesWithStyle(
     });
     messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook(window) : window));
   }
-  let replayMessages = replayPlan.compaction
-    ? [replayPlan.compaction, ...transformedMessages]
-    : transformedMessages;
-  // Responses continuation requires the complete prior input before tool output.
-  // Each carrier stays with its preceding user/checkpoint; moving it past an
-  // appended steering user would rewrite the already admitted request prefix.
-  const isCarrier = (message: (typeof replayMessages)[number]) =>
-    "role" in message && hasRuntimeContextMarker(message);
-  if (replayMessages.some(isCarrier)) {
-    const anchored: typeof replayMessages = [];
-    // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
-    let insertionIndex = replayPlan.compactedWindow ? 0 : undefined;
-    for (const message of replayMessages) {
-      if (isCarrier(message) && insertionIndex !== undefined) {
-        anchored.splice(insertionIndex++, 0, message);
-        continue;
-      }
-      anchored.push(message);
-      if (
-        !isCarrier(message) &&
-        ("role" in message ? message.role === "user" : message.type === "compaction")
-      ) {
-        insertionIndex = anchored.length;
+  if (replayPlan.compaction) {
+    messages.push(
+      options?.mutableInput
+        ? cloneResponsesInputForPayloadHook(replayPlan.compaction)
+        : replayPlan.compaction,
+    );
+  }
+  if ((options?.includeSystemPrompt ?? true) && context.systemPrompt) {
+    const prompt = prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt);
+    const owner = options?.mutableInput ? undefined : immutable;
+    let input = owner && messageProjections.get(prompt)?.get(instructionRole);
+    if (!input) {
+      const item = {
+        type: "message" as const,
+        role: instructionRole,
+        content: [{ type: "input_text" as const, text: prompt.instructions }],
+        [RESPONSES_SYSTEM_PROMPT]: true,
+      };
+      input = [item];
+      if (owner) {
+        publishResponsesProjection(prompt, instructionRole, input, owner);
       }
     }
-    replayMessages = anchored;
+    // OpenAI drops input before its checkpoint. Compatible endpoints expect the prompt first.
+    messages.splice(nativeOpenAI ? messages.length : 0, 0, ...input);
   }
+  // A checkpoint is already emitted above; it anchors an otherwise userless tail.
+  const replayMessages = anchorRuntimeContextCarriers(
+    transformedMessages,
+    Boolean(replayPlan.compactedWindow || replayPlan.compaction),
+  );
   let msgIndex = 0;
+  let recoveryAnchor = replayPlan.itemRecovery?.anchor;
+  let pastRecoveryBoundary = false;
+  const recoveredCalls = recoveryAnchor ? new Set<string>() : undefined;
+  const replayCallId = (id: string) =>
+    recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
-  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   const convertMessage = (
     msg: Context["messages"][number],
     messageIndex: number,
   ): ResponseInput => {
+    const replayItemIds = shouldReplayResponsesItemIds && !recoveryAnchor;
     const converted: ResponseInput = [];
-    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
+    if (nativeOpenAI && isRuntimeContextMessage(msg)) {
       converted.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -444,7 +416,7 @@ function convertResponsesMessagesWithStyle(
     } else if (msg.role === "user") {
       const role =
         msg.operatorMessage &&
-        inHistorySystemUpdates &&
+        nativeOpenAI &&
         (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
           ? resolveResponsesInstructionRole(model)
           : "user";
@@ -476,15 +448,17 @@ function convertResponsesMessagesWithStyle(
       }
     } else if (msg.role === "assistant") {
       const output = converted;
-      const sourceTurnKey = responsesAssistantTurnKey(msg);
-      const sourceFragmentId = msg.content.find((block) => block.type === "toolCall")?.id;
+      let textFallbackId: string | undefined;
       let textFallbackOrdinal = 0;
-      let previousReplayItemWasReasoning = false;
+      let previousReasoningHasId = false;
       let seenReplayableReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
+          if (recoveryAnchor) {
+            continue;
+          }
           if (
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
@@ -506,44 +480,53 @@ function convertResponsesMessagesWithStyle(
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
-            if (!shouldReplayResponsesItemIds) {
+            // OpenAI's store records replayed ciphertext under its ID. An ID from a store:false
+            // or compacted turn names no stored record, so the second stored replay fails with
+            // item_conflict. Ciphertext is self-contained; dependent message and call IDs follow.
+            // Foundry instead validates ciphertext against its original ID.
+            if (replayableReasoningItem.encrypted_content && (nativeOpenAI || !replayItemIds)) {
               delete replayableReasoningItem.id;
-              // Summaries alone cannot verify stateless reasoning and poison
-              // the next cached continuation, even if this request succeeds.
-              if (!replayableReasoningItem.encrypted_content) {
-                continue;
-              }
-            }
-            if (
-              shouldReplayResponsesItemIds &&
-              !providerStyle &&
-              model.provider === "github-copilot" &&
-              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
+            } else if (
+              // Summaries alone cannot verify stateless reasoning and poison the next cached continuation.
+              !replayItemIds ||
+              (!providerStyle &&
+                model.provider === "github-copilot" &&
+                !isSafeResponsesReplayItemId(replayableReasoningItem.id))
             ) {
               continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
-            previousReplayItemWasReasoning = true;
+            const reasoningId: unknown = replayableReasoningItem.id;
+            previousReasoningHasId = typeof reasoningId === "string";
             seenReplayableReasoning ||=
-              typeof replayableReasoningItem.id === "string" &&
-              replayableReasoningItem.id.startsWith("rs_");
+              typeof reasoningId === "string" && reasoningId.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
-          let msgId = resolveReplayableResponsesMessageId({
-            replayResponsesItemIds: shouldReplayResponsesItemIds,
-            textSignatureId: textSignature?.id,
-            // Async prefixes own a call; the final tail has none. Both survive history pruning.
-            fallbackId: sourceTurnKey
-              ? `msg_${shortHash(JSON.stringify([sourceTurnKey, sourceFragmentId]))}`
-              : `msg_${messageIndex}`,
-            fallbackOrdinal: textFallbackOrdinal,
-            previousReplayItemWasReasoning,
-          });
-          if (!textSignature?.id) {
-            textFallbackOrdinal += 1;
+          let msgId: string | undefined;
+          if (replayItemIds) {
+            if (textSignature?.id) {
+              // Signed text can only replay its ID after its reasoning ID.
+              msgId = previousReasoningHasId ? textSignature.id : undefined;
+            } else {
+              if (!textFallbackId) {
+                const sourceTurnKey = responsesAssistantTurnKey(msg);
+                // Async prefixes own a call; the final tail has none. Both survive history pruning.
+                const sourceFragmentId = msg.content.find((item) => item.type === "toolCall")?.id;
+                textFallbackId = sourceTurnKey
+                  ? `msg_${shortHash(JSON.stringify([sourceTurnKey, sourceFragmentId]))}`
+                  : `msg_${messageIndex}`;
+              }
+              msgId =
+                textFallbackOrdinal === 0
+                  ? textFallbackId
+                  : `${textFallbackId}_${textFallbackOrdinal}`;
+              textFallbackOrdinal += 1;
+            }
           }
-          msgId = normalizeResponsesReplayItemId(msgId);
+          if (msgId && msgId.length > OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
+            msgId = `msg_${shortHash(msgId)}`;
+          }
           // Source links are OpenClaw's rendering, not provider output. Replaying the
           // provider text keeps history equal to the stored response for continuation.
           const sources = textSignature?.sources;
@@ -566,30 +549,30 @@ function convertResponsesMessagesWithStyle(
             phase: textSignature?.phase,
           };
           output.push(messageItem as ResponseInputItem);
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         } else if (block.type === "toolCall") {
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
           // Orphan fc_* ids can be rejected; omit them on the wire without rewriting history.
           const itemId =
-            shouldReplayResponsesItemIds &&
+            replayItemIds &&
             (!itemIdRaw?.startsWith("fc_") || (seenReplayableReasoning && !isDifferentModel))
               ? itemIdRaw
               : undefined;
           output.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
-            call_id: callId,
+            call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: providerStyle
-              ? JSON.stringify(block.arguments)
-              : typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         }
       }
       // Completed encrypted reasoning is self-contained, including steered async
@@ -653,30 +636,45 @@ function convertResponsesMessagesWithStyle(
       }
       converted.push({
         type: "function_call_output",
-        call_id: callId,
+        call_id: replayCallId(callId),
         output,
       });
     }
     return converted;
   };
-  const immutable = getAiTransportHost().immutableData;
   const projectionKey = JSON.stringify([
     conversionStyle,
     replayContext,
     shouldReplayResponsesItemIds,
-    inHistorySystemUpdates,
-    resolveResponsesInstructionRole(model),
+    nativeOpenAI,
+    instructionRole,
     model.input.includes("image"),
     options?.retainUserProvenance === true,
   ]);
   for (const msg of replayMessages) {
-    if (!("role" in msg)) {
-      messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook([msg]) : [msg]));
-      continue;
+    // The recovery receipt anchors only the rejected past. New output keeps its IDs.
+    if (
+      msg.role === "assistant" &&
+      replayPlan.itemRecovery &&
+      readOpenAIResponsesItemRecoveryAnchor(msg.providerReplay) === replayPlan.itemRecovery.anchor
+    ) {
+      pastRecoveryBoundary = true;
+    }
+    recoveryAnchor =
+      !pastRecoveryBoundary || (msg.role === "toolResult" && recoveredCalls?.has(msg.toolCallId))
+        ? replayPlan.itemRecovery?.anchor
+        : undefined;
+    // Delayed async results keep their call's repair identity across the boundary.
+    if (recoveryAnchor && msg.role === "assistant") {
+      for (const block of msg.content) {
+        if (block.type === "toolCall") {
+          recoveredCalls?.add(block.id);
+        }
+      }
     }
     // Prepared suffix results resolve IDs against the current request's call map.
     // Retained projections already prove source immutability. Images retain their own scalar facts.
-    let projections = responsesMessageProjections.get(msg);
+    const projections = messageProjections.get(msg);
     const reusable =
       immutable &&
       !preparedRequestSuffix.has(context) &&
@@ -684,23 +682,14 @@ function convertResponsesMessagesWithStyle(
         (immutable.isDeeplyFrozenPlainData(msg) &&
           (typeof msg.content === "string" ||
             !msg.content.some((block) => block.type === "image"))));
-    const key = `${projectionKey}:${msgIndex}`;
+    const key = recoveryAnchor
+      ? `${projectionKey}:${msgIndex}:${recoveryAnchor}`
+      : `${projectionKey}:${msgIndex}`;
     let output = reusable ? projections?.get(key) : undefined;
     if (!output) {
       output = convertMessage(msg, msgIndex);
       if (reusable) {
-        immutable.freezeJsonSnapshot(output);
-        if (!projections) {
-          projections = new Map();
-          responsesMessageProjections.set(msg, projections);
-        }
-        if (projections.size >= 8) {
-          const oldest = projections.keys().next().value;
-          if (oldest !== undefined) {
-            projections.delete(oldest);
-          }
-        }
-        projections.set(key, output);
+        publishResponsesProjection(msg, key, output, immutable);
       }
     }
     if (reusable && options?.mutableInput) {

@@ -13,11 +13,61 @@ import { resetCommandQueueStateForTest } from "../../../process/command-queue.te
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import { AsyncContext } from "../../../shared/async-context.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
+import { expectCollected } from "../../../test-utils/retention.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { outsideExecutionCapacity, withReleasableExecutionCapacity } from "./execution-capacity.js";
 
 const lane = "projection-recovery-capacity";
 
 afterEach(resetCommandQueueStateForTest);
+
+it("releases completed tasks while their scheduled request contexts remain live", async () => {
+  const scheduler = createTestGatewayScheduler();
+  const contexts: ReturnType<typeof AsyncLocalStorage.snapshot>[] = [];
+  const managers: WeakRef<SessionManager>[] = [];
+  const runMaintenance = () => {};
+  const complete = async (index: number) => {
+    const manager = SessionManager.inMemory();
+    managers.push(new WeakRef(manager));
+    try {
+      await withReleasableExecutionCapacity(
+        (task) => task(),
+        async () => {
+          contexts.push(AsyncLocalStorage.snapshot());
+          scheduler.schedule({ id: `completed-${index}`, delayMs: 60_000, run: runMaintenance });
+          if (index % 3 !== 0) {
+            await outsideExecutionCapacity(async () => manager.getSessionId());
+          }
+          if (index % 3 === 2) {
+            throw new Error("synthetic task failure");
+          }
+          return manager.getSessionId();
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "synthetic task failure") {
+        throw error;
+      }
+    }
+  };
+  try {
+    for (let index = 0; index < 9; index++) {
+      await complete(index);
+    }
+    await expectCollected(...managers);
+    const operation = vi.fn(async () => {});
+    for (const context of contexts) {
+      await expect(context(() => outsideExecutionCapacity(operation))).rejects.toThrow(
+        "Execution capacity is not held",
+      );
+    }
+    expect(operation).not.toHaveBeenCalled();
+    expect(scheduler.nextWakeAtMs).not.toBeNull();
+  } finally {
+    await scheduler.stop();
+  }
+});
 
 it("shares one native carrier for turn capacity and model context", async () => {
   const ambient = new AsyncContext<string>(Symbol("ambient-turn"));

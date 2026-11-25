@@ -12,10 +12,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabaseOwnerId,
-  resolveAuthProfileDatabasePath,
-} from "./auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileCredential, AuthProfileRowRead } from "./auth-profiles/types.js";
 
 export type PluginModelCatalogAuthSnapshot = Array<{
@@ -106,9 +103,8 @@ export async function capturePluginModelCatalogAuth(
   for (const owner of owners) {
     const reader =
       owner.kind === "agent"
-        ? prepareAgentAuthProfileRowsRead({
+        ? await prepareAgentAuthProfileRowsRead({
             databasePath: owner.databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(owner.agentDir),
             env: capturedEnv,
           })
         : undefined;

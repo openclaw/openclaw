@@ -31,7 +31,9 @@ The current audited safe-deny names are:
 agents_list, automations, canvas, dashboard, gateway,
 image_generate, memory_get, memory_search, message, music_generate, openclaw,
 progress_card, session_status, show_widget, skill_library, skill_workshop, tts,
-video_generate, web_fetch, x_search
+video_generate, web_fetch, x_search,
+sessions_send, sessions_list, sessions_history, sessions_search, sessions_spawn,
+subagents, conversations_list, conversations_send, conversations_turn
 ```
 
 A policy containing only those denies stays on the normal Codex native surface;
@@ -40,13 +42,17 @@ the restricted surface. For example, `tools.deny: ["nodes"]`
 restricts the native surface because `nodes` is not in the audited set.
 
 OpenClaw admin and status denies alone do not remove native Codex tools.
-Session and conversation-tool denies still restrict the native surface: the
-supported runtime has not been qualified to enforce the same target boundary
-independently of optional hooks. Default hidden OpenClaw children therefore
-remain restricted. Visible spawned sessions do not get the built-in sub-agent
-denies, so they keep the native surface unless another policy, such as an
-inherited parent restriction, restricts it. OpenClaw's native input admission checks the sender's admitted tree,
-but that hook-side check is not a substitute for native enforcement.
+Session, conversation and delegation-tool denies keep the native shell and file
+tools but disable native delegation for the turn: OpenClaw sets
+`agents.enabled=false` and turns off `features.multi_agent` and
+`features.multi_agent_v2`, so `spawn_agent`, `send_input`, `resume_agent`
+and the v2 cross-thread tools are not available. Managed Codex requirements or
+legacy managed config that pin `multi_agent` or `multi_agent_v2` on make such a
+turn fail before inference instead of re-enabling delegation. Default hidden
+OpenClaw children therefore keep native shell and file tools without native
+delegation. Visible spawned sessions do not get the built-in sub-agent denies,
+so they keep the full native surface, including delegation, unless another
+policy, such as an inherited parent restriction, restricts it.
 
 A child at its configured delegation depth cap also loses native collaboration,
 as do turns with an explicit native-tool deny, finite allowlist, or other unsafe

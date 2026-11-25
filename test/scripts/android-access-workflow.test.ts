@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -26,6 +26,60 @@ const invalidReports = [
   "skipped-tls",
 ];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
+
+it.skipIf(process.platform === "win32").each([4096, 16384])(
+  "builds native APKs before starting the %i-byte-page emulator",
+  (pageSize) => {
+    const root = tempDirs.make("openclaw-android-build-order-");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const commands: Record<string, string> = {
+      sdkmanager: "exit 0",
+      avdmanager: 'read -r answer; test "$answer" = no',
+      timeout: 'shift 3; exec "$@"',
+      node: 'printf "%s\\n" "$@" > "$RUNNER_TEMP/build-args"',
+      emulator: `if [ "$1" = -accel-check ]; then
+  echo 'KVM is available'
+else
+  test -f "$RUNNER_TEMP/build-args" || exit 49
+  case " $* " in *" -memory 4096 "*) ;; *) exit 50 ;; esac
+fi`,
+    };
+    for (const [name, body] of Object.entries(commands)) {
+      writeFileSync(path.join(bin, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
+    }
+    const setup = step.run.slice(
+      step.run.indexOf("sdkmanager "),
+      step.run.indexOf("emulator_pid=$!") + "emulator_pid=$!".length,
+    );
+    const result = spawnSync(
+      workflowBash,
+      [
+        "-c",
+        `set -euo pipefail\n${setup.replaceAll("/usr/bin/timeout", "timeout")}\nwait "$emulator_pid"`,
+      ],
+      {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          RUNNER_TEMP: root,
+          ANDROID_SDK_ROOT: root,
+          SYSTEM_IMAGE: "fixture",
+          EXPECTED_PAGE_SIZE: String(pageSize),
+        },
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(path.join(root, "build-args"), "utf8").split("\n");
+    expect(args).toContain(":app:assemblePlayDebug");
+    expect(args).toContain(":app:assemblePlayDebugAndroidTest");
+    expect(args).toContain(
+      `-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=${pageSize}`,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32").each(["offline", "responsive"])(
   "disposes the owned emulator after boot failure with %s ADB",
@@ -109,10 +163,17 @@ set -euo pipefail
 [[ "$1/$2" == -s/emulator-5554 ]]
 shift 2
 printf '%s\\n' "$*" >> "$ADB_TEST_CALLS"
+if [[ "$*" == wait-for-device ]]; then
+  rm -f "$ADB_TEST_OFFLINE"
+  exit "$ADB_TEST_WAIT_STATUS"
+fi
+if [[ -f "$ADB_TEST_OFFLINE" ]]; then
+  echo 'error: device offline' >&2
+  exit 1
+fi
 case "$*" in
   'shell getprop ro.kernel.qemu') echo 1 ;;
   root) printf '%s\\n' "$ADB_TEST_ROOT_OUTPUT" >&2; exit "$ADB_TEST_ROOT_STATUS" ;;
-  wait-for-device) exit "$ADB_TEST_WAIT_STATUS" ;;
   'shell id -u') printf '%s\\r\\n' "$ADB_TEST_UID"; exit "$ADB_TEST_UID_STATUS" ;;
   'shell getprop ro.build.fingerprint') exit 91 ;;
   'shell am force-stop ai.openclaw.app.debug' | uninstall*) ;;
@@ -129,6 +190,7 @@ esac
     ADB_TEST_ROOT_OUTPUT: rootOutput,
     ADB_TEST_ROOT_STATUS: String(rootStatus),
     ADB_TEST_WAIT_STATUS: String(waitStatus),
+    ADB_TEST_OFFLINE: path.join(root, "offline"),
     ADB_TEST_UID: uid,
     ADB_TEST_UID_STATUS: String(uidStatus),
   };
@@ -138,7 +200,7 @@ esac
       encoding: "utf8",
       timeout: 5_000,
     });
-  return { result: run("prepare"), run, state, calls };
+  return { result: run("prepare"), run, state, calls, offline: env.ADB_TEST_OFFLINE };
 }
 
 it.each([
@@ -167,15 +229,28 @@ it.each([
   },
 );
 
-it("can clean up a rejected root admission without a trust baseline", () => {
-  const fixture = rootAdmission(1, "adb: unable to connect for root: closed", 0, "2000");
-  expect(fixture.result.status).toBe(1);
-  const cleanup = fixture.run("cleanup");
-  expect(cleanup.status, cleanup.stderr).toBe(0);
-  expect(readFileSync(path.join(fixture.state, "CLEANUP.txt"), "utf8")).toBe(
-    "No trust baseline captured; no trust mutation attempted.\n",
-  );
-});
+it.each([0, 43])(
+  "requires reconnecting before trust cleanup (readiness status %s)",
+  (waitStatus) => {
+    const fixture = rootAdmission(
+      1,
+      "adb: unable to connect for root: closed",
+      0,
+      "2000",
+      waitStatus,
+    );
+    expect(fixture.result.status).toBe(waitStatus || 1);
+    writeFileSync(fixture.offline, "disconnected\n");
+    const cleanup = fixture.run("cleanup");
+    expect(cleanup.status, cleanup.stderr).toBe(waitStatus);
+    expect(existsSync(path.join(fixture.state, "CLEANUP.txt"))).toBe(waitStatus === 0);
+    if (waitStatus === 0) {
+      expect(readFileSync(path.join(fixture.state, "CLEANUP.txt"), "utf8")).toBe(
+        "No trust baseline captured; no trust mutation attempted.\n",
+      );
+    }
+  },
+);
 
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");

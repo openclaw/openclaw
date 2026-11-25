@@ -20,13 +20,6 @@ import {
   type DiagnosticToolExecutionLiveness,
 } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
-  applyArgumentChurnObservation,
-  resolveArgumentChurnProgress,
-  clearArgumentChurnActivity,
-  clearArgumentChurnPolicyWaits,
-  type DiagnosticArgumentChurnObservationParams,
-} from "./diagnostic-argument-churn-activity.js";
-import {
   captureDiagnosticSessionOperation,
   projectControllerDiagnosticActivity,
 } from "./diagnostic-controller-projection.js";
@@ -309,21 +302,6 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-export function markDiagnosticArgumentChurnObservation(
-  params: DiagnosticArgumentChurnObservationParams,
-): void {
-  if (params.active !== undefined) {
-    params.watchdogAttempt?.observeStagnation({
-      active: params.active,
-      existingOnly: params.existingOnly,
-    });
-  }
-  const activity = resolveSessionActivity({ ...params, create: params.active === true });
-  if (activity) {
-    applyArgumentChurnObservation(activity, activity.activeEmbeddedRuns.values(), params);
-  }
-}
-
 export function markDiagnosticRunProgress(
   params: RunProgressEvent & { onlyIfActive?: boolean },
 ): void {
@@ -402,8 +380,6 @@ function recordRunCompleted(
     return;
   }
   embeddedRunIndex.clear(activity);
-  clearArgumentChurnActivity(activity, { runId: event.runId });
-  clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
   touchSemanticSessionActivity(activity, "run:completed", event.runId);
 }
 
@@ -440,10 +416,6 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   if (activity.repeatedRequestOwnerRunId !== ownerRunId) {
     clearRepeatedRequestActivity(activity);
   }
-  if (activity.argumentChurnStartedAt !== undefined) {
-    clearArgumentChurnActivity(activity, { runId: ownerRunId });
-  }
-  clearArgumentChurnPolicyWaits(activity);
   const workKey = params.workKey ?? params.sessionId;
   const existing = activity.activeEmbeddedRuns.get(workKey);
   if (existing && existing.runId !== ownerRunId) {
@@ -489,10 +461,6 @@ export function closeDiagnosticEmbeddedRunOwner(owner: DiagnosticEmbeddedRunOwne
       activity.activeTools.delete(key);
     }
   }
-  if (activity.activeEmbeddedRuns.size === 0) {
-    clearArgumentChurnActivity(activity);
-    clearArgumentChurnPolicyWaits(activity);
-  }
   touchSessionActivity(activity, "embedded_run:ended");
 }
 
@@ -512,10 +480,6 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeCoreModelCalls.clear();
-  if (activity.activeEmbeddedRuns.size === 0) {
-    clearArgumentChurnActivity(activity);
-    clearArgumentChurnPolicyWaits(activity);
-  }
   touchSessionActivity(activity, "embedded_run:ended"); // Retained retry evidence is inert here.
 }
 
@@ -607,7 +571,6 @@ export function getDiagnosticSessionActivitySnapshot(
       }
     }
   }
-  const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
@@ -616,8 +579,8 @@ export function getDiagnosticSessionActivitySnapshot(
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
     activeToolDeadlineAtMs:
       currentOwnerRunId === undefined ? activeTool?.deadlineAtMs : activeToolDeadlineAtMs,
-    lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
-    lastProgressReason: churnProgress.lastProgressReason,
+    lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
+    lastProgressReason: activity.lastProgressReason,
     repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
       activity,
       currentOwnerRunId,

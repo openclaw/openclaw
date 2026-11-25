@@ -281,9 +281,8 @@ function scheduleCleanup(directory: string, delayMs: number): void {
       void removeStagedUpload(directory);
     },
     Math.max(0, delayMs),
-  );
+  ).unref();
   cleanupTimers.set(directory, timer);
-  timer.unref?.();
 }
 
 async function recoverStagedUploads(): Promise<void> {

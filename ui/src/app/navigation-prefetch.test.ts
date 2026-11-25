@@ -23,6 +23,9 @@ const manifest = {
   templates: ["assets/templates-1234abcd.js"],
   palette: ["assets/palette-1234abcd.js"],
   "model-picker": ["assets/model-picker-1234abcd.js"],
+  "chat-next": ["assets/chat-controls-1234abcd.js"],
+  "chat-session-menu": ["assets/chat-session-menu-1234abcd.js"],
+  "sidebar-menus": ["assets/sidebar-menus-1234abcd.js"],
   appearance: ["assets/appearance-1234abcd.js"],
   debug: ["assets/debug-1234abcd.js"],
   "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
@@ -59,7 +62,7 @@ afterEach(() => {
 });
 
 function setup(
-  routeId?: "advanced" | "dashboard" | "workboard" | "new-session",
+  routeId?: "advanced" | "chat" | "dashboard" | "workboard" | "new-session",
   sidebarAgentsMode?: "chip" | "roster",
 ) {
   const currentLocation = {
@@ -278,6 +281,41 @@ it("keeps declared next interactions as the route's only automatic idle work", a
     new URL("/control/assets/new-1234abcd.js", location.origin).href,
     new URL("/control/assets/new-1234abcd.css", location.origin).href,
   ]);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+});
+
+it("warms Chat controls once after the composer is ready, leaving other menus for intent", async () => {
+  const fixture = setup("chat");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  fixture.paneState.composerReady = false;
+  await idle();
+  expect(fetch).not.toHaveBeenCalled();
+
+  fixture.paneState.composerReady = true;
+  await idle();
+  const warmed = () => hints().map((link) => new URL(link.href).pathname.split("/").at(-1));
+  expect(warmed()).toEqual(["chat-controls-1234abcd.js"]);
+  hints()[0]!.dispatchEvent(new Event("load"));
+  await idle();
+  expect(warmed()).toEqual(["chat-controls-1234abcd.js", "new-1234abcd.js", "new-1234abcd.css"]);
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await idle();
+  expect(warmed()).toHaveLength(3);
+
+  const trigger = fixture.shell.appendChild(document.createElement("button"));
+  trigger.className = "chat-header-session-menu__trigger";
+  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(hints().at(-1)).toMatchObject({ rel: "preload", as: "script" });
+  expect(warmed().at(-1)).toBe("chat-session-menu-1234abcd.js");
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await vi.advanceTimersByTimeAsync(0);
+
+  trigger.className = "sidebar-identity-card";
+  trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(warmed()).toContain("sidebar-menus-1234abcd.js");
   expect(fixture.preloadRoute).not.toHaveBeenCalled();
 });
 

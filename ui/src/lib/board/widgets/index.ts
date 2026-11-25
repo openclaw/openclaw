@@ -11,6 +11,8 @@ registerSessionProgressEnglish();
 /**
  * Core widget metadata stays independent of the lazy renderers. Preview-safe widgets consume
  * only saved data; they never acquire live subscriptions or invoke Gateway methods.
+ * Content-fitting widgets render host DOM that may grow to its natural height on
+ * narrow boards in the phone layout; embedded pages keep their saved height.
  */
 const CORE_BOARD_WIDGET_ELEMENTS = [
   {
@@ -20,6 +22,7 @@ const CORE_BOARD_WIDGET_ELEMENTS = [
       return t("sessionProgressCard.widgetLabel");
     },
     previewSafe: false,
+    fitsContent: true,
   },
   {
     kind: "session:report",
@@ -28,6 +31,7 @@ const CORE_BOARD_WIDGET_ELEMENTS = [
       return t("board.widget.kindReport");
     },
     previewSafe: true,
+    fitsContent: true,
   },
   {
     kind: "session:website",
@@ -36,6 +40,7 @@ const CORE_BOARD_WIDGET_ELEMENTS = [
       return t("board.widget.kindWebsite");
     },
     previewSafe: false,
+    fitsContent: false,
   },
   {
     kind: "browser:dashboard",
@@ -44,6 +49,7 @@ const CORE_BOARD_WIDGET_ELEMENTS = [
       return t("board.widget.kindBrowserDashboard");
     },
     previewSafe: false,
+    fitsContent: false,
   },
 ] as const;
 

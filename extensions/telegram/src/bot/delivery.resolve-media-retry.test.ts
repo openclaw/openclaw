@@ -61,6 +61,7 @@ function resolveMediaWithDefaults(
     ctx,
     maxBytes: MAX_MEDIA_BYTES,
     token: BOT_TOKEN,
+    budget: new AbortController().signal,
     ...overrides,
   });
 }

@@ -119,7 +119,7 @@ it("forks only placed background results and keeps their payload through a manua
   expect(estimateParentForkPromptTokens(source)).toBeGreaterThan(unplacedTokens);
 
   const trimmed = selectManualCompactTranscriptLines(
-    child.map((entry) => JSON.stringify(entry)),
+    (visit) => child.forEach((entry) => visit(JSON.stringify(entry))),
     2,
   );
   const entries = trimmed.lines.map((line) => JSON.parse(line)).filter(isIndexedSessionEntry);

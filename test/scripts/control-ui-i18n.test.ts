@@ -25,7 +25,6 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
-import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
@@ -166,7 +165,6 @@ describe("translation provider privacy and fallback", () => {
           assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
-          assert.ok(JSON.stringify(payload).includes("Connect -> Connecter"), "native glossary must reach the provider request");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
           const text = JSON.stringify({ "native.android.0123456789abcdef": "Connecter {count}" });
           const events = [
@@ -180,9 +178,9 @@ describe("translation provider privacy and fallback", () => {
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
         const { syncNativeLocale } = await import(${JSON.stringify(scriptUrl)});
-        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { glossary: [{ source: "Connect", target: "Connecter" }], translationsDir: ${JSON.stringify(translationsDir)} });
+        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { translationsDir: ${JSON.stringify(translationsDir)} });
         const artifact = JSON.parse(await readFile(${JSON.stringify(path.join(translationsDir, "fr.json"))}, "utf8"));
-        assert.equal(artifact.translations["native.android.0123456789abcdef"], "Connecter {count}");
+        assert.deepEqual(artifact, { version: 2, locale: "fr", translations: { "native.android.0123456789abcdef": "Connecter {count}" } });
         assert.equal(result.translated, 1);
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
@@ -277,7 +275,6 @@ describe("translation provider privacy and fallback", () => {
       const result = await translateNativeEntries(
         [{ id: "label0", source: "Open {count}", sourcePath: "fixture.ts" }],
         "fr",
-        [],
         validate,
       );
       expect([...result]).toEqual([["label0", "Ouvrir {count}"]]);
@@ -313,7 +310,6 @@ describe("control-ui-i18n generated ownership", () => {
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatMessageMetadataEnglish.catalog,
-      registerChatFailedMessageEditEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
       registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
@@ -331,18 +327,6 @@ describe("control-ui-i18n generated ownership", () => {
     const sessionKeys = [...source.keys()]
       .filter((key) => key.startsWith("sessionsView."))
       .map((key) => key.slice("sessionsView.".length));
-    expect(
-      sessionKeys.slice(
-        sessionKeys.indexOf("personalGroupAdd"),
-        sessionKeys.indexOf("personalGroupEdit") + 1,
-      ),
-    ).toEqual([
-      "personalGroupAdd",
-      "personalGroupReferenceAdded",
-      "personalGroups",
-      "personalGroupNew",
-      "personalGroupEdit",
-    ]);
     expect(
       sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
     ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
@@ -397,7 +381,6 @@ describe("control-ui-i18n generated ownership", () => {
       "tryAnotherName",
       "sharingOptions",
       "menu",
-      "share",
       "current",
       "visibility",
       "shared",
@@ -543,7 +526,6 @@ describe("control-ui-i18n generated ownership", () => {
       generated("de.meta.json"),
       generated("de.tm.jsonl"),
     ]).not.toThrow();
-    isolated([locale("de"), generated("glossary.de.json")]).not.toThrow();
     isolated([generated("catalog-fallbacks.json"), generated("raw-copy-baseline.json")]).toThrow(
       isolationError,
     );

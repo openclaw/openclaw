@@ -75,7 +75,8 @@ grants: each invite must then supply positive `days` or explicitly set
 `forever: true`.
 
 For people without an assigned Gateway role, the configured `gateway.roles.default`
-must provide the restricted guest policy: `sessions.others: "view"`,
+must provide the restricted guest policy: `sessions.others: "invited"` (own,
+public, and invited sessions) or `"view"` (all shared sessions),
 `sandbox: "required"`, at least one permitted agent (or `"*"`), and
 `scopes: ["operator.sessions.write"]`. The optional `operator.sessions.read`
 scope is equivalent for reading; broader operator scopes do not meet this
@@ -111,13 +112,31 @@ Guest admission or restore authority for unfinished work.
 | Tool             | Input                                                                        | Result                                                                                                                |
 | ---------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever`, and `note` | Adds a grant or refreshes the same target's expiry, and returns copyable invitation text.                             |
-| `visitor_list`   | `{}`                                                                         | Shows targets, verified GitHub identities, selection IDs, Gateway access, policy drift, and welcome-session progress. |
+| `visitor_list`   | `{}`; optional `cursor` and `limit`                                          | Shows targets, verified GitHub identities, selection IDs, Gateway access, policy drift, and welcome-session progress. |
 | `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                                  | Removes a person's recorded grants or cancels a selected invitation.                                                  |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
 information as its text: invite returns `outcome`, either `email` or `githubAccountId`, `grantId`, optional `githubLogin`,
 `expiresAt`, `gatewayAccess`, optional `signInUrl`, `noteStored`, and `invitationText`; revoke returns `outcome`, `emails`,
-and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, `omitted`, and `nextCursor`.
+Start listing with `{}`. When `nextCursor` is a string, call `visitor_list` again
+with `{ "cursor": "<nextCursor>" }` until `nextCursor` is `null`. Each page
+contains at most `maxVisitors` rows and stays within the 12,000-character text
+budget; optional `limit` (1–500) can lower the page size, not raise those bounds.
+Recorded grants come first, sorted by target key, followed by sorted unmanaged
+policy targets. `counts` and drift always describe the whole current inventory;
+`omitted` is the number of rows remaining **after** this page, not rows already
+returned on earlier pages. A lowered invitation cap never makes existing rows
+unreachable: follow the continuation to inspect them.
+
+The cursor is opaque and bound to the ordered recorded/unmanaged target inventory.
+If targets are added, removed, or move between those groups, the tool refuses the
+old cursor and asks you to restart without it instead of silently skipping rows.
+Pages read policy, profile identities, access, metadata, and account seats afresh;
+they are not a frozen snapshot, and a cursor never supplies authority. A single
+row that cannot fit the output budget reports an explicit metadata-inspection
+error rather than an empty page or an unusable continuation.
+
 Invite and list also return `accountSeats`: the fresh account-wide `capacity`,
 `occupied`, and `remaining` counts, `status` (`available`, `full`, or `unknown`),
 and `diagnostics`. Unavailable numbers are `null`, not zero.

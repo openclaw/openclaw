@@ -33,6 +33,10 @@ import {
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
 } from "../../gateway/edge-auth.js";
+import {
+  createGatewayUnreachableTransportError,
+  isGatewayUnreachableSocketError,
+} from "../../gateway/transport-error.js";
 import { openUrl } from "../../infra/browser-open.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -299,12 +303,18 @@ export async function modelsAccountsLoginCommand(
           options.provider,
           prompter,
         );
-        const method = await selectAccountChoice(
-          "Sign-in method",
-          provider.methods,
-          options.method,
-          prompter,
-        );
+        // `--method device-code` (documented through v2026.11.6) names the declared device-code
+        // sign-in, which the catalog lists under its own id; the Gateway resolves the alias.
+        const method =
+          options.method?.trim() === "device-code" &&
+          !provider.methods.some((entry) => entry.id === "device-code")
+            ? { id: "device-code" }
+            : await selectAccountChoice(
+                "Sign-in method",
+                provider.methods,
+                options.method,
+                prompter,
+              );
         signal.throwIfAborted();
         const result = await connectAccount(
           client,
@@ -449,7 +459,15 @@ async function withModelsAccountsGateway<T>(
     maxProtocol: PROTOCOL_VERSION,
     notifyOnStartupRetry: true,
     onHelloOk: () => ready.resolve(),
-    onConnectError: fail,
+    onConnectError: (error) =>
+      fail(
+        isGatewayUnreachableSocketError(error)
+          ? createGatewayUnreachableTransportError({
+              cause: error,
+              connectionDetails: bootstrap.connectionDetails,
+            })
+          : error,
+      ),
     onClose: () => {
       // A personal connect belongs to this socket; never move it to a reconnect.
       fail(new Error("Gateway connection closed. Re-run the personal-account command."));

@@ -26,6 +26,16 @@ import {
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  ActiveNativeHookRelayRegistrationHandle,
+  NativeHookRelayOwnerOptions,
+  NativeHookRelayRegistration,
+  OwnedNativeHookRelayParams,
+  OwnedNativeHookRelayRegistrationHandle,
+  RegisterNativeHookRelayParams,
+  RelayLifetime,
+} from "./native-hook-relay-contexts.js";
 import {
   processNativeHookRelayInvocation,
   snapshotNativeHookRelayExecutionAdmission,
@@ -45,18 +55,10 @@ import {
   nativeHookRelayState,
 } from "./native-hook-relay-state.js";
 import type {
-  ActiveNativeHookRelayRegistration,
-  ActiveNativeHookRelayRegistrationHandle,
   InvokeNativeHookRelayParams,
   NativeHookRelayEvent,
   NativeHookRelayInvocation,
-  NativeHookRelayOwnerOptions,
   NativeHookRelayProcessResponse,
-  NativeHookRelayRegistration,
-  OwnedNativeHookRelayParams,
-  OwnedNativeHookRelayRegistrationHandle,
-  RegisterNativeHookRelayParams,
-  RelayLifetime,
 } from "./native-hook-relay-types.js";
 import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
 import {
@@ -79,8 +81,8 @@ export type {
   NativeHookRelayEvent,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
-  NativeHookRelayRegistrationHandle,
 } from "./native-hook-relay-types.js";
+export type { NativeHookRelayRegistrationHandle } from "./native-hook-relay-contexts.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
@@ -226,7 +228,6 @@ function registerNativeHookRelayInternal(
       ...(params.requester ? { requester: params.requester } : {}),
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
-      preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
       requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
@@ -711,6 +712,7 @@ export async function dispatchNativeHookRelayHttpCallback(
     return;
   }
   if (!registration || !bridge?.remoteEnabled) {
+    log.warn("native hook remote callback refused", { relayId, status: 403 });
     res.writeHead(403).end();
     return;
   }

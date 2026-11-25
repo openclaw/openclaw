@@ -6,6 +6,7 @@ import { expect, onTestFinished } from "vitest";
 import { acquireGatewayTestClient } from "../../../../test/helpers/gateway-client.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.js";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { GatewayClient } from "../../../gateway/client.js";
@@ -487,9 +488,10 @@ export async function runWithLiveSubagentGateway(
         }
       };
       const waitForFinal = async (sessionKey: string, marker: string, expected: string) => {
+        // A parent woken with partial results may stay silent until the rest arrive.
         const taskFinals = (messages: Record<string, unknown>[]) =>
           finalReplies(messages, "").filter(
-            (reply) => !statusOnlyReplies.get(sessionKey)?.has(reply),
+            (reply) => !statusOnlyReplies.get(sessionKey)?.has(reply) && !isSilentReplyText(reply),
           );
         const firstFinal = await until(
           "parent final",

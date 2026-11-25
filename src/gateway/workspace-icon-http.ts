@@ -22,7 +22,11 @@ import {
   type HttpImageRepresentation,
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
+import {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
+} from "./http-utils.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
@@ -124,6 +128,21 @@ export function resolveWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIc
   return pending;
 }
 
+/** A root served by a remote workspace owner must never expose a coincident local path. */
+function localWorkspaceRoot(root: string | undefined): string | undefined {
+  if (!root) {
+    return undefined;
+  }
+  try {
+    return getAgentWorkspaceAccess(root) ? undefined : root;
+  } catch (error) {
+    if (!isWorkspaceAccessUnavailableError(error)) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
 function respondWorkspaceIconUnavailable(res: ServerResponse) {
   res.statusCode = 503;
   res.setHeader("cache-control", "no-store");
@@ -162,7 +181,6 @@ export async function handleWorkspaceIconHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
 
   if (!parsed.value) {
     res.setHeader("cache-control", "no-store");
@@ -187,20 +205,7 @@ export async function handleWorkspaceIconHttpRequest(
       row && entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
         ? resolveSessionWorkspaceRoots(read.state.cfg, row.agentId, entry).root
         : undefined;
-    let localRoot = root;
-    if (localRoot) {
-      try {
-        if (getAgentWorkspaceAccess(localRoot)) {
-          localRoot = undefined;
-        }
-      } catch (error) {
-        if (!isWorkspaceAccessUnavailableError(error)) {
-          throw error;
-        }
-        // A stopped remote owner must never expose a coincident local path.
-        localRoot = undefined;
-      }
-    }
+    const localRoot = localWorkspaceRoot(root);
     // An unknown session stays an ordinary miss; a known one must be visible to the profile.
     const visible = entry ? requestAuth.canReadSession(query.key, entry) : true;
     return {
@@ -211,10 +216,8 @@ export async function handleWorkspaceIconHttpRequest(
     };
   };
   const selected = await withReadySessionRows(projection, queries, select);
-  requestAuth.assertCurrent();
   const icon = selected.root ? await resolveWorkspaceIcon(selected.root) : null;
   await withReadySessionRows(projection, queries, (read) => {
-    requestAuth.assertCurrent();
     const current = select(read);
     if (
       current.generation !== selected.generation ||
@@ -233,5 +236,57 @@ export async function handleWorkspaceIconHttpRequest(
       sendHttpImageResponse({ req, res, image: icon, filename: "workspace-icon" });
     }
   });
+  return true;
+}
+
+/**
+ * Serves a registered project's icon to callers that may list projects. The
+ * route resolves the checkout root from the registry, so a caller names only a
+ * project id it can already discover and never a host path.
+ */
+export async function handleProjectIconHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: GatewayHttpRequestAuthOptions & { config: OpenClawConfig; basePath?: string },
+): Promise<boolean> {
+  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const parsed = parseControlUiResourcePath("projectIcon", pathname, opts.basePath);
+  if (!parsed.matched) {
+    return false;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    sendMethodNotAllowed(res, "GET, HEAD");
+    return true;
+  }
+  const auth = await authorizeControlUiReadRequestOrReply({
+    ...opts,
+    req,
+    res,
+    cfg: opts.cfg ?? opts.config,
+    requiredOperatorMethod: "projects.list",
+  });
+  if (!auth) {
+    return true;
+  }
+  const project = parsed.value
+    ? await resolveRequesterProject(
+        opts.config,
+        parsed.value,
+        projectRequesterForProfile(
+          opts.config,
+          auth.operatorScopes,
+          auth.authenticatedUserProfile?.profileId,
+        ),
+      )
+    : undefined;
+  const root = localWorkspaceRoot(project?.repoRoot);
+  const icon = root ? await resolveWorkspaceIcon(root) : null;
+  if (!icon) {
+    res.setHeader("cache-control", root ? "private, max-age=60" : "no-store");
+    res.setHeader("vary", "Authorization, Cookie");
+    respondNotFound(res);
+    return true;
+  }
+  sendHttpImageResponse({ req, res, image: icon, filename: "project-icon" });
   return true;
 }

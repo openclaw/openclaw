@@ -6,10 +6,15 @@ export function shouldUseGatewayOwnerProfile(params: {
   authenticatedUserId?: string;
   authMethod: GatewayAuthResult["method"];
   rolesConfigured: boolean;
+  /** An admitted OpenClaw ID owner device, which acts as the Gateway owner. */
+  openclawIdOwner?: boolean;
 }): boolean {
   return (
     params.role === "operator" &&
     !params.authenticatedUserId &&
-    (!params.rolesConfigured || params.authMethod === "token" || params.authMethod === "password")
+    (!params.rolesConfigured ||
+      params.authMethod === "token" ||
+      params.authMethod === "password" ||
+      params.openclawIdOwner === true)
   );
 }

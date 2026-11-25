@@ -1,71 +1,50 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
-
-type ControlOptions = Pick<SpawnInput, "env" | "assertCurrent" | "initiateSpawn">;
-type StopOptions = Pick<ControlOptions, "assertCurrent">;
-type LaunchOptions = ControlOptions &
-  Pick<SpawnInput, "cwd" | "timeoutMs" | "memoryLimitBytes"> & {
-    id: string;
-    argv: string[];
-    env: Record<string, string>;
-    logPath: string;
-  };
-export type DurableProcessObservation =
-  | { state: "missing" }
-  | { state: "running"; pid?: number }
-  | {
-      state: "exited";
-      exitCode: number | null;
-      exitSignal: number | null;
-      reason: TerminationReason;
-      result: string;
-    };
+import { hasErrnoCode } from "../infra/errors.js";
+import { getHostExecMemoryBudget } from "../process/child-memory.js";
+import { describeLiveProcesses } from "../process/supervisor/service-child-group-ownership.js";
+import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import {
+  runDurableControlCommand,
+  type DurableControlOptions as ControlOptions,
+  type DurableLaunchOptions,
+  type DurableProcessObservation,
+  type DurableProcessSupervisor,
+  type DurableStopOptions as StopOptions,
+} from "./bash-process-durable-supervisor.js";
 
 const REQUIREMENT =
   "Durable exec requires Gateway-host execution on Linux, systemd 250 or newer, and a reachable Gateway user's systemd manager (XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS). Use ordinary background exec on unsupported hosts.";
 const MANAGER_KEYS = ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] as const;
-const MAX_OUTPUT = 256_000;
 const EXIT_REASONS: Record<string, TerminationReason> = {
   timeout: "overall-timeout",
   "oom-kill": "memory-limit",
 };
 let version: Promise<number> | undefined;
+// systemd stops (and so kills) a unit whose main process fails. Every exit counts as
+// success so what the command left running survives; ExecMainCode/Status keep the real result.
+// Accepted edge case: a root killed by a real-time signal still fails the unit.
+const SUCCESS_EXIT_STATUS = [
+  ...Array.from({ length: 255 }, (_, index) => index + 1),
+  ...[
+    "HUP INT QUIT ILL TRAP ABRT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT",
+    "CHLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO PWR SYS",
+  ]
+    .join(" ")
+    .split(" ")
+    .map((name) => `SIG${name}`),
+].join(" ");
 const failure = () =>
   new Error(
     "Durable process control was not confirmed; inspect process status and the systemd user manager before retrying.",
   );
 
-async function command(argv: string[], options: ControlOptions = {}): Promise<RunExit> {
-  try {
-    const executable = resolveExecutablePath(argv[0]!, { env: process.env, cwd: process.cwd() });
-    if (!executable) {
-      throw failure();
-    }
-    const run = await getProcessSupervisor().spawn({
-      mode: "child",
-      argv: [executable, ...argv.slice(1)],
-      env: process.env,
-      exactEnv: true,
-      cleanupOwnership: "external",
-      stdinMode: "pipe-closed",
-      timeoutMs: 15_000,
-      maxCapturedOutputChars: MAX_OUTPUT,
-      ...options,
-    });
-    const result = await run.wait();
-    if (result.reason !== "exit" || result.stdout.length >= MAX_OUTPUT) {
-      throw failure();
-    }
-    return result;
-  } catch {
-    throw failure();
-  }
-}
+const command = (argv: string[], options: ControlOptions = {}): Promise<RunExit> =>
+  runDurableControlCommand(argv, options, failure);
 
-export function durableProcessUnitName(id: string): string {
+function durableProcessUnitName(id: string): string {
   return `openclaw-proc-${createHash("sha256").update(id).digest("hex")}.service`;
 }
 
@@ -76,9 +55,7 @@ function control(args: string[], unit: string, options?: StopOptions) {
   return command(["systemctl", "--user", "--no-ask-password", ...args, "--", unit], options);
 }
 
-export async function requireDurableProcessHost(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
+async function requireDurableProcessHost(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (process.platform !== "linux" || !MANAGER_KEYS.some((key) => process.env[key])) {
     throw new Error(REQUIREMENT);
   }
@@ -102,7 +79,7 @@ export async function requireDurableProcessHost(
   }
 }
 
-export async function launchDurableProcess(params: LaunchOptions): Promise<{ unitName: string }> {
+async function launchDurableProcess(params: DurableLaunchOptions): Promise<{ unitName: string }> {
   const unitName = durableProcessUnitName(params.id);
   // The manager can retain credentials ordinary exec omitted; discard names absent from the launch env.
   const manager = await command(["systemctl", "--user", "show-environment"]);
@@ -113,17 +90,23 @@ export async function launchDurableProcess(params: LaunchOptions): Promise<{ uni
     .split("\n")
     .map((line) => /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1])
     .filter((key) => key && !(key in params.env));
+  const budget = getHostExecMemoryBudget();
   const properties = {
     Type: "exec",
-    ExitType: "cgroup",
+    // The unit ends with the command's own exit; RemainAfterExit retains the result and
+    // whatever the command left running until cleanup finds it gone.
     RemainAfterExit: "yes",
+    SuccessExitStatus: SUCCESS_EXIT_STATUS,
     KillMode: "control-group",
     TimeoutStopSec: "10s",
+    LimitCORE: 0,
     StandardInput: "null",
     StandardOutput: `append:${params.logPath}`,
     StandardError: "inherit",
     RuntimeMaxSec: params.timeoutMs ? `${params.timeoutMs / 1000}s` : "infinity",
-    MemoryMax: params.memoryLimitBytes ?? "infinity",
+    // Bound one unit at the full allowance; the sampler accounts concurrent work.
+    MemoryMax: budget?.memoryBytes ?? "infinity",
+    ...(budget ? { MemorySwapMax: budget.swapBytes, OOMPolicy: "kill" } : {}),
     UnsetEnvironment: unset.join(" "),
   };
   const helperEnv: NodeJS.ProcessEnv = { ...params.env };
@@ -157,11 +140,11 @@ export async function launchDurableProcess(params: LaunchOptions): Promise<{ uni
   return { unitName };
 }
 
-export async function readDurableProcess(unit: string): Promise<DurableProcessObservation> {
+async function readDurableProcess(unit: string): Promise<DurableProcessObservation> {
   const reply = await control(
     [
       "show",
-      "--property=LoadState,ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,Result",
+      "--property=LoadState,ActiveState,SubState,MainPID,ControlGroup,ExecMainCode,ExecMainStatus,Result",
     ],
     unit,
   );
@@ -172,11 +155,20 @@ export async function readDurableProcess(unit: string): Promise<DurableProcessOb
   if (reply.exitCode !== 0 || fields.loadstate !== "loaded") {
     throw failure();
   }
+  const group = fields.controlgroup;
+  const cgroupDirectory =
+    group?.startsWith("/") && !group.split("/").includes("..")
+      ? path.join("/sys/fs/cgroup", group)
+      : undefined;
   if (
     ["activating", "deactivating", "reloading"].includes(fields.activestate ?? "") ||
     (fields.activestate === "active" && fields.substate !== "exited")
   ) {
-    return { state: "running", pid: Number(fields.mainpid) || undefined };
+    return {
+      state: "running",
+      pid: Number(fields.mainpid) || undefined,
+      ...(cgroupDirectory ? { cgroupDirectory } : {}),
+    };
   }
   const code = Number(fields.execmaincode),
     status = Number(fields.execmainstatus),
@@ -184,23 +176,39 @@ export async function readDurableProcess(unit: string): Promise<DurableProcessOb
   const reason =
     EXIT_REASONS[fields.result ?? ""] ??
     (signaled ? "signal" : code === 1 ? "exit" : "spawn-error");
+  // An active/exited unit still holds what the command left running.
+  const procs = cgroupDirectory
+    ? await readFile(path.join(cgroupDirectory, "cgroup.procs"), "utf8").catch((error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        return "";
+      })
+    : "";
+  const pids = new Set(procs.split("\n").filter(Boolean).map(Number));
   return {
     state: "exited",
     exitCode: code === 1 ? status : null,
     exitSignal: signaled ? status : null,
     reason,
     result: fields.result ?? "unknown",
+    survivors: pids.size === 0 ? [] : describeLiveProcesses((row) => pids.has(row.pid)),
   };
 }
 
-export async function stopDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+async function stopDurableProcess(unit: string, options?: StopOptions): Promise<void> {
   if ((await control(["stop"], unit, options)).exitCode !== 0) {
     throw failure();
   }
 }
 
 /** The registry records the real result before releasing systemd's retained unit. */
-export async function cleanupDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+async function cleanupDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+  const observed = await readDurableProcess(unit);
+  // Stopping the unit would kill what the command left running; a later cleanup releases it.
+  if (observed.state === "exited" && observed.survivors?.length !== 0) {
+    return;
+  }
   for (const action of ["stop", "reset-failed"]) {
     if (
       (await control([action], unit, options)).exitCode !== 0 &&
@@ -210,3 +218,12 @@ export async function cleanupDurableProcess(unit: string, options?: StopOptions)
     }
   }
 }
+
+export const systemdDurableSupervisor: DurableProcessSupervisor = {
+  unitName: durableProcessUnitName,
+  requireHost: requireDurableProcessHost,
+  launch: launchDurableProcess,
+  read: readDurableProcess,
+  stop: stopDurableProcess,
+  cleanup: cleanupDurableProcess,
+};

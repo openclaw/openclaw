@@ -2,6 +2,7 @@ import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
 import { createMemo, For, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSION_COMPANION_SLOW_MS } from "../../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
@@ -17,6 +18,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { SidebarPanelDefinitionParams } from "../chat-pane-embedded-types.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
@@ -33,7 +35,7 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
-import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-panel-host.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
@@ -102,6 +104,8 @@ function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null 
 }
 const COMPANION_HINT_KEYS = {
   busy: "chat.rail.askBusy",
+  stopped: "chat.rail.askStopped",
+  timeout: "chat.rail.askTimeout",
   "history-unavailable": "chat.rail.askHistoryUnavailable",
   missing: "chat.rail.askMissing",
   "model-unavailable": "chat.rail.askModelUnavailable",
@@ -345,7 +349,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                   "chat-session-rail__exchange",
                   {
                     "chat-session-rail__exchange--pending": turn().status === "pending",
-                    "chat-session-rail__exchange--error": turn().status === "failed",
+                    "chat-session-rail__exchange--error": Boolean(
+                      failed() && failed()?.hint !== "stopped",
+                    ),
                   },
                 ]}
               >
@@ -375,7 +381,13 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                                   startedAt: waiting().startedAt,
                                 },
                               ]}
-                              options={{}}
+                              options={{
+                                startupLabel:
+                                  readVisibleTime(1_000) - waiting().startedAt >=
+                                  SESSION_COMPANION_SLOW_MS
+                                    ? t("chat.rail.askStillWaiting")
+                                    : undefined,
+                              }}
                             />
                           </ChatLazyBoundary>
                         )}
@@ -424,6 +436,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       />
       <SessionRailComposer
         textareaRef={(element) => (textarea = element)}
+        agentId={props.agentId}
         sessionKey={props.sessionKey}
         companion={props.companion}
         modelControls={props.modelControls}
