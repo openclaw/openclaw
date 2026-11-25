@@ -1,6 +1,6 @@
-5465
+5541
 # Participate split, part 4 of 6 (invited admission): measured with
-# check-test-lines-ratchet against the part-3 branch tip; 5,865 net lines minus
+# check-test-lines-ratchet against the merge base with main; 5,941 net lines minus
 # the ordinary 400-line allowance. This part is the opt-in switch, so it carries
 # the Gateway suites that prove the lower parts' participant limits through the
 # real admission path; before it, nothing can admit a participant run. Reuses the
@@ -19,4 +19,6 @@
 # because they need real admission. Talk handler fixture clients carry the
 # connection scopes that session access resolution reads, and the approval
 # delivery replay fixture selects records the way the session runtime does.
+# One upgrade-compatibility case proves released role settings and unlevelled
+# member rows keep main's sharing projection under this part.
 # No assertion, timeout, file cap or global budget is relaxed.
