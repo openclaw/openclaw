@@ -25,6 +25,7 @@ function parseArgs(argv: string[]) {
     "workload",
     "seed",
     "definition",
+    "qualification",
     "harness-sha",
     "timeout-ms",
   ]);
@@ -53,6 +54,39 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
+  if (mode === "node-cache-qualification-admission") {
+    for (const name of values.keys()) {
+      if (
+        ![
+          "mode",
+          "definition",
+          "workload",
+          "qualification",
+          "output",
+          "pnpm-bin",
+          "harness-sha",
+          "timeout-ms",
+          "run-attempt",
+        ].includes(name)
+      ) {
+        throw new Error(`--${name} is not supported in ${mode} mode`);
+      }
+    }
+    return {
+      mode,
+      definitionPath: required("definition"),
+      workloadDir: required("workload"),
+      qualificationDir: required("qualification"),
+      outputDir: required("output"),
+      pnpmBin: required("pnpm-bin"),
+      harnessSha: required("harness-sha"),
+      timeoutMs: Number(required("timeout-ms")),
+      runAttempt: required("run-attempt"),
+    } as const;
+  }
+  if (values.has("qualification")) {
+    throw new Error("--qualification requires node-cache-qualification-admission mode");
+  }
   if (mode === "node-cache-disabled-control" || mode === "node-cache-workload-qualification") {
     for (const name of values.keys()) {
       if (
@@ -135,7 +169,11 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (
+if (options.mode === "node-cache-qualification-admission") {
+  assertSingleWorkflowAttempt(options.runAttempt);
+  const { admitNodeCacheQualification } = await import("./lib/node-cache-qualification.mts");
+  await admitNodeCacheQualification(options);
+} else if (
   options.mode === "node-cache-disabled-control" ||
   options.mode === "node-cache-workload-qualification"
 ) {
