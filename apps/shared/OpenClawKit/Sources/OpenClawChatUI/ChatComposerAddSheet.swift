@@ -379,7 +379,9 @@ private struct ChatComposerPhotoRow: View {
                 Image(systemName: systemImage).foregroundStyle(.secondary).accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                title.font(OpenClawChatTypography.settingsBody).foregroundStyle(Color.primary)
+                title.font(OpenClawChatTypography.settingsBody)
+                    // A card that only informs stays quiet; one that acts reads like a row.
+                        .foregroundStyle(action == nil ? Color.secondary : Color.primary)
                 if let detail {
                     detail.font(OpenClawChatTypography.settingsFootnote).foregroundStyle(.secondary)
                 }
