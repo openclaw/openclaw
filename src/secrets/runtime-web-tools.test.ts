@@ -93,7 +93,7 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
 
 // mock-isolation: Installed-plugin records come from the fixture, not host state.
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecordsSync: installedPlugins,
+  loadInstalledPluginIndexInstallRecords: installedPlugins,
 }));
 
 function envRef(id: string) {

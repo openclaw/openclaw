@@ -29,6 +29,8 @@ export const TEMPLATE_OUTPUT_STABILITY = "experimental" as const;
 
 export type TemplateAddPlanContext = {
   config?: OpenClawConfig;
+  /** Validated zone from the adding device; otherwise keep each declared zone. */
+  deviceTimeZone?: string;
   agentId?: string;
   workspace?: string;
   existingAgentIds?: Iterable<string>;

@@ -1,7 +1,5 @@
 import { isTestFileTarget } from "./changed-path-facts.mjs";
 
-export const PG16_GATEWAY_SMOKE_RESERVATION_SECONDS = 150;
-
 const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
 // These directory and non-suffix suites also require the PostgreSQL runner.
 const additionalPostgresConformanceTargets = [
@@ -11,9 +9,13 @@ const additionalPostgresConformanceTargets = [
   "extensions/team-reports/src/postgres-store.test.ts",
   "src/infra/postgres-sync",
   DATABASE_ENGINE_TARGET,
+  "src/state/openclaw-state-lease-heartbeat.test.ts",
   "src/infra/exec-approvals-native.test.ts",
   "src/infra/client-credential-update.test.ts",
   "src/infra/update-managed-service-handoff-engine.test.ts",
+  "src/channels/message/ingress-monitor.scheduling.test.ts",
+  "src/gateway/github-publication-runtime.test.ts",
+  "src/plugin-state/plugin-state-worker.test.ts",
 ] as const;
 
 /** Filesystem discovery owns suffix suites; explicit targets cover the remaining contracts. */
@@ -114,11 +116,8 @@ export function assignPostgresConformanceShards(
   count: number,
   estimate: (targets: readonly string[]) => number,
 ): string[][] {
-  // PR row 1 also pays ~140s for the PG16 smoke, including worker preparation.
-  // Keep one deterministic plan for every caller, reserving service lifecycle headroom too.
-  const shards = Array.from({ length: count }, (_, index) => ({
+  const shards = Array.from({ length: count }, () => ({
     targets: new Array<string>(),
-    overhead: index === 0 ? PG16_GATEWAY_SMOKE_RESERVATION_SECONDS : 0,
     weight: 0,
   }));
   const ordered = targets
@@ -133,9 +132,7 @@ export function assignPostgresConformanceShards(
     let bestTotal = Infinity;
     for (const shard of shards) {
       const next = estimate([...shard.targets, target]);
-      const candidate = shards.map(
-        (other) => other.overhead + (other === shard ? next : other.weight),
-      );
+      const candidate = shards.map((other) => (other === shard ? next : other.weight));
       const tail = Math.max(...candidate);
       const total = candidate.reduce((sum, weight) => sum + weight, 0);
       if (tail < bestTail || (tail === bestTail && total < bestTotal)) {

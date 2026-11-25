@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { StatelessTemplateAddOptions } from "./add-stateless.js";
+import type { StatelessTemplateAddOptions } from "./add-stateless-contract.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
 import type { ChatTemplateAddInput, PreparedAgentChat } from "./gateway-add-input.js";
 
@@ -16,6 +16,7 @@ export type AdmittedTemplateAgent = {
   config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
   chat: PreparedAgentChat;
   workspaceIdentity: string;
+  deviceTimeZone?: string;
   configured?: Initialization["configured"];
   preparing?: Initialization["preparing"];
   /** This request created the agent and chat, so it alone may remove them. */
@@ -31,7 +32,10 @@ export function templateInitializationCheckpoints(
     if (!pending.chat.checkpoint) {
       throw new Error("Template initialization checkpoint owner is unavailable");
     }
-    await pending.chat.checkpoint(initialization);
+    await pending.chat.checkpoint({
+      ...initialization,
+      ...(pending.deviceTimeZone ? { deviceTimeZone: pending.deviceTimeZone } : {}),
+    });
   };
   return {
     onAgentConfiguring: async (preparing) => {

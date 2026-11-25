@@ -12,7 +12,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { captureRpcSourceScopeMatcher } from "./session-runtime-scope.js";
@@ -150,6 +150,10 @@ export async function runTalkNodePermissionParity({
   context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [connectionId] : []);
   const { closeTalkClientGatewayControlSession } = await import("./talk/client-gateway-control.js");
   const workspace = expectDefined(config.agents?.defaults?.workspace, "fixture workspace");
+  // Keep workspace content independent of the effect marker: removing the only
+  // file after a consult attests the workspace correctly looks like data loss.
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(path.join(workspace, "README.md"), "Synthetic Talk permission workspace.\n");
   const marker = path.join(workspace, "node-parity-effects");
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
@@ -346,7 +350,16 @@ export async function runTalkNodePermissionParity({
           task = dispatch(method, params);
         }
         void task.catch((error: unknown) => finished.resolve({ error: String(error) }));
-        const runId = await started.promise;
+        // Direct callbacks settle with execution, unlike RPC dispatch acknowledgments.
+        const runId =
+          ingress === "direct"
+            ? await Promise.race([
+                started.promise,
+                task.then(() => {
+                  throw new Error("Direct consult settled before model start");
+                }),
+              ])
+            : await started.promise;
         diagnostic.lastCompletedAwait = "model-started";
         if (requiresApproval) {
           const pending = await Promise.race([
@@ -369,12 +382,12 @@ export async function runTalkNodePermissionParity({
             invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
             expect(activeSignal?.aborted, "admitted work survives device revocation").toBe(false);
             await expect(
-              captureGatewayOperatorRunAuthority({
+              prepareGatewayOperatorRunAuthority({
                 client,
                 context,
                 hasCurrentClientAuthority: source.isCurrent,
               }),
-            ).rejects.toThrow("Gateway caller authority is no longer active.");
+            ).rejects.toThrow("Gateway request could not start.");
             expect(
               (
                 await rpcReq(reviewer, "exec.approval.resolve", {
@@ -410,7 +423,7 @@ export async function runTalkNodePermissionParity({
             ),
           ).toBe(false);
           await expect(provider.run("Start new work after revocation")).rejects.toThrow(
-            /authority|active|closed|stopped/i,
+            /ended or changed|closed|stopped/i,
           );
         }
         const completed =
@@ -513,7 +526,7 @@ export async function runTalkOperatorSourceParity({
     isWebchatConnect: () => true,
     extraHandlers: {
       "talk.client.toolCall": async (options) => {
-        const original = await captureGatewayOperatorRunAuthority({
+        const original = await prepareGatewayOperatorRunAuthority({
           client: options.client ?? null,
           context: options.context,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,

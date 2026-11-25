@@ -16,7 +16,7 @@ import {
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-row.js";
-import type { SessionEntry } from "./types.js";
+import { isTerminalSessionStatus, type SessionEntry } from "./types.js";
 
 function readWorktree(value: string): NonNullable<SessionEntry["worktree"]> {
   const worktree: unknown = JSON.parse(value);
@@ -95,6 +95,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
       "lastInteractionAt",
       "lifecycleRevision",
       "worktree",
+      "status",
     ]);
     const revision = fields.first.get("lifecycleRevision");
     const worktree = fields.first.get("worktree");
@@ -122,6 +123,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
     }
     // The raw token retains opaque UTF-16 code units that SQLite scalar extraction replaces.
     const lifecycleRevision = readJsonPredicateScalar(revision);
+    const status = readJsonPredicateScalar(fields.first.get("status"));
     if (lifecycleRevision !== undefined && typeof lifecycleRevision !== "string") {
       throw new Error("Session lifecycle revision metadata requires repair");
     }
@@ -131,6 +133,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
         entry: {
           sessionId: row.current_session_id,
           updatedAt: row.updated_at,
+          ...(isTerminalSessionStatus(status) ? { status } : {}),
           ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
           ...(row.last_interaction_at === null
             ? {}

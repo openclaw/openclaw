@@ -11,7 +11,11 @@ export type CronConversationResultParams = {
   agentId: string;
   jobId: string;
   runStartedAt: number;
+  /** Defaults to the run's completion key; other notices about the same run need their own. */
+  idempotencyKey?: string;
   conversation: { sessionKey: string };
+  /** The cron turn ran in this conversation; see `commitBackgroundResultToSession`. */
+  displayOnly?: true;
   payloads: ReplyPayload[];
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
@@ -29,8 +33,9 @@ export async function commitCronConversationResult(
     agentId: params.agentId,
     sessionKey: params.conversation.sessionKey,
     payloads: params.payloads,
-    idempotencyKey: `cron-current-completion:${runId}`,
+    idempotencyKey: params.idempotencyKey ?? `cron-current-completion:${runId}`,
     provenance: { kind: "cron", jobId: params.jobId, runId },
+    displayOnly: params.displayOnly,
     config: params.config,
     signal: params.signal,
     assertCurrent: () => {

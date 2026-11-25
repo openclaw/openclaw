@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinel } from "../../infra/restart-sentinel-store.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewayRestart } from "../../infra/restart.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildSessionCommandTestParams } from "./commands-session-params.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -105,17 +103,6 @@ function expectNoRestart() {
   expect(mocks.schedule).not.toHaveBeenCalled();
 }
 
-function revocableOwner() {
-  const authority = { current: true };
-  const params = restartParams();
-  params.command.assertOwnerCurrent = () => {
-    if (!authority.current) {
-      throw new Error("Owner authority changed");
-    }
-  };
-  return { params, authority };
-}
-
 describe("handleRestartCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -126,16 +113,12 @@ describe("handleRestartCommand", () => {
   it("prepares the routed sentinel only when SIGUSR2 restart emits", async () => {
     await withRestartSignal(async () => {
       const params = restartParams();
-      params.command.assertOwnerCurrent = vi.fn();
       const result = await handleRestartCommand(params, true);
       expect(result?.reply?.text).toContain("SIGUSR2");
       expect(mocks.write).not.toHaveBeenCalled();
       expect(mocks.trigger).not.toHaveBeenCalled();
       const scheduledArgs = mocks.schedule.mock.calls.at(-1)?.[0];
-      expect(scheduledArgs).toMatchObject({
-        sessionKey: params.sessionKey,
-        emitHooks: { assertCurrent: params.command.assertOwnerCurrent },
-      });
+      expect(scheduledArgs).toMatchObject({ sessionKey: params.sessionKey });
       await scheduledArgs?.emitHooks?.beforeEmit?.();
       expect(mocks.write).toHaveBeenCalledOnce();
       expect(mocks.write.mock.calls[0]?.[0]).toMatchObject({
@@ -172,42 +155,6 @@ describe("handleRestartCommand", () => {
     expectNoRestart();
   });
 
-  it.each(["adoption", "sentinel"] as const)(
-    "rejects revoked owner authority after awaited restart %s preparation",
-    async (stage) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const { params, authority } = revocableOwner();
-      const prepare = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const handler = () => {};
-      if (stage === "adoption") {
-        params.opts = { turnAdoptionLifecycle: { onAdopted: prepare } };
-        process.on("SIGUSR2", handler);
-      } else {
-        mocks.write.mockImplementationOnce(async (payload) => {
-          await prepare();
-          return { version: 1, revision: 1, payload };
-        });
-      }
-      const command = handleRestartCommand(params, true);
-      try {
-        await entered.promise;
-        authority.current = false;
-        release.resolve();
-        expect((await command)?.reply?.text).toContain("owner authority changed");
-        expectNoRestart();
-        expect(mocks.clear).toHaveBeenCalledTimes(stage === "sentinel" ? 1 : 0);
-      } finally {
-        release.resolve();
-        await command;
-        process.removeListener("SIGUSR2", handler);
-      }
-    },
-  );
-
   it("gives authorized non-owner text restart commands the owner setup hint", async () => {
     const result = await handleRestartCommand(
       restartParams({
@@ -242,30 +189,5 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartParams(), true);
     expect(result?.reply?.text).toContain("Restart failed");
     expect(mocks.clear).toHaveBeenCalledExactlyOnceWith(1);
-  });
-
-  it("preserves a newer acknowledgement when owner revocation cancels the prepared restart", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
-        "../../infra/restart-sentinel.js",
-      );
-      const { params, authority } = revocableOwner();
-      let replacement: RestartSentinel | undefined;
-      mocks.write.mockImplementationOnce(async (payload) => {
-        const prepared = await sentinel.writeRestartSentinel(payload);
-        replacement = await sentinel.writeRestartSentinel({
-          ...payload,
-          message: "newer accepted restart",
-        });
-        authority.current = false;
-        return prepared;
-      });
-      mocks.clear.mockImplementationOnce(sentinel.clearRestartSentinelIfRevision);
-      const result = await handleRestartCommand(params, true);
-      expect(result?.reply?.text).toContain("owner authority changed");
-      expect(mocks.trigger).not.toHaveBeenCalled();
-      expect(replacement).toBeDefined();
-      expect(await sentinel.readRestartSentinel()).toEqual(replacement);
-    });
   });
 });

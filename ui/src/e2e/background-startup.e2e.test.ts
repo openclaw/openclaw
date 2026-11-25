@@ -1,7 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { SessionBackground } from "../components/session-background-host.tsx";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -25,7 +28,7 @@ function installPreferences(page: Page) {
     deferredMethods: ["users.prefs.get"],
     featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get"],
     methodResponses: {
-      "config.get": configResponse({ themeMode: "dark" }, "background"),
+      "config.get": configResponse({ theme: "dash", themeMode: "dark" }, "background"),
     },
   });
 }
@@ -38,7 +41,12 @@ suite.define(() => {
         { colorScheme: "dark", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const entries =
-            choice === "none" ? { "ui.background": selectBackgroundSource({ kind: "none" }) } : {};
+            choice === "none"
+              ? {
+                  "ui.background": selectBackgroundSource({ kind: "none" }),
+                  "ui.themeMode": "light",
+                }
+              : { "ui.themeMode": "light" };
           const gateway = await installPreferences(page);
           const imageRequests: string[] = [];
           page.on("request", (request) => {
@@ -64,15 +72,24 @@ suite.define(() => {
             expect(await shellImage()).toBe("none");
             expect(imageRequests).toEqual([]);
             await gateway.resolveDeferred("users.prefs.get", preferences(entries));
+            await expect
+              .poll(() => page.locator("html").getAttribute("data-theme"))
+              .toBe("dash-light");
             if (choice === "none") {
               await expect.poll(() => backgroundKind(backgroundOf(page))).toBe("none");
-              expect(await shellImage()).toBe("none");
-              expect(await page.locator(".session-background__image").count()).toBe(0);
-              expect(imageRequests).toEqual([]);
-            } else {
-              await expect.poll(shellImage).toMatch(/^url\(/u);
-              expect(await shell.getAttribute("data-background-managed")).toBeNull();
             }
+            if (choice === "absent" && !reload && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              const frame = await takeControlUiScreenshotFrame(
+                page,
+                shell,
+                [page.locator(".agent-chat__input")],
+                { animations: "disabled" },
+              );
+              await writeFile(path.join(suite.artifactDir, "new-session.png"), frame.png);
+            }
+            expect(await shellImage()).toBe("none");
+            expect(await page.locator(".session-background__image").count()).toBe(0);
+            expect(imageRequests).toEqual([]);
           }
         },
       ),

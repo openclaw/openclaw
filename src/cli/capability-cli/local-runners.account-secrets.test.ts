@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as image from "../../image-generation/runtime.js";
 import * as media from "../../media-understanding/runtime.js";
 import * as memory from "../../plugin-sdk/memory-core-bundled-runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { setupSecretsRuntimeSnapshotTestHooks } from "../../secrets/runtime.test-support.ts";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -33,6 +34,7 @@ function withEgressAuth<T>(result: T) {
 }
 
 beforeEach(() => {
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const generated = { provider, model: "test-model", attempts: [], ignoredOverrides: [] };
   vi.spyOn(image, "generateImage").mockImplementation(withEgressAuth({ ...generated, images: [] }));
   vi.spyOn(video, "generateVideo").mockImplementation(withEgressAuth({ ...generated, videos: [] }));
@@ -55,12 +57,6 @@ afterEach(() => vi.restoreAllMocks());
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: vi.fn(async (_runtime: unknown, run: () => Promise<void>) => await run()),
-}));
-
-vi.mock("./output.js", () => ({
-  emitJsonOrText: vi.fn(),
-  formatEnvelopeForText: vi.fn(),
-  providerSummaryText: vi.fn(),
 }));
 
 const envKey = "OPENCLAW_TEST_CAPABILITY_ACCOUNT_KEY";

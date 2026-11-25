@@ -76,6 +76,7 @@ export async function computeWorkspaceManifest<Command extends WorkspaceManifest
   command: Command,
   signal?: AbortSignal,
   git?: GitWorkerOperationOptions["git"],
+  idleIoPriority?: boolean,
 ): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]> {
   if (hasGitWorkerContext()) {
     const { executeWorkspaceManifestComputation } =
@@ -85,6 +86,7 @@ export async function computeWorkspaceManifest<Command extends WorkspaceManifest
   return await runGitWorkerOperation(command, {
     signal,
     git,
+    idleIoPriority,
     inputBytes: 256 + computationInputBytes(command.input),
     transferList: transferableManifestInput,
   });
@@ -94,16 +96,20 @@ function computeValue<Type extends keyof WorkspaceManifestValueInputs>(
   type: Type,
   input: WorkspaceManifestValueInputs[Type],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ): Promise<WorkspaceManifestComputationOperations[Type]["output"]>;
 async function computeValue(
   type: keyof WorkspaceManifestValueInputs,
   input: WorkspaceManifestValueInputs[keyof WorkspaceManifestValueInputs],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ) {
   signal?.throwIfAborted();
   return computeWorkspaceManifest(
     { type, input: { payload: new TextEncoder().encode(JSON.stringify(input)) } },
     signal,
+    undefined,
+    idleIoPriority,
   );
 }
 
@@ -266,8 +272,14 @@ export async function captureInitialLocalWorkspaceManifest(params: WorkspaceCapt
 export async function captureTemplateWorkspaceManifest(
   input: WorkspaceManifestValueInputs["workspace.manifest.template"],
   signal?: AbortSignal,
+  idleIoPriority?: boolean,
 ) {
-  return await computeValue("workspace.manifest.template", input, signal);
+  const result = await computeValue("workspace.manifest.template", input, signal, idleIoPriority);
+  return {
+    ...result,
+    projectionFingerprints:
+      result.projectionFingerprints && Buffer.from(result.projectionFingerprints),
+  };
 }
 
 export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {

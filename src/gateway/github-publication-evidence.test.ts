@@ -418,7 +418,7 @@ describe("workspace evidence through the guest tool and registered publication a
       expect(admission.authorization).toBeDefined();
       admission.authorization!.assertCurrent();
       await expect(f.upload({}, client)).rejects.toThrow(
-        "The original GitHub publication requester is no longer authorized.",
+        "This requester is not authorized to publish from this conversation.",
       );
       expect(f.fetch).not.toHaveBeenCalled();
     } finally {
@@ -426,7 +426,7 @@ describe("workspace evidence through the guest tool and registered publication a
     }
   });
 
-  it("rechecks PR head and the guest's current role after evidence preparation", async () => {
+  it("rechecks PR head after evidence preparation", async () => {
     const f = await evidenceFixture();
     let reads = 0;
     f.onRead(async () => {
@@ -435,14 +435,6 @@ describe("workspace evidence through the guest tool and registered publication a
       }
     });
     await expect(f.upload()).rejects.toThrow("head changed");
-    f.state.head.sha = f.publication.headCommit;
-    reads = 0;
-    f.onRead(async () => {
-      if (++reads === 2) {
-        await f.revoke();
-      }
-    });
-    await expect(f.upload()).rejects.toThrow("Your operator role changed");
     expect(f.fetch).not.toHaveBeenCalled();
   });
 

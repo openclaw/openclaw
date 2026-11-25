@@ -135,7 +135,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
-      // Children that already exist at load stay collapsed; only new children reveal.
+      // Linking directly to a parent doesn't open the child list.
       const initialToggle = parent.locator("[data-child-session-toggle]");
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
@@ -174,11 +174,12 @@ suite.define(() => {
       const activeChild = page.locator(`[data-session-key="${childOneKey}"]`);
       const completedChild = page.locator(`[data-session-key="${childTwoKey}"]`);
       await activeChild.getByRole("img", { name: "Active run" }).waitFor();
-      await completedChild.getByRole("img", { name: "Done" }).waitFor();
+      expect(await completedChild.getByRole("img", { name: "Done" }).count()).toBe(0);
 
       const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
       const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
-      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      // A previously read failure gets the same quiet treatment as a root chat.
+      expect(await failedChild.getByRole("img", { name: "Failed" }).count()).toBe(0);
       await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
 
       const expandedTree = await accessibility.send("Accessibility.getFullAXTree");

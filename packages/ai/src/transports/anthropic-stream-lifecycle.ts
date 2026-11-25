@@ -1,4 +1,7 @@
-import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages.js";
+import type {
+  MessageCreateParams,
+  MessageCreateParamsStreaming,
+} from "@anthropic-ai/sdk/resources/messages.js";
 import type { AssistantMessageEvent, Context, MaybePromise, Model } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import {
@@ -81,7 +84,7 @@ type PreparedAnthropicRequest = {
   directApiKeyBetaHeader?: string;
   claudeCodeVersion?: string;
   request: (
-    body: MessageCreateParamsStreaming,
+    body: MessageCreateParams,
     headers: Record<string, string> | undefined,
     encodeBody: () => string | Uint8Array<ArrayBuffer>,
   ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
@@ -94,6 +97,33 @@ type SentAnthropicRequest = {
   events: AsyncIterable<object> | Iterable<object>;
   maxTokens: number;
 };
+
+/**
+ * Anthropic answers `max_tokens: 0` only without streaming, and refuses it when the request
+ * implies output: budget thinking, a forced tool, or structured output. Changing any of those
+ * would change the cached prefix, so a prewarm keeps the request and refuses instead.
+ */
+function assertAnthropicPrewarmable(body: MessageCreateParamsStreaming): void {
+  const toolChoice = body.tool_choice?.type;
+  if (body.thinking?.type === "enabled") {
+    throw new Error("Anthropic cache prewarm is not available with budget thinking.");
+  }
+  if (toolChoice === "any" || toolChoice === "tool") {
+    throw new Error("Anthropic cache prewarm is not available with a forced tool choice.");
+  }
+  if (body.output_config?.format) {
+    throw new Error("Anthropic cache prewarm is not available with structured output.");
+  }
+}
+
+/** A non-streamed message as the stream events the reducer already reads. */
+function anthropicMessageEvents(message: Record<string, unknown>): object[] {
+  return [
+    { type: "message_start", message: { ...message, content: [] } },
+    { type: "message_delta", delta: { stop_reason: message.stop_reason }, usage: message.usage },
+    { type: "message_stop" },
+  ];
+}
 
 /** Entry points retain their SDK/fetch adapters; request and terminal ownership is shared. */
 export async function runAnthropicStreamLifecycle(params: {
@@ -136,7 +166,13 @@ export async function runAnthropicStreamLifecycle(params: {
         prepared.options,
         prepared.directApiKeyBetaHeader,
       );
-      const wireBody = { ...body, stream: true as const };
+      const prewarm = prepared.options?.cachePrewarm === true;
+      if (prewarm) {
+        assertAnthropicPrewarmable(body);
+      }
+      const wireBody: MessageCreateParams = prewarm
+        ? { ...body, max_tokens: 0, stream: false }
+        : { ...body, stream: true };
       if (!retry.speed) {
         delete wireBody.speed;
       }
@@ -146,7 +182,12 @@ export async function runAnthropicStreamLifecycle(params: {
         );
         await notifyProviderHttpResponse({ options: prepared.options, response, model });
         await prepared.checkResponse?.(response);
-        return { prepared, built, events, maxTokens: wireBody.max_tokens };
+        return {
+          prepared,
+          built,
+          events: prewarm ? anthropicMessageEvents(asRecord(await response.json())) : events,
+          maxTokens: wireBody.max_tokens,
+        };
       } catch (error) {
         // Anthropic names the Claude Code version a model needs. Adopt it and
         // resend once instead of shipping a release for every new model.
@@ -599,7 +640,11 @@ export async function runAnthropicStreamLifecycle(params: {
               if (delta.stop_reason === "refusal") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
-                output.stopReason = mapAnthropicStopReason(delta.stop_reason);
+                // A prewarm ends at its zero-token limit by design; it is a complete reply.
+                output.stopReason =
+                  reducerOptions.cachePrewarm === true && delta.stop_reason === "max_tokens"
+                    ? "stop"
+                    : mapAnthropicStopReason(delta.stop_reason);
               }
             }
             applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);

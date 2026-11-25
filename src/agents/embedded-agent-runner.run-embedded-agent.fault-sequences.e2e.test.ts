@@ -5,6 +5,7 @@ import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest"
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import {
@@ -391,14 +392,44 @@ async function expectPreparationInvalidationToDropRoutingWork(
       boundary: "route-preparation-e2e",
     });
     let replacementAdmission: ReturnType<typeof createModelRoutingTestAdmission> | undefined;
-    const targetPreparation =
+    const reachedPreparation = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const transcriptPreparation =
       await import("./embedded-agent-runner/run/attempt-transcript-helpers.js");
-    const resolveTarget = targetPreparation.resolveAttemptDispatchSessionTarget;
-    // Invalidate after real target preparation, before dispatch can publish routing work.
-    const targetSpy = vi
-      .spyOn(targetPreparation, "resolveAttemptDispatchSessionTarget")
-      .mockImplementationOnce(async (input) => {
-        const target = await resolveTarget(input);
+    const resolveTarget = transcriptPreparation.resolveAttemptDispatchSessionTarget;
+    // Hold real preparation before routing publication and backend dispatch.
+    const preparationSpy = vi
+      .spyOn(transcriptPreparation, "resolveAttemptDispatchSessionTarget")
+      .mockImplementationOnce(async (params) => {
+        const target = await resolveTarget(params);
+        reachedPreparation.resolve();
+        await releasePreparation.promise;
+        return target;
+      });
+    let run: ReturnType<ProductionRunEmbeddedAgent> | undefined;
+    try {
+      const { decisionWork } = await captureRoutingDecisionWork(async () => {
+        run = runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission: preparedAdmission,
+          sessionId: `session:${runId}`,
+          sessionKey: `agent:test:${runId}`,
+          workspaceDir,
+          agentDir,
+          config,
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          // The preparation barrier, not elapsed time, drives admission invalidation.
+          timeoutMs: 0,
+          runId,
+          enqueue: async (task) => await task(),
+        });
+        await Promise.race([
+          reachedPreparation.promise,
+          run.then(() => {
+            throw new Error("embedded run settled before attempt preparation");
+          }),
+        ]);
         if (mode === "close") {
           preparedAdmission.close();
         } else {
@@ -409,25 +440,7 @@ async function expectPreparationInvalidationToDropRoutingWork(
           });
           await replacementAdmission.admit("embedded");
         }
-        return target;
-      });
-    try {
-      const { decisionWork } = await captureRoutingDecisionWork(async () => {
-        const run = runEmbeddedAgentWithPreparedAdmission({
-          preparedRunAdmission: preparedAdmission,
-          sessionId: `session:${runId}`,
-          sessionKey: `agent:test:${runId}`,
-          workspaceDir,
-          agentDir,
-          config,
-          prompt: "hello",
-          provider: "openai",
-          model: "mock-1",
-          // Target preparation, not elapsed time, drives admission invalidation.
-          timeoutMs: 0,
-          runId,
-          enqueue: async (task) => await task(),
-        });
+        releasePreparation.resolve();
         await expect(run).rejects.toThrow(
           "embedded attempt reached dispatch without an active admitted run",
         );
@@ -436,9 +449,12 @@ async function expectPreparationInvalidationToDropRoutingWork(
       expect(decisionWork).toHaveLength(0);
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     } finally {
-      targetSpy.mockRestore();
+      releasePreparation.resolve();
       replacementAdmission?.close();
       preparedAdmission.close();
+      // The rejection is observed above; join all run work before restoring its checkpoint.
+      await Promise.allSettled(run ? [run] : []);
+      preparationSpy.mockRestore();
     }
   });
 }

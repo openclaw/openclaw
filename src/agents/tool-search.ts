@@ -7,7 +7,7 @@ import {
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayToolPolicyControl, copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
@@ -23,10 +23,7 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
-import {
-  applyToolSchemaDirectoryCatalog,
-  buildMcpToolSearchDirectory,
-} from "./tool-search-directory.js";
+import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
   MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
@@ -50,12 +47,7 @@ import {
   formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
-import type {
-  ToolSearchCatalogRef,
-  ToolSearchCatalogSession,
-  ToolSearchToolContext,
-} from "./tool-search-types.js";
-import { hasToolUsageRanking, type ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
+import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
@@ -244,60 +236,15 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
-  const result = applyToolCatalogCompaction({
+  // The MCP directory goes in the system prompt's deferred-tool section, so a server
+  // that connects later changes an appended prompt update, never this definition.
+  return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
     selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
-  const catalog = result.catalogRegistered ? params.catalogRef?.current : undefined;
-  const directory = catalog ? buildMcpToolSearchDirectory(catalog) : "";
-  if (!directory) {
-    return result;
-  }
-  // The directory follows the registered catalog snapshot; an unchanged MCP
-  // inventory keeps identical description bytes across turns.
-  return {
-    ...result,
-    tools: result.tools.map((tool) =>
-      tool.name === TOOL_SEARCH_RAW_TOOL_NAME
-        ? copyAgentToolMetadata(tool, {
-            ...tool,
-            description: `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`,
-          })
-        : tool,
-    ),
-  };
-}
-
-/**
- * The ranking snapshot depends on the registered catalog, so it reaches the MCP
- * directory after `applyToolSearchCatalog`. Only the unranked directory this
- * catalog produced is replaced; without learned usage the tools are unchanged.
- */
-export function applyUsageRankedMcpToolSearchDirectory(
-  tools: AnyAgentTool[],
-  catalog: ToolSearchCatalogSession | undefined,
-  usageRanking: ToolUsageRankingSnapshot | undefined,
-): AnyAgentTool[] {
-  if (!catalog || !hasToolUsageRanking(usageRanking)) {
-    return tools;
-  }
-  const directory = buildMcpToolSearchDirectory(catalog);
-  const ranked = buildMcpToolSearchDirectory(catalog, usageRanking);
-  if (!directory || ranked === directory) {
-    return tools;
-  }
-  const unrankedDescription = `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`;
-  return tools.map((tool) =>
-    tool.name === TOOL_SEARCH_RAW_TOOL_NAME && tool.description === unrankedDescription
-      ? copyAgentToolMetadata(tool, {
-          ...tool,
-          description: `${TOOL_SEARCH_DESCRIPTION}\n\n${ranked}`,
-        })
-      : tool,
-  );
 }
 
 export { applyToolSchemaDirectoryCatalog };

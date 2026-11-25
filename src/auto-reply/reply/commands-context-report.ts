@@ -16,6 +16,7 @@ import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-re
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../../agents/model-catalog-view.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -176,6 +177,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
+  const model = params.model;
+  if (!model) {
+    return { text: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const agentId = resolveContextReportAgentId(params);
   const runtime = resolveEffectiveAgentRuntime({
@@ -184,7 +189,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sessionKey: params.sessionKey,
     sessionEntry: targetSessionEntry,
     provider: params.provider,
-    modelId: params.model,
+    modelId: model,
   });
   const { getPreparedModelCatalogSnapshot } =
     await import("../../agents/prepared-model-catalog.js");
@@ -194,7 +199,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
-  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, params.model);
+  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, model);
   const modelEntry = entry
     ? selectModelCatalogRuntimeEntry({
         entry,
@@ -211,12 +216,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
               : ["openclaw", "auto", candidate.provider].includes(runtime),
           ),
           params.provider,
-          params.model,
+          model,
         );
   const modelContext = resolveModelContextTokenProjection({
     cfg: params.cfg,
     provider: params.provider,
-    model: params.model,
+    model,
     modelContextTokens: modelEntry?.contextTokens,
     modelContextWindow: resolveModelContextWindowProfile({
       catalogEntry: modelEntry,
@@ -233,7 +238,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       resolveProjectedSessionContextTokens({
         entry: targetSessionEntry,
         provider: params.provider,
-        model: params.model,
+        model,
         agentHarnessId: runtime,
         resolvedContextTokens: modelContext.contextTokens,
         authoredContextTokens: modelContext.authoredContextTokens,

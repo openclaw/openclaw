@@ -67,7 +67,7 @@ export function CreationComposer(props: {
             modelCatalog: [],
             modelSwitching: false,
             sessions: null,
-            assistantName: "",
+            assistantName: composer.assistantName,
             sendShortcut: context.theme?.settings.chatSendShortcut,
             uploadConfig: context.config,
             attachmentLimits: resolveChatAttachmentLimits(context.gateway.snapshot.hello?.policy),

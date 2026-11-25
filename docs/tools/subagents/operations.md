@@ -36,6 +36,9 @@ limit. Collector admission instead uses Swarm's `maxChildrenPerGroup` (default
 not raise either group limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
 and limits independently of these OpenClaw queues.
 
+When a session reaches its active subagent limit, web chat shows the count on
+the launch row and tells you to wait for a subagent to finish before retrying.
+
 Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
 authorization checks independently of the delivery backlog.
@@ -98,6 +101,14 @@ completion retain their error outcome for delivery after startup, including when
 their requester has already finished its turn. A shutdown interruption does not count as
 an intentional cancellation by the requester. Root requesters with interrupted work
 receive the standard resume input; children are not independently resumed.
+Recorded spawn ancestry includes visible spawned coordinators and workers: their
+running descendants contribute to the original root even after its own turn ends.
+An ordinary conversation contacted through `sessions_send` keeps its own restart
+recovery; receiving a message does not make it a spawned child.
+
+Startup also repairs pending `Gateway stopped` completions written by older
+Gateways as quiet kills. These interrupted runs retain an error notice for the
+requester; an explicit Stop or an already delivered outcome is not reopened.
 
 Completion turns retain processing receipts so a transient failure before the
 requester consumes the outcome can retry. An intentional Stop or a completed

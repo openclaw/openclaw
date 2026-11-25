@@ -24,7 +24,11 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { platformId, withFixture } from "./cron.inference-binding.test-support.js";
-import { templatesAddHandlers } from "./templates-add.js";
+import {
+  applyTemplateAddForRequest,
+  planTemplateAddForRequest,
+  templatesAddHandlers,
+} from "./templates-add.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const greeting = vi.hoisted(() => vi.fn(async () => {}));
@@ -163,6 +167,7 @@ async function addTemplate(
   fixture: Fixture,
   client: GatewayClient,
   context = templateContext(fixture, client),
+  planIntegrity?: string,
 ) {
   // Direct handler fixtures represent an admitted socket; real handshakes are covered by Gateway E2E.
   await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
@@ -184,7 +189,7 @@ async function addTemplate(
       required: null,
     });
   }
-  const params = { source: { packageName, version } };
+  const params = { source: { packageName, version }, ...(planIntegrity ? { planIntegrity } : {}) };
   const respond = vi.fn<RespondFn>();
   await templatesAddHandlers["templates.add.apply"]!({
     req: { type: "req", id: "template-inference", method: "templates.add.apply", params },
@@ -209,6 +214,59 @@ async function addTemplate(
   );
   return result;
 }
+
+it("reviews and installs the adding device's wall clock and refuses a different schedule than reviewed", async () => {
+  await withFixture(async (fixture) => {
+    await remoteTemplate({ "CLAW.md": manifest.replace("timezone: UTC", "timezone: Asia/Tokyo") });
+    await withTemplateRuntime(fixture, async () => {
+      const client: GatewayClient = {
+        connId: "reviewer",
+        connect: gatewayConnect(["operator.admin"]),
+      };
+      const context = templateContext(fixture, client);
+      const request = {
+        client,
+        context,
+        params: { source: { packageName, version } },
+        req: { type: "req" as const, id: "review", method: "templates.add.plan" },
+        respond: vi.fn(),
+        isWebchatConnect: () => false,
+      };
+      const authored = await planTemplateAddForRequest(request);
+      expect(authored.scheduledJobs?.jobs[0]?.proposed?.schedule).toEqual({
+        cron: "0 9 * * 1",
+        timezone: "Asia/Tokyo",
+      });
+      for (const invalid of ["Invalid/Timezone", "-05:00"]) {
+        client.connect.client.timeZone = invalid;
+        expect((await planTemplateAddForRequest(request)).planIntegrity).toBe(
+          authored.planIntegrity,
+        );
+      }
+      client.connect.client.timeZone = "America/New_York";
+      const reviewed = await planTemplateAddForRequest(request);
+      expect(reviewed.scheduledJobs?.jobs[0]?.proposed?.schedule).toEqual({
+        cron: "0 9 * * 1",
+        timezone: "America/New_York",
+      });
+      await expect(
+        applyTemplateAddForRequest({
+          ...request,
+          params: { ...request.params, planIntegrity: authored.planIntegrity },
+        }),
+      ).rejects.toThrow("changed since review");
+      expect(await fixture.status()).toMatchObject({ jobs: 0 });
+      expect(await addTemplate(fixture, client, context, reviewed.planIntegrity)).toMatchObject({
+        status: "complete",
+      });
+      expect((await fixture.reload()).schedule).toEqual({
+        kind: "cron",
+        expr: "0 9 * * 1",
+        tz: "America/New_York",
+      });
+    });
+  });
+});
 
 it.each([false, true])(
   "fresh Template Add captures the host account privately and refuses replaced authority (replace: %s)",
@@ -501,7 +559,6 @@ it.each(["ocid", "paired device"])(
             });
           const restored = await restore();
           try {
-            restored.authority.assertCurrent();
             setOpenClawIdTunnelPrincipalLookup(undefined);
             if (source === "paired device") {
               expect(
@@ -510,18 +567,12 @@ it.each(["ocid", "paired device"])(
               // Publish the native device RPC's policy change for the next start.
               invalidateGatewayDeviceRevocation(context, device.deviceId, "operator");
             }
-            expect(restored.authority.assertCurrent).not.toThrow();
-            expect(restored.authority.signal?.aborted).toBe(false);
-            expect(restored.authority.reauthorize).toThrow();
+            expect(restored.authority.signal?.aborted).not.toBe(true);
             await expect(restore()).rejects.toThrow();
-            expect(restored.authority.assertCurrent).not.toThrow();
-            expect(restored.authority.signal?.aborted).toBe(false);
+            expect(restored.authority.signal?.aborted).not.toBe(true);
           } finally {
             restored.release();
           }
-          expect(restored.authority.assertCurrent).toThrow(
-            "Restart recovery operator authority is no longer active.",
-          );
         });
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);

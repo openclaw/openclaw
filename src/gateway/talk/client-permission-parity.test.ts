@@ -237,7 +237,7 @@ describe("authenticated Talk permission parity", () => {
         text: "Completed.",
       });
       await expect(runner.runArgs({ question: "Start another action" })).rejects.toThrow(
-        /authority|active|closed/,
+        /ended or changed|closed/,
       );
     } finally {
       retained.release();

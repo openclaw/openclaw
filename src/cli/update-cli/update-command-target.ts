@@ -59,17 +59,20 @@ import {
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import { admitUpdatePackageRoot } from "./update-command-package-activation.js";
 import {
-  captureUpdateCommandExecutorAuthority,
-  type UpdateCommandExecutor,
-} from "./update-command-executor.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
-import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
+  inspectCheckoutLinkPackageSwitch,
+  inspectNpmGlobalDestination,
+} from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
+import {
+  logManagedServicePackageUpdatePlan,
+  resolveManagedServicePackageUpdatePlan,
+} from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { checkUpdateTargetSnapshotSpace } from "./update-command-target-space.js";
 
@@ -346,37 +349,7 @@ export async function resolveUpdateCommandTarget(
           warn(formatGatewayServiceRootRedirect(managedServiceRootRedirect));
         }
         if (!opts.json) {
-          const { rootRedirect, nodeRunner } = managedServicePlan;
-          if (rootRedirect) {
-            defaultRuntime.log(
-              theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
-            );
-            defaultRuntime.log(
-              theme.warn(
-                `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-              ),
-            );
-            if (nodeRunner) {
-              defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
-            }
-          } else if (managedServicePlan.serviceRoot) {
-            defaultRuntime.log(
-              theme.muted(
-                `Updating this installation and rebinding the managed Gateway from ${managedServicePlan.serviceRoot} after ownership and runtime verification.`,
-              ),
-            );
-          } else if (nodeRunner) {
-            defaultRuntime.log(
-              theme.warn(
-                `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
-              ),
-            );
-            defaultRuntime.log(
-              theme.muted(
-                "Using the managed service runtime for this update so the gateway can start after the upgrade.",
-              ),
-            );
-          }
+          logManagedServicePackageUpdatePlan(managedServicePlan);
         }
         packageUpdateNodeRunner =
           managedServiceRoot && !process.versions.bun
@@ -386,20 +359,8 @@ export async function resolveUpdateCommandTarget(
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
-      if (updateInstallKind === "package" && !opts.dryRun) {
-        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-        const fence = await executor.enter(root, {
-          preflight: true,
-          serviceRoot: managedServiceRoot,
-        });
-        if (opts.run) {
-          opts.run.executorFence = fence;
-        }
-        fence.assertCurrent();
-        assertUpdatePackageActivationAdmission(
-          captureUpdateCommandExecutorAuthority(fence).installKey,
-          { serviceRoot: managedServiceRoot },
-        );
+      if (updateInstallKind === "package" && !switchToPackage && !opts.dryRun) {
+        await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
       }
 
       const currentVersion = await readPackageVersion(root);
@@ -428,7 +389,10 @@ export async function resolveUpdateCommandTarget(
             ...reportOptions,
             controlPlaneUpdateSentinelMeta,
           };
-          throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
+          throw new UnreportedUpdateAdmissionOutcome(
+            report,
+            error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
+          );
         });
         if (manager) {
           packageManager = manager;
@@ -469,6 +433,22 @@ export async function resolveUpdateCommandTarget(
             if (destination.kind === "owned" && destination.releaseBoundService) {
               warn(destination.releaseBoundService.warning);
               packageInstallTarget = destination.releaseBoundService.installTarget;
+            }
+          }
+          if (switchToPackage && packageInstallTarget.packageRoot) {
+            // A switch from Git updates the package destination, which owns this update's
+            // lease and publication recovery; the installed target's continuation checks them.
+            if (
+              packageInstallTarget.manager === "npm" &&
+              managedServicePlan?.service &&
+              prepared.shouldRestart &&
+              process.platform !== "win32"
+            ) {
+              managedServiceRoot ??= discoveredRoot;
+            }
+            root = packageInstallTarget.packageRoot;
+            if (!opts.dryRun) {
+              await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
@@ -584,6 +564,26 @@ export async function resolveUpdateCommandTarget(
             if (canResolveRegistryVersionForPackageTarget(tag)) {
               packageInstallSpec = packageSpec(targetVersion);
             }
+          }
+          const unsafeSwitch =
+            switchToPackage &&
+            (await inspectCheckoutLinkPackageSwitch({
+              checkoutRoot: discoveredRoot,
+              installTarget: packageInstallTarget,
+              // The plan records a service only when it runs this same installation.
+              serviceRunsCheckout: Boolean(managedServicePlan?.service) && !managedServiceRoot,
+              targetSpec: packageInstallSpec,
+              storedChannel,
+              requestedChannel: channel,
+            }));
+          if (unsafeSwitch) {
+            await refuseUpdate(
+              unsafeSwitch.reason,
+              unsafeSwitch.message,
+              unsafeSwitch.failureFacts,
+              unsafeSwitch.recoverySteps,
+            );
+            return undefined;
           }
         }
       }

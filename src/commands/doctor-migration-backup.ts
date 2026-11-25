@@ -181,16 +181,18 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  // Archive-only coverage cannot serve a fresh credential capture inside its transaction.
-  const verifiedSnapshots =
+  // A fresh credential capture falls back to Doctor's own shared image (legacy
+  // STAT4 on runtimes without it). Archive-only and rehearsal coverage cannot serve it.
+  const retainSharedImage =
     !hasUpdateDoctorMigrationCapture() &&
     params.pendingMigrations?.some(
       (migration) =>
         migration.kind === "state" &&
         migration.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
-    )
-      ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
-      : params.verifiedSnapshots;
+    );
+  const verifiedSnapshots = retainSharedImage
+    ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
+    : params.verifiedSnapshots;
   const integrityChecks = new Map<string, SqliteIntegrityCheckOptions>();
   for (const pathname of new Set([...pending, ...params.databasePaths, sharedPath])) {
     const engine = pathname === sharedPath ? stateEngineInput() : agentEngineInput();
@@ -246,6 +248,7 @@ export async function backupDoctorMigrationDatabases(params: {
       databasePaths: params.databasePaths.filter((pathname) => !postgresPaths.has(pathname)),
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       stateFamilyBackedUp: postgresPaths.has(sharedPath) ? true : undefined,
+      retainSharedImage,
       integrityChecks,
     });
     return {
@@ -305,6 +308,7 @@ export async function backupDoctorMigrationDatabases(params: {
       pendingDatabasePaths: [...pending],
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       migrationTables: migrationTables.size > 0 ? migrationTables : undefined,
+      retainSharedImage,
       integrityChecks,
     });
   };
@@ -360,6 +364,8 @@ export async function backupDoctorSqliteDatabases(params: {
   stateFamilyBackedUp?: true;
   /** Recovery must retain its own verified originals, including on disposable rehearsals. */
   requireSnapshots?: true;
+  /** Fresh credential capture needs the shared image, including on disposable rehearsals. */
+  retainSharedImage?: boolean;
 }): Promise<MigrationMessages & { snapshots?: readonly { sourcePath: string; path: string }[] }> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
@@ -382,7 +388,11 @@ export async function backupDoctorSqliteDatabases(params: {
   const disposable = params.requireSnapshots
     ? undefined
     : createDoctorRehearsalDatabaseCoverage(params.env);
-  disposable?.admit([...pending, ...params.databasePaths]);
+  disposable?.admit(
+    [...pending, ...params.databasePaths].filter(
+      (pathname) => !params.retainSharedImage || pathname !== sharedPath,
+    ),
+  );
   const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
     (pathname) => !disposable?.excludes(pathname),
   );

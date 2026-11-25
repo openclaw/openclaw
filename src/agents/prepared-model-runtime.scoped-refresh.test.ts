@@ -27,6 +27,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import * as catalogLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 
 const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
@@ -718,9 +719,28 @@ describe("prepared model runtime scoped refresh", () => {
     const owner = await prepareCatalogOwner(config, catalog);
     containsEntries((await owner.loadFullModelCatalog!()).entries, learned);
     serveCatalog(makeCatalog());
-    await hotReload(config);
-    const reloaded = published(config);
-    expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    const discoveryCalls = catalogWorker.mock.calls.length;
+    const observations: { privateRowPresent: boolean; discoveryCalls: number }[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase !== "published") {
+        return;
+      }
+      const entries = published(config).readFullModelCatalog!()?.entries ?? [];
+      observations.push({
+        privateRowPresent: entries.some(
+          (row) => row.provider === learned.provider && row.id === learned.id,
+        ),
+        discoveryCalls: catalogWorker.mock.calls.length,
+      });
+    });
+    try {
+      await hotReload(config);
+      expect(observations).toEqual([{ privateRowPresent: false, discoveryCalls }]);
+      const reloaded = published(config);
+      expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    } finally {
+      unregister();
+    }
   });
 
   it("retains warmed catalog callbacks across scoped exec reloads", async () => {

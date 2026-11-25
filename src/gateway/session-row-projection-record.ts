@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
+import type { SessionWorktreeObservation } from "../agents/worktrees/session-lifecycle.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
@@ -22,6 +23,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { resolveGatewaySessionActiveModel } from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
@@ -42,31 +44,28 @@ export type ProjectionOptions = {
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
 };
 
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+type SharedFacts = {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
+  worktree?: SessionWorktreeObservation | null;
 };
 
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SharedFacts;
+
 /** Undefined shared facets await their owner; null is acknowledged absence. */
-export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<
-    Pick<
-      PreparedSessionRowDatabaseFacts,
-      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
-    >
-  >;
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts & Partial<SharedFacts>;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
 ): facts is PreparedSessionRowDatabaseFacts {
   return (
-    facts !== undefined &&
-    facts.acpMeta !== undefined &&
+    facts?.acpMeta !== undefined &&
     facts.runtimeOwnership !== undefined &&
     facts.runtimeOwnershipDependencies !== undefined &&
-    facts.repositoryWorkspace !== undefined
+    facts.repositoryWorkspace !== undefined &&
+    (!facts.entry?.worktree || facts.worktree !== undefined)
   );
 }
 
@@ -88,7 +87,7 @@ export type SessionRowStore = {
   filename: string;
 };
 
-export type Row = {
+export type Row = Pick<GatewaySessionRow, "hasMessages"> & {
   key: string;
   agentId: string;
   storeTarget: SessionStoreTarget;
@@ -214,11 +213,18 @@ export const identity = (row: RowTarget) =>
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
 export const logicalSessionRowIdentity = (agentId: string, key: string) =>
   `logical:${agentId}\0${key}`;
-export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
-  return new Set([
-    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
-    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
-  ]);
+export function dependents(
+  row: Row,
+  byParent: ReadonlyMap<string, Set<string>>,
+  referenced?: (reference: string) => Row | undefined,
+): Iterable<string> {
+  const read = (ref: string) => {
+    const children = byParent.get(ref);
+    return children && (!referenced || referenced(ref) === row) ? children : undefined;
+  };
+  const logical = read(logicalSessionRowIdentity(row.agentId, row.key));
+  const local = read(physical(row.storeTarget.storePath, row.key));
+  return logical && local ? new Set([...logical, ...local]) : (logical ?? local ?? []);
 }
 export function markRelated(
   row: Row,
@@ -390,6 +396,7 @@ export function renewGeneration(row: Row): Row {
     publishedSource: undefined,
     sharingEntry: undefined,
     materialized: undefined,
+    hasMessages: undefined,
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
@@ -413,12 +420,15 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
+  fields: Pick<
+    Row,
+    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel"
+  >,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
   // Same-generation metadata may change while transcript work is awaiting publication.
-  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+  const fallbackModel = resolveGatewaySessionActiveModel({
     cfg,
     agentId: row.agentId,
     sessionId: row.entry.sessionId,
@@ -431,22 +441,20 @@ export function publishTranscriptFields(
     activeModel: fields.fallbackModel ?? null,
   });
   if (
+    row.hasMessages === fields.hasMessages &&
     row.lastMessagePreview === fields.lastMessagePreview &&
     isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, {
-    lastMessagePreview: fields.lastMessagePreview,
-    lastAssistantMessage: fields.lastAssistantMessage,
-    fallbackModel,
-  });
   const transcript = {
+    hasMessages: fields.hasMessages,
     lastMessagePreview: fields.lastMessagePreview,
     lastAssistantMessage: fields.lastAssistantMessage,
   };
-  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
+  Object.assign(row, transcript, { fallbackModel });
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript);
   return true;
 }
 
@@ -478,18 +486,6 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
   return undefined;
 }
 
-export function firstReferenced(
-  ref: string,
-  rows: ReadonlyMap<string, Row>,
-  byKey: ReadonlyMap<string, ReadonlySet<string>>,
-  storePaths: Iterable<string>,
-) {
-  return first(
-    [...(byKey.get(ref) ?? [])].flatMap((id) => rows.get(id) ?? []),
-    storePaths,
-  );
-}
-
 export function present(
   record: MaterializedRow,
   context: SessionListRowContext,
@@ -516,12 +512,11 @@ export function present(
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
   // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending =
-    sessionTitleRequests.get({
-      storePath: record.storeTarget.storePath,
-      sessionKey: record.key,
-      sessionId: record.entry.sessionId,
-    }) !== undefined;
+  row.titlePending = sessionTitleRequests.isPending({
+    storePath: record.storeTarget.storePath,
+    sessionKey: record.key,
+    sessionId: record.entry.sessionId,
+  });
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -655,23 +650,26 @@ export function readSessionRowLineage(
     (key) =>
       selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
   );
-  // Accepted source identity covers every field except the two projected lineage keys.
+  // Check projected lineage first. A changed timestamp or label also settles common
+  // metadata writes without comparing the rest of the decoded entry.
   // Deferred archives have newer stored metadata but have not accepted its projection yet.
   const entry =
     row.entry &&
-    (!row.entryAcquisitionPending && row.storedEntry === storedEntry
-      ? row.entry.parentSessionKey === projected.parentSessionKey &&
-        row.entry.spawnedBy === projected.spawnedBy
-      : isDeepStrictEqual(row.entry, projected))
+    row.entry.parentSessionKey === projected.parentSessionKey &&
+    row.entry.spawnedBy === projected.spawnedBy &&
+    ((!row.entryAcquisitionPending && row.storedEntry === storedEntry) ||
+      (Object.is(row.entry.updatedAt, projected.updatedAt) &&
+        row.entry.label === projected.label &&
+        isDeepStrictEqual(row.entry, projected)))
       ? row.entry
       : projected;
   const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
-  const selection =
-    entry === row.entry ? row.selection : readSessionListSelectionFacts(row.key, entry);
+  const selection = entry === row.entry ? undefined : readSessionListSelectionFacts(row.key, entry);
   return {
     entry,
     parents,
-    selection: isDeepStrictEqual(row.selection, selection) ? row.selection : selection,
+    selection:
+      selection && !isDeepStrictEqual(row.selection, selection) ? selection : row.selection,
   };
 }
 

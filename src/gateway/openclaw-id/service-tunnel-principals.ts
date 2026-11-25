@@ -4,6 +4,7 @@ import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-orig
 import { setOpenClawIdOwnerAccountResolver } from "./owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdNodeDescriptionLookup,
   setOpenClawIdTunnelActivityRecorder,
   setOpenClawIdTunnelPrincipalResolver,
@@ -21,6 +22,11 @@ export function createTunnelPrincipalPublisher(params: {
       if (!params.enabled()) {
         return;
       }
+      setOpenClawIdMemberAccountLookup(
+        (accountId) =>
+          params.enabled() &&
+          Object.hasOwn(params.current()?.current()?.authority?.members ?? {}, accountId),
+      );
       setOpenClawIdTunnelPrincipalResolver(async (peerKey) => {
         const owner = await params.authority();
         if (!params.enabled()) {
@@ -69,6 +75,7 @@ export function createTunnelPrincipalPublisher(params: {
       );
     },
     stop(): void {
+      setOpenClawIdMemberAccountLookup(undefined);
       setOpenClawIdNodeDescriptionLookup(undefined);
       setOpenClawIdTunnelActivityRecorder(undefined);
       setOpenClawIdTunnelPrincipalResolver(undefined);

@@ -97,11 +97,15 @@ const consentDialog = async () =>
   );
 
 describe("TemplateUpload", () => {
-  it("uses the mobile header, confirms reviewed consent, then reports apply and opens the installed chat", async ({
+  it("uses the mobile header, confirms reviewed consent, and opens the installed chat automatically", async ({
     onTestFinished,
   }) => {
     const planning = Promise.withResolvers<TemplateAddReviewPlan>();
-    const applying = Promise.withResolvers<{ agentId: string; status: string }>();
+    const applying = Promise.withResolvers<{
+      agentId: string;
+      status: string;
+      sessionKey: string;
+    }>();
     gateway.plan.mockReturnValue(planning.promise);
     gateway.apply.mockReturnValue(applying.promise);
     const owner = new ShellLayoutOwner();
@@ -165,28 +169,54 @@ describe("TemplateUpload", () => {
       { kind: "upload", archiveBase64: "YQ==" },
       reviewed,
     );
-    applying.resolve({ status: "complete", agentId: "example" });
-    await waitFor(() =>
-      expect(view.getByRole("status").textContent).toBe("Installed agent: example"),
-    );
-    expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy();
     const refreshing = Promise.withResolvers<AgentsListResult | null>();
     gateway.refreshList.mockReturnValue(refreshing.promise);
-    const openChat = view.button("Open chat");
-    openChat.click();
-    flush();
-    expect(gateway.refreshList).toHaveBeenCalledOnce();
+    applying.resolve({ status: "complete", agentId: "example", sessionKey: "agent:example:main" });
+    await waitFor(() => expect(gateway.refreshList).toHaveBeenCalledOnce());
     expect(gateway.navigate).not.toHaveBeenCalled();
-    expect(openChat.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
     refreshing.resolve(makeBootRoster({ agents: [{ id: "example", name: "Example briefing" }] }));
     await waitFor(() =>
       expect(gateway.navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/example" }),
     );
+    expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(gateway.selectAgent).toHaveBeenCalledWith("example");
     expect(gateway.setSessionKey).toHaveBeenCalledWith("agent:example:main");
     release();
     flush();
     expect(slot.querySelector("button")).toBeNull();
+  });
+
+  it("retries opening the saved chat without applying the archive again", async () => {
+    gateway.plan.mockResolvedValue(plan);
+    gateway.apply.mockResolvedValue({
+      status: "complete",
+      agentId: "example-2",
+      sessionKey: "agent:example-2:welcome",
+    });
+    gateway.refreshList
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeBootRoster({ agents: [{ id: "example-2", name: "Example briefing 2" }] }),
+      );
+    const view = mountUpload();
+    view.choose();
+    await waitFor(() =>
+      expect(view.getByRole("heading", { name: "Example briefing" })).toBeTruthy(),
+    );
+    view.button("Import").click();
+    await waitFor(() =>
+      expect(view.getByRole("alert").textContent).toContain("The agent was added"),
+    );
+    expect(gateway.navigate).not.toHaveBeenCalled();
+    view.button("Retry opening chat").click();
+    await waitFor(() =>
+      expect(gateway.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/chat/example-2/welcome",
+      }),
+    );
+    expect(gateway.setSessionKey).toHaveBeenCalledWith("agent:example-2:welcome");
+    expect(gateway.apply).toHaveBeenCalledOnce();
   });
 
   it("cancels a pending review and ignores its late result", async () => {

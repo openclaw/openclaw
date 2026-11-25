@@ -53,7 +53,7 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
-  validateSetupInferenceOwnerEvidence,
+  validateSetupInferenceEvidence,
   validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
@@ -301,13 +301,10 @@ async function activateCandidate(
     },
   };
   const staged = await stageCandidate(ctx);
+  // Each error is a complete sentence; a saved credential adds only that fact.
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
-    ...(ctx.effects.credentialsSaved
-      ? {
-          error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
-        }
-      : {}),
+    ...(ctx.effects.credentialsSaved ? { error: `Your sign-in is saved. ${result.error}` } : {}),
     disposition: "rejected-before-promotion" as const,
   });
   if ("error" in staged) {
@@ -490,16 +487,14 @@ async function verifyAndActivateCandidate(
   if (!verification.ok) {
     return failure(verification);
   }
-  if ("auth" in verification) {
-    const ownerFailure = validateSetupInferenceOwnerEvidence({
-      runner: route.runner,
-      configuredHarnessId:
-        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-      auth: verification.auth,
-    });
-    if (ownerFailure) {
-      return failure(ownerFailure);
-    }
+  const evidence =
+    "auth" in verification ? validateSetupInferenceEvidence(route, verification, params) : {};
+  if (evidence.failure) {
+    return failure(evidence.failure);
+  }
+  if (evidence.warning && params.prompter) {
+    await params.prompter.note(evidence.warning, "Context window");
+    throwIfSetupInferenceCancelled(params);
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -708,6 +703,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines,
+    lines: evidence.warning && !params.prompter ? [...lines, evidence.warning] : lines,
   };
 }

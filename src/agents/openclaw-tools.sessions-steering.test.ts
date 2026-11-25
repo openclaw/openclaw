@@ -188,12 +188,6 @@ it.each([
     let responding = false;
     let closing = false;
     const initialResponseStarted = createDeferred();
-    const queued = createDeferred();
-    const unsubscribe = session.subscribe((event) => {
-      if (event.type === "queue_update") {
-        queued.resolve();
-      }
-    });
     streamMocks.streamSimple.mockImplementation((model) => {
       if (responding || closing) {
         return createAssistantResultStream(createAssistant(model, "received"));
@@ -264,22 +258,15 @@ it.each([
           ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
         }),
       );
-      let acknowledged = false;
-      void send.then(() => {
-        acknowledged = true;
-      });
       pending.push(send);
-      await Promise.race([queued.promise, send, prompt]);
-      expect(session.pendingMessageCount).toBe(1);
-      // Stay below the fixed admission deadline while checking that input remains
-      // pending until the receiver consumes it.
-      await vi.advanceTimersByTimeAsync(15_000);
-      vi.useRealTimers();
-      expect(acknowledged).toBe(false);
+      // The receipt returns at acceptance, with no time passing, while the
+      // receiver still holds the input for its next model boundary.
+      const result = await send;
       expect(session.pendingMessageCount).toBe(1);
       expect(userEntries(scope, dir)).toHaveLength(1);
+      vi.useRealTimers();
       held.release();
-      const [result] = await Promise.all([send, prompt]);
+      await prompt;
 
       expect(result.details).toMatchObject({
         status: "accepted",
@@ -288,7 +275,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(true);
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
       expect(queueMessage.mock.calls[0]?.[1]?.deliveryTimeoutMs).toBeUndefined();
       expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
@@ -324,7 +311,6 @@ it.each([
       vi.useRealTimers();
       // Release even a late provider callback, then join work before fixture teardown.
       closing = true;
-      unsubscribe();
       held.release();
       await session.abort();
       await Promise.allSettled(pending);

@@ -14,7 +14,6 @@ import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -57,6 +56,7 @@ import { prepareSessionTranscriptHydration } from "./session-transcript-hydratio
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection as waitProjection } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
+import { observePayloadAcquisition } from "./transcript-payload-acquisition.test-support.js";
 
 const readSessionTranscriptMessageEventCount = (scope: Parameters<typeof messagePage>[0]): number =>
   messagePage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
@@ -351,71 +351,6 @@ function readHistory(scope: Scope) {
   return tailPage(scope, { maxBytes: 1024 * 1024, maxMessages: 100, offset: 0 });
 }
 
-function observePayloadAcquisition(
-  connection: ReturnType<typeof openOpenClawAgentDatabase>["db"],
-  marker: string,
-  read: () => void,
-) {
-  const db = requireNativeSqliteDatabase(connection);
-  clearNodeSqliteKyselyCacheForDatabase(db);
-  const prepare = db.prepare.bind(db);
-  const parse = JSON.parse;
-  const restoreStatements: Array<() => void> = [];
-  const pending = new Map<string, number>();
-  let acquiredBytes = 0;
-  let largestRowBytes = 0;
-  let peakPendingBytes = 0;
-  let decodedRows = 0;
-  const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    const statement = prepare(query);
-    const iterate = statement.iterate.bind(statement);
-    // Observe SQLite result acquisition, including payloads rejected before JSON.parse.
-    const iterateSpy = vi.spyOn(statement, "iterate").mockImplementation(function* (...params) {
-      for (const row of iterate(...params)) {
-        for (const value of Object.values(row)) {
-          if (typeof value === "string" && value.includes(marker)) {
-            const bytes = Buffer.byteLength(value);
-            acquiredBytes += bytes;
-            pending.set(value, bytes);
-            largestRowBytes = Math.max(largestRowBytes, bytes);
-            peakPendingBytes = Math.max(
-              peakPendingBytes,
-              [...pending.values()].reduce((a, b) => a + b, 0),
-            );
-          }
-        }
-        yield row;
-      }
-      return undefined;
-    });
-    restoreStatements.push(() => iterateSpy.mockRestore());
-    return statement;
-  });
-  const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    if (typeof text === "string" && text.includes(marker)) {
-      decodedRows++;
-      pending.delete(text);
-    }
-    return parse(text, reviver);
-  });
-  try {
-    read();
-  } finally {
-    parseSpy.mockRestore();
-    prepareSpy.mockRestore();
-    for (const restore of restoreStatements) {
-      restore();
-    }
-  }
-  return {
-    acquiredBytes,
-    largestRowBytes,
-    peakPendingBytes,
-    decodedRows,
-    pendingRows: pending.size,
-  };
-}
-
 it.for(["host", "borrowed"] as const)(
   "collects %s range-rendering facts during the selector's sole payload decode",
   async (owner, { scope }) => {
@@ -687,6 +622,33 @@ it.for(["header", "compaction"] as const)(
     expect(acquisition.acquiredBytes).toBe(0);
   },
 );
+
+it("keeps escaped legacy IDs distinct from SQLite replacement strings", async ({ scope }) => {
+  const escaped = storedMessage("\ud800", null, "user", "Escaped ID.");
+  const replacement = storedMessage(
+    "\ufffd\ufffd\ufffd",
+    "\ud800",
+    "assistant",
+    "Literal replacement ID.",
+  );
+  await seedImportedTranscript(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    escaped,
+    replacement,
+  ]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  expect(
+    database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
+      .get(scope.sessionId),
+  ).toEqual({ count: 0 });
+  expect(historyEvent(scope, "\ud800", { currentOnly: true, maxBytes: 1024 })?.event).toEqual(
+    escaped,
+  );
+  expect(
+    historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true, maxBytes: 1024 })?.event,
+  ).toEqual(replacement);
+});
 
 it("selects imported headers and retention anchors before later indexed duplicates", async ({
   scope,

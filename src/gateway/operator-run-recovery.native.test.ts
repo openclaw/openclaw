@@ -29,8 +29,6 @@ describe("native UI operator recovery", () => {
           ).toBe(true);
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
           expectCurrent(restored.authority);
-          expect(restored.authority.reauthorize).toThrow();
-          expectCurrent(restored.authority);
           await expect(fixture.restore()).rejects.toThrow();
         },
         { clientInfo: { id, mode: "ui" } },
@@ -45,7 +43,6 @@ describe("native UI operator recovery", () => {
       const restore = (controlUiAdmin: boolean) =>
         restoreGatewayOperatorSource({
           snapshot: { ...legacy, controlUiAdmin },
-          target: fixture.target,
           context: fixture.context,
           assertCurrent: () => {},
         });

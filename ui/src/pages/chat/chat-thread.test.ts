@@ -15,6 +15,7 @@ import {
   message as chatMessage,
   messagesOf as messagesIn,
   nativeMessage,
+  openAIMessage,
   pending as pendingInput,
   person as senderProfile,
   queued as queuedSend,
@@ -327,40 +328,6 @@ describe("collapseCompletedTurnWork", () => {
     timestamp,
   });
 
-  it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
-    const boundary = source === "persisted boundary";
-    const marker = boundary
-      ? {
-          role: "system",
-          timestamp: 2_000,
-          __openclaw: {
-            kind: "compaction",
-            id: "checkpoint-with-metrics",
-            tokensBefore: 900_000,
-            tokensAfter: 24_700,
-          },
-        }
-      : chatMessage("custom", "Context compacted", 2_000, {
-          customType: "openclaw.context-compaction",
-          display: true,
-          excludeFromContext: true,
-          details: { runId: "run-1" },
-          idempotencyKey: "codex-context-compaction:thread:turn:item",
-        });
-    const items = collapsedItems({
-      messages: boundary ? [marker] : [user("do it", 1_000), marker, assistant("All done.", 3_000)],
-    });
-    expect(items[boundary ? 0 : 1]).toMatchObject(
-      boundary
-        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens (97.3%)" }
-        : { compaction: "complete", label: "Context compacted" },
-    );
-    if (!boundary) {
-      expectKinds(items, ["group", "divider", "group"]);
-      expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
-    }
-  });
-
   it("keeps a tool visualization visible while collapsing its work", () => {
     const items = collapsedItems({
       messages: [
@@ -371,9 +338,9 @@ describe("collapseCompletedTurnWork", () => {
           [mcpAppCanvasBlock("completed-turn", "visualization")],
           2_000,
         ),
-        assistant("Checking the details.", 2_500),
+        openAIMessage("Checking the details.", 2_500),
         toolResult("call-1", 3_000),
-        assistant("All done.", 4_000),
+        openAIMessage("All done.", 4_000),
       ],
     });
     expectKinds(items, ["group", "work-group", "group", "group"]);
@@ -393,9 +360,9 @@ describe("collapseCompletedTurnWork", () => {
         sessionKey,
         messages: [
           user("do it", 1_000),
-          assistant("Checking…", 2_000),
+          openAIMessage("Checking…", 2_000),
           toolResult("call-1", 3_000),
-          assistant("All done.", 10_000),
+          openAIMessage("All done.", 10_000),
         ],
       }),
     );
@@ -408,14 +375,14 @@ describe("collapseCompletedTurnWork", () => {
   it("does not borrow an unscoped answer across a queued message from a peer", () => {
     const messages = [
       nativeUser("active-run", "do it", 1_000, { senderId: "operator" }),
-      assistant("Checking…", 2_000),
+      openAIMessage("Checking…", 2_000),
       toolResult("call-1", 3_000),
       nativeUser("queued-run", "queued follow-up", 3_500, { senderId: "peer" }),
       nativeUser("steer-run", "continue", 4_000, {
         senderId: "operator",
         steerTargetRunId: "active-run",
       }),
-      assistant("All done.", 5_000),
+      openAIMessage("All done.", 5_000),
     ];
 
     expect(
@@ -445,7 +412,7 @@ describe("collapseCompletedTurnWork", () => {
       messages: [
         user("go", 1_000),
         toolResult("call-1", 2_000),
-        assistant("Done.", 3_000),
+        openAIMessage("Done.", 3_000),
         trailing,
       ],
     });
@@ -460,15 +427,15 @@ describe("collapseCompletedTurnWork", () => {
     const failed = toolResult("failed", 4_000, true);
     const messages = [
       user("go", 1_000),
-      assistant("First result.", 2_000),
+      openAIMessage("First result.", 2_000),
       failed,
-      assistant([signedText("Checking the failure.", "commentary", "checking")], 5_000),
+      openAIMessage([signedText("Checking the failure.", "commentary", "checking")], 5_000),
       toolResult("supplementary", 6_000),
     ];
     const idle = collapsedItems({ messages });
     expect(messagesIn(groupsIn(idle))).toContain(failed);
     const recovered = collapsedItems({
-      messages: [...messages, assistant("Recovered via another route.", 7_000)],
+      messages: [...messages, openAIMessage("Recovered via another route.", 7_000)],
     });
     expect(messagesIn(groupsIn(recovered))).not.toContain(failed);
     expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);

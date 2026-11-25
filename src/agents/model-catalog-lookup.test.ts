@@ -20,6 +20,11 @@ it("prefers exact identity when models differ only by case", () => {
   expect(findModelCatalogEntry(catalog, { modelId: "READER" })).toBeUndefined();
 });
 
+it("finds nothing for a session without a model instead of loading provider policy", () => {
+  expect(findModelInCatalog([upper], "", "")).toBeUndefined();
+  expect(findModelInCatalog([upper], "custom", " ")).toBeUndefined();
+});
+
 it("prefers a literal catalog row over provider equivalence", () => {
   const rows = [
     { provider: "arcee", id: "arcee-ai/trinity-large-thinking" },

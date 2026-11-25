@@ -98,6 +98,14 @@ vi.mock("../plugins/plugin-cache.js", () =>
 vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
   loadSubagentSessionCleanupRuntime: async () => undefined,
 }));
+// mock-isolation: Shutdown ordering records which modules load; real modules must stay unloaded.
+vi.mock("./session-restart-resume.js", () =>
+  state.loadedMock("restart-resume", { persistRunningSessionsForRestart: vi.fn() }),
+);
+// mock-isolation: Shutdown ordering records which modules load; real modules must stay unloaded.
+vi.mock("../agents/subagents/registry/subagent-registry.js", () =>
+  state.loadedMock("subagent-registry", { terminateLiveSubagentsForShutdown: vi.fn() }),
+);
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
@@ -119,6 +127,8 @@ it("resolves every shutdown dependency during preparation", async () => {
       "provider-transports",
       "plugin-runtime",
       "plugin-cache",
+      "restart-resume",
+      "subagent-registry",
     ].toSorted(),
   );
   expect(runtime.prepareGatewayClose).toBe(state.prepareClose);

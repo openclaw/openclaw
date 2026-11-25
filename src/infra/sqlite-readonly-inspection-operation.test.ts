@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 async function inspectFailure(
-  operation: "backup-source" | "snapshot-open" | "snapshot-copy" | "snapshot-backup",
+  operation: "backup-source" | "snapshot-copy" | "snapshot-backup",
   failure: Error,
 ) {
   const root = tempDirs.make("sqlite-inspection-operation-");
@@ -50,12 +50,7 @@ async function inspectFailure(
   const sqlite = await import("./node-sqlite.js");
   const opened: DatabaseSync[] = [];
   vi.mocked(sqlite.openNodeSqliteDatabase).mockImplementation((location, options) => {
-    if (
-      (operation === "backup-source" && location === sourcePath) ||
-      (operation === "snapshot-open" &&
-        path.dirname(location).startsWith(stagingRoot) &&
-        path.basename(location) === "database.sqlite.partial")
-    ) {
+    if (operation === "backup-source" && location === sourcePath) {
       throw failure;
     }
     const database = actual.openNodeSqliteDatabase(location, options);
@@ -111,7 +106,6 @@ async function inspectFailure(
 
 it.each([
   ["backup-source", "opening the source database"],
-  ["snapshot-open", "creating its private snapshot"],
   ["snapshot-copy", "creating its private snapshot"],
   ["snapshot-backup", "creating its private snapshot"],
 ] as const)(

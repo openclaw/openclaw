@@ -118,6 +118,125 @@ describeControlUiE2e("Chat plugin installation status", () => {
     }
   });
 
+  it("keeps plugin and skill recommendations compact with verification beside the author", async () => {
+    const context = await newContext({ width: 1440, height: 900 });
+    const page = await context.newPage();
+    const recommendations = [
+      {
+        type: "clawhub",
+        kind: "plugin",
+        id: "ch_granola",
+        name: "Granola",
+        official: true,
+        installed: false,
+      },
+      {
+        type: "clawhub",
+        kind: "skill",
+        id: "@openclaw/weather",
+        skillRef: "@openclaw/weather",
+        registry: "https://clawhub.ai",
+        name: "Weather",
+        official: true,
+        installed: false,
+      },
+    ];
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...pluginMethods, "skills.detail", "skills.status"],
+      historyMessages: [
+        { role: "assistant", content: recommendations, timestamp: 1_780_000_000_000 },
+      ],
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.get": {
+          plugin: {
+            id: "ch_granola",
+            catalog: { name: "Granola", author: "openclaw", official: true, categories: [] },
+            local: { installed: false, action: "install" },
+          },
+          detail: { packageName: "@openclaw/granola" },
+        },
+        "skills.detail": {
+          skill: { slug: "weather", displayName: "Weather", isOfficial: true },
+          owner: { handle: "openclaw" },
+        },
+        "skills.status": { skills: [] },
+      },
+    });
+    const artifacts =
+      process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
+        ? createControlUiE2eArtifactDir("compact-install-cards")
+        : undefined;
+    try {
+      await page.goto(server.baseUrl + "chat");
+      const cards = page.locator(".chat-clawhub-card");
+      await expect.poll(() => cards.locator(".chat-clawhub-card__install").count()).toBe(2);
+      for (const width of [1440, 1366, 768, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        if (artifacts) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            cards.first(),
+            [cards.first().getByText("Ready to install", { exact: true })],
+            {
+              animations: "disabled",
+              elements: [cards.first(), cards.last()],
+              scrollTo: cards.first(),
+            },
+          );
+          await writeFile(artifacts + "/" + width + "-page.png", frame.png);
+          for (const [index, kind] of ["plugin", "skill"].entries()) {
+            await writeFile(
+              artifacts + "/" + width + "-" + kind + ".png",
+              frame.elements[index]!.png,
+            );
+          }
+        }
+        for (const card of await cards.all()) {
+          const metrics = await card.evaluate((element) => {
+            const button = element.querySelector<HTMLElement>(".chat-clawhub-card__install")!;
+            const author = element.querySelector<HTMLElement>(".plugin-card-author")!;
+            const badge = element.querySelector<HTMLElement>(".plugin-official-badge")!;
+            const style = getComputedStyle(element);
+            const buttonStyle = getComputedStyle(button);
+            const authorBox = author.getBoundingClientRect();
+            const badgeBox = badge.getBoundingClientRect();
+            return {
+              width: element.getBoundingClientRect().width,
+              height: element.getBoundingClientRect().height,
+              padding: Number.parseFloat(style.paddingTop),
+              buttonPadding: Number.parseFloat(buttonStyle.paddingInlineStart),
+              buttonHeight: button.getBoundingClientRect().height,
+              authorGap: badgeBox.left - authorBox.right,
+              sameLine:
+                Math.abs(
+                  badgeBox.top + badgeBox.height / 2 - authorBox.top - authorBox.height / 2,
+                ) < 2,
+              overflow: element.scrollWidth > element.clientWidth,
+            };
+          });
+          if (width >= 768) {
+            expect(metrics.width).toBeLessThanOrEqual(395);
+            expect(metrics.height).toBeLessThanOrEqual(65);
+          }
+          expect(metrics.padding).toBeLessThanOrEqual(16);
+          expect(metrics.buttonPadding).toBeLessThanOrEqual(12);
+          // Browser geometry can round CSS dimensions a few millionths below their size.
+          const buttonHeightRoundingTolerancePx = 0.01;
+          expect(metrics.buttonHeight).toBeGreaterThanOrEqual(32 - buttonHeightRoundingTolerancePx);
+          expect(metrics.buttonHeight).toBeLessThanOrEqual(34 + buttonHeightRoundingTolerancePx);
+          expect(metrics.authorGap).toBeGreaterThanOrEqual(0);
+          expect(metrics.authorGap).toBeLessThanOrEqual(4);
+          expect(metrics.sameLine).toBe(true);
+          expect(metrics.overflow).toBe(false);
+        }
+      }
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("presents only authoritative lifecycle states and keeps recovery and navigation usable", async () => {
     const artifactDir =
       process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
@@ -224,7 +343,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
           await surface
             .locator(".chat-clawhub-card")
             .evaluate((element) => getComputedStyle(element).borderRadius),
-        ).toBe("27px");
+        ).toBe("15px");
         const width = (await surface.boundingBox())!.width;
         desktopWidth ??= width;
         expect(width).toBe(desktopWidth);
@@ -291,10 +410,13 @@ describeControlUiE2e("Chat plugin installation status", () => {
             await surface
               .locator(".chat-clawhub-card")
               .evaluate((element) => getComputedStyle(element).borderRadius),
-          ).toBe("20px");
+          ).toBe("15px");
           const identity = await surface.locator(".chat-clawhub-card__listing").boundingBox();
           const actions = await surface.locator(".chat-clawhub-card__actions").boundingBox();
-          expect(actions!.y).toBeGreaterThanOrEqual(identity!.y + identity!.height);
+          expect(
+            actions!.x >= identity!.x + identity!.width ||
+              actions!.y >= identity!.y + identity!.height,
+          ).toBe(true);
           if (artifactDir) {
             const frame = await takeControlUiScreenshotFrame(
               page,
@@ -548,9 +670,20 @@ describeControlUiE2e("Chat plugin installation status", () => {
           await page.setViewportSize(mobileViewport);
           await waitForControlUiFrameLayout([surface]);
           await capture("connecting-mobile");
-          const actions = (await surface.locator(".chat-clawhub-card__actions").boundingBox())!;
-          const cardBounds = (await surface.boundingBox())!;
-          expect(actions.x + actions.width).toBeLessThanOrEqual(cardBounds.x + cardBounds.width);
+          // Read both edges together so a resize cannot split their layout measurements.
+          const geometry = await surface.evaluate((cardElement) => {
+            const actions = cardElement.querySelector(".chat-clawhub-card__actions");
+            if (!actions) {
+              throw new Error("Missing mounted wizard actions");
+            }
+            return {
+              viewportWidth: window.innerWidth,
+              actionsRight: actions.getBoundingClientRect().right,
+              cardRight: cardElement.getBoundingClientRect().right,
+            };
+          });
+          expect(geometry.viewportWidth).toBe(mobileViewport.width);
+          expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.cardRight);
           await page.setViewportSize({ width: 1280, height: 900 });
           await surface.getByRole("button", { name: "Cancel", exact: true }).click();
           await surface.getByRole("button", { name: "Retry", exact: true }).waitFor();

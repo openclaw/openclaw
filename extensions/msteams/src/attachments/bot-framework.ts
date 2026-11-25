@@ -10,12 +10,12 @@ import {
 } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
+import { resolveMSTeamsMediaKind } from "./html.js";
 import {
   applyAuthorizationHeaderForUrl,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   resolveAttachmentFetchPolicy,
-  resolveMSTeamsMediaKind,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {

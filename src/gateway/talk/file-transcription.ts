@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { mulawToPcmInto } from "../../talk/audio-codec.js";
@@ -26,14 +28,27 @@ export async function resolveTalkFileTranscriptionConfig(
   if (!cfg.tools?.media?.models?.length || cfg.tools.media.audio?.enabled === false) {
     return undefined;
   }
-  const [
-    { buildMediaUnderstandingRegistry, normalizeMediaProviderId },
-    { resolveModelEntries, resolveMaxBytes },
-  ] = await Promise.all([
-    import("../../media-understanding/provider-registry.js"),
-    import("../../media-understanding/resolve.js"),
-  ]);
-  const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+  const [{ resolvePluginCapabilityProvider }, { resolveModelEntries, resolveMaxBytes }] =
+    await Promise.all([
+      import("../../plugins/capability-provider-runtime.js"),
+      import("../../media-understanding/resolve.js"),
+    ]);
+  const registry = new Map<string, MediaUnderstandingProvider>();
+  // File transcription only uses configured models; don't discover unrelated media plugins.
+  for (const providerId of new Set(
+    cfg.tools.media.models.flatMap(({ provider }) =>
+      provider ? [normalizeMediaProviderId(provider)] : [],
+    ),
+  )) {
+    const provider = resolvePluginCapabilityProvider({
+      key: "mediaUnderstandingProviders",
+      providerId,
+      cfg,
+    });
+    if (provider) {
+      registry.set(normalizeMediaProviderId(provider.id), provider);
+    }
+  }
   const entries = resolveModelEntries({
     cfg,
     capability: "audio",

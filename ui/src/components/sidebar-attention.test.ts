@@ -67,6 +67,9 @@ function selection(selectedId: string, scopeId: string | null = selectedId) {
 
 function respond(responses: Record<string, unknown>) {
   return vi.fn(async (method: string) => {
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
     if (!Object.hasOwn(responses, method)) {
       throw new Error(`Unexpected request: ${method}`);
     }
@@ -77,6 +80,12 @@ function respond(responses: Record<string, unknown>) {
 
 function queuedResponses(responses: Record<string, unknown[]>) {
   return vi.fn((method: string) => {
+    if (method === "users.prefs.get") {
+      return Promise.resolve({ status: "ok", entries: {} });
+    }
+    if (method === "cron.acknowledgeFailure") {
+      return Promise.resolve({ acknowledgedAtMs: 0 });
+    }
     const response = responses[method]?.shift();
     if (!response) {
       throw new Error(`Unexpected request: ${method}`);
@@ -89,18 +98,12 @@ function eventGateway(
   snapshot: object,
   connection: Partial<ApplicationGateway["connection"]> = { gatewayUrl: "ws://gateway.test" },
 ) {
-  let listener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  const harness = createGatewayHarness(null);
+  harness.update(snapshot);
+  Object.assign(harness.gateway.connection, connection);
   return {
-    gateway: {
-      snapshot,
-      connection,
-      subscribe: () => () => undefined,
-      subscribeEvents: (next: NonNullable<typeof listener>) => {
-        listener = next;
-        return () => undefined;
-      },
-    } as unknown as ApplicationGateway,
-    emit: (event: string) => listener?.({ type: "event", event, payload: {} }),
+    gateway: harness.gateway,
+    emit: (event: string) => harness.emitEvent(event, {}),
   };
 }
 
@@ -809,10 +812,14 @@ describe("sidebar attention refresh ownership", () => {
       await waitForFast(() => expect(attention(element, "modelAuthExpired")).not.toBeNull());
 
       now = 200_000;
-      emit("cron");
+      emit("cron.inventory.changed");
+      const healthReads = () =>
+        request.mock.calls.filter(([method]) =>
+          ["cron.list", "cron.status", "models.authStatus"].includes(method),
+        );
       invalidateModelAuthStatusRequests(client);
       emit("chat.metadata.changed");
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+      await waitForFast(() => expect(healthReads()).toHaveLength(6));
 
       selectionState.selectedId = "writer";
       for (const listener of selectionListeners) {
@@ -830,7 +837,7 @@ describe("sidebar attention refresh ownership", () => {
           request.mock.calls.filter(([method]) => method === "models.authStatus"),
         ).toHaveLength(3),
       );
-      emit("cron");
+      emit("cron.inventory.changed");
       expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
       switchedAuth.resolve(authStatus(2));
       await waitForFast(() => expect(authText(element)).toContain("writer"));
@@ -926,7 +933,7 @@ describe("sidebar attention refresh ownership", () => {
     }
     await openPanel(element, trigger);
 
-    emit("cron");
+    emit("cron.inventory.changed");
     await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());
   });
 });

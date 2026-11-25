@@ -11,7 +11,7 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
-import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -112,7 +112,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   params: { agentId: string; storePath: string; sessionKey: string },
   assertCurrent: SessionSourceAssertion,
-): Promise<ConfigSessionEntry | undefined> {
+): Promise<InternalSessionEntry | undefined> {
   const entry = await readSessionEntryInWorker(params, assertCurrent);
   assertCurrent();
   if (!entry?.quotaSuspension) {

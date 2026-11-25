@@ -51,7 +51,7 @@ describe("openaiMediaUnderstandingProvider", () => {
     expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
     expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
       image: "gpt-6-astra",
-      audio: "gpt-4o-transcribe",
+      audio: "gpt-transcribe",
     });
     expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
     expect(openaiMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
@@ -89,14 +89,18 @@ describe("provider-owned audio transcription", () => {
       expect(url).toBe("https://api.openai.com/v1/audio/transcriptions");
       expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
       expect(new Headers(init?.headers).has("ChatGPT-Account-ID")).toBe(false);
+      // gpt-transcribe takes a `languages` list; older models keep the single `language` hint.
+      const languageField = model ? "language" : "languages[]";
       expectForm(init, {
-        language: "de",
-        model: model ?? "gpt-4o-transcribe",
+        [languageField]: "de",
+        model: model ?? "gpt-transcribe",
         prompt: "Names: Ada",
       });
+      const body = expectDefined(init?.body, "transcription request body") as FormData;
+      expect(body.has(model ? "languages[]" : "language")).toBe(false);
       expect(result).toEqual({
         ok: true,
-        value: { text: "Hallo", model: model ?? "gpt-4o-transcribe" },
+        value: { text: "Hallo", model: model ?? "gpt-transcribe" },
       });
       expect(authMocks.resolve).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -324,7 +328,7 @@ describe("transcribeOpenAiAudio", () => {
         fetchFn,
       });
       const { url: seenUrl, init: seenInit } = getRequest();
-      expect(result).toEqual({ model: "gpt-4o-transcribe", text: "hello" });
+      expect(result).toEqual({ model: "gpt-transcribe", text: "hello" });
       expect(seenUrl).toBe("https://api.example.com/v1/audio/transcriptions");
       expect(seenInit?.method).toBe("POST");
       expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
@@ -333,7 +337,8 @@ describe("transcribeOpenAiAudio", () => {
       expect(headers.get("x-custom")).toBe("1");
       const form = seenInit?.body as FormData;
       expect(form).toBeInstanceOf(FormData);
-      expectForm(seenInit, { model: "gpt-4o-transcribe", language: "en", prompt: "hello" });
+      expectForm(seenInit, { model: "gpt-transcribe", "languages[]": "en", prompt: "hello" });
+      expect(form.has("language")).toBe(false);
       expect(form.get("file")).toMatchObject({ type: "audio/wav", name: "voice.wav" });
     },
   );
@@ -344,7 +349,7 @@ describe("transcribeOpenAiAudio", () => {
       const { fetchFn } = createRequestCaptureJsonFetch(response);
       const result = transcribe({ fetchFn });
       if ("text" in response) {
-        await expect(result).resolves.toEqual({ text: "", model: "gpt-4o-transcribe" });
+        await expect(result).resolves.toEqual({ text: "", model: "gpt-transcribe" });
       } else {
         await expect(result).rejects.toThrow("Audio transcription response missing text");
       }

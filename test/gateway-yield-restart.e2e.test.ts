@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
@@ -32,6 +36,8 @@ it
     "finish",
     "root-source-stopped",
     "root-background-stopped",
+    "root-main-tool-stopped",
+    "root-main-legacy-stopped",
     "other-agent",
     "parked-message",
     "completed-before",
@@ -41,6 +47,8 @@ it
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
     const stoppedRoot = action.startsWith("root-");
+    const legacyShutdown = action === "root-main-legacy-stopped";
+    const mainTool = action === "root-main-tool-stopped" || legacyShutdown;
     const parkedRoot = action === "root-source-stopped" || action === "parked-message";
     const restartRoot = stoppedRoot || parkedRoot || action === "completed-before";
     const childAgent = action === "other-agent" ? "other" : "main";
@@ -55,6 +63,11 @@ it
     let childKey: string | undefined;
     let childRunId: string | undefined;
     let childCalls = 0;
+    let childRestartRequests = 0;
+    let mainToolCalls = 0;
+    let childCallsAfterStop: number | undefined;
+    const childRequests: Array<{ phase: string; ordinal: number; execResult: boolean }> = [];
+    let lastExecOrdinal: number | undefined;
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
@@ -65,6 +78,7 @@ it
     let yieldRequester: (() => void) | undefined;
     let yieldedAfterOutage = false;
     let requesterFinished = false;
+    let toolMarker = "";
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -89,6 +103,9 @@ it
           const call = (name: string, args: object) => {
             const wireName = tools.includes(name) ? name : "dispatch_action";
             expect(tools).toContain(wireName);
+            if (name === "exec") {
+              lastExecOrdinal = ordinal;
+            }
             writeRestartToolCall(
               response,
               "yield",
@@ -99,6 +116,39 @@ it
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
+            childRequests.push({
+              phase,
+              ordinal,
+              execResult:
+                lastExecOrdinal !== undefined &&
+                input.some(
+                  (item) =>
+                    isRecord(item) &&
+                    item.type === "function_call_output" &&
+                    item.call_id === `call_yield_${lastExecOrdinal}`,
+                ),
+            });
+            if (childRequests.length > 16) {
+              childRequests.shift();
+            }
+            if (mainTool) {
+              if (text.includes("The Gateway restarted while you were working.")) {
+                childRestartRequests++;
+                reply("CHILD_RECONCILED_RESTART");
+                return;
+              }
+              if (text.includes("RUN_MAIN_LANE_TOOL")) {
+                mainToolCalls++;
+                call("exec", {
+                  command: `printf ready > '${toolMarker.replaceAll("'", "'\\''")}' ; sleep 600`,
+                  yieldMs: 120_000,
+                  timeoutSeconds: 600,
+                });
+              } else {
+                call("sessions_yield", { waitFor: "message" });
+              }
+              return;
+            }
             if (action === "completed-before" || text.includes("CONTINUE_PARKED_CHILD")) {
               if (action === "policy-unavailable") {
                 finishChild = () => reply("PARKED_CHILD_COMPLETED");
@@ -156,7 +206,14 @@ it
               reply("ROOT_RECONCILED_STOPPED_CHILD");
               return;
             }
-            if (action === "root-background-stopped") {
+            if (mainTool && phase === "child parked") {
+              // Hold this requester turn while its child executes the long-running tool.
+              return;
+            }
+            if (
+              action === "root-background-stopped" ||
+              (mainTool && text.includes("already_pending"))
+            ) {
               reply("REQUESTER_WAITING_FOR_BACKGROUND_RESULT");
               return;
             }
@@ -242,11 +299,37 @@ it
         },
         tools: {
           ...base.tools,
-          allow: ["sessions_spawn", "sessions_yield", "sessions_send", "sessions_history"],
+          allow: [
+            "sessions_spawn",
+            "sessions_yield",
+            "sessions_send",
+            "sessions_history",
+            ...(mainTool ? ["exec"] : []),
+          ],
         },
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
+    toolMarker = instance.state.path("long-tool-started");
+    const readChildRun = () => {
+      const db = openNodeSqliteDatabase(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const row = db
+          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(childRunId!);
+        assert(
+          typeof row?.payload_json === "string",
+          `Child outcome disappeared before delivery: ${JSON.stringify(db.prepare("SELECT kind, occurred_at, payload_json FROM session_state_events WHERE run_id = ?").all(childRunId!))}`,
+        );
+        const stored: unknown = JSON.parse(row.payload_json);
+        assert(isRecord(stored));
+        return isRecord(stored.parentCompletion) ? stored.parentCompletion : stored;
+      } finally {
+        db.close();
+      }
+    };
     if (action === "policy-unavailable") {
       const pluginDir = instance.state.path("recovery-access");
       await writeRestartPlugin(
@@ -305,7 +388,9 @@ it
     let client: Pick<GatewayClient, "request" | "stopAndWait"> | undefined;
     let phase = "startup";
     onTestFailed(() => {
-      process.stderr.write(`yield restart phase=${phase}\n${instance.logs()}\n`);
+      process.stderr.write(
+        `yield restart ${JSON.stringify({ phase, childCallsAfterStop, childRestartRequests, mainToolCalls, childRequests })}\n${instance.logs()}\n`,
+      );
     });
     await runQaGatewayFixture(
       async () => {
@@ -330,7 +415,24 @@ it
         );
         assert(childKey);
         assert(childRunId);
-        if (!stoppedRoot) {
+        if (mainTool) {
+          expect(
+            await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok", yielded: true });
+          const continuation = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: childKey,
+            message: "RUN_MAIN_LANE_TOOL",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          childRunId = continuation.runId;
+          await vi.waitFor(() => expect(existsSync(toolMarker)).toBe(true), { timeout: 30_000 });
+          expect(readChildRun()).toMatchObject({
+            spawnMode: "run",
+            expectsCompletionMessage: true,
+            execution: { status: "running" },
+          });
+        } else if (!stoppedRoot) {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
           ).toMatchObject(
@@ -376,10 +478,48 @@ it
             await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
           ).toMatchObject({ status: "ok" });
         }
-        phase = "restart";
+        phase = "shutdown";
         await instance.stopGateway();
+        childCallsAfterStop = childCalls;
+        phase = "stopped";
         await client.stopAndWait();
         client = undefined;
+        if (mainTool) {
+          expect(childCallsAfterStop).toBe(callsBeforeRestart);
+          expect(readChildRun()).toMatchObject({
+            execution: {
+              status: "terminal",
+              outcome: { status: "error", error: "Gateway stopped" },
+            },
+            completion: { required: true },
+            delivery: { status: "pending" },
+          });
+        }
+        if (legacyShutdown) {
+          // Previous Gateways recorded this exact quiet-kill state during shutdown.
+          // Reproduce the persisted upgrade input after the real main-lane tool is aborted.
+          const legacy = readChildRun();
+          assert(isRecord(legacy.execution));
+          Object.assign(legacy, {
+            endedReason: "subagent-killed",
+            completion: { required: true },
+            cleanupHandled: true,
+            cleanupCompletedAt: legacy.execution.endedAt,
+            suppressAnnounceReason: "killed",
+            killReconciliation: { killedAt: legacy.execution.endedAt, suppressTaskDelivery: true },
+          });
+          const db = openNodeSqliteDatabase(
+            path.join(instance.stateDir, "state", "openclaw.sqlite"),
+          );
+          try {
+            db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+              JSON.stringify(legacy),
+              childRunId!,
+            );
+          } finally {
+            db.close();
+          }
+        }
         if (action !== "root-background-stopped") {
           expect
             .soft(
@@ -395,7 +535,9 @@ it
             root.runId,
           );
         }
+        phase = "restart startup";
         await instance.startGateway();
+        phase = "restart recovery";
         client = await connect();
         await vi.waitFor(
           () =>
@@ -429,7 +571,9 @@ it
               const history = await client!.request<{ messages: unknown[] }>("chat.history", {
                 sessionKey: rootKey,
               });
-              expect(JSON.stringify(history.messages)).toContain("ROOT_RECONCILED_STOPPED_CHILD");
+              expect(
+                JSON.stringify(history.messages).includes("ROOT_RECONCILED_STOPPED_CHILD"),
+              ).toBe(true);
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
                   expect.objectContaining({ customType: "run-failed-before-reply" }),
@@ -438,7 +582,54 @@ it
             },
             { timeout: 15_000 },
           );
-          expect(childCalls).toBe(callsBeforeRestart);
+          if (mainTool) {
+            // The direct chat.send continuation owns its own restart, while the
+            // stopped delegated run still owes its original parent a terminal notice.
+            await vi.waitFor(
+              async () => {
+                const history = await client!.request<{
+                  messages: unknown[];
+                  sessionInfo: { hasActiveRun: boolean };
+                }>("chat.history", { sessionKey: childKey });
+                expect(JSON.stringify(history.messages)).toContain("CHILD_RECONCILED_RESTART");
+                expect(history.sessionInfo.hasActiveRun).toBe(false);
+              },
+              { timeout: 15_000 },
+            );
+            expect(childRestartRequests).toBe(1);
+            expect(mainToolCalls).toBe(1);
+            expect(childCalls).toBe(callsBeforeRestart + 1);
+            await vi.waitFor(
+              () => {
+                const db = openNodeSqliteDatabase(
+                  path.join(instance.stateDir, "state", "openclaw.sqlite"),
+                  { readOnly: true },
+                );
+                try {
+                  const removals = db
+                    .prepare(
+                      "SELECT payload_json FROM session_state_events WHERE session_key = ? AND run_id = ? AND kind = 'child_delivery_removed'",
+                    )
+                    .all(rootKey, childRunId!);
+                  if (removals.length === 0) {
+                    expect(readChildRun().delivery).toMatchObject({ status: "delivered" });
+                  }
+                  for (const removal of removals) {
+                    expect(JSON.parse(String(removal.payload_json))).toMatchObject({
+                      outcome: "delivered",
+                      previousStatus: "delivered",
+                      deliveredAt: expect.any(Number),
+                    });
+                  }
+                } finally {
+                  db.close();
+                }
+              },
+              { timeout: 15_000 },
+            );
+          } else {
+            expect(childCalls).toBe(callsBeforeRestart);
+          }
           return;
         }
         phase = "restored parked child";
@@ -533,23 +724,60 @@ it
             );
           }
         }
-        await vi.waitFor(
-          async () => {
-            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey: rootKey,
-            });
-            expect(JSON.stringify(history.messages)).toContain(
-              "REQUESTER_RECEIVED_CHILD_COMPLETION",
-            );
-          },
-          { timeout: 30_000 },
-        );
+        if (action === "policy-unavailable") {
+          // The outage refuses the wake. Since #204178 the child's end state is delivered as
+          // model-visible requester history, once, with no retried wake turn.
+          await vi.waitFor(
+            () => {
+              const agentDir = instance.state.agentDir("main");
+              const sessionId = readRestartSession(agentDir, rootKey)?.sessionId;
+              assert(typeof sessionId === "string");
+              const statuses = (
+                readTranscriptExportSnapshotReadOnlySync({
+                  agentId: "main",
+                  sessionKey: rootKey,
+                  sessionId,
+                  storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+                })?.events ?? []
+              ).filter(
+                (event) =>
+                  isRecord(event) &&
+                  event.type === "custom_message" &&
+                  event.customType === "subagent-completion",
+              );
+              expect(statuses).toEqual([
+                expect.objectContaining({
+                  display: false,
+                  content: expect.stringMatching(
+                    new RegExp(
+                      `session ${childKey}, run [^)]+\\): completed[\\s\\S]*PARKED_CHILD_COMPLETED`,
+                      "u",
+                    ),
+                  ),
+                }),
+              ]);
+            },
+            { timeout: 30_000 },
+          );
+        } else {
+          await vi.waitFor(
+            async () => {
+              const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+                sessionKey: rootKey,
+              });
+              expect(JSON.stringify(history.messages)).toContain(
+                "REQUESTER_RECEIVED_CHILD_COMPLETION",
+              );
+            },
+            { timeout: 30_000 },
+          );
+        }
         if (action === "completed-before") {
           expect(childCalls).toBe(callsBeforeRestart);
         }
         if (action === "policy-unavailable") {
           expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
-          expect(instance.logs()).not.toContain("Restart recovery operator authority changed");
+          expect(instance.logs()).not.toContain("Restart recovery could not admit this input");
         }
       },
       async () => {

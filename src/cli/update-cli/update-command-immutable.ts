@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   adoptImmutableInstall,
@@ -5,7 +6,10 @@ import {
   prepareImmutableUpdate,
 } from "../../infra/update-immutable-install.js";
 import { defaultRuntime } from "../../runtime.js";
+import { hasReleaseUpdateOwner } from "../../update/installation-identity.js";
+import { resolvePrefix } from "../../update/store.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 
 const PREPARATION_ONLY =
@@ -93,6 +97,19 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
       throw new Error("--drain-timeout requires an adopted immutable installation.");
     }
     return false;
+  }
+  if (!opts.dryRun && (await hasReleaseUpdateOwner())) {
+    const command = [
+      process.execPath,
+      path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+      "update",
+    ]
+      .map(quoteCliArg)
+      .join(" ");
+    return reportImmutableFailure(
+      `The resident launcher owns this state directory; immutable activation cannot replace it. To update the selected release, run: ${command}`,
+      opts.json,
+    );
   }
   let result: Awaited<ReturnType<typeof prepareImmutableUpdate>>;
   const reportedWarnings = new Set<string>();

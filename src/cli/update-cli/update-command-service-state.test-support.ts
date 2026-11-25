@@ -1,22 +1,7 @@
 import path from "node:path";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
-} from "../../daemon/service-types.js";
+import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { GatewayService, readGatewayServiceState } from "../../daemon/service.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-
-export function createGlobalUserServiceCommand(entrypoint: string): GatewayServiceCommandConfig {
-  return {
-    programArguments: ["node", entrypoint, "gateway", "--port", "18789"],
-    environment: {
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    },
-    sourcePath: "/etc/systemd/user/openclaw-gateway.service",
-    definitionPaths: ["/etc/systemd/user/openclaw-gateway.service"],
-  };
-}
 
 export function createUpdateServiceStateReader(mocks: {
   readCommand: GatewayService["readCommand"];

@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { hasToolOutput } from "./mock-openai-input.js";
 import { buildToolCallEventsWithArgs } from "./mock-openai-tooling.js";
 
 const QA_CRON_PARENT_BOARD_PROMPT_RE = /Cron parent board QA check: tab=([a-z0-9-]{1,40})/;
@@ -17,7 +18,7 @@ export function planCronParentBoardTurn(
   if (!tabId) {
     return null;
   }
-  return input.some((item) => item.type === "function_call_output")
+  return hasToolOutput(input)
     ? buildAssistantEvents(QA_CRON_PARENT_BOARD_DONE)
     : buildToolCallEventsWithArgs("dashboard", {
         action: "tab_create",

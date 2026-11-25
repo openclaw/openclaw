@@ -6,6 +6,10 @@ import {
 } from "./approval-native-route-coordinator.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+// mock-isolation: Capture the undelivered-notice record without writing host logs.
+vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+
 const coordinators: Array<ReturnType<typeof createCoordinator>> = [];
 const approvalRouteReporters: Reporter[] = [];
 function createApprovalNativeRouteCoordinator() {
@@ -462,6 +466,26 @@ describe("createApprovalNativeRouteReporter", () => {
         "Reply with: /approve deadbeef allow-once|deny\n" +
         "If the short code is ambiguous, use the full id in /approve.",
       { channel: "discord" },
+    );
+  });
+
+  it("records a manual fallback notice that could not be delivered", async () => {
+    const request = originRequest("deadbeef-2234-4567-89ab-cdef01234567", "discord", {
+      turnSourceAccountId: "default",
+    });
+    requestGateway.mockRejectedValueOnce(new Error("channel offline"));
+    const reporter = createApprovalNativeRouteReporter({
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+    await reporter.selectRequest(selection(request));
+
+    await reporter.reportDelivery(delivery(request, [], [approverDm("user:owner")]));
+
+    await vi.waitFor(() =>
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`approval ${request.id}, channel discord): channel offline`),
+      ),
     );
   });
 });

@@ -52,6 +52,8 @@ Once session stores are admitted, authorization for direct session targets prepa
 
 `sessions.describe` and `sessions.get` are connection-bound observations. Disconnecting cancels further row-preparation retries, including preparation during authorization, after in-flight preparation settles. Reconnect and issue a new read to obtain a current result. Accepted session mutations retain their existing completion lifetime.
 
+Session rows include `modelDisplayName` when the Gateway already has the selected model's catalog name. Clients can show it before loading the model catalog. The name does not grant model access or identify the model serving a run.
+
 Changing a session's model or native runtime consent can wait for runtime preparation. During that wait, other sessions can still be created or updated. Changes to the same session remain ordered, and a prepared change is rejected if its captured session state changed before commit.
 
 Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`, and Gateway copies through `sessions.catalog.continue` share a 20-second budget per request. A stalled catalog or canceled caller returns retryable `UNAVAILABLE` before the affected session change commits. `sessions.patchMany` retains ordered per-target outcomes; independent successful targets remain committed.
@@ -147,6 +149,82 @@ a terminal result no longer blocks a new request.
 
 - `sessions.create.surface` optionally accepts `"plugin-dock"` for an operator-created conversation owned by a plugin dock. It persists the immutable `createdSurface` marker; `createdVia`, the authenticated human creator, sharing, and sandbox policies retain their ordinary operator behavior. Omitting it keeps the existing creation behavior. Trusted spawn and other internal creation contracts cannot be replaced by this option. Adopting an existing session preserves its original creation surface and provenance.
 
+### Active-only human steering
+
+This surface is disabled by default. Set `gateway.sessionControl.steeringEnabled`
+to `true` to admit authenticated human steering. Publication-reader access does
+not enable it. The opt-in is checked when each request starts. Disabling the
+setting denies new requests; it does not revoke a request already admitted.
+Retries pass through the same admission check and retain the original message ID.
+
+If a hook redacts accepted input and no keyed request fingerprint is available,
+the original delivery cannot be established. Keep the original message ID; a
+new ID could deliver the correction twice.
+
+`sessions.steerTarget` accepts `{ sessionKey, agentId? }` under the same genuine
+person and current session-write policy as steering. It returns
+`{ target: { sessionId, runId } }` for the exact steerable physical backend, or
+`{ target: null }` when none is available. Catalog status and projected activity
+are not target identities. Discovery does not reserve a run: submit both returned
+IDs to `sessions.steerActive`, which rejects a replaced target rather than
+retargeting a successor.
+
+`sessions.steerActive` accepts
+`{ sessionKey, agentId?, sessionId, runId, message, idempotencyKey }`.
+It requires a source-authenticated personal operator with current session write
+access, through a registered connection or a host-bound person ingress grant.
+Agent callers, synthetic attribution, shared-owner fallback, and read-only
+Session Share reader credentials do not qualify.
+
+Use the exact physical `sessionId` and the active backend `runId`, not another
+input's submission ID. The Gateway captures that backend once. Idle, replaced,
+unsupported, and unauthorized targets do not start a turn, enqueue a follow-up,
+interrupt an existing run, or retarget a successor. `message` is literal human
+text, including a leading slash; it is not executed as a chat command.
+
+The result is `{ inputId, runId, status, receiptPersisted, messageSeq?, reason? }`.
+`inputId` identifies this submission; `runId` remains the requested target.
+`accepted` means native delivery was confirmed, not that the run completed.
+`rejected` means no delivery was accepted. `indeterminate` means acceptance
+cannot be established safely; `in_flight` means the original input still has a
+live owner. `messageSeq` is present only for a committed transcript row.
+`receiptPersisted` reports a durable delivery outcome, not merely saved text.
+
+After a lost response, retry the same request with the same idempotency key.
+The retained request binds the person, physical session, target run, and text;
+changed requests conflict. A retained active-only input is never injected again,
+even when its native outcome is unknown or the Gateway restarted. This guarantee
+lasts while its source or receipt remains in that session. Reconciliation still
+requires current access. Original text comparison uses the existing keyed request
+fingerprint without retaining a plaintext copy that could undo message-hook
+redaction. If that fingerprint is unavailable, reconciliation requires retained
+proof that the approved text was unchanged and an exact text match; otherwise the
+retry fails closed. Do not generate a new key to recover an uncertain result.
+This host method does not add remote writer authentication or grant write access
+to a Session Share reader.
+
+### Restricted Session Share writer transport
+
+A separately approved paired device with the exact singleton scope
+`operator.session-share.steer` can connect as a restricted writer transport.
+It is not a human identity, an upgrade of `operator.session-share.read`, or an
+`operator.write` grant. Mixed scopes, role changes, shared-token impersonation,
+and omission of the stored restricted scope are rejected.
+
+Like a publication reader, this connection receives only a minimal hello and
+transport ticks. The only eligible methods are `session-share.steer.target` and
+`session-share.steer.send`, registered by the Session Share plugin with the exact
+writer scope and independent-profile policy. Without those source handlers,
+neither method is advertised or admitted. In particular, the device cannot call
+`sessions.steerTarget`, `sessions.steerActive`, ordinary chat, or administration.
+Token replacement, revocation, and issuer rotation retire the transport through
+the existing device lifecycle.
+
+This transport does not implement source grants or remote steering. Future source
+handlers must supply a source-approved genuine person grant through ingress v2
+and enforce current publication selection before calling the host operations.
+A device ID, catalog row, or display identity does not supply that authority.
+
 ### Chat input reconciliation
 
 `chat.steerNow` accelerates an already accepted steer without stopping its run.
@@ -168,6 +246,14 @@ tools: string[] }` only while the captured runtime owns the steer. An empty
 blocked tool list indicates an unsupported runtime. Clients offer **Send now**
 only for `available`; blocked state should explain why the input must wait.
 `sessions.changed` with reason `agent.input.steering` refreshes this projection.
+
+For a send that must reach a previously resolved physical session, pass its
+`sessionKey` and `expectedSessionId` to `chat.send`. The Gateway checks the ID
+before preparation can create a session and again at send admission. A missing
+or replaced target returns `INVALID_REQUEST` with
+`details.reason: "session-incarnation-changed"`. Resolve the destination again
+before deciding whether to send a new request. Ordinary sends can keep using
+the logical session key across a reset.
 
 The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
 (`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
@@ -210,3 +296,26 @@ can only be reused with its original device and canonical folder. A required
 cloud-worker profile cannot be combined with a device folder. If the device is
 offline or its folder consent changes, reconnect or restore consent; no local
 fallback is permitted.
+
+### Restricted writer opt-in
+
+`gateway.sessionControl.publicationWriteEnabled` defaults to off. Enable it to
+admit a paired singleton `operator.session-share.steer` transport. This switch
+does not enable host steering or publication reads; each has its own opt-in.
+Source plugins must separately enable their writer handlers and grant access.
+The switch is checked at each request admission. Disabling denies new requests
+but does not revoke admitted work, which may still deliver. Retries pass admission
+and keep their original message ID.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.
