@@ -772,7 +772,7 @@ export class RealtimeCallHandler {
         initialGreetingInstructions,
         hostOwnsOpening,
         holdOpeningMaxMs: this.holdOpeningMaxMs,
-        idleHangupMs: this.config.idleHangupMs,
+        realtimeConfig: this.config,
         getSession: () => nativeConsultOwner,
         isClosed: () => sessionClosed,
         closeForInactivity: () => {
@@ -1008,7 +1008,7 @@ export class RealtimeCallHandler {
         }
         if (text.trim()) {
           outboundGreeting.claim();
-          activity.noteSpeech();
+          activity.noteSpeech(role);
         }
         const timestamp = (transcriptStartedAt[role] ??= Date.now());
         const turnId = harness.ensureTurn();
@@ -1157,7 +1157,7 @@ export class RealtimeCallHandler {
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
           transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
-          activity.noteSpeech();
+          activity.noteSpeech("user");
           harness.ensureTurn();
           return;
         }

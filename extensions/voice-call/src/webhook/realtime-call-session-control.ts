@@ -207,6 +207,8 @@ export function createRealtimeCallActivityController(params: {
   idleHangupMs?: number;
   /** While true (for example an answering-machine hold), speech idle is not timed. */
   isPaused?: () => boolean;
+  /** Speech detected from the caller, as opposed to any sound on the line or the assistant. */
+  onCallerSpeech?: () => void;
   onIdle: () => void;
   onMediaWarning: () => void;
   onMediaTimeout: () => void;
@@ -265,7 +267,13 @@ export function createRealtimeCallActivityController(params: {
       }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
       mediaTimer.unref();
     },
-    noteSpeech: resetIdle,
+    /** Speech keeps the call alive; the caller's own speech is also reported. */
+    noteSpeech(this: void, speaker?: "user" | "assistant") {
+      if (speaker === "user") {
+        params.onCallerSpeech?.();
+      }
+      resetIdle();
+    },
     start() {
       started = true;
       resetIdle();

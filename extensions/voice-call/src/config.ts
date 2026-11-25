@@ -202,6 +202,11 @@ const VoiceCallRealtimeConfigSchema = z
     streamPath: z.string().min(1).optional(),
     /** End an active realtime call after this much speech inactivity. */
     idleHangupMs: z.number().int().positive().optional(),
+    /**
+     * Before a speech-idle hangup, ask once whether the caller is still there, and say goodbye
+     * before hanging up if the silence continues. Each step waits idleHangupMs.
+     */
+    idleCheckIn: z.boolean().optional(),
     /** System instructions passed to the realtime provider. */
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
