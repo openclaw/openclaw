@@ -5,7 +5,6 @@ import {
   cloneCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "./session-cost-usage-totals.js";
-import type { UsageCivilDays } from "./session-cost-usage.types.js";
 import type {
   CostUsageTotals,
   SessionCostSummary,
@@ -18,6 +17,7 @@ import type {
   SessionUtcQuarterHourMessageCounts,
   SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
+  UsageCivilDays,
 } from "./session-cost-usage.types.js";
 
 const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
