@@ -27,6 +27,15 @@ enum ScreenshotFixtureMode {
         return arguments[index + 1]
     }
 
+    /// How long the sign-in fixture's server takes to hear back from a browser or a device code.
+    static var modelSignInWaitSeconds: Int {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-sign-in-wait"),
+              arguments.indices.contains(index + 1)
+        else { return 4 }
+        return Int(arguments[index + 1]) ?? 4
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
@@ -347,15 +356,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
         guard self.fixture.sessionIDPrefix == "screenshot-fixture",
-              ScreenshotFixtureMode.modelSignInScenario != nil
+              ScreenshotFixtureMode.modelSignInScenario != nil,
+              await ModelSignInFixture.shared.supportsSignIn
         else { return nil }
-        return OpenClawChatModelSignInContext(
-            agentID: agentID ?? self.fixture.defaultAgentID,
-            request: { method, _ in
-                guard method == "models.authStatus" else { throw CancellationError() }
-                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
-            },
-            isCurrent: { true })
+        return await ModelSignInFixture.shared.context(agentID: agentID ?? self.fixture.defaultAgentID)
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
@@ -380,7 +384,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             ]}
             """#.utf8))
         }
-        return [
+        var choices = [
             OpenClawChatModelChoice(
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
@@ -388,6 +392,18 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 contextWindow: 128_000,
                 supportsFastMode: true),
         ] + self.fixture.additionalModels
+        if ScreenshotFixtureMode.modelSignInScenario != nil,
+           await ModelSignInFixture.shared.providersNeedingSignIn.contains("xai")
+        {
+            choices += try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[{"id":"grok-5","name":"Grok 5","provider":"xai",
+              "available":false,"unavailableReason":"missing-auth","contextWindow":256000}]}
+            """#.utf8))
+        } else if ScreenshotFixtureMode.modelSignInScenario != nil {
+            choices.append(OpenClawChatModelChoice(
+                modelID: "grok-5", name: "Grok 5", provider: "xai", contextWindow: 256_000))
+        }
+        return choices
     }
 
     func loadModelCatalog(

@@ -61,6 +61,10 @@ final class ChatCatalogUITests: XCTestCase {
         let modelSignIn = app.buttons["chat-model-sign-in"]
         XCTAssertTrue(modelSignIn.waitForExistence(timeout: 5))
         modelSignIn.tap()
+        // Provider accounts lists the provider; its page holds the sign-in options.
+        let provider = app.buttons["model-auth-provider-catalog-proof"]
+        XCTAssertTrue(provider.waitForExistence(timeout: 15), app.debugDescription)
+        provider.tap()
         let signIn = app.buttons["Catalog fixture sign-in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 15))
         signIn.tap()
@@ -75,10 +79,9 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         confirm.tap()
         app.buttons["Continue"].tap()
-        let account = app.descendants(matching: .any)["model-auth-provider-catalog-proof"]
-        let connected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "Connected"), object: account)
-        XCTAssertEqual(XCTWaiter.wait(for: [connected], timeout: 20), .completed)
+        // Signed in: the page shows the account instead of its sign-in options, with no banner.
+        let signedIn = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: signIn)
+        XCTAssertEqual(XCTWaiter.wait(for: [signedIn], timeout: 20), .completed)
         self.capture(app, named: "published-auth-state")
         let evidence = XCTAttachment(data: catalogData, uniformTypeIdentifier: "public.json")
         evidence.name = "gateway-published-model"
