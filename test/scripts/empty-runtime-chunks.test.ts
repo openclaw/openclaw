@@ -320,7 +320,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
           removedMap = shared.sourcemapFileName;
           expect(mapAssetBytes(bundle[removedMap]).length).toBeGreaterThan(0);
           const entryChunks = chunks.filter((chunk) => chunk.isEntry);
-          expect(entryChunks.map((entry) => entry.fileName).sort()).toEqual([
+          expect(entryChunks.map((entry) => entry.fileName).toSorted()).toEqual([
             "left.js",
             "right.js",
           ]);
