@@ -38,6 +38,7 @@ export type DatabaseStoreInspection = Pick<
   schemaVersion?: number | null;
   postgres?: DatabaseEngineInput;
   inspectionError?: "unreadable-root";
+  ownerInactive?: boolean;
 };
 
 function inspectSearchMetadata(result: DatabaseStoreDiagnostic, value: unknown) {
@@ -244,9 +245,11 @@ export async function inspectDatabaseStore(
     }
   }
   if (absent || !input.path) {
-    result.nextSteps.push(
-      "Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
-    );
+    if (!input.ownerInactive) {
+      result.nextSteps.push(
+        "Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
+      );
+    }
     return result;
   }
   try {

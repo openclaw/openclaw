@@ -15,6 +15,8 @@ import { resolveStatePortRoots } from "../infra/database-engine/state-port.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
@@ -58,6 +60,15 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
       }
       const legacy = await inspectDoctorDatabaseLegacyMigrations({ ...input, env });
       const inspected = new Set<string>();
+      const normalizedConfig = normalizePluginsConfig(input.config.plugins);
+      const [statePath] = resolveStatePortRoots(input);
+      const isPluginInactive = (id: string) => {
+        const plugin = plugins.plugins.find((entry) => entry.id === id);
+        return (
+          !plugin ||
+          !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: input.config })
+        );
+      };
       for (const family of describeDatabaseEngineSelection(input.config)) {
         const provider = databasePortProviders.find((entry) => entry.id === family.id);
         if (!provider) {
@@ -147,6 +158,11 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
             descriptor,
             postgres: selection?.postgres,
             inspectionError: file && unreadableRoots.has(file) ? "unreadable-root" : undefined,
+            // Voice Call owns the absent shared-state candidates outside the core root.
+            ownerInactive:
+              family.id === "state"
+                ? file !== statePath && isPluginInactive("voice-call")
+                : family.id !== "agent" && isPluginInactive(family.id),
           });
           diagnostic.legacyMigrations = legacy[family.id] ?? { state: "unknown", pending: [] };
           if (diagnostic.legacyMigrations.state !== "none") {
