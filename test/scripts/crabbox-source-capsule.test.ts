@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -21,6 +21,11 @@ import {
 import { createMirrorStaging } from "../../scripts/crabbox-staging.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const childProcess = await importOriginal<typeof import("node:child_process")>();
+  return { ...childProcess, execFileSync: vi.fn(childProcess.execFileSync) };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
@@ -137,6 +142,19 @@ function fileIdentity(path: string) {
   return { ino: stat.ino, mtime: stat.mtimeNs, ctime: stat.ctimeNs, size: stat.size };
 }
 
+function expectNoEmptyGitBatches() {
+  for (const [command, args, options] of vi.mocked(execFileSync).mock.calls) {
+    if (
+      command === "git" &&
+      ((args?.includes("update-index") && args.includes("--index-info")) ||
+        (args?.includes("hash-object") &&
+          (args.includes("--stdin") || args.includes("--stdin-paths"))))
+    ) {
+      expect(options?.input, args.join(" ")).not.toBe("");
+    }
+  }
+}
+
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
   it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
     const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
@@ -144,8 +162,10 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     writeFileSync(join(f.repository, ".crabboxignore"), "private.secret\n");
     writeFileSync(join(f.repository, "private.secret"), "synthetic private source\n");
     vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
     const capsule = f.prepare(mirror);
     try {
+      expectNoEmptyGitBatches();
       for (const path of [
         "stable.txt",
         "new.txt",
@@ -327,11 +347,13 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
 
     const arrivingSecret = join(f.repository, "arriving.secret");
     vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
     const unchanged = f.prepare(
       true,
       `require("node:fs").writeFileSync(${JSON.stringify(arrivingSecret)},"synthetic secret");`,
     );
     try {
+      expectNoEmptyGitBatches();
       // One pre-Git integrity check and one shared final seal per retained file.
       expect(
         vi.mocked(lstatSync).mock.calls.filter(([path]) => path === join(directory, "stable.txt")),
