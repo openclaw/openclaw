@@ -610,13 +610,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           err = admissionError;
         }
       }
-      const requiredAuthProfileId = sessionEntry?.authProfileOverrideRequired
-        ? sessionEntry.authProfileOverride
-        : undefined;
-      if (
-        err instanceof LiveSessionModelSwitchError &&
-        (!requiredAuthProfileId || err.authProfileId === requiredAuthProfileId)
-      ) {
+      if (err instanceof LiveSessionModelSwitchError) {
         if (isModelSelectionLocked(sessionEntry)) {
           lifecycle.emitBasicError(MODEL_SELECTION_LOCKED_MESSAGE);
           await fallbackTrajectoryRecorder?.flush();
@@ -662,7 +656,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             ? err.authProfileIdSource
             : undefined;
           sessionEntry.authProfileOverrideCompactionCount = undefined;
-          sessionEntry.authProfileOverrideRequired = requiredAuthProfileId ? true : undefined;
           sessionEntryForAttempt = sessionEntry;
         }
         attemptLifecycleState.lifecycleEnded = false;
