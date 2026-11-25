@@ -340,6 +340,35 @@ describe("registered message action source completion", () => {
   );
 });
 
+it("preserves literal folder names and their order in a poll", async ({ onTestFinished }) => {
+  onTestFinished(resetPluginRuntimeStateForTest);
+  const received: unknown[] = [];
+  registerMessageChannel({
+    ...workspaceTestPlugin,
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      handleAction: async ({ params }) => {
+        received.push({ question: params.pollQuestion, options: params.pollOption });
+        return jsonResult({ ok: true });
+      },
+    },
+  });
+  setRuntimeConfigSnapshot(workspaceConfig);
+  const tool = createMessageTool({ config: workspaceConfig });
+  const folder = String.raw`C:\notes`;
+  const question = `Choose a folder under ${folder}`;
+  const prefix = String.raw`Reasoning:\n_Comparing folders_\n`;
+  const options = [String.raw`C:\nest`, String.raw`C:\rest`, String.raw`C:\nest`];
+  await tool.execute("poll-folders", {
+    action: "poll",
+    channel: "workspace",
+    target: "C123",
+    pollQuestion: prefix + question + "\n",
+    pollOption: [...options, prefix + folder + String.raw`\n`],
+  });
+  expect(received).toEqual([{ question, options: [...options, folder] }]);
+});
+
 function createFailingMessageTool(error: Error) {
   const runMessageAction = vi
     .spyOn(messageActionRunner, "runMessageAction")

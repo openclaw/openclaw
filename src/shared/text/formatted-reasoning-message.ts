@@ -1,6 +1,9 @@
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
-export function stripFormattedReasoningMessage(text: string): string {
+export function stripFormattedReasoningMessage(
+  text: string,
+  onRetainedBody?: (tagStripped: string, start: number, end: number) => void,
+): string {
   const stripped = stripReasoningTagsFromText(text, { trim: "none" });
   // Removed tags may leave blank lines before a preamble; untouched text keeps its boundary.
   const preamble = stripped === text ? stripped : stripped.trimStart();
@@ -22,11 +25,18 @@ export function stripFormattedReasoningMessage(text: string): string {
       break;
     }
     hasSummary ||= isSummary;
-    offset = end + 1;
+    offset = newline === -1 ? end : newline + 1;
   }
   // Thinking needs an italic summary. Normalize CRLF and remove trailing newlines
   // only after a preamble; preserve the remaining body indentation.
-  return thinking && !hasSummary
-    ? stripped
-    : preamble.slice(offset).replace(/\r\n/g, "\n").replace(/\n+$/u, "");
+  if (thinking && !hasSummary) {
+    return stripped;
+  }
+  let end = preamble.length;
+  while (end > offset && preamble[end - 1] === "\n") {
+    end -= preamble[end - 2] === "\r" ? 2 : 1;
+  }
+  const preambleStart = stripped.length - preamble.length;
+  onRetainedBody?.(stripped, preambleStart + offset, preambleStart + end);
+  return preamble.slice(offset, end).replace(/\r\n/g, "\n");
 }
