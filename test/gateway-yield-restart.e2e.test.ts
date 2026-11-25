@@ -169,10 +169,13 @@ it
             return;
           }
           assert(text.includes(rootPrompt), "Unexpected synthetic requester input");
-          if (action === "policy-unavailable" && text.includes(readSavedChildPrompt)) {
-            expect(text).toContain("PARKED_CHILD_COMPLETED");
-            reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
-            return;
+          if (action === "policy-unavailable") {
+            if (text.includes(readSavedChildPrompt)) {
+              expect(text.split("PARKED_CHILD_COMPLETED")).toHaveLength(2);
+              reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
+              return;
+            }
+            expect(text).not.toContain("PARKED_CHILD_COMPLETED");
           }
           const spawned = input.find(
             (item) => isRecord(item) && item.type === "function_call_output",
@@ -237,7 +240,6 @@ it
               return;
             }
             if (text.includes("PARKED_CHILD_COMPLETED")) {
-              expect(action).not.toBe("policy-unavailable");
               reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
               return;
             }
@@ -720,6 +722,7 @@ it
             // Completion admission waits behind this turn; release it before injecting failure.
             assert(yieldRequester);
             yieldRequester();
+            assert(childRunId, "Requester has not received its child run ID");
             const agentDir = instance.state.agentDir("main");
             await vi.waitFor(
               () => {
@@ -727,7 +730,7 @@ it
                 expect(instance.logs()).toContain(
                   "Gateway access policy is unavailable; retry the operation.",
                 );
-                // A refused wake settles into model-visible history, not another requester turn.
+                // The refused wake settles once, correlated to the original child receipt.
                 const session = readRestartSession(agentDir, rootKey);
                 assert(typeof session?.sessionId === "string");
                 const transcript = readTranscriptExportSnapshotReadOnlySync({
@@ -746,7 +749,9 @@ it
                 expect(statuses).toEqual([
                   expect.objectContaining({
                     display: false,
-                    content: expect.stringContaining("PARKED_CHILD_COMPLETED"),
+                    content: expect.stringContaining(
+                      `session ${childKey}, run ${childRunId}): completed\n\nPARKED_CHILD_COMPLETED`,
+                    ),
                   }),
                 ]);
               },

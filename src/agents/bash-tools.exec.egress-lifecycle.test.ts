@@ -138,10 +138,8 @@ async function createInvocation(runId: string) {
 
 type Invocation = Awaited<ReturnType<typeof createInvocation>>;
 
-function hasExitEvent(instanceId: string): boolean {
-  return peekSystemEventEntries(sessionKey).some(
-    (event) => event.contextKey === `exec:${instanceId}`,
-  );
+function hasExitEvent(contextKey: string): boolean {
+  return peekSystemEventEntries(sessionKey).some((event) => event.contextKey === contextKey);
 }
 
 async function waitForOutput(owner: Invocation, sessionId: string, text: string) {
@@ -164,11 +162,10 @@ async function startWatcher(owner: Invocation, label: string, timeoutSeconds = 3
   });
   const { sessionId } = runningSession(result.details);
   processIds.push(sessionId);
-  const instanceId = processSessionInstanceId(expectDefined(getSession(sessionId), "running exec"));
   await waitForOutput(owner, sessionId, "READY");
   return {
     sessionId,
-    instanceId,
+    contextKey: `exec:${processSessionInstanceId(expectDefined(getSession(sessionId), "running process"))}`,
     grant: await fs.readFile(grantPath, "utf8"),
     request: async (observer: Invocation, marker: string) => {
       await fs.writeFile(controlPath, marker);
@@ -321,12 +318,12 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
       { timeout: 10_000 },
     );
     // Observe settlement before polling can acknowledge an unwanted notification.
-    expect(hasExitEvent(killed.instanceId)).toBe(false);
+    expect(hasExitEvent(killed.contextKey)).toBe(false);
     const running = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(running.details).toMatchObject({ status: "running" });
-    expect(hasExitEvent(survivor.instanceId)).toBe(false);
+    expect(hasExitEvent(survivor.contextKey)).toBe(false);
     await survivor.exit();
-    await vi.waitFor(() => expect(hasExitEvent(survivor.instanceId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(survivor.contextKey)).toBe(true), {
       timeout: 10_000,
     });
     const exited = await later.process({ action: "poll", sessionId: survivor.sessionId });
@@ -338,7 +335,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     const owner = await createInvocation("egress-timeout");
     const watcher = await startWatcher(owner, "timeout", 3);
     await watcher.request(owner, "before-timeout");
-    await vi.waitFor(() => expect(hasExitEvent(watcher.instanceId)).toBe(true), {
+    await vi.waitFor(() => expect(hasExitEvent(watcher.contextKey)).toBe(true), {
       timeout: 10_000,
     });
     const result = await owner.process({ action: "poll", sessionId: watcher.sessionId });

@@ -488,6 +488,7 @@ export {
   ChatToolTitlesResultSchema,
   ChatPredictParamsSchema,
   ChatPredictResultSchema,
+  ChatPendingInputsOwnParamsSchema,
   ChatPendingInputsDismissParamsSchema,
   ChatPendingInputsDismissResultSchema,
   ChatSteerNowParamsSchema,

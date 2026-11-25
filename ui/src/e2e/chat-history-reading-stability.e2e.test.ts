@@ -111,6 +111,48 @@ suite.define(() => {
     }
   });
 
+  it("selects list text without selecting or painting the space between items in WebKit", async () => {
+    const context = await webkitBrowser.newContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        historyMessages: [chatMessage("assistant", "- **First** item.\n- **Second** item.")],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const items = page.locator(".chat-text li");
+      await items.last().waitFor();
+      const first = (await items.first().boundingBox())!;
+      const second = (await items.last().boundingBox())!;
+      const x = first.x + 12;
+      const y = Math.floor(second.y - 1);
+      const selection = () => page.evaluate(() => document.getSelection()?.toString());
+      await page.mouse.dblclick(x, y);
+      expect.soft(await selection(), "blank spacing is not a word").toBe("");
+      await page.mouse.click(x, first.y + first.height / 2);
+      await page.keyboard.press("Escape");
+
+      // Include the edges of both line boxes: WebKit can paint thin full-width
+      // stripes there even when the middle of the margin stays transparent.
+      const clip = {
+        x: Math.floor(first.x + first.width - 8),
+        y: Math.floor(first.y + first.height - 2),
+        width: 6,
+        height: Math.ceil(second.y + 2) - Math.floor(first.y + first.height - 2),
+      };
+      const neutral = await page.screenshot({ clip });
+      await page.mouse.move(first.x + 1, first.y + first.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(second.x + second.width - 1, second.y + second.height / 2, {
+        steps: 6,
+      });
+      expect(await selection()).toBe("First item.\nSecond item.");
+      expect(await page.screenshot({ clip })).toEqual(neutral);
+      await page.mouse.up();
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([
     { engine: "chromium", width: 390 },
     { engine: "webkit", width: 390 },

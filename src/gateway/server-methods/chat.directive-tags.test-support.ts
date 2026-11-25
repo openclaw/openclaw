@@ -4,8 +4,13 @@ import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES as MODES,
+  GATEWAY_CLIENT_NAMES as NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   loadExactSessionEntryCandidates,
@@ -31,6 +36,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { createScopedCliClient } from "./chat-client.test-support.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -40,6 +46,16 @@ export const handedOffDashboardSession = {
   parentSessionKey: "agent:main:main",
   spawnDepth: 1,
 } as const;
+
+/** `local: "resumed"` sends the Control UI reconnect marker; admission matches a fresh send. */
+export const lazyChatCronAuthorityCases = [
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", true],
+  [NAMES.CLI, MODES.CLI, "darwin", "operator.admin", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.write", true],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.cron", false],
+  [NAMES.CONTROL_UI, MODES.WEBCHAT, "web", "operator.admin", "resumed"],
+] as const;
 
 export const deniedChatCronAuthorityCases = [
   {
@@ -91,10 +107,24 @@ export const deniedChatCronAuthorityCases = [
   },
 ];
 
+/** An ACP CLI client whose turn admission carries an owner grant. */
+export function createAdmittedAcpClient() {
+  return {
+    ...createScopedCliClient(["operator.admin"], { id: "cli", displayName: "ACP", version: "acp" }),
+    internal: {
+      operatorRunAuthority: createTestOperatorAuthority({
+        profileId: "acp-owner",
+        scopes: ["operator.admin"],
+      }),
+    },
+  };
+}
+
 export function createExpectedAcpUserTurn(params: {
   content: string;
   idempotencyKey: string;
   senderIsOwner?: boolean;
+  operatorProfileId?: string;
   provenance?: InputProvenance;
 }) {
   return {
@@ -109,6 +139,7 @@ export function createExpectedAcpUserTurn(params: {
         sessionKey: "agent:main:main",
         messageProvider: "webchat",
         chatType: "direct",
+        ...(params.operatorProfileId ? { operatorProfileId: params.operatorProfileId } : {}),
       },
       ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
       transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },

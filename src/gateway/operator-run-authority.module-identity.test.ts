@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { decideTurnGrant } from "./operator-admission.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const { createAdmittedRunOperatorAuthority: issue } =
@@ -25,6 +26,7 @@ it("preserves Stop across modules", async () => {
     canonicalIdentity: null,
     profileId: "module-owner",
     scopes: ["operator.read", "operator.write"],
+    grant: decideTurnGrant(["operator.read", "operator.write"]),
     signal: controller.signal,
     retain: () => {
       holds += 1;
@@ -66,6 +68,7 @@ it.each(["unissued", "spread", "json"] as const)("rejects %s before callbacks", 
     canonicalIdentity: null,
     profileId: "module-owner",
     scopes: ["operator.read"],
+    grant: decideTurnGrant(["operator.read"]),
     retain,
   };
   const issued = issue(source);

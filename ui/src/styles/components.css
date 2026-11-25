@@ -4147,7 +4147,7 @@ select.data-table-pagination__size {
    (openclaw/openclaw#196820), and hidden popovers still pay for those searches during
    page restyles. Closing surfaces may fade on their primary side; hidden surfaces
    need no fallback. !important overrides surface-specific lists until opening.
-   Document styles keep this out of overlay.css's shadow-inlined boot JS copies. */
+   Shadow roots get the same rule from components/solid/overlay-shadow-reset.css. */
 [data-phase="closing"],
 [data-phase="hidden"] {
   position-try-fallbacks: none !important;

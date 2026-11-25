@@ -2,6 +2,7 @@
 export const databaseWorkerCoreTestFiles = [
   "src/update/gateway-trial.test.ts",
   "src/update/prepare.test.ts",
+  "src/update/prepare-failure.test.ts",
   "src/state/state-upgrade.large-agent-db.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
@@ -176,6 +177,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.integrity-cache.test.ts",
   "src/state/openclaw-database-preflight.startup-integrity.test.ts",
   "src/state/openclaw-database-preflight.startup-prepared.test.ts",
+  "src/state/agent-database-startup-verification.test.ts",
   "src/state/openclaw-database-verify.test.ts",
   "src/state/openclaw-state-db-checkonce.test.ts",
   "src/state/openclaw-state-db.integrity-lease.test.ts",
@@ -1010,6 +1012,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-creation-operations-migration.test.ts",
   "src/state/openclaw-agent-active-event-facts-migration.test.ts",
   "src/state/openclaw-agent-tool-usage-migration.test.ts",
+  "src/state/openclaw-agent-member-access-migration.test.ts",
   "src/state/openclaw-agent-tool-usage-migration.postgres.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
