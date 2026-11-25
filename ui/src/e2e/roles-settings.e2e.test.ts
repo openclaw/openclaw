@@ -1,13 +1,8 @@
 import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
-import {
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -245,79 +240,6 @@ suite.define(() => {
         gateway: { roles: { definitions: Record<string, unknown> } };
       };
       expect(Object.keys(raw.gateway.roles.definitions)).toEqual(["design-reviewers"]);
-    });
-  });
-
-  it("links each Remote access member to their role", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-      const gateway = await installNativePluginMockGateway(page, {
-        nativePlugins: [
-          {
-            pluginId: "openclaw-id-access",
-            rootDir: path.resolve("extensions/openclaw-id-access"),
-            source: "./browser/index.tsx",
-          },
-        ],
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-        methodResponses: {
-          "openclawId.status": {
-            status: { state: "on" },
-            owner: true,
-            channel: "local_operator",
-            link: { linked: true },
-          },
-          "openclawId.people": { link: { linked: true } },
-        },
-      });
-      await page.goto(suite.server.baseUrl + "plugin?plugin=openclaw-id-access&id=access");
-      await page.locator(".ocid-access").waitFor();
-      await gateway.setMethodResponse("openclawId.people", {
-        link: {
-          linked: true,
-          clawId: "synthetic-claw",
-          ownerDevices: [],
-          roles: [
-            {
-              name: "operator",
-              defined: true,
-              sessions: "write",
-              requiresSandbox: false,
-              admin: false,
-            },
-            {
-              name: "collaborator",
-              defined: true,
-              sessions: "invited",
-              maxInvitedAccess: "send",
-              requiresSandbox: true,
-              admin: false,
-            },
-          ],
-          members: [
-            {
-              accountId: "m-maya",
-              displayName: "Maya Chen",
-              role: "collaborator",
-              roleDefined: true,
-              peerKeys: [],
-              email: "maya@example.test",
-            },
-          ],
-          invites: [],
-          nodes: [],
-        },
-      });
-      await gateway.emitGatewayEvent("openclawId.people.changed");
-      const link = page
-        .locator(".ocid-access__row--member")
-        .getByRole("link", { name: "Open role" });
-      await link.waitFor();
-      expect(
-        new URL(await link.evaluate((node) => (node as HTMLAnchorElement).href)).pathname +
-          new URL(await link.evaluate((node) => (node as HTMLAnchorElement).href)).search,
-      ).toBe("/settings/roles?role=collaborator");
-      await proof(page, "remote-access-role-link");
     });
   });
 

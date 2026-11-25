@@ -658,9 +658,8 @@ sign-in transport.
 OpenClaw ID identifies the member's linked Gateway profile. That profile's effective
 role is the single authority across OpenClaw ID, trusted proxy, Tailscale, and other
 identified sign-in routes. Invite approval assigns the invite's role to the profile.
-An owner or an `operator.admin` administrator can change it with `users.setRole`.
-**Access → Change role** uses an owner-signed membership change to request the same
-profile assignment. The membership role is a display label: Discovery and Access
+An owner or an `operator.admin` administrator can change it with `users.setRole`,
+including from **Settings → Team → Roles**. The membership role is a display label: Discovery and Access
 publish the current profile role, not a separate permission ceiling.
 
 On upgrade, the Gateway imports each existing member's membership role into an
