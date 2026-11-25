@@ -345,3 +345,19 @@ it("keeps reset ahead of a later flush while its execution capture is pending", 
     }
   });
 });
+
+it("prunes without recreating registered agent databases whose file is missing", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { env } = state;
+    const { existsSync } = await import("node:fs");
+    const { registerOpenClawAgentDatabase } =
+      await import("../../state/openclaw-agent-db-registry.js");
+    const { resolveOpenClawAgentSqlitePath } =
+      await import("../../state/openclaw-agent-db.paths.js");
+    const missing = resolveOpenClawAgentSqlitePath({ agentId: "stale", env });
+    registerOpenClawAgentDatabase({ agentId: "stale", path: missing, env });
+    expect(existsSync(missing)).toBe(false);
+    await pruneRegisteredAgentToolUsage({ env, now, assertCurrent: () => {} });
+    expect(existsSync(missing)).toBe(false);
+  });
+});
