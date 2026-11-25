@@ -13,7 +13,7 @@ export function parseVcard(vcard?: string) {
     if (!line) {
       continue;
     }
-    const colonIndex = line.indexOf(":");
+    const colonIndex = findVcardValueSeparator(line);
     if (colonIndex === -1) {
       continue;
     }
@@ -54,6 +54,19 @@ export function parseVcard(vcard?: string) {
     }
   }
   return { name: nameFromFn ?? nameFromN, phones };
+}
+
+function findVcardValueSeparator(line: string): number {
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ":" && !inQuotes) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function normalizeVcardKey(key: string): string | undefined {
