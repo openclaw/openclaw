@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  parseStandalonePlainTextToolCallBlocks,
   projectPlainTextToolCallBlocks,
   scanPlainTextToolCall,
   stripPlainTextToolCallBlocks,
@@ -39,6 +40,22 @@ function projection(raw: string, settleBefore?: number) {
   });
   return [text, retainStart, retainedOutputStart];
 }
+
+describe("parseStandalonePlainTextToolCallBlocks", () => {
+  it.each([
+    [
+      "<function=read><parameter=path> ",
+      "/tmp</parameter><parameter=content>literal </function> tail</parameter></function>",
+      { path: " \n/tmp", content: "literal </function> tail" },
+    ],
+    ["[read]", '  {"path":"/tmp"}[/read]', { path: "/tmp" }],
+  ])("repairs a boundary inside leading horizontal whitespace", (first, second, args) => {
+    const parsed = parseStandalonePlainTextToolCallBlocks(first + second, undefined, {
+      lineBreakOffsets: new Set([first.length]),
+    });
+    expect(parsed?.[0]).toMatchObject({ name: "read", arguments: args });
+  });
+});
 
 describe("scanPlainTextToolCall", () => {
   it.each<[number, boolean]>([

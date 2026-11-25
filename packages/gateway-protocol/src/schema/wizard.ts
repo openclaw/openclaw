@@ -99,6 +99,9 @@ export const WizardStepSchema = closedObject({
   title: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   progressMessage: Type.Optional(Type.String()),
+  // Typed sign-in failure reason (ProviderAuthFailureReason) on progress reported while the
+  // step stays open, such as a browser refusal; clients show it with its recovery.
+  reason: Type.Optional(NonEmptyString),
   format: Type.Optional(Type.Union([Type.Literal("plain")])),
   options: Type.Optional(Type.Array(WizardStepOptionSchema)),
   initialValue: Type.Optional(Type.Unknown()),
@@ -120,6 +123,9 @@ const WizardResultFields = {
   step: Type.Optional(WizardStepSchema),
   status: Type.Optional(WizardRunStatusSchema),
   error: Type.Optional(Type.String()),
+  // Typed provider sign-in failure reason (ProviderAuthFailureReason) on an error result;
+  // clients pick their one recovery action from it.
+  reason: Type.Optional(NonEmptyString),
   // What the flow actually configured; set on the terminal result of
   // wizard.start flow "channels" sessions so clients run channel-specific
   // completion (e.g. WhatsApp QR linking for the right account) from the

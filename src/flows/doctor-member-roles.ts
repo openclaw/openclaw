@@ -3,7 +3,7 @@ import {
   listMissingMemberRolePresets,
   withMissingMemberRolePresets,
 } from "../gateway/openclaw-id/member-role-presets.js";
-import { readSandboxBackendAvailability } from "../gateway/openclaw-id/sandbox-availability.js";
+import { createRoleSandboxReadinessCheck } from "../gateway/openclaw-id/sandbox-availability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -99,7 +99,9 @@ export const memberRolesCheck: HealthCheck = {
         name,
       );
     }
-    const sandboxUsers: string[] = [];
+    const sandboxUsers = new Map<string, string[]>();
+    const addSandboxUser = (role: string, user: string) =>
+      sandboxUsers.set(role, [...(sandboxUsers.get(role) ?? []), user]);
     for (const [accountId, role] of members ?? []) {
       const definition = Object.hasOwn(roles.definitions, role)
         ? roles.definitions[role]
@@ -112,20 +114,34 @@ export const memberRolesCheck: HealthCheck = {
           accountId,
         );
       } else if (definition.sandbox === "required") {
-        sandboxUsers.push(`member "${accountId}" (role "${role}")`);
+        addSandboxUser(role, `member "${accountId}" (role "${role}")`);
       }
     }
     if (roles.default && roles.definitions[roles.default]?.sandbox === "required") {
-      sandboxUsers.push(`people using the named default "${roles.default}"`);
+      addSandboxUser(roles.default, `people using the named default "${roles.default}"`);
     }
-    if (sandboxUsers.length) {
-      const availability = await readSandboxBackendAvailability(cfg);
-      if (availability.available === false) {
-        const engine = availability.backend === "podman" ? "Podman" : "Docker";
+    const readiness = createRoleSandboxReadinessCheck(cfg);
+    for (const [role, users] of sandboxUsers) {
+      const result = await readiness(roles.definitions[role]!.agents);
+      if (result.ready !== false) {
+        continue;
+      }
+      const engine = result.backend === "podman" ? "Podman" : "Docker";
+      if (result.reason === "engine_unavailable") {
         warn(
           "sandbox-unavailable",
-          `Sandbox required for ${sandboxUsers.join(", ")}, but the configured ${engine} backend is unavailable; their runs will fail.`,
+          `Sandbox required for ${users.join(", ")}, but the configured ${engine} backend is unavailable; their runs will fail.`,
           `Make the configured ${engine} sandbox backend available. Required exec and file tools do not fall back to the host; see https://docs.openclaw.ai/gateway/sandboxing.`,
+          role,
+        );
+      } else {
+        warn(
+          "sandbox-image-missing",
+          `Sandbox required for ${users.join(", ")}, but the sandbox image ${result.image} is missing; their runs will fail.`,
+          result.doctorBuilds
+            ? `Accept Doctor's sandbox image build (openclaw doctor --fix); see https://docs.openclaw.ai/gateway/sandboxing.`
+            : `Build or pull ${result.image} with ${engine}; see https://docs.openclaw.ai/gateway/sandboxing.`,
+          role,
         );
       }
     }

@@ -3,7 +3,10 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
 import { commandError, gitEnvironment, requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
@@ -13,12 +16,15 @@ import {
   type PreparedSessionSourceEffect,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { resolveStateDir } from "../../config/state-dir.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { idleIoPriorityArgv } from "../../process/idle-io-priority.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { prepareSandboxMountSources } from "../../skills/runtime/refresh.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
+import { localWorkspaceProjectionRoot } from "./local-workspace-paths.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureInitialLocalWorkspaceManifest } from "./workspace-manifest-worker.js";
@@ -29,6 +35,7 @@ type CheckoutAuthority = {
   signal: AbortSignal;
   assertCurrent: SessionSourceAssertion;
   workerAuthority?: WorktreeWorkerAuthority;
+  idleIoPriority?: boolean;
 };
 
 function checkoutCurrent(source: PreparedSessionSourceEffect, params: CheckoutAuthority) {
@@ -73,6 +80,7 @@ async function configureProjectionFetch(
   cleanEnv: NodeJS.ProcessEnv,
 ) {
   const options = {
+    idleIoPriority: params.idleIoPriority,
     baseEnv: cleanEnv,
     env: cleanEnv,
     signal: params.signal,
@@ -117,12 +125,7 @@ export async function localWorkspaceProjectionPath(
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
     throw new Error("Invalid managed worktree identity");
   }
-  return path.join(
-    await fs.realpath(resolveStateDir(owner.env)),
-    "worktree-projections",
-    owner.worktree.id,
-    "workspace",
-  );
+  return path.join(await localWorkspaceProjectionRoot(owner.env), owner.worktree.id, "workspace");
 }
 
 /** Build or refresh private source-only metadata before any guest can write this checkout. */
@@ -154,6 +157,7 @@ export async function prepareLocalWorkspaceCheckout(
       params.source,
       true,
       {
+        idleIoPriority: params.idleIoPriority,
         signal,
         beforeRun: current,
         stateOwnerPath: params.workerAuthority?.stateOwnerPath,
@@ -167,6 +171,7 @@ export async function prepareLocalWorkspaceCheckout(
             temporaryRoot: temporary,
             signal,
             baseEnv,
+            idleIoPriority: params.idleIoPriority,
           }),
         ),
     );
@@ -177,6 +182,7 @@ export async function prepareLocalWorkspaceCheckout(
     const cleanEnv = checkoutGitEnvironment(temporary);
     const git = (args: string[], input?: Uint8Array) =>
       requireGit(repo, args, {
+        idleIoPriority: params.idleIoPriority,
         baseEnv: cleanEnv,
         env: cleanEnv,
         input,
@@ -192,30 +198,34 @@ export async function prepareLocalWorkspaceCheckout(
         "--object-format=" + (params.baseCommit.length === 40 ? "sha1" : "sha256"),
       ]);
     }
-    const input = await fs.open(pack, "r");
-    try {
+    {
+      await using input = await openCommandStdinFile(pack);
       await prepare();
       current();
       const result = await withGitProcessOperation(
         "workspace.inventory",
         () =>
-          runCommandWithTimeout(["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"], {
-            stdinFileDescriptor: input.fd,
-            baseEnv: gitEnvironment(cleanEnv),
-            signal,
-            timeoutMs: 300_000,
-            maxOutputBytes: 4096,
-            terminateOnOutputLimit: true,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-          }),
+          runCommandWithTimeout(
+            idleIoPriorityArgv(
+              ["git", "-C", repo, "index-pack", "--stdin", "--fix-thin"],
+              params.idleIoPriority,
+            ),
+            {
+              stdinFile: input.stdinFile,
+              baseEnv: gitEnvironment(cleanEnv),
+              signal,
+              timeoutMs: 300_000,
+              maxOutputBytes: 4096,
+              terminateOnOutputLimit: true,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+            },
+          ),
         "default",
       );
       if (result.code !== 0 || result.termination !== "exit") {
         throw commandError("git index-pack", result);
       }
-    } finally {
-      await input.close();
     }
     await prepare();
     current();
@@ -246,7 +256,7 @@ export async function prepareLocalWorkspaceCheckout(
     await configureProjectionFetch({ ...params, assertCurrent: current }, cleanEnv);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
-    await fs.rm(temporary, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporary, { commitGuard: () => {} });
   }
 }
 
@@ -268,13 +278,15 @@ export async function initializeLocalWorkspaceProjection(
     projectionPath: string;
     baseCommit: string;
     buildCacheInputs: () => Promise<string[]>;
-    dependencies?: { sandbox: SandboxConfig; allocation: WorktreeAllocationGuard };
+    dependencies?: { sandbox: SandboxConfig; allocation?: WorktreeAllocationGuard };
   },
 ): Promise<{
   rawManifest: string;
   manifestRef: string;
   projectionFingerprints?: Buffer | null;
+  clonedDevice?: bigint;
   buildCacheInputs: string[];
+  preparedDirectories?: string[];
 }> {
   using phases = observeDiagnosticsTimelinePhases(`${RECONCILE_PHASE}.initialize`);
   const { signal, dependencies } = params;
@@ -309,7 +321,7 @@ export async function initializeLocalWorkspaceProjection(
   current();
   // No runtime can use an uncommitted initial projection. Only this durable
   // reservation owns interrupted preparation; never recreate a ready checkout.
-  await fs.rm(params.projectionPath, { recursive: true, force: true });
+  await nativeWorktreeFilesystem.remove(params.projectionPath, filesystem);
   await prepare();
   current();
   const temporary = await fs.mkdtemp(path.join(parent, ".prepare-"));
@@ -328,7 +340,7 @@ export async function initializeLocalWorkspaceProjection(
     const buildCacheInputs = await params.buildCacheInputs();
     phases.mark(`${RECONCILE_PHASE}.template`);
     const cloned =
-      dependencies &&
+      dependencies?.allocation &&
       (await (
         await import("./local-workspace-template.js")
       ).cloneLocalWorkspaceTemplate({
@@ -373,6 +385,27 @@ export async function initializeLocalWorkspaceProjection(
       // A retained template may predate the fetch defaults; its key remains source-owned.
       await configureProjectionFetch(checkout, checkoutGitEnvironment(temporary));
     }
+    phases.mark(`${RECONCILE_PHASE}.layout`);
+    // Establish protected mount sources on both sides before accepting the initial
+    // baseline. Later layout must not rediscover these producer-owned empty directories.
+    let preparedDirectories: string[] = [];
+    for (const root of dependencies ? [params.owner.worktree.path, repo] : []) {
+      const created = await prepareSandboxMountSources(
+        {
+          workspaceDir: root,
+          agentWorkspaceDir: root,
+          workdir: "/workspace",
+          workspaceAccess: "none",
+        },
+        current,
+        workerAuthority.stateOwnerPath,
+      );
+      if (root === repo) {
+        preparedDirectories = created.map((directory) =>
+          path.relative(repo, directory).split(path.sep).join("/"),
+        );
+      }
+    }
     phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
     const initial =
       cloned ||
@@ -388,9 +421,9 @@ export async function initializeLocalWorkspaceProjection(
     current();
     phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);
-    return { ...initial, buildCacheInputs };
+    return { ...initial, buildCacheInputs, ...(cloned ? { preparedDirectories } : {}) };
   } finally {
     phases.mark(`${RECONCILE_PHASE}.cleanup`);
-    await fs.rm(temporary, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporary, { commitGuard: () => {} });
   }
 }

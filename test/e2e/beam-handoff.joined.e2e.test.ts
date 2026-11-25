@@ -92,8 +92,6 @@ it("continues one released Beam conversation through real client, Gateway, resta
           ...model,
           cron: { enabled: false },
           plugins: {
-            allow: ["beam"],
-            entries: { beam: { enabled: true } },
             slots: { memory: "none" },
           },
           gateway: {
@@ -130,6 +128,13 @@ it("continues one released Beam conversation through real client, Gateway, resta
           },
         },
       });
+      const installed = await instance.cli(["plugins", "inspect", "beam", "--json"]);
+      expect(installed, installed.stderr).toMatchObject({ code: 0, signal: null });
+      expect(JSON.parse(installed.stdout)).toMatchObject({
+        plugin: { id: "beam", origin: "bundled", enabled: false },
+      });
+      const enabled = await instance.cli(["plugins", "enable", "beam"]);
+      expect(enabled, enabled.stderr).toMatchObject({ code: 0, signal: null });
       const publisher = ensureProfileForEmail("publisher@example.test", { env: instance.env });
       const administrator = ensureProfileForEmail("admin@example.test", { env: instance.env });
       setUserProfileRole(publisher.id, "member", { env: instance.env });

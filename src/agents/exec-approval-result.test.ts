@@ -124,6 +124,10 @@ describe("formatExecDeniedUserMessage", () => {
       "Command did not run: approval is required.",
     ],
     [
+      "Exec denied (gateway id=req-1, participant-allowlist-miss): uname -a",
+      "Command did not run: it is not on the allowlist, and a participant cannot request approval for it. Use an allowed command or ask the session creator to run it.",
+    ],
+    [
       "Exec denied (gateway id=req-1, approval-request-failed): uname -a",
       "Command did not run: approval request failed.",
     ],

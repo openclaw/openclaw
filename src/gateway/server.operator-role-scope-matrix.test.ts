@@ -409,10 +409,13 @@ function expected(row: Row, column: Column) {
       ? PRESET
       : member && column === "assignment"
         ? ["operator.read"]
-        : restricted
-          ? // Pinned base operator-scope-compat.ts: operator.write grants requested talk.
-            [...RW, "operator.talk"]
-          : ALL;
+        : row === "member"
+          ? // A tunnel member connects with its role's scopes, whatever it asked for.
+            RW
+          : restricted
+            ? // Pinned base operator-scope-compat.ts: operator.write grants requested talk.
+              [...RW, "operator.talk"]
+            : ALL;
   const send = !(member && column === "assignment");
   return {
     connected: true,

@@ -15,7 +15,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -24,6 +23,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -201,12 +201,7 @@ if (!values["native-owner"]) {
   observer.observe({ entryTypes: ["gc"] });
   const inspector = values.mode === "allocation" ? new Session() : undefined;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const cpuBefore = process.threadCpuUsage();
   const started = performance.now();
@@ -219,9 +214,7 @@ if (!values["native-owner"]) {
   let allocatedBytes: number | undefined;
   if (inspector) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-    allocatedBytes = sum(profile.head);
+    allocatedBytes = sumSampledHeapBytes(profile.head);
     inspector.disconnect();
   }
   countingHooks?.deregister();

@@ -11,10 +11,14 @@ read_when:
 
 FRV adopts newer planned-child attempts only with unchanged run ID, workflow
 path/ref, Tooling SHA, title, and event. Newest logical-job result wins—even failure;
-absent jobs carry forward. Reject missing attempts, provenance drift, duplicate names.
+absent jobs carry forward. Exact retained execution copies keep their original job URL
+and accepted attempt. Runnerless queued copies are not executions when the same
+attempt contains exactly one assigned real execution. Cancellation and failure
+remain blocking; multiple real executions, missing attempts, and provenance drift
+remain invalid.
 During materialization, `status`/`continue` retry newest-attempt duplicates for
 60 seconds: identity/attempt pinned; timeouts, pagination, backoff share deadline.
-Persistent/earlier duplicates and changed identities remain invalid, never evidence.
+Unresolved duplicate identities and changed identities remain invalid, never evidence.
 
 ```bash
 pnpm frv status --run <parent-run-id> --json
@@ -26,13 +30,20 @@ pnpm frv verify --run <successful-parent-run-id>
 pnpm frv prioritize --restore <record> [--dry-run]
 ```
 
-| Command                | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`               | Text/JSON blockers: owner, job, conclusion, attempt, URL, including pre-plan parent failures. Leads with qualification, evidence acceptance, drain, workload failures, next command. Successful parents undergo strict verification; green badges/children are not accepted seals. Unreadable evidence stays unavailable; JSON retains child facts/incomplete collection. Suggestions are dry-run previews; mutations require fresh admission.      |
-| `rerun --job`          | Exact executed terminal name under a `status --json` child key (e.g. `normalCi`, `pluginPrerelease`, `releaseChecksIndependent`). Waits only for that child's termination, then reruns the job's accepted attempt through GitHub, including dependents. Other failures still need retries.                                                                                                                                                          |
-| `rerun --child`        | Waits for one failed child, sends one retry, confirms no duplicate jobs, records audit line, returns after start. `--max-attempts` defaults to 2 (one rerun). Final reseal belongs to `continue --failed`.                                                                                                                                                                                                                                          |
-| `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Ghost duplicate attempts require fresh all-group FRV. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
-| `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                       |
+| Command                | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`               | Text/JSON blockers: owner, job, conclusion, attempt, URL, including pre-plan parent failures. Leads with qualification, evidence acceptance, drain, workload failures, next command. Successful parents undergo strict verification; green badges/children are not accepted seals. Unreadable evidence stays unavailable; JSON retains child facts/incomplete collection. Suggestions are dry-run previews; mutations require fresh admission.              |
+| `rerun --job`          | Exact executed terminal name under a `status --json` child key (e.g. `normalCi`, `pluginPrerelease`, `releaseChecksIndependent`). Waits only for that child's termination, then reruns the job's accepted attempt through GitHub, including dependents. Other failures still need retries.                                                                                                                                                                  |
+| `rerun --child`        | Waits for one failed child, sends one retry, confirms unambiguous executed jobs, records audit line, returns after start. `--max-attempts` defaults to 2 (one rerun). Final reseal belongs to `continue --failed`.                                                                                                                                                                                                                                          |
+| `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Resolved runnerless copies do not require an all-group rerun. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
+| `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                               |
+
+Successful `verify` output ends with a verdict, the qualification tooling SHA (Q)
+as informational identity, and reusable candidate inputs (target SHA, validation
+run, and release profile). With `release:candidate`, independently pin publication
+tooling (P) using `--workflow-sha <P>` or `--publish-workflow-ref <tag>`; Q is not a
+publication-tooling selection. Supply the intended tag, channel, route, and any
+required SDK acknowledgement separately. `--json` retains the verifier evidence alone.
 
 For active child jobs, `status` shows the running step and its elapsed seconds (or
 `unknown` when GitHub has not supplied a step start time). JSON exposes this
@@ -46,6 +57,52 @@ Retry selection for `rerun --child` and continuation:
 | Failed-jobs retry would execute install-smoke update/non-root installer consumers (direct or upstream failure, e.g. installer image build) | `mode: producer`: rerun green producer/dependents, preserving current-attempt payload verification.                                                                                                                      |
 | Another failure lies outside those dependents                                                                                              | `mode: all-jobs`: rerun whole child; one job retry cannot cover both.                                                                                                                                                    |
 | Workloads passed; only **Seal child receipt** failed                                                                                       | `mode: receipt`: bounded retry of that exact job, carrying workload attempts forward and sealing exact new child attempt. Still requires continuation/strict verification; starting metadata retry is not qualification. |
+
+A controller repair does not change tooling already pinned by a hosted workflow.
+The child receipt publisher checks out its original `github.sha`; a local or
+new-parent tooling repair cannot retrofit that publisher. For an original direct
+qualification with explicitly retained publication artifacts, repaired protected
+P tooling can seal an evidence-only recovery aggregate instead:
+
+```bash
+# Retry only the selected failed job and GitHub-required dependents.
+pnpm frv rerun --run <original-parent> --job "<child-key>:<job-name>" --no-follow
+# Once the selected child attempt is terminal, freeze all original selections.
+node scripts/release-ci-summary.mjs --prepare-recovery <original-parent> --output recovery-request.json
+gh workflow run openclaw-release-prepare.yml --ref <protected-P-tag> \
+  -f operation=recover-qualification -f recovery_request="$(cat recovery-request.json)"
+```
+
+If the retained-artifact parent dispatched a replacement normal CI, select the
+original normal-CI receipt explicitly instead. Copy its complete authenticated
+selection object from the prior execution plan's `childReuse.normalCi` field into
+`normal-ci-selection.json`, then prepare a read-only request:
+
+```bash
+node scripts/release-ci-summary.mjs --prepare-recovery <retained-artifact-parent> \
+  --output recovery-request.json --normal-ci-selection normal-ci-selection.json
+```
+
+Preparation verifies the original receipt against frozen-Q dispatch defaults,
+coverage, target context and upgrade baselines. Only the normal CI originally
+dispatched by the explicitly retained publication origin may be selected. The
+request records this selection separately; the original execution plan and its
+hash remain immutable. Sealing and subsequent publication verification recheck
+the receipt, its original dispatch witness and all other qualification evidence.
+The replacement CI is not a prerequisite. Missing or invalid evidence fails
+closed; there is no discovery, fallback dispatch or artifact rebuild. A prepared
+request is not a qualification seal: dispatch the protected P operation above,
+and use its successful, strictly verified aggregate for publication.
+
+The recovery operation authenticates the original immutable plan and admission,
+unchanged C/Q, exact publication bytes, and every explicitly pinned child attempt.
+It recomposes genuine executions through the shared owner and runs strict
+publication verification before writing its aggregate. The successful recovery
+run is the new producer; original Q provenance stays separate. Use that recovery
+run ID and attempt as publication qualification evidence. Missing evidence,
+transport errors, cancellation, or identity/byte drift fail closed: this operation
+does not dispatch CI or rerun the old parent. Do not use `continue --failed` for
+this route, because it reseals with the old parent tooling.
 
 Keep recovery in a long-running shell: default budget is 12 hours, including
 collection/strict verification. Manifest retains planned/effective child attempts,
@@ -114,7 +171,7 @@ Validation SHA = Code SHA (possibly Release SHA) or changelog-only Release SHA,
 not a third identity. Reject malformed/mismatched expected SHAs before children;
 all report Q. `-f reuse_evidence=false` forces fresh work. New publish defaults
 Q=C; admission-workflow arguments select P; candidate `--workflow-sha <Q>` selects
-reviewed main-ancestor Q. Missing contracts need Q repair/candidate backport;
+reviewed exact Q. Missing contracts need Q repair/candidate backport;
 new Q requires new request/admission, never continuation/plan edits/substitution.
 Historical identities stay frozen; workflows never create/update refs.
 
@@ -164,7 +221,7 @@ Readers preserve original plan digests and accept only empty `knownFlakyJobs`/
 [release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers).
 Older campaigns retain immutable tooling; strict tooling rejects retained
 `windows-node-ci` advisory evidence and retired candidate omissions/advisory
-allowances. Start fresh qualifying work: admit reviewed main-ancestor Q with C
+allowances. Start fresh qualifying work: admit reviewed exact Q with C
 unchanged, or backport/freeze new C. Never retarget old runs or silently use newer main.
 
 ### Read publication observations

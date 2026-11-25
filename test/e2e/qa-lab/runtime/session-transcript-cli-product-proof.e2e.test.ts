@@ -8,8 +8,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../../src/state/openclaw-state-db.js";
-import type { TranscriptSessionDescriptor } from "../../../../src/transcripts/provider-types.js";
 import { TranscriptsStore } from "../../../../src/transcripts/store.js";
+import type { TranscriptSessionDescriptor } from "../../../../src/transcripts/types.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,

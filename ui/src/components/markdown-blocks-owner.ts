@@ -12,7 +12,9 @@ registerCodeBlocksEnglish();
 
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
+const fileLinkSelector = "a[data-file-path], span[data-file-path]";
 export class MarkdownBlocks {
+  #fileLinkScope: string | undefined;
   #observing = false;
   #scanPending = false;
   #presented = false;
@@ -23,9 +25,12 @@ export class MarkdownBlocks {
   readonly #stopVisibility: () => void;
 
   readonly #root: HTMLElement;
+  readonly #onFileLinks: ((links: HTMLElement[]) => void) | undefined;
 
-  constructor(root: HTMLElement) {
+  /** `onFileLinks` receives rendered file links once their message has stopped streaming. */
+  constructor(root: HTMLElement, onFileLinks?: (links: HTMLElement[]) => void) {
     this.#root = root;
+    this.#onFileLinks = onFileLinks;
     // Solid refs can still belong to an inert template document before adoption.
     // Observe the rendering document so replacement readers follow the real tab.
     this.#stopVisibility = subscribeDocumentVisibility(document, () => {
@@ -34,6 +39,7 @@ export class MarkdownBlocks {
   }
 
   readonly #pendingBlocks = new Set<HTMLElement>();
+  readonly #pendingFileLinks = new Set<HTMLElement>();
   readonly #observedNodes = new Set<HTMLElement>();
   readonly #pendingWidths = new Set<HTMLElement>();
   readonly #resizeObserver = new ResizeObserver((entries) => {
@@ -63,7 +69,7 @@ export class MarkdownBlocks {
   });
   readonly #mutationObserver = new MutationObserver((records) => {
     this.#collectMutations(records);
-    if (this.#pendingBlocks.size) {
+    if (this.#pendingBlocks.size || this.#pendingFileLinks.size) {
       this.#scheduleScan();
     }
   });
@@ -106,6 +112,15 @@ export class MarkdownBlocks {
     this.#codeHighlights?.prune();
   }
 
+  refreshFileLinks(scope: string | undefined): void {
+    if (this.#fileLinkScope === scope) {
+      return;
+    }
+    this.#fileLinkScope = scope;
+    // Only availability answers changed; settled code blocks keep their enhancements.
+    this.#collectBlocks(this.#root, fileLinkSelector);
+  }
+
   update(presented: boolean): void {
     // Every caller, including attachment previews, shares this gate. Keep pane
     // intent separate so revealing the browser tab cannot reactivate a hidden pane.
@@ -131,6 +146,7 @@ export class MarkdownBlocks {
     this.#mutationObserver.disconnect();
     this.#observing = false;
     this.#pendingBlocks.clear();
+    this.#pendingFileLinks.clear();
     this.#resizeObserver.disconnect();
     this.#observedNodes.clear();
     cancelLayout(this.#pendingWidths);
@@ -164,13 +180,14 @@ export class MarkdownBlocks {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["data-prepared-row", "data-preparing-row"],
+        attributeFilter: ["data-prepared-row", "data-preparing-row", "data-chat-streaming"],
       });
       this.#observing = true;
     }
     // A post-commit scan can precede observer delivery. Wire new controls
     // from this commit's records before consumers observe the rendered result.
     this.#collectMutations(this.#mutationObserver.takeRecords());
+    this.#flushFileLinks(root);
     for (const wrapper of this.#pendingBlocks) {
       this.#pendingBlocks.delete(wrapper);
       if (!root.contains(wrapper) || isMarkdownBlockParked(wrapper)) {
@@ -226,12 +243,26 @@ export class MarkdownBlocks {
     }
   }
 
-  #collectBlocks(root: HTMLElement): void {
-    if (root.matches(blockSelector)) {
-      this.#pendingBlocks.add(root);
+  #collectBlocks(
+    root: HTMLElement,
+    selector = this.#onFileLinks ? `${blockSelector}, ${fileLinkSelector}` : blockSelector,
+  ): void {
+    for (const element of [root, ...root.querySelectorAll<HTMLElement>(selector)]) {
+      if (element.matches(blockSelector)) {
+        this.#pendingBlocks.add(element);
+      } else if (this.#onFileLinks && element.matches(fileLinkSelector)) {
+        this.#pendingFileLinks.add(element);
+      }
     }
-    for (const block of root.querySelectorAll<HTMLElement>(blockSelector)) {
-      this.#pendingBlocks.add(block);
+  }
+
+  #flushFileLinks(root: HTMLElement): void {
+    const links = [...this.#pendingFileLinks].filter(
+      (link) => root.contains(link) && !link.closest('[data-chat-streaming="true"]'),
+    );
+    this.#pendingFileLinks.clear();
+    if (links.length) {
+      this.#onFileLinks?.(links);
     }
   }
 }

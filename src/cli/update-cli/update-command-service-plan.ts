@@ -17,6 +17,7 @@ import {
   gatewayServiceCommandMatchesRoot,
   resolveGatewayServiceInstallationRefreshRoot,
   resolveManagedServiceNodeRunner,
+  resolveServiceEntrypointIndex,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -37,7 +38,10 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 // Read-only managed Gateway ownership and runtime selection for update planning.
-import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  resolveGitReleaseEntrypointForForwardingTree,
+} from "../../infra/git-release-paths.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
@@ -59,6 +63,7 @@ import { resolveNodeRunner } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedServicePackageUpdatePlan,
+  ManagedServiceStopParams,
 } from "./update-command-service-context-types.js";
 import { resolveUpdateServiceHeapEnv } from "./update-command-service-env.js";
 
@@ -183,7 +188,7 @@ export async function serviceInspectionWarningMessage(
     state?.installed || state?.command?.sourcePath
       ? "A service definition is present and was left unchanged."
       : "",
-    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
+    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -220,6 +225,7 @@ export function observedSystemdManagerUid(state: GatewayServiceState): number | 
 export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root?: string;
   state: GatewayServiceState;
+  updateInstallKind?: ManagedServiceStopParams["updateInstallKind"];
   retainedCommand?: boolean;
   allowIncompleteInspection?: boolean;
   allowInstallRootChange?: boolean;
@@ -321,10 +327,13 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         kind: "owned",
         root,
         fingerprint,
-        // A unit that names the Git release launcher is written once; switches never change it.
+        // Git releases switch behind a stable launcher; leaving Git for a package
+        // instead requires rebinding the same owned definition.
         refreshDefinition:
           (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
-          !command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER),
+          (params.updateInstallKind === "package" ||
+            (!command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
+              !isForwardedServiceEntrypoint(command))),
       }
     : { kind: "unresolved", root, fingerprint };
 }
@@ -538,6 +547,16 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     }
   }
   return plan;
+}
+
+function isForwardedServiceEntrypoint(command: GatewayServiceCommandConfig): boolean {
+  const index = resolveServiceEntrypointIndex(command.programArguments);
+  const entrypoint = index === undefined ? undefined : command.programArguments[index];
+  return (
+    entrypoint !== undefined &&
+    path.isAbsolute(entrypoint) &&
+    resolveGitReleaseEntrypointForForwardingTree(entrypoint) !== null
+  );
 }
 
 export async function gatewayServiceCommandUsesRoot(params: {

@@ -10,7 +10,7 @@ import {
 } from "./subagents/spawn/subagent-capabilities.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-/** Restart completions are fresh host input, never restored requester continuations. */
+/** Adoption captures the chat with no caller; the exit wakes it as the process's saved requester. */
 export async function prepareAdoptedDurableProcessNotification(
   session: ProcessSession,
 ): Promise<void> {

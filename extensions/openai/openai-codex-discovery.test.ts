@@ -6,15 +6,9 @@ import {
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCatalogWithFetchGuard } from "./test-support/live-catalog.test-support.js";
 
-async function discoverCodexModels(
-  models: Record<string, unknown>[],
-  registry = async () => Response.json({ version: "0.999.0" }),
-) {
+async function discoverCodexModels(models: Record<string, unknown>[]) {
   const fetch = vi.fn<LiveModelCatalogFetchGuard>(async ({ url }) => ({
-    response:
-      url === "https://registry.npmjs.org/@openai/codex/latest"
-        ? await registry()
-        : Response.json({ models }),
+    response: Response.json({ models }),
     finalUrl: url,
     release: async () => undefined,
   }));
@@ -37,60 +31,47 @@ describe("OpenAI discovered subscription models", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
-  it("lists with the newest published Codex independently of the OpenClaw version", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.11.5");
+  it.each([
+    ["2026.11.5", "2026.11.5"],
+    ["2027.1.1", "2027.1.1"],
+    ["2026.11.5-beta.1", "2026.11.5"],
+    ["2026.11.5-1+build.abc", "2026.11.5"],
+    ["0.0.0", "99.0.0"],
+    ["unknown", "99.0.0"],
+    ["dev", "99.0.0"],
+    ["beta", "99.0.0"],
+    ["0.170.0", "99.0.0"],
+    ["2025.12.31", "99.0.0"],
+    ["10000.1.1", "99.0.0"],
+    ["2026.11", "99.0.0"],
+    ["2026.11.5garbage", "2026.11.5"],
+  ])("lists with OpenClaw version %s or its safe fallback", async (version, expected) => {
+    vi.stubEnv("OPENCLAW_VERSION", version);
     const { fetch, provider } = await discoverCodexModels([
       { slug: "gpt-launch-day", visibility: "list" },
     ]);
 
     expect(fetch.mock.calls.map(([{ url }]) => url)).toEqual([
-      "https://registry.npmjs.org/@openai/codex/latest",
-      "https://chatgpt.com/backend-api/codex/models?client_version=0.999.0",
+      `https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(expected)}`,
     ]);
     expect(provider.models.map((model) => model.id)).toContain("gpt-launch-day");
   });
-  it.each([
-    ["older version", async () => Response.json({ version: "0.1.0" })],
-    ["prerelease", async () => Response.json({ version: "9.0.0-alpha.1" })],
-    ["missing version", async () => Response.json({})],
-    ["invalid JSON", async () => new Response("invalid JSON")],
-    ["HTTP failure", async () => new Response("", { status: 503 })],
-    [
-      "network failure",
-      async () => {
-        throw new Error("offline");
+  it("treats an empty subscription list as a failed listing", async () => {
+    const { outcomes } = await runCatalogWithFetchGuard({
+      fetchGuard: async ({ url }) => ({
+        response: Response.json({ models: [] }),
+        finalUrl: url,
+        release: async () => undefined,
+      }),
+      auth: {
+        mode: "oauth",
+        apiKey: "oauth-token",
+        discoveryApiKey: "oauth-token",
+        source: "profile",
+        profileId: "openai:chatgpt",
       },
-    ],
-  ])("lists with the bundled Codex after a registry %s", async (_case, registry) => {
-    const { fetch } = await discoverCodexModels([], registry);
-    expect(fetch.mock.calls.at(-1)?.[0].url).toBe(
-      "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0",
-    );
-  });
-  it("caches successful versions for six hours and retries a failed refresh on the next listing", async () => {
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const registry = vi
-      .fn(async () => Response.json({ version: "0.999.0" }))
-      .mockResolvedValueOnce(Response.json({ version: "0.999.0" }))
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce(Response.json({ version: "0.1000.0" }));
-
-    await discoverCodexModels([], registry);
-    now += 6 * 60 * 60_000 - 1;
-    await discoverCodexModels([], registry);
-    expect(registry).toHaveBeenCalledTimes(1);
-
-    now += 2;
-    const failed = await discoverCodexModels([], registry);
-    expect(failed.fetch.mock.calls.at(-1)?.[0].url).toBe(
-      "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0",
-    );
-    const retried = await discoverCodexModels([], registry);
-    expect(registry).toHaveBeenCalledTimes(3);
-    expect(retried.fetch.mock.calls.at(-1)?.[0].url).toBe(
-      "https://chatgpt.com/backend-api/codex/models?client_version=0.1000.0",
-    );
+    });
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["unavailable"]);
   });
   it.each([128_000, undefined])(
     "preserves the active window %s and enabled reasoning for discovered GPT-6.1 Sol",

@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw id` (OpenClaw ID remote access status, moving a claw to new keys, publishing)"
+summary: "CLI reference for `openclaw id` (OpenClaw ID remote access status, moving a claw to new keys, unlinking, publishing)"
 read_when:
   - OpenClaw ID remote access is off because a key file is missing or replaced
   - You want to move a claw to new connection keys with its recovery kit
+  - You want to take a claw off OpenClaw ID for good
 title: "OpenClaw ID"
 ---
 
@@ -10,8 +11,8 @@ title: "OpenClaw ID"
 
 OpenClaw ID remote access of the Gateway on this machine (an experimental Lab, see
 [Remote access with OpenClaw ID](/concepts/experimental-features#make-a-claw-reachable)).
-Run these commands on the computer that runs the claw: the Gateway accepts `rebind` only
-from a direct-loopback client, never over the tunnel or another network.
+Run these commands on the computer that runs the claw: the Gateway accepts `rebind` and
+`unlink` only from a direct-loopback client, never over the tunnel or another network.
 
 ## Common options
 
@@ -113,6 +114,55 @@ the move was stored but before it switched keys, it finishes the switch at its n
 
 A move does not review who has access. If you think a key leaked, also check **Your
 devices** and **People**.
+
+## Unlink
+
+```bash
+openclaw id unlink
+openclaw id unlink --yes
+```
+
+Ends this claw's link to OpenClaw ID for good. Before anything changes, the command shows
+what you lose and asks you to confirm (`--yes` skips the question):
+
+- how many people and devices lose access now (owner devices, member devices and nodes).
+  Every member is removed; linking again later starts with no one;
+- that the claw's address stops working at once;
+- that the claw's name can never be used again, by any account, including yours;
+- that conversations and everything else on this computer stay.
+
+The Gateway signs the unlink with this computer's Gateway key, removes every owner device,
+member, member device, node and invite, closes every remote session, revokes the device
+tokens issued over the tunnel, stops the tunnel and clears the link. Local access keeps
+working. Then it sends the unlink to Discovery, which retires the address and the name,
+drops the claw from everyone's claw list and stops relaying to it. A browser that opens the
+claw's address afterwards shows "This claw was unlinked by its owner."
+
+If Discovery can't be reached, the claw is still unlinked on this computer. The Gateway keeps
+the signed unlink and sends it as soon as Discovery answers, also after a restart;
+`openclaw id status` shows `Unlink pending` until then, also after you link this computer
+again. Until Discovery has it, the address may still be listed, but this computer no longer
+accepts anyone through it. If Discovery refuses the unlink for good, status shows
+`Unlink refused` with Discovery's reason and the Gateway does not send it again.
+
+A claw that never sent its registration to Discovery (for example because Discovery couldn't be
+reached when it was linked) has no address to retire. Its unlink is complete on this computer:
+nothing stays pending, the command exits 0 and reports `discovery: "local_only"`. Once a
+registration has been sent, Discovery may hold the claw even if this computer never got its
+answer, so the unlink is sent and waits for Discovery as above.
+
+In the Control UI on this computer the same action is **Unlink from OpenClaw ID** in the
+account menu, with the same warning. It needs no OpenClaw ID sign-in, so it stays available
+when the account session has expired. Neither is offered over the tunnel, and the Gateway
+refuses an unlink that arrives over it (`not_local_operator`). An unlink is refused with
+`binding_unpublished` while a move to new keys is not yet published: publish it first
+(`openclaw id publish --code <link-code>`). With `--json` the command needs `--yes`, and
+reports `discovery: "confirmed"`, `"local_only"`, `"pending"`, `"refused"` or `"unconfigured"` with the counts it
+removed. If another unlink or link changes the claw while the warning is open, the unlink is
+refused with `claw_changed`; run it again to see the new warning.
+
+To link this computer again, use **Turn on remote access** with a new name: it becomes a new
+claw.
 
 ## Publish
 

@@ -85,16 +85,19 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
-      // Catalogs already load both; a lazy skill reader must not split their first visit.
+    case "ui/src/pages/plugins/catalog-skeleton.tsx":
+      // Catalogs load these together; shared category icons must not pull in either page.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -152,13 +155,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-    case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/templates-lab-feature.ts":
-      // Draft navigation and its Labs gate belong to the optional template flow.
+      // Draft navigation belongs to the optional template flow.
       return "template-draft-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
@@ -192,7 +194,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":
@@ -423,6 +424,20 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
+    case "ui/src/lib/skills-shared.ts":
+    case "ui/src/lib/skills-grouping.ts":
+    case "ui/src/lib/skills/index.ts":
+    case "ui/src/i18n/locales/en-skill-library.ts":
+    case "ui/src/i18n/locales/en-skills-browser.ts":
+    case "ui/src/pages/skills/skill-status.tsx":
+      // Skills and Agents already load this presentation and its shared dependencies together.
+      return "skills-shared";
+    case "ui/src/pages/skills/skills-page.tsx":
+    case "ui/src/pages/skills/view.tsx":
+    case "ui/src/pages/skills/discovery-view.tsx":
+    case "ui/src/pages/skills/skill-page-boundary.tsx":
+      // Lists already load these together; skill detail pages keep their lazy imports.
+      return "skills-page";
     case "src/config/cron-limits.ts":
     case "src/cron/store/delivery-codec.ts":
     case "src/cron/stagger.ts":

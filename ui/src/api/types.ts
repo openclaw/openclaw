@@ -38,6 +38,7 @@ export type {
   AgentsFilesSetResult,
   SessionsFilesGetResult as SessionWorkspaceGetResult,
   SessionsFilesSetResult as SessionWorkspaceSetResult,
+  SessionsFilesStatResult as SessionWorkspaceStatResult,
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
@@ -124,10 +125,6 @@ export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessP
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
-    /** Transient UI-owned Swarm note overlays, not persisted session fields. */
-    swarmPhase?: string;
-    swarmPhaseRank?: number;
-    swarmLog?: string;
     icon?: string;
     channelAvatarUrl?: string;
     surface?: string;

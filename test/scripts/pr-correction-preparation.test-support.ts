@@ -15,11 +15,12 @@ export function createCapturedHashProbe(root: string, write = false) {
   writeFileSync(
     probe,
     `#!/usr/bin/env python3
-import os,sys,signal,subprocess
+import json,os,signal,struct,sys,subprocess
 args=sys.argv[1:]
 if args == ${JSON.stringify(args)}:
  captured=sys.stdin.buffer.read()
- with open(${JSON.stringify(calls)},'a') as record: record.write(str(len(captured))+'\\n')
+ with open(${JSON.stringify(calls)},'a+') as record:
+  record.seek(0); count=len(record.readlines()); record.write(str(len(captured))+'\\n')
  held=()
  if os.environ.get('CHECK_HASH_LIFETIME'):
   held=(7,10)
@@ -29,6 +30,12 @@ if args == ${JSON.stringify(args)}:
    try: os.fstat(fd)
    except OSError: pass
    else: raise AssertionError('creator/review authority leaked to Git')
+ if os.environ.get('HASH_SEQUENCE'):
+  sequence=json.load(open(os.environ['HASH_SEQUENCE']))
+  if count+1 < len(sequence):
+   size,identity=sequence[count+1]
+   value=bytearray([identity%256])*size; value[:4]=struct.pack('<I',identity)
+   open('.local/correction-review.json','wb').write(value)
  if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
  if os.environ.get('SIGNAL_HASH'):

@@ -10,9 +10,10 @@ import {
   parseFenceSpans,
   type FenceSpan,
 } from "../../packages/markdown-core/src/fences.js";
+import { findMarkdownLinkSourceSpans } from "../../packages/markdown-core/src/link-spans.js";
 import { scanParenAwareBreakpoints } from "../../packages/markdown-core/src/text-breakpoints.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
-import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
+import { resolveChannelStreamingChunkMode } from "../channels/streaming-config-readers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -316,6 +317,13 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   const chunks: string[] = [];
   const spans = parseFenceSpans(text);
+  const links = findMarkdownLinkSourceSpans(text).filter(
+    ([linkStart, linkEnd]) => linkEnd - linkStart <= normalizedLimit,
+  );
+  const breakSpans = [...spans, ...links.map(([start, end]) => ({ start, end }))].toSorted(
+    (left, right) => left.start - right.start,
+  );
+  let linkIndex = 0;
   let start = 0;
   let reopenFence: FenceSpan | undefined;
 
@@ -334,8 +342,16 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     // A reopen applies to one continuation; the split below records the next one.
     reopenFence = undefined;
     const windowEnd = Math.min(text.length, start + contentLimit);
-    const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
+    const softBreak = pickSafeBreakIndex(text, start, windowEnd, breakSpans);
     let breakIdx = findGraphemeChunkEnd(text, start, windowEnd, softBreak);
+    let link = links[linkIndex];
+    while (link && link[1] <= breakIdx) {
+      linkIndex += 1;
+      link = links[linkIndex];
+    }
+    if (link && link[0] > start && link[0] < breakIdx) {
+      breakIdx = findGraphemeChunkEnd(text, start, link[0]);
+    }
 
     const initialFence = findFenceSpanAt(spans, breakIdx);
 
@@ -438,9 +454,9 @@ function pickSafeBreakIndex(
   text: string,
   start: number,
   end: number,
-  spans: ReturnType<typeof parseFenceSpans>,
+  spans: ReadonlyArray<{ start: number; end: number }>,
 ): number {
-  // Windows may overlap after a soft break, so seek once before advancing through their fences.
+  // Windows may overlap after a soft break, so seek once before advancing through protected spans.
   let fenceIndex = 0;
   let high = spans.length;
   while (fenceIndex < high) {

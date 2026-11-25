@@ -311,7 +311,8 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
-          parentToolCallId: params.parentToolCallId,
+          // Discovery returns lazy guest handles, not model-visible metadata.
+          // Their getters/serialization mark exposure; actual calls retain host provenance.
         });
         value = exactBinding
           ? [exactBinding.callableName]

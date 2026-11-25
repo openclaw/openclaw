@@ -7,13 +7,12 @@ import {
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
+import { canSubscribeOperatorApprovals } from "../exec-approval-delivery.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -97,7 +96,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         context,
         respond,
         sessionMutationAuthorization,
-        hasCurrentClientAuthority,
         signal,
         markSessionSubscribePhase: mark,
       } = options;
@@ -107,11 +105,11 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       if (!key) {
         return;
       }
-      if (params.includeApprovals === true && !canReviewOperatorApproval(client)) {
+      if (params.includeApprovals === true && !canSubscribeOperatorApprovals(client)) {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,
-          `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
+          `sessions.messages.subscribe includeApprovals requires a directly authenticated person or a paired device with gateway scope: ${APPROVALS_SCOPE}`,
         );
         return;
       }
@@ -149,13 +147,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             })
           : undefined;
         try {
-          using sessionAccess = includeApprovals
-            ? await prepareApprovalSessionAccess({
-                client,
-                getCfg: context.getRuntimeConfig,
-                sources: [{ sessionKey: canonicalKey, agentId: requestedAgentId }],
-              })
-            : undefined;
           if (includeApprovals) {
             read?.assertCurrent();
             sessionMutationAuthorization?.assertCurrent();
@@ -211,17 +202,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             if (!prepared || !prepared.isCurrent()) {
               throw new Error("session approval replay changed during preparation");
             }
-            if (
-              client?.invalidated ||
-              signal?.aborted ||
-              hasCurrentClientAuthority?.() === false ||
-              !canReviewOperatorApproval(client) ||
-              !sessionAccess?.canAccess({
-                sessionKey: canonicalKey,
-                agentId: requestedAgentId,
-              })
-            ) {
-              throw new Error("session approval replay authority is no longer active");
+            if (signal?.aborted) {
+              throw new Error("session approval replay was stopped; subscribe again");
             }
           }
           mark?.("observerCommit");

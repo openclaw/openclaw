@@ -12,10 +12,9 @@ async function commitQueuedReplySessionActivity(params: {
   target: { agentId?: string; storePath: string; sessionKey: string };
   expected: SessionEntry;
   updatedAt: number;
-  assertCurrent: () => void;
   onCommittedEntry: (entry: SessionEntry | undefined) => void;
 }): Promise<void> {
-  const assertCurrent = () => params.assertCurrent();
+  const assertCurrent = () => {};
   const authority: SessionActorAuthority = {
     assertCurrent,
     authorize(_stage, facts) {
@@ -80,9 +79,6 @@ export async function touchQueuedReplySessionActivity(
       target: { agentId: followupRun.run.agentId, storePath, sessionKey },
       expected: activeSessionEntry,
       updatedAt,
-      assertCurrent: () => {
-        followupRun.operatorAuthority?.assertCurrent();
-      },
       onCommittedEntry: (entry) => {
         onCommittedEntry(entry);
         if (entry) {

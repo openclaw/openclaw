@@ -129,7 +129,11 @@ export function createPage(options: PageOptions = {}) {
     }
     if (method === "templates.catalog.detail") {
       const instructions = (options.workspaceFileNames ?? ["AGENTS.md", "SOUL.md", "USER.md"]).map(
-        (name) => ({ name, source: `workspace/${name}` }),
+        (name) => ({
+          name,
+          source: `workspace/${name}`,
+          excerpt: name === "SOUL.md" ? "Keep the owner informed." : undefined,
+        }),
       );
       return {
         detail: {

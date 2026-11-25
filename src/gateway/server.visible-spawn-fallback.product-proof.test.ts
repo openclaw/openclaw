@@ -688,7 +688,6 @@ describe("CLI model inheritance through MCP", () => {
             });
             const caller = createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: currentGrant.admittedRunContext,
-              receiptAuthority: currentGrant.isCurrent,
               agentId: scoped.agentId,
               sessionKey: context.sessionKey,
             });

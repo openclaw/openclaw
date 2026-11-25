@@ -39,6 +39,7 @@ import {
   assertSameClawIdentity,
   assertStoredClawText,
   clawStoreRows,
+  emptyRecord,
   readStoredClaw,
   writeStoredClaw,
   storedOwnerProfile,
@@ -53,8 +54,9 @@ import { canonicalMemberProfiles, type OpenClawIdMemberProfiles } from "./member
 import { retainMemberRecoveryUses } from "./member-recovery-uses.js";
 import {
   assertMemberRoleDefined,
+  assertSandboxGrantReady,
   roleChangeDisconnects,
-  refuseUndefinedMemberRole,
+  refuseMemberRole,
 } from "./member-role-change.js";
 import {
   listAdmitted,
@@ -66,6 +68,7 @@ import {
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+import { createUnlinkOperations } from "./unlink-operations.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
 export type LinkPreparation = {
@@ -95,22 +98,6 @@ export type RedemptionSender = {
   display_name?: string | null;
   location_hint?: string | null;
 };
-
-function emptyRecord(clawId: string): StoredClaw {
-  return {
-    v: 1,
-    claw_id: clawId,
-    hostname: null,
-    authority: null,
-    binding: null,
-    discovery: {
-      owner_account_id: null,
-      published_binding_seq: 0,
-      published_snapshot_seq: 0,
-      mailbox_cursor: null,
-    },
-  };
-}
 
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
@@ -423,8 +410,10 @@ export function createOpenClawIdAuthority(
           return binding;
         }
         // The caller's live ceremony authority is checked at the durable write itself.
+        // No registration has been sent for this claw yet (unlink-operations.ts).
+        const discovery = { ...current.discovery, registration_unsent: true };
         await commit(
-          { ...current, authority: added.state, binding: binding.statement },
+          { ...current, authority: added.state, binding: binding.statement, discovery },
           expected.guard,
         );
         return {
@@ -456,6 +445,7 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: result.code, detail: result.detail };
         }
         const roleChange = assertMemberRoleDefined(input);
+        await assertSandboxGrantReady(input);
         if (roleChange && result.status === "applied") {
           await profiles.setRole(roleChange.account_id, roleChange.role, false);
         }
@@ -480,7 +470,7 @@ export function createOpenClawIdAuthority(
           status: result.status,
           events: [...expiry, ...result.events, ...reconnect],
         };
-      }).catch(refuseUndefinedMemberRole);
+      }).catch(refuseMemberRole);
     },
 
     /**
@@ -491,7 +481,7 @@ export function createOpenClawIdAuthority(
       input: { cap: unknown; proofKey: Uint8Array; existingProfileId?: string },
       channel: Channel,
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -511,6 +501,7 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
+        await assertSandboxGrantReady(input.cap);
         let inviteReports = current.invite_reports;
         if (input.existingProfileId !== undefined) {
           const profile = (await profiles.inviteProfiles()).find(
@@ -541,12 +532,13 @@ export function createOpenClawIdAuthority(
         Object.assign(next, inviteReports ? { invite_reports: inviteReports } : {});
         await commit(next);
         return { ok: true, status: result.status, events: [...events, ...result.events] };
-      });
+      }).catch(refuseMemberRole);
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
 
     ...createRebindOperations({ serialize, load, commit }),
+    ...createUnlinkOperations({ serialize, load, commit, emptyRecord }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
@@ -803,8 +795,11 @@ export function createOpenClawIdAuthority(
       return [...expired].filter((key) => !isAdmitted(state, key, now)).toSorted();
     },
 
-    /** Records mirror progress; recovery may require the same committed binding through settlement. */
-    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
+    /**
+     * Records mirror progress; recovery may require the same committed binding through settlement.
+     * With a claw id as `expected`, progress for another claw (one unlinked meanwhile) is dropped.
+     */
+    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw | string) {
       return serialize(async () => {
         for (const field of ["owner_account_id", "mailbox_cursor"] as const) {
           if (Object.hasOwn(update, field)) {
@@ -812,7 +807,10 @@ export function createOpenClawIdAuthority(
           }
         }
         const current = await load();
-        if (expected) {
+        if (typeof expected === "string" ? current?.claw_id !== expected : false) {
+          return;
+        }
+        if (expected && typeof expected !== "string") {
           assertSameClawIdentity(current, expected);
         }
         if (current) {

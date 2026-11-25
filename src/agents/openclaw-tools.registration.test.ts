@@ -8,8 +8,9 @@ import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as userProfileList from "../state/user-profile-list.native.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
@@ -119,6 +120,25 @@ it("keeps top-level tool argument names distinct from the required schema keywor
     }
   }
 });
+
+it.each([
+  ["without", undefined, "this run has no yield owner"],
+  ["with", () => {}, undefined],
+] as const)(
+  "keeps the yield owner's availability through tool assembly (%s onYield)",
+  (_label, onYield, reason) => {
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      sessionId: "session",
+      ...(onYield ? { onYield } : {}),
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(getAgentToolExecutionLocation(expectToolNamed(tools, "sessions_yield"))).toEqual(
+      reason ? { kind: "gateway", unavailableReason: reason } : { kind: "gateway" },
+    );
+  },
+);
 
 describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {
@@ -464,6 +484,21 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("offers session_project only for a session admitted in the default workspace", () => {
+    const built = (eligible?: boolean, tools?: OpenClawConfig["tools"]) =>
+      hasTool(
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:main",
+          config: { tools },
+          sessionProjectMoveEligible: eligible,
+        }),
+        "session_project",
+      );
+    expect(built()).toBe(false);
+    expect(built(true)).toBe(true);
+    expect(built(false, { alsoAllow: ["session_project"] })).toBe(false);
+  });
+
   it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
     const olderTools = createOpenClawTools({
       githubPublicationAvailable: false,
@@ -626,10 +661,9 @@ describe("gateway client capability tool filtering", () => {
         {
           agentId: "main",
           sessionKey,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "reviewer",
             scopes: [scope],
-            assertCurrent: () => {},
           }),
         },
         () =>

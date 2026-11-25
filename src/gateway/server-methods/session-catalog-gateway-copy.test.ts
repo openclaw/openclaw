@@ -3,6 +3,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -110,7 +111,7 @@ function copyParams(
     agentId: "main",
     clientScopes: ["operator.read", "operator.write"],
     client: {
-      connect: { scopes: ["operator.read", "operator.write"] },
+      connect: gatewayConnect(["operator.read", "operator.write"]),
     } as never,
     context: {
       getRuntimeConfig: () => ({
@@ -277,7 +278,7 @@ describe("copySessionCatalogToGateway", () => {
           ? { signal: controller.signal }
           : {
               client: {
-                connect: { scopes: ["operator.read", "operator.write"] },
+                connect: gatewayConnect(["operator.read", "operator.write"]),
                 connectionSignal: controller.signal,
               } as never,
             },
@@ -444,7 +445,7 @@ describe("copySessionCatalogToGateway", () => {
     expect(mocks.createGatewaySession.mock.calls[0]![0]).toMatchObject({ model: "openai/gpt-5.4" });
   });
 
-  it.each(["ready", "missing", "pending", "foreign", "denied"])(
+  it.each(["ready", "missing", "missing-id", "pending", "foreign", "denied"])(
     "resolves %s receiver handoffs under read policy without adoption or creation",
     async (state) => {
       const { catalog, continuation } = continuationProvider(false);
@@ -454,7 +455,7 @@ describe("copySessionCatalogToGateway", () => {
         state === "missing"
           ? undefined
           : {
-              sessionId: "current-runtime-id",
+              sessionId: state === "missing-id" ? "" : "current-runtime-id",
               initializationPending: state === "pending",
               pluginExtensions: {
                 beam: {
@@ -480,7 +481,10 @@ describe("copySessionCatalogToGateway", () => {
       });
       expect(result).toMatchObject(
         state === "ready"
-          ? { ok: true, sessionKey: continuation.sessionKey }
+          ? {
+              ok: true,
+              destination: { sessionKey: continuation.sessionKey, sessionId: "current-runtime-id" },
+            }
           : { ok: false, error: { code: state === "denied" ? "FORBIDDEN" : "UNAVAILABLE" } },
       );
       expect(mocks.authorizeDestination).toHaveBeenCalledWith(
@@ -505,7 +509,7 @@ describe("copySessionCatalogToGateway", () => {
         context: params.context,
         assertCurrent() {},
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, destination: null });
     expect(params.provider.continueSession).not.toHaveBeenCalled();
     expect(params.provider.copyToGatewaySession).not.toHaveBeenCalled();
     expect(mocks.authorizeDestination).not.toHaveBeenCalled();

@@ -23,7 +23,7 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
-import { PUBLICATION_READ_SCOPE } from "./operator-scopes.js";
+import { PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE } from "./operator-scopes.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -73,10 +73,17 @@ describe("gateway shared auth rotation", () => {
     );
   });
 
-  async function startGateway(token: GatewayAuthConfig["token"] = OLD_TOKEN) {
+  async function startGateway(
+    token: GatewayAuthConfig["token"] = OLD_TOKEN,
+    readerEnabled = false,
+  ) {
     await state.writeConfig({
       gateway: {
         mode: "local",
+        sessionControl: {
+          publicationReadEnabled: readerEnabled,
+          publicationWriteEnabled: readerEnabled,
+        },
         bind: "loopback",
         auth: { mode: "token", token },
         controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
@@ -268,20 +275,23 @@ describe("gateway shared auth rotation", () => {
     },
   );
 
-  it("revokes established publication readers when their shared-auth issuer rotates", async () => {
-    await startGateway();
-    const reader = await openDeviceTokenClient({
-      issuerGeneration: requiredSharedGeneration(),
-      scopes: [PUBLICATION_READ_SCOPE],
-    });
-    expect(reader.hello.auth?.scopes).toEqual([PUBLICATION_READ_SCOPE]);
-    const admin = await connect({ token: OLD_TOKEN });
-    await rotateSharedToken(admin.client);
-    await expectAuthChangedClose(reader);
-    await expect(
-      reader.client.request("publication-proof.read", {}, { timeoutMs: 1_000 }),
-    ).rejects.toThrow();
-  });
+  it.each([PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE])(
+    "revokes established publication transport %s when its shared-auth issuer rotates",
+    async (scope) => {
+      await startGateway(OLD_TOKEN, true);
+      const reader = await openDeviceTokenClient({
+        issuerGeneration: requiredSharedGeneration(),
+        scopes: [scope],
+      });
+      expect(reader.hello.auth?.scopes).toEqual([scope]);
+      const admin = await connect({ token: OLD_TOKEN });
+      await rotateSharedToken(admin.client);
+      await expectAuthChangedClose(reader);
+      await expect(
+        reader.client.request("publication-proof.read", {}, { timeoutMs: 1_000 }),
+      ).rejects.toThrow();
+    },
+  );
 
   it("disconnects shared-auth websocket sessions when config.apply rewrites a SecretRef token", async () => {
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);

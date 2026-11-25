@@ -36,6 +36,13 @@ vi.mock("../process/exec.js", async (importOriginal) => {
         : actual.spawnCommand(...args),
   };
 });
+// mock-isolation: the shared sandbox contribution also repairs images; a role requiring a
+// sandbox would otherwise inspect and build the real host's Docker image during this suite.
+const maybeRepairSandboxImages = vi.hoisted(() => vi.fn(async () => [] as string[]));
+vi.mock("./doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-sandbox.js")>()),
+  maybeRepairSandboxImages,
+}));
 const it = stateTest("doctor-member-roles");
 beforeEach(() => {
   spawnCommand.mockReset().mockRejectedValue(new Error("synthetic engine unavailable"));
@@ -290,6 +297,26 @@ for (const who of ["member", "default"]) {
     expect(await detect(config)).toEqual([]);
   });
 }
+it("warns when a required-sandbox member's image is missing", async ({ state }) => {
+  state.applyEnv();
+  await writeStoredClaw(claw({ alice: "guest" }));
+  spawnCommand.mockImplementation(async (argv: string[]) => ({
+    failed: argv.includes("inspect"),
+    isCanceled: false,
+    exitCode: argv.includes("inspect") ? 1 : 0,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.from(argv.includes("inspect") ? "Error: No such image" : ""),
+  }));
+  expect(await detect(cfg())).toEqual([
+    expect.objectContaining({
+      requirement: "sandbox-image-missing",
+      message: expect.stringMatching(/alice.*openclaw-sandbox:trixie-slim is missing/),
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+      target: "guest",
+    }),
+  ]);
+});
+
 it("does not warn for unused required roles or an unprobed non-container backend", async ({
   state,
 }) => {
@@ -447,6 +474,8 @@ for (const policy of [
       prompter: createDoctorPrompterFixture(true),
     });
     await contribution().run(ctx);
+    // The suite never reaches the host's real image check or build.
+    expect(maybeRepairSandboxImages).toHaveBeenCalled();
     expect(ctx.prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(ctx.cfg).toBe(config);
     expect(ctx.configResult.pendingChangePanels).toBeUndefined();

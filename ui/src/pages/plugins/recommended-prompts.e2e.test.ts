@@ -272,7 +272,9 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
         restartRequired: false,
       });
       await gateway.waitForRequest("sessions.create");
-      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
+      await page
+        .getByRole("switch", { name: "Calendar Plus", checked: true, exact: true })
+        .waitFor();
       await expect.poll(() => recommendation(page).first().isEnabled()).toBe(true);
       expect(new URL(page.url()).pathname).toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
       expect(await page.locator('.plugins-row-message[role="alert"]').allTextContents()).toEqual(

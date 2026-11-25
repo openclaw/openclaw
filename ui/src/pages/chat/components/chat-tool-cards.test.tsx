@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByRole } from "@solidjs/testing-library";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
@@ -189,8 +190,15 @@ it("labels a completed Codex file creation from its recorded operation", async (
   expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
   expect(onToggleExpanded).not.toHaveBeenCalled();
 
-  expect(query(container, ".chat-tool-row__toggle")).toMatchObject({ ariaLabel: "Created new.ts" });
-  query(container, ".chat-tool-row__toggle")?.click();
+  const toggle = getByRole(container, "button", {
+    name: "Created new.ts",
+    description: "",
+    expanded: false,
+  });
+  expect(toggle).toBe(query(container, ".chat-tool-row__toggle"));
+  toggle.focus();
+  expect(document.activeElement).toBe(toggle);
+  toggle.click();
   expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
   expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
 });
@@ -527,7 +535,9 @@ it.each([
   for (const expanded of [false, true]) {
     await mountCard(card, { expanded }, container);
     if (name === "tool_call") {
-      expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      expect(textOf(container, ".chat-tool-row__title")).toBe(
+        "Search the web for “OpenClaw release notes”",
+      );
     }
     expect(container.textContent?.toLowerCase()).toContain("skipped");
     expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
@@ -537,7 +547,7 @@ it.each([
 
 it("renders Tool Search like a direct call and retains the sidebar identity", async () => {
   const name = "web_search";
-  const args = { query: "OpenClaw release notes" };
+  const args = { query: "OpenClaw release notes", count: 5 };
   const input = { id: name, args };
   const card: ToolCard = {
     id: "search-release",
@@ -551,7 +561,7 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
   const onOpenSidebar = vi.fn();
   for (const expanded of [false, true]) {
     const container = await mountCard(card, { expanded, onOpenSidebar });
-    expect(textOf(container, ".chat-tool-msg-summary")).toContain(args.query);
+    expect(textOf(container, ".chat-tool-row__title")).toBe(`Searched the web for “${args.query}”`);
     const direct = await mountCard(
       { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
       { expanded, onOpenSidebar },
@@ -564,11 +574,92 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
       direct.querySelector(".chat-tool-card")?.className,
     );
     if (expanded) {
+      expect(
+        Array.from(container.querySelectorAll(".chat-tool-kv__row"), (row) => [
+          textOf(row, ".chat-tool-kv__key"),
+          textOf(row, ".chat-tool-kv__value"),
+        ]),
+      ).toEqual([
+        ["query:", args.query],
+        ["count:", "5"],
+      ]);
       query(container, ".chat-tool-card__action-btn")?.click();
       expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
     }
   }
   expect([card.name, card.args]).toEqual(["tool_call", { id: name, args }]);
+});
+
+const incompleteSearch = { itemId: "search", kind: "tool", title: "Search", phase: "end" } as const;
+it.each([
+  ["blocked", { activity: { ...incompleteSearch, status: "blocked" } }, "Blocked", "Blocked"],
+  ["unknown", { activity: incompleteSearch }, "Outcome unknown", "Outcome unknown"],
+  ["unrecorded", {}, "No result recorded", "No result available."],
+] as const)(
+  "keeps a long %s web search and its outcome in separate slots",
+  async (state, card, collapsed, expanded) => {
+    const args = { query: "OpenClaw release notes · " + "history ".repeat(12).trim(), count: 5 };
+    const call =
+      state === "unknown"
+        ? { name: "tool_call", args: { id: "web_search", args } }
+        : { name: "web_search", args };
+    const search = { id: "long-search", ...card, ...call, inputText: JSON.stringify(call.args) };
+    const inlineCommands = await inlineCommandPresentation();
+    const container = await mountCard(search, { expanded: false, inlineCommands });
+    const row = query(container, ".chat-tool-row")!;
+    const title = `Search the web for “${args.query}”`;
+    const slot = ":scope > .chat-activity-group__outcome";
+    expect.soft(textOf(row, ".chat-tool-row__title")).toBe(title);
+    expect(row.querySelectorAll(slot)).toHaveLength(1);
+    expect(textOf(row, slot)).toBe(collapsed);
+    expect(row.textContent).toBe(title + collapsed);
+    expect(query(row, ".chat-command-trail__status")).toBeNull();
+    if (state === "unrecorded") {
+      await mountCard(search, { expanded: false, inlineCommands, interrupted: true }, container);
+      expect(textOf(row, ".chat-tool-row__title")).toBe(title);
+      expect(textOf(row, slot)).toBe("interrupted");
+      expect(row.textContent).toBe(title + "interrupted");
+    }
+    await mountCard(search, { expanded: true, inlineCommands }, container);
+    expect(textOf(row, ".chat-tool-row__title")).toBe(title);
+    expect(row.textContent).toBe(title);
+    expect(textOf(container, ".chat-tool-card__outcome")).toBe(expanded);
+    expect(textOf(container, ".chat-tool-kv__value")).toBe(args.query);
+
+    const grep = { id: "inline-search", name: "grep", args: { pattern: "release" }, ...card };
+    const inline = await mountCard(grep, { expanded: false, inlineCommands });
+    expect(textOf(inline, ".chat-command-trail__status")).toBe(collapsed);
+    expect(query(inline, ".chat-activity-group__outcome")).toBeNull();
+    await mountCard(grep, { expanded: true, inlineCommands }, inline);
+    expect(query(inline, ".chat-command-trail__status")).toBeNull();
+    expect(textOf(inline, ".chat-tool-card__outcome")).toBe(expanded);
+  },
+);
+
+it.each([
+  ["nodes", { action: "describe", node: "Lab Mac" }, "Described node · Lab Mac", "Lab Mac"],
+  ["nodes", { action: "describe", node: "a".repeat(64) }, "Described node", "a".repeat(64)],
+  ["browser", { action: "snapshot", targetId: "report" }, "Read browser page", "report"],
+] as const)(
+  "keeps human device names in %s titles and technical selectors in details: %j",
+  async (name, args, label, target) => {
+    const card = { id: name, name, args, inputText: JSON.stringify(args), completed: true };
+    const container = await mountCard(card, { expanded: false });
+    expect(textOf(container, ".chat-tool-row__title")).toBe(label);
+    await mountCard(card, { expanded: true }, container);
+    expect(textOf(container, ".chat-tool-msg-body")).toContain(target);
+  },
+);
+
+it("bounds the literal web search title without changing the expanded query", async () => {
+  const prefix = "with <b>{query}</b> ";
+  const padding = "a".repeat(118 - prefix.length);
+  const args = { query: `  with\n<b>{query}</b>\u202e${padding}🦞 more  ` };
+  const container = await mountTool("web_search", { args, inputText: JSON.stringify(args) });
+  const title = query(container, ".chat-tool-row__title");
+  expect(title?.textContent).toBe(`Search the web for “${prefix}${padding}…”`);
+  expect(title?.querySelector("b")).toBeNull();
+  expect(textOf(container, ".chat-tool-kv__value")).toBe(args.query);
 });
 
 it("keeps command progress neutral across the row, expanded body, and sidebar until completion", async () => {

@@ -3,7 +3,7 @@ import {
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -11,6 +11,7 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
@@ -21,7 +22,10 @@ import {
   readCodexLiveThreadEphemeralPolicy,
   waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
-import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
+import {
+  CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+  wasCodexAppServerThreadClosed,
+} from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -173,7 +177,7 @@ export async function releaseCodexBoundLiveThread(
     ownerClientId?: string;
     /** Cold resume may join asynchronous Stop cleanup, never force its release. */
     waitForBackgroundCleanup?: boolean;
-    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    /** Runs synchronously if cancellation or timeout ends the wait for the previous owner's exit. */
     onExitWaitCancelled?: () => void;
   },
 ): Promise<boolean> {
@@ -311,9 +315,25 @@ export async function releaseCodexBoundLiveThread(
               ),
           );
         }
-        // Siblings may keep the old process alive after this exact thread stops.
+        // A sibling can keep this process alive. Timing out leaves the old writer in place.
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
-          racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError),
+          raceWithTimeout(
+            Promise.race(stopped),
+            CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+            () => {
+              options.onExitWaitCancelled?.();
+              throw new CodexAppServerStartupError(
+                "timed_out",
+                "The previous Codex thread did not confirm shutdown before the handoff timed out. Try sending your message again in a few seconds. If the conversation still cannot resume, start a new chat.",
+              );
+            },
+            {
+              signal: options.signal,
+              onAbort: (signal) => {
+                throw exitWaitAbortError(signal);
+              },
+            },
+          ),
         );
       } else if (released && threadClosed) {
         // A live previous owner keeps the per-home writer lock until it unloads the thread

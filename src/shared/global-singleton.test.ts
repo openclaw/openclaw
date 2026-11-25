@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import {
   drainGlobalSingletonLifecycleState as drain,
   readGlobalSingleton,
@@ -65,13 +65,19 @@ describe("resolveGlobalSingleton", () => {
     register(() => held);
     register(siblingReset, TEST_MAP_KEY);
 
-    const pending = drain();
+    let settled = false;
+    const pending = drain().then(() => {
+      settled = true;
+    });
     try {
       expect(siblingReset).toHaveBeenCalledOnce();
+      await nextEventLoopTurn();
+      expect(settled).toBe(false);
     } finally {
       release();
       await pending;
     }
+    expect(settled).toBe(true);
   });
 
   it("runs every registered reset before reporting failures", async () => {

@@ -246,6 +246,25 @@ function createRewriteFixture(state: OpenClawTestState, events: readonly unknown
   return { db, snapshot, rewrite, scope, write, setKeyOwner };
 }
 
+it("preserves admission for the first exact native identity of an accepted steer", async () => {
+  await withRewriteFixture(({ snapshot, rewrite }) => {
+    const before = snapshot().generation;
+    const metadata = {
+      steerTargetRunId: "active-run",
+      importedFrom: "claude-cli",
+      cliSessionId: "native-session",
+      externalId: "input-1",
+    };
+    const message = { ...rewriteEvents[1].message, __openclaw: metadata };
+    rewrite(rewriteMessage(1, message));
+    expect(snapshot().generation).toBe(before);
+    rewrite(
+      rewriteMessage(1, { ...message, __openclaw: { ...metadata, externalId: "different" } }),
+    );
+    expect(snapshot().generation).not.toBe(before);
+  });
+});
+
 it("preserves the generation when initially recording identical model prompt text", async () => {
   await withRewriteFixture(({ snapshot, rewrite }) => {
     const before = snapshot();
@@ -271,6 +290,7 @@ it.each([
   { name: "content", message: { content: "changed" } },
   { name: "provenance", message: { provenance: { kind: "internal_system" } } },
   { name: "sender authority", metadata: { senderIsOwner: true } },
+  { name: "incomplete native identity", metadata: { externalId: "input-1" } },
   {
     name: "model projection",
     metadata: { modelPromptProjection: { version: 1, text: "changed" } },
@@ -372,7 +392,7 @@ it("keeps oversized metadata current but hides changed text until the real worke
     expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
       { messageId: "user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
   });
 });
 

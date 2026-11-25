@@ -22,8 +22,10 @@ Output and exit codes match the offline command. With `gateway.reload.mode: "off
 a routed write is saved without a Gateway restart and prints
 `Restart the gateway to apply.`, as an offline write does. Older Gateways, such as
 2026.10.7, still restart to apply such a write. If the config changed in between,
-the Gateway rejects the write; rerun the command. A failure after the request was
-sent is reported as an uncertain outcome and is never retried locally; check the
+the Gateway rejects the write; rerun the command. If the Gateway saved the edit
+but failed to apply it, the CLI briefly checks whether that exact revision
+became active. The CLI reports success if the Gateway confirms it. If the
+outcome is still uncertain, the CLI reports the original error. Check the
 path with `openclaw config get` before retrying.
 
 Some changes still need the Gateway stopped: `database.*` settings, which

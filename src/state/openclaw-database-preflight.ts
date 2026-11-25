@@ -80,6 +80,12 @@ export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-prefli
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
 
+export function getOpenClawDatabaseReadinessFailure(
+  database: IndeterminateOpenClawDatabase,
+): unknown {
+  return indeterminateCauses.get(database);
+}
+
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
   options: OpenClawDatabaseReadinessOptions,

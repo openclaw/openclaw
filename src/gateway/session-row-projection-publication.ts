@@ -1,3 +1,5 @@
+import { worktreeRegistryPublication } from "../agents/worktrees/registry-publication.js";
+import { rowToRecord } from "../agents/worktrees/registry-read.kernel.js";
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { projectSessionEntryPredicateChange } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
@@ -5,7 +7,9 @@ import {
   pluginStatePublication,
   pluginStateReadDependenciesAffected,
 } from "../plugin-state/plugin-state-publication.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
+  emitSessionLifecycleEvent,
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
@@ -21,7 +25,6 @@ export function createSessionRowPublication(owner: {
   runAsOwner: <T>(run: () => T) => T;
   registryFactsReady: () => boolean;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
-  markRelated: (row: records.Row, includeChildren: boolean) => void;
   placement: {
     publish: (sessionId: string, change: SessionRowChange) => boolean;
     invalidate: (sessionId: string) => void;
@@ -38,7 +41,6 @@ export function createSessionRowPublication(owner: {
     entry: NonNullable<records.Row["storedEntry"]>,
     databaseFacts?: records.RetainedSessionRowDatabaseFacts,
   ) {
-    owner.markRelated(row, records.changesSessionRowDependents(row.storedEntry, entry));
     owner.runAsOwner(() => {
       if (entry.archivedAt !== undefined && !owner.registryFactsReady()) {
         owner.invalidateSelection();
@@ -191,6 +193,11 @@ export function createSessionRowPublication(owner: {
               sameSession && previousFacts.entry.sessionStartedAt === entry.sessionStartedAt
                 ? previousFacts.acpMeta
                 : undefined,
+            worktree: !entry.worktree
+              ? null
+              : sameSession && previousFacts.entry.worktree?.id === entry.worktree.id
+                ? previousFacts.worktree
+                : undefined,
             repositoryWorkspace: !entry.repositoryWorkspaceId
               ? null
               : sameSession &&
@@ -320,6 +327,7 @@ export function createSessionRowPublication(owner: {
 
 export function subscribeSessionRowPublications({
   rows,
+  byKey,
   dirty,
   revisions,
   advanceRevision,
@@ -330,6 +338,7 @@ export function subscribeSessionRowPublications({
   mutateGeneration,
 }: {
   rows: ReadonlyMap<string, records.Row>;
+  byKey: ReadonlyMap<string, ReadonlySet<string>>;
   dirty: Set<string>;
   revisions: Pick<
     ReturnType<typeof createSessionRowProjectionRevisions>,
@@ -344,6 +353,98 @@ export function subscribeSessionRowPublications({
 }): Array<() => void> {
   return [
     observeSessionRowProjectionRetention(rows),
+    worktreeRegistryPublication.subscribeFacts((change) => {
+      if (change.kind !== "committed" && change.kind !== "unknown") {
+        return;
+      }
+      const changed = new Set<records.Row>();
+      const deleted = new Set<string>();
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          if (fact.kind === "absent") {
+            if (key.startsWith('["worktrees",')) {
+              deleted.add(key);
+            }
+            continue;
+          }
+          if (
+            fact.kind !== "postimage" ||
+            !("id" in fact.value) ||
+            fact.value.owner_kind !== "session" ||
+            !fact.value.owner_id
+          ) {
+            continue;
+          }
+          const worktree = rowToRecord(fact.value);
+          if (isIncognitoSessionKey(fact.value.owner_id)) {
+            // Memory-only conversations never enter the resident roster.
+            const sessionKey = fact.value.owner_id;
+            queueMicrotask(() =>
+              emitSessionLifecycleEvent({ sessionKey, reason: "workspace", scope: "runtime" }),
+            );
+          }
+          for (const id of byKey.get(`key:${worktree.ownerId}`) ?? []) {
+            const row = rows.get(id);
+            if (!row || row.storedEntry?.worktree?.id !== worktree.id) {
+              continue;
+            }
+            const previous = row.retainedDatabaseFacts?.worktree?.record;
+            if (
+              previous &&
+              previous.removedAt === worktree.removedAt &&
+              previous.snapshotRef === worktree.snapshotRef
+            ) {
+              continue;
+            }
+            records.invalidateDatabaseFacts(
+              row,
+              row.retainedDatabaseFacts && {
+                ...row.retainedDatabaseFacts,
+                worktree: { record: worktree },
+              },
+            );
+            changed.add(row);
+          }
+        }
+      }
+      if (change.kind === "unknown" || deleted.size) {
+        for (const row of rows.values()) {
+          if (!row.storedEntry?.worktree) {
+            continue;
+          }
+          if (
+            change.kind !== "unknown" &&
+            !deleted.has(JSON.stringify(["worktrees", row.storedEntry.worktree.id]))
+          ) {
+            continue;
+          }
+          records.invalidateDatabaseFacts(
+            row,
+            row.retainedDatabaseFacts && { ...row.retainedDatabaseFacts, worktree: undefined },
+          );
+          changed.add(row);
+        }
+      }
+      if (!changed.size) {
+        return;
+      }
+      advanceRevision();
+      for (const row of changed) {
+        dirty.add(records.identity(row));
+        revisions.publishFacts(row);
+      }
+      queueMicrotask(() => {
+        for (const row of changed) {
+          emitSessionLifecycleEvent({
+            sessionKey: row.key,
+            agentId: row.agentId,
+            reason: "workspace",
+            scope: "runtime",
+          });
+        }
+        void ensureMaterialized().catch(() => {});
+      });
+    }),
     pluginStatePublication.subscribeFacts((change) => {
       if (change.kind === "pending" || change.kind === "settled") {
         return;

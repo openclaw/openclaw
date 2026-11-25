@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
   isPostgresConformanceTestTarget,
@@ -46,15 +45,11 @@ describe("PostgreSQL conformance cost model", () => {
     );
   });
 
-  it("reserves the first shard's PG16 smoke while balancing PG17 work", () => {
+  it("balances equal work across all shards without reserving space for the separate smoke job", () => {
     const targets = Array.from({ length: 12 }, (_, index) => `test-${index}`);
     const estimateWork = (selected: readonly string[]) => selected.length * 50;
     const shards = assignPostgresConformanceShards(targets, 3, estimateWork);
-    expect(shards.map(estimateWork)).toEqual([
-      250 - PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
-      250,
-      250,
-    ]);
+    expect(shards.map(estimateWork)).toEqual([200, 200, 200]);
     expect(shards.flat().toSorted()).toEqual(targets.toSorted());
   });
 

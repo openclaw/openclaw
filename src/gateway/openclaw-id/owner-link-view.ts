@@ -17,7 +17,8 @@ import type { OpenClawIdEffects } from "./service.js";
 
 export async function readOwnerLinkStatus(params: {
   enabled: boolean;
-  includeSandboxBackend?: true;
+  /** Probe whether roles that require a sandbox can start one (People page only). */
+  includeSandboxReadiness?: true;
   getAuthority: () => Promise<OpenClawIdAuthority>;
   getEffects: () => Promise<OpenClawIdEffects> | undefined;
   lastPublish: PublishOutcome | undefined;
@@ -76,26 +77,34 @@ export async function readOwnerLinkStatus(params: {
   const members = state ? await describeMembers(state.members, record?.member_approved_at) : [];
   const cfg = getRuntimeConfigSnapshot() ?? undefined;
   const definitions = cfg?.gateway?.roles?.definitions ?? {};
-  const sandboxBackend = params.includeSandboxBackend
-    ? await (await import("./sandbox-availability.js")).readSandboxBackendAvailability(cfg)
+  const sandboxReadiness = params.includeSandboxReadiness
+    ? (await import("./sandbox-availability.js")).createRoleSandboxReadinessCheck(cfg)
     : undefined;
   const defined = (name: string) => Object.hasOwn(definitions, name);
   return {
-    roles: [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
-      .toSorted()
-      .map((name) => {
-        const definition = defined(name) ? definitions[name] : undefined;
-        return definition
-          ? {
-              name,
-              defined: true as const,
-              sessions: definition.sessions.others,
-              requiresSandbox: definition.sandbox === "required",
-              admin: definition.scopes.includes("operator.admin"),
-            }
-          : { name, defined: false as const, requiresSandbox: false };
-      }),
-    sandboxBackend,
+    roles: await Promise.all(
+      [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
+        .toSorted()
+        .map(async (name) => {
+          const definition = defined(name) ? definitions[name] : undefined;
+          if (!definition) {
+            return { name, defined: false as const, requiresSandbox: false };
+          }
+          const requiresSandbox = definition.sandbox === "required";
+          const sandbox =
+            requiresSandbox && sandboxReadiness
+              ? await sandboxReadiness(definition.agents)
+              : undefined;
+          return {
+            name,
+            defined: true as const,
+            sessions: definition.sessions.others,
+            requiresSandbox,
+            sandbox,
+            admin: definition.scopes.includes("operator.admin"),
+          };
+        }),
+    ),
     linked: Boolean(state),
     clawId: record?.claw_id,
     hostname: record?.hostname ?? undefined,

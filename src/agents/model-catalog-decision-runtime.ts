@@ -8,22 +8,24 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
 
 /** Public runtime and thinking consume this same route/account decision. */
-export function resolveCatalogDecisionRuntime(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: ModelCatalogEntry;
-  evaluation: ModelAuthAvailabilityEvaluation;
-  pluginRegistry?: PluginRegistry;
-  resolveOpenAIProviderRoutes?: Parameters<
-    typeof resolveAgentHarnessPolicy
-  >[0]["resolveOpenAIProviderRoutes"];
-}): GatewayAgentRuntime | undefined {
+export function resolveCatalogDecisionRuntime(
+  params: {
+    cfg: OpenClawConfig;
+    entry: ModelCatalogEntry;
+    evaluation: ModelAuthAvailabilityEvaluation;
+    pluginRegistry?: PluginRegistry;
+    resolveOpenAIProviderRoutes?: Parameters<
+      typeof resolveAgentHarnessPolicy
+    >[0]["resolveOpenAIProviderRoutes"];
+  } & AgentRuntimePolicyScope,
+): GatewayAgentRuntime | undefined {
   const route = params.evaluation.selectedRoute;
   const context = {
     config: params.cfg,
-    agentId: params.agentId,
+    ...(params.agentScope ? { agentScope: params.agentScope } : { agentId: params.agentId }),
     provider: params.entry.provider,
     modelId: params.entry.id,
     modelProvider: {

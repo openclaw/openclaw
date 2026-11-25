@@ -7,6 +7,7 @@ import {
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -74,7 +75,7 @@ async function expectLeaseReleased(
   heartbeat?.mockClear();
   await vi.advanceTimersByTimeAsync(60_000);
   expect(heartbeat).not.toHaveBeenCalled();
-  expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
 }
 
 afterEach(() => {
@@ -145,7 +146,7 @@ it.each(["current", "webhook-repair"] as const)(
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
         expect(await fs.readFile(configPath, "utf8")).toBe(replacement);
       }
-      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     });
   },
 );
@@ -282,7 +283,7 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
     expect(delayed).toBe(true);
     expect(result.snapshot.valid).toBe(true);
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(backupConfig);
-    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     const completedHeartbeats = heartbeats;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(heartbeats).toBe(completedHeartbeats);

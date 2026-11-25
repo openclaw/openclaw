@@ -73,6 +73,8 @@ export type CompactionStatus = {
   phase: "active" | "retrying" | "complete";
   runId: string | null;
   itemId?: string;
+  /** The session-operation event's unique ID, not a reusable agent run ID. */
+  manualOperation?: true;
   startedAt: number | null;
   completedAt: number | null;
 };
@@ -118,7 +120,7 @@ export type ToolStreamHost = {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  toolStreamSyncTimer: number | null;
+  toolStreamSyncTimer?: number | null;
   /** Monotonic time of the last publication; idle gaps count toward the next deadline. */
   toolStreamPublishedAt?: number;
   /** Pending publication includes membership or presentation beyond output text. */
@@ -141,4 +143,6 @@ export type ToolStreamState = Pick<
   | "knownAgentRunIds"
   | "waitingApprovalStatuses"
   | "toolStreamPublishedAt"
-> & { toolStreamSyncTimer?: number | null; toolStreamStructureChanged?: boolean };
+  | "toolStreamSyncTimer"
+  | "toolStreamStructureChanged"
+>;

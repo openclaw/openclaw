@@ -207,6 +207,7 @@ function ProviderRow(props: TalkViewProps) {
           stacked
           control={
             <SettingsSegmented
+              class="talk-provider-options"
               value={selected()?.id ?? unknownConfigured() ?? TALK_PICKER_UNSET}
               options={options()}
               disabled={props.configBusy}

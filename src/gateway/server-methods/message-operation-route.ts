@@ -273,7 +273,7 @@ export async function withMessageOperationRoute<
       });
       const assertCurrent = () => {
         if (!authorize()) {
-          throw new Error("message action authority is no longer active");
+          throw new Error("The message turn has ended. Start a new turn to retry.");
         }
       };
       assertCurrent();
@@ -367,16 +367,19 @@ export async function withMessageOperationRoute<
       await inflight.done;
       return;
     }
-    // Routing and attachment preparation may yield while the caller's turn closes.
-    if (!authorize()) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "message action authority is no longer active"),
-      );
-      return;
-    }
     try {
+      // Routing and attachment preparation may yield while the caller's turn closes.
+      if (!authorize()) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "The message turn has ended. Start a new turn to retry.",
+          ),
+        );
+        return;
+      }
       params.assertNewInputAllowed?.();
     } catch (error) {
       respondMessageOperationAdmissionError({

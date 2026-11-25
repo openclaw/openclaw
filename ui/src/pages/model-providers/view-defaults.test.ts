@@ -2,7 +2,7 @@
 
 import { expect, it, vi } from "vitest";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
-import { mount, props, settingsRow } from "./view.test-support.tsx";
+import { mount, openMoreSettings, props, settingsRow } from "./view.test-support.tsx";
 
 const trigger = (container: Element, setting: string) =>
   container.querySelector<HTMLButtonElement>(`#model-providers-${setting}-model`)!;
@@ -69,7 +69,7 @@ it("retains a saved unavailable model without offering it for another default se
     blocked.push(...picker.querySelectorAll(optionSelector("blocked")));
     ready.push(...picker.querySelectorAll(optionSelector("ready")));
   }
-  expect(blocked).toHaveLength(3);
+  expect(blocked).toHaveLength(4);
   expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
   expect(ready.every((option) => option.getAttribute("aria-disabled") === "false")).toBe(true);
   const utility = trigger(container, "utility");
@@ -87,6 +87,129 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
 });
 
+it("shows a saved subagent model unfolded and clears it back to not set", async () => {
+  const onSubagentChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: [
+        { provider: "fixture", id: "ready", name: "Ready", available: true },
+        { provider: "fixture", id: "last", name: "Last", available: true },
+      ],
+      defaultModels: {
+        primary: "fixture/ready",
+        fallbacks: [],
+        utilityModel: null,
+        subagentModel: "fixture/last",
+      },
+      onSubagentChange,
+    }),
+  );
+  await updatePickers(container);
+  const picker = trigger(container, "subagent");
+  expect(picker.textContent).toContain("Last");
+  await choosePickerValue(picker, "fixture/ready");
+  expect(onSubagentChange).toHaveBeenLastCalledWith("fixture/ready");
+  await choosePickerValue(picker, "__openclaw_inherit_subagent__");
+  expect(onSubagentChange).toHaveBeenLastCalledWith(null);
+});
+
+it("chooses a harness for the primary or fallback without offering the primary again", async () => {
+  const onPrimaryChange = vi.fn();
+  const onFallbackChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: ["First", "Second"].map((name) => ({
+        id: name.toLowerCase(),
+        name,
+        provider: "openai",
+        available: true,
+        agentRuntime: { id: "codex", source: "model" },
+        runtimeChoices: [{ agentRuntime: { id: "agent-only", source: "model" }, available: true }],
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+          alternatives: [
+            { agentRuntime: { id: "codex", source: "model" }, available: true },
+            { agentRuntime: { id: "hidden", source: "model" }, manualSelectionAllowed: false },
+            { agentRuntime: { id: "offline", source: "model" }, available: false },
+          ],
+        },
+      })),
+      defaultModels: {
+        primary: "openai/first",
+        fallbacks: ["openai/second"],
+        utilityModel: null,
+        runtimes: { "openai/first": { id: "codex" } },
+      },
+      onPrimaryChange,
+      onFallbackChange,
+    }),
+  );
+  await updatePickers(container);
+  const primary = settingsRow(container, "Model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  const fallback = settingsRow(container, "Fallback model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  expect(primary.textContent).toContain("First · Codex");
+  const menu = await openPicker(primary);
+  const option = (parent: Element, label: string) =>
+    [...parent.querySelectorAll<HTMLElement>('[role="option"]')].find((row) =>
+      row.textContent?.includes(label),
+    );
+  expect(option(menu, "Hidden")).toBeUndefined();
+  expect(option(menu, "Agent Only")).toBeUndefined();
+  expect(option(menu, "First · Offline")?.getAttribute("aria-disabled")).toBe("true");
+  option(menu, "First · OpenClaw")!.click();
+  expect(onPrimaryChange).toHaveBeenCalledWith("openai/first", {
+    id: "openclaw",
+    base: "openclaw",
+  });
+  const backup = await openPicker(fallback);
+  expect(option(backup, "First")).toBeUndefined();
+  option(backup, "Second · Codex")!.click();
+  expect(onFallbackChange).toHaveBeenCalledWith("openai/second", { id: "codex", base: "openclaw" });
+});
+
+it("can return a saved harness pin to the ordinary base when the defaults preview is omitted", async () => {
+  const onPrimaryChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: [
+        {
+          provider: "openai",
+          id: "current",
+          name: "Current",
+          available: true,
+          agentRuntime: { id: "openclaw", source: "model" },
+          runtimeChoices: [{ agentRuntime: { id: "agentsapi", source: "model" }, available: true }],
+        },
+      ],
+      defaultModels: {
+        primary: "openai/current",
+        fallbacks: [],
+        utilityModel: null,
+        runtimes: { "openai/current": { id: "codex" } },
+      },
+      onPrimaryChange,
+    }),
+  );
+  await updatePickers(container);
+  const picker = settingsRow(container, "Model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  expect(picker.textContent).toContain("Current · Codex");
+  const menu = await openPicker(picker);
+  expect(
+    [...menu.querySelectorAll<HTMLElement>('[role="option"]')].map(({ dataset }) => dataset.value),
+  ).not.toContain(JSON.stringify(["openai/current", "agentsapi"]));
+  await choosePickerValue(picker, JSON.stringify(["openai/current", "openclaw"]));
+  expect(onPrimaryChange).toHaveBeenCalledExactlyOnceWith("openai/current", {
+    id: "openclaw",
+    base: "openclaw",
+  });
+});
+
 it("names agents with their own utility settings and opens their Overview", async () => {
   const onOpenAgent = vi.fn();
   const container = mount(
@@ -98,6 +221,7 @@ it("names agents with their own utility settings and opens their Overview", asyn
       onOpenAgent,
     }),
   );
+  openMoreSettings(container);
   const row = settingsRow(container, "Utility model");
   expect(row.textContent).toContain("Forge: fixture/small · fallbacks: fixture/backup");
   expect(row.textContent).toContain("Quiet: Disabled");
@@ -105,4 +229,30 @@ it("names agents with their own utility settings and opens their Overview", asyn
   expect(link.getAttribute("href")).toBe("/settings/agents/forge");
   link.click();
   expect(onOpenAgent).toHaveBeenCalledWith("forge");
+});
+
+it("keeps the global decision model reachable for a new user without a chat model", () => {
+  const container = mount(
+    props({
+      cards: [],
+      configuredModels: [],
+      decisionModels: [
+        { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
+      ],
+      defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+      thinkingOverridden: false,
+      fastModeOverridden: false,
+      catalogProviders: [{ id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] }],
+    }),
+  );
+  // The catalog stays the first action; the defaults wait below it.
+  const sections = [
+    ...container.querySelectorAll("[data-models-catalog], .model-providers__defaults"),
+  ];
+  expect(sections.map((section) => section.matches("[data-models-catalog]"))).toEqual([
+    true,
+    false,
+  ]);
+  openMoreSettings(container);
+  expect(trigger(container, "decision")).not.toBeNull();
 });

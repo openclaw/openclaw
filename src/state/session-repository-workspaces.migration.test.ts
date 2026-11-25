@@ -75,6 +75,8 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
       await assertSqliteMigrationScopePreserved(
         scope,
         [
+          "operator_approvals",
+          "worker_session_placements",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "worker_environments",

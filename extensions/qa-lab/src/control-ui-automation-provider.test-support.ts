@@ -7,14 +7,14 @@ import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
 import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
 import {
+  countCurrentToolOutputs,
   extractLastUserText,
   extractToolOutput,
-  hasToolOutput,
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
 export async function startAutomationProvider() {
-  const requests = new Map<string, Record<string, unknown>>();
+  const requests = new Map<string, Record<string, unknown> | Record<string, unknown>[]>();
   const results = new Map<string, string>();
   const toolAvailability = new Map<string, boolean>();
   const observedRequests: { marker: string | null; inputTypes: unknown[]; hasOutput: boolean }[] =
@@ -53,29 +53,31 @@ export async function startAutomationProvider() {
         });
         return;
       }
-      const args = marker ? requests.get(marker) : undefined;
+      const script = marker ? requests.get(marker) : undefined;
       const output = extractToolOutput(input);
-      const hasOutput = hasToolOutput(input);
+      // Responses continuations carry the completed calls from the same turn.
+      const completed = countCurrentToolOutputs(input);
+      const hasOutput = completed > 0;
+      const args = Array.isArray(script) ? script[completed] : hasOutput ? undefined : script;
       const toolAvailable = hasToolDefinition(body, "automations");
       const inputTypes = input.map((item) => item.type ?? item.role);
       observedRequests.push({ marker: marker ?? null, inputTypes, hasOutput });
-      if (marker && args && !hasOutput) {
+      if (marker && script && !hasOutput) {
         // A retry must not erase an earlier exposure of an owner-only tool.
         toolAvailability.set(marker, toolAvailability.get(marker) === true || toolAvailable);
       }
-      if (marker && args && hasOutput) {
+      if (marker && script && hasOutput && !args) {
         results.set(marker, output);
       }
       const reply =
-        marker && args
+        marker && script
           ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\``
           : "Scheduled reminder completed.";
-      const events =
-        args && !hasOutput
-          ? toolAvailable
-            ? buildToolCallEventsWithArgs("automations", args)
-            : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
-          : buildAssistantEvents(reply);
+      const events = args
+        ? toolAvailable
+          ? buildToolCallEventsWithArgs("automations", args)
+          : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
+        : buildAssistantEvents(reply);
       const streaming = body.stream === true;
       const contentType = streaming ? "text/event-stream" : "application/json";
       const payload = streaming

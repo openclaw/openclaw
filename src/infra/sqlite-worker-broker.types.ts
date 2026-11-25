@@ -5,6 +5,7 @@ import type {
   StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import type { HostedWorkerEndpoint } from "./shared-worker-host.js";
 import type { SqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import type {
   SqliteWorkerRequest,
@@ -28,6 +29,23 @@ import type {
   createSqliteWorkerTransferReceiver,
 } from "./sqlite-worker-transfer.js";
 import type { WorkerRequestObservation } from "./worker-request-diagnostics.js";
+export type CompletedSqliteWorkerOutcome = { value: unknown } | { error: unknown };
+
+export type SqliteWorkerReplyOwner = {
+  fail(
+    reason: unknown,
+    currentError?: Error,
+    openOutcome?: "refused-before-agent-open",
+    completed?: CompletedSqliteWorkerOutcome,
+  ): void;
+  finish(
+    job: Job,
+    error?: unknown,
+    value?: unknown,
+    settlement?: SqliteWorkerOperationSettlement,
+  ): void | Promise<void>;
+  dispatch(): void;
+};
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
     ? Omit<Request, "id">
@@ -73,7 +91,7 @@ export type Slot = {
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
-  worker: Worker;
+  worker: Worker | HostedWorkerEndpoint;
   receiveReply(reply: SqliteWorkerReply): void;
   actors: Set<Actor>;
   queue: Job[];

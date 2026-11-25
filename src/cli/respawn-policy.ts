@@ -1,6 +1,6 @@
 // CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { getCommandPathWithRootOptions } from "./argv.js";
+import { getCommandPathWithRootOptions, getCommandPositionalsWithRootOptions } from "./argv.js";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.js";
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
@@ -39,12 +39,23 @@ export function shouldSkipRespawnForArgv(
     invocation.commandPath.length === 2 &&
     invocation.commandPath[0] === "gateway" &&
     invocation.commandPath[1] === "status";
+  const [primary, domain] = invocation.commandPath;
+  const isModelRun =
+    (primary === "infer" || primary === "capability") &&
+    domain === "model" &&
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: [primary, domain],
+      valueFlags: ["--agent"],
+      maxPositionals: 1,
+      mode: "command-path",
+    })?.[0] === "run";
   return (
     shouldSkipStartupEnvironmentRespawnForArgv(argv, platform) ||
     (invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary)) ||
-    // Status commonly overlaps the running Gateway; a warning-only wrapper doubles
-    // transient CLI memory. Startup-environment respawn remains separately owned.
-    isGatewayStatus
+    // Both commands can overlap a running Gateway or provider runtime. A parent
+    // kept only to suppress warnings consumes memory for the whole operation.
+    isGatewayStatus ||
+    isModelRun
   );
 }
 

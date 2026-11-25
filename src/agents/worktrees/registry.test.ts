@@ -236,6 +236,7 @@ it("reads the provisioned-path ledger after captured shared-state migration", as
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
       ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
       DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 5;
       UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';

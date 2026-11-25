@@ -137,7 +137,7 @@ describe("github-copilot runtime auth", () => {
         code: "github_copilot_auth_failed",
         reason: "http_error",
         status: 403,
-        message: expect.stringContaining("login-github-copilot"),
+        message: expect.stringContaining("Verify that your GitHub account has Copilot access"),
       });
       expect(response.bodyUsed).toBe(true);
     } finally {

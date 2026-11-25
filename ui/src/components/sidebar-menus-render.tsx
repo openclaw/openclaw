@@ -60,7 +60,7 @@ import {
   runSessionAction,
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
-import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { moveSessionFromMenu, sessionMenuPlacementAction } from "./session-placement-action.ts";
 import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
@@ -420,6 +420,7 @@ function renderSidebarMenus(
         const assignmentAccess = createMemo(() =>
           view.readSessionMutationAccess({
             method: "sessions.assignOwner",
+            missingScopeReasonKey: "sessionsView.assignPermissionDenied",
             params: {
               key: session().key,
               owner: { type: "human", id: selfUser()?.id ?? "profile" },
@@ -447,7 +448,10 @@ function renderSidebarMenus(
           <SessionMenu
             session={{
               label: session().label,
-              placementAction: sessionPlacementAction(currentPlacementSession()),
+              placementAction: sessionMenuPlacementAction(
+                currentPlacementSession(),
+                context()?.agents.state.agentsList,
+              ),
               target: { key: session().key, agentId: session().agentId },
               sessionId: session().sessionId ?? null,
               isChild: session().isChild,

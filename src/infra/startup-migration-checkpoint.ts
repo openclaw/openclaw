@@ -2,10 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import {
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -21,17 +18,12 @@ import { VERSION } from "../version.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   parseStateLeaseProcessOwner,
-  readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "./state-lease-process-owner.js";
 
@@ -105,38 +97,6 @@ function assertStartupMigrationLeaseOwned(expiresAt: number | undefined): void {
       "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
     );
   }
-}
-
-/** Returns whether the shared startup/Doctor lease has a live process owner. */
-export function hasActiveStartupMigrationLease(
-  params: { env?: NodeJS.ProcessEnv; nowMs?: number } = {},
-): boolean {
-  const env = params.env ?? process.env;
-  const nowMs = params.nowMs ?? Date.now();
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-        const lease = executeSqliteQueryTakeFirstSync(
-          db,
-          stateDb
-            .selectFrom("state_leases")
-            .select("payload_json as payloadJson")
-            .where("scope", "=", STARTUP_MIGRATION_LEASE.scope)
-            .where("lease_key", "=", STARTUP_MIGRATION_LEASE.key)
-            .where("expires_at", ">", nowMs),
-        );
-        if (!lease) {
-          return false;
-        }
-        return (
-          readStateLeaseProcessOwnerStatus(parseStateLeaseProcessOwner(lease.payloadJson)) !==
-          "dead"
-        );
-      },
-      { env },
-    ) ?? false
-  );
 }
 
 function acquireStartupMigrationLease(

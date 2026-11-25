@@ -296,7 +296,6 @@ export function isSessionSharingOwnerEquivalent(
     return false;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   // Attribution alone grants nothing; neither side may widen session-only scopes.
   return (
     authority.profileId === actor.profileId &&
@@ -553,6 +552,8 @@ export function authorizeSessionAgentRun(
     client: GatewayClient | null;
     /** File readers reuse the admission policy with read-specific recovery guidance. */
     sandboxRequiredMessage?: string;
+    /** Host-resolved invitation to another person's session; never request data. */
+    invitedSession?: boolean;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
       entry?: Pick<SessionEntry, "sandbox">;
     };

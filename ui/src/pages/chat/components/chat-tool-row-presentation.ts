@@ -1,6 +1,10 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { PATCH_TOOL_NAMES, resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
@@ -61,6 +65,25 @@ export function commandPreview(command: string): string {
   return truncateUtf16Safe(command.replace(/\s+/gu, " ").trim(), 200);
 }
 
+export const SESSION_LAUNCH_LIMIT_STYLE = {
+  "white-space": "normal",
+  "overflow-wrap": "anywhere",
+} as const;
+
+export function formatSessionLaunchLimit(
+  launch: ReturnType<typeof resolveSessionLaunchPresentation>,
+): string | undefined {
+  if (launch?.capacity) {
+    return t(
+      launch.label
+        ? "chat.toolCards.launch.subagent.namedLimitReached"
+        : "chat.toolCards.launch.subagent.limitReached",
+      { ...launch.capacity, name: launch.label ?? "" },
+    );
+  }
+  return undefined;
+}
+
 /** Recorded child actions replace containers; a standalone code operation keeps its purpose. */
 export function resolveToolOperationLabel(
   card: ToolCard,
@@ -70,12 +93,12 @@ export function resolveToolOperationLabel(
 ): string {
   const launch = resolveSessionLaunchPresentation(card, outcome);
   if (launch) {
-    return [
-      t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`),
-      addressed?.name ?? launch.label,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    return (
+      formatSessionLaunchLimit(launch) ??
+      [t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`), addressed?.name ?? launch.label]
+        .filter(Boolean)
+        .join(" ")
+    );
   }
   const call = unwrapToolCallForDisplay(card);
   const args = asNullableRecord(call.args);
@@ -125,6 +148,41 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (name === "get_goal") {
+    return t(`chat.toolCards.${byOutcome(outcome, "checkingGoal", "checkedGoal", "checkGoal")}`);
+  }
+  if (name === "sessions_send") {
+    const result = {
+      ...asNullableRecord(card.details),
+      ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    };
+    let action = outcome === "running" ? "sending" : "send";
+    if (
+      (outcome === "failed" || outcome === "succeeded") &&
+      result.sentBeforeError === true &&
+      (result.status === "timeout" || result.status === "error")
+    ) {
+      // A generic error can also mean that Gateway admission is still pending.
+      action = result.status === "timeout" ? "replyTimedOut" : "unconfirmed";
+    } else if (outcome === "succeeded") {
+      action = "unconfirmed";
+      if (result.status === "ok" || result.status === "no_reply") {
+        action = "sent";
+      } else if (result.status === "accepted" || result.status === "queued") {
+        action = result.status;
+      } else if (
+        result.status === "started" &&
+        asNullableRecord(result.retained)?.acceptance === "not_accepted"
+      ) {
+        action = "deferred";
+      }
+    }
+    const targetName =
+      addressed?.name ?? (typeof args?.label === "string" ? args.label.trim() : undefined);
+    return t(`chat.toolCards.sessionSend.${action}${targetName ? "Named" : ""}`, {
+      name: targetName ?? "",
+    });
+  }
   if (PATCH_TOOL_NAMES.has(name)) {
     return t(
       `chat.toolCards.${byOutcome(outcome, "changingFiles", "changedFiles", "fileChanges")}`,

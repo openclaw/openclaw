@@ -43,7 +43,14 @@ type ChatSendRetryParams = Pick<
 > & {
   request: Pick<
     ChatSendPreAdmissionParams["request"],
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
+    | "goalOperation"
+    | "requestIdentity"
+    | "rawMessage"
+    | "mentions"
+    | "workContext"
+    | "appContext"
+    | "activeSteer"
+    | "p"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
@@ -98,6 +105,7 @@ export function resolveChatSendRequestConflict(
     return undefined;
   }
   if (
+    !request.activeSteer &&
     comparison &&
     !comparison.submitted &&
     request.requestIdentity !== undefined &&
@@ -106,7 +114,9 @@ export function resolveChatSendRequestConflict(
     return undefined;
   }
   const mismatch = compareChatSendSubmittedInput(request, session, comparison);
-  return mismatch ? chatSendRequestConflictError(mismatch === "unverifiable") : undefined;
+  return mismatch
+    ? chatSendRequestConflictError(mismatch === "unverifiable", request.activeSteer !== undefined)
+    : undefined;
 }
 
 export function prepareChatSendRetryComparison(
@@ -120,7 +130,7 @@ export function prepareChatSendRetryComparison(
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
     }
-    return readChatSendRetryComparison(params.session);
+    return readChatSendRetryComparison(params.session, params.request.activeSteer !== undefined);
   }
 }
 
@@ -149,7 +159,9 @@ async function respondPreparedChatSendRetry(
   try {
     const pending =
       prepareChatSendRetryComparison(params) ??
-      (readRecordedInput ? readChatSendRetryComparison(params.session) : undefined);
+      (readRecordedInput
+        ? readChatSendRetryComparison(params.session, params.request.activeSteer !== undefined)
+        : undefined);
     const comparison = pending ? await pending : undefined;
     return await consumeChatSendCurrent(params, () => respondChatSendRetry(params, comparison));
   } catch (error) {
@@ -172,6 +184,25 @@ export function respondChatSendRetry(
   const conflict = resolveChatSendRequestConflict(params, comparison);
   if (conflict) {
     respond(false, undefined, conflict);
+    return true;
+  }
+  // A staged active-only input is never re-admitted, even after restart or a lost native reply.
+  if (params.request.activeSteer && comparison?.submitted) {
+    const receipt = comparison.completion?.activeSteer;
+    const live = getRpcSourceForGateway(clientRunId, context.resolveGatewayContext);
+    respond(
+      true,
+      {
+        inputId: clientRunId,
+        runId: params.request.activeSteer.runId,
+        status: receipt?.status ?? (live ? "in_flight" : "indeterminate"),
+        ...(receipt?.reason ? { reason: receipt.reason } : {}),
+        ...(comparison.messageSeq ? { messageSeq: comparison.messageSeq } : {}),
+        receiptPersisted: receipt !== undefined,
+      },
+      undefined,
+      { cached: true, runId: clientRunId },
+    );
     return true;
   }
   const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
@@ -385,6 +416,7 @@ export async function runChatSendPreAdmission(
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: selectedAgent.agentId,
         sessionId: entry?.sessionId,
+        requiredSessionId: request.targetPrecondition?.requiredSessionId,
         session: {
           ok: true,
           value: {

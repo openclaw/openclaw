@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { nativeWorktreeFilesystem } from "../agents/worktrees/filesystem-native.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import * as sourceIntegration from "./github-publication-base-refresh.js";
@@ -91,11 +92,11 @@ describe("PR source acquisition", () => {
         );
         return prepareCheckout(params);
       });
-      const remove = fs.rm;
+      const remove = nativeWorktreeFilesystem.remove;
       const cleanupPaused: boolean[] = [];
-      using removalSpy = vi.spyOn(fs, "rm");
+      using removalSpy = vi.spyOn(nativeWorktreeFilesystem, "remove");
       removalSpy.mockImplementation(async (target, options) => {
-        if (String(target).includes("openclaw-checkpoint-payload-")) {
+        if (target.includes("openclaw-checkpoint-payload-")) {
           cleanupPaused.push(runtime.isPaused());
         }
         return remove(target, options);

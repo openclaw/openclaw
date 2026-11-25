@@ -3,13 +3,12 @@ import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { Message, ToolResultMessage } from "../../llm/types.js";
+import type { ToolResultMessage } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import { copyAgentToolMetadata, getAgentToolListingScope } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
-import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { shareSystemPromptPrefix } from "../sessions/system-prompt-pool.js";
 import {
@@ -27,6 +26,7 @@ import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { promptDelta } from "./session-prompt-delta.js";
 import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
+import { SYSTEM_PROMPT_UPDATE_HEADER } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -54,8 +54,6 @@ type EmbeddedSessionPromptState = {
   historyBoundary?: { count: number; id: string | null };
   toolSurface?: ToolSurface;
   pendingToolSurface?: ToolSurface;
-  removedRuntimeContextKeys?: Set<string>;
-  runtimeContextCarrierPositions?: number[];
 };
 
 type SystemPromptSeries = {
@@ -486,7 +484,7 @@ export function prepareSessionSystemPrompt(params: {
       ? buildSystemUpdateMessage(
           restart
             ? sections.join("\n\n")
-            : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${sections.join("\n\n")}`,
+            : `${SYSTEM_PROMPT_UPDATE_HEADER}\n\n${sections.join("\n\n")}`,
           "prompt-update",
           false,
         )
@@ -656,26 +654,6 @@ export function retainEmbeddedSessionPromptState(sessionId: string) {
       }
     },
   };
-}
-
-export function recordRuntimeContextProjection(
-  sessionId: string,
-  removed: readonly AgentMessage[] | undefined,
-  converted: readonly Message[],
-): boolean {
-  const state = getEmbeddedSessionPromptState(sessionId);
-  const keys = removed?.map((message, index) => `${index}:${message.timestamp}`);
-  const positions = converted.flatMap((message, index) =>
-    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
-  );
-  const changed =
-    keys?.some((key) => !state.removedRuntimeContextKeys?.has(key)) ||
-    state.runtimeContextCarrierPositions?.some((position, index) => positions[index] !== position);
-  if (keys) {
-    state.removedRuntimeContextKeys = new Set(keys);
-  }
-  state.runtimeContextCarrierPositions = positions;
-  return Boolean(changed);
 }
 
 export async function persistToolResultProjections(

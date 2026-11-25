@@ -7,19 +7,22 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { invalidateGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { captureGatewayOperatorContinuation } from "../../gateway/operator-run-recovery.js";
 import {
   pairedOperator,
+  persistDevices,
   recoveryFixture,
 } from "../../gateway/operator-run-recovery.test-support.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -71,17 +74,9 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it.each<{ revocation: string; rejection?: RegExp }>([
-    { revocation: "none" },
-    {
-      revocation: "sender device removed",
-      rejection: /Restart recovery operator source policy changed/i,
-    },
-    { revocation: "sender role changed", rejection: /Restart recovery operator identity changed/i },
-    { revocation: "explicit stop", rejection: /agent run aborted/i },
-  ])(
-    "prepares the queued CLI turn after the occurrence ended ($revocation)",
-    ({ revocation, rejection }) =>
+  it.each(["none", "sender device removed", "sender role denied", "explicit stop"] as const)(
+    "prepares the queued CLI turn after the occurrence ended (%s)",
+    (revocation) =>
       withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
         const profile = ensureProfileForEmail("scheduled-sender@example.test");
         const occurrence = await recoveryFixture(stateDir, profile.id, {
@@ -105,36 +100,44 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
           scopes: ["operator.write"],
         });
         const accepted = expectDefined(
-          await captureGatewayOperatorContinuation({
-            client: senderClient,
-            context: occurrence.context,
-          }),
+          await withPluginRuntimeGatewayRequestScope(
+            {
+              client: senderClient,
+              context: occurrence.context,
+              resolveGatewayContext: occurrence.context.resolveGatewayContext,
+              isWebchatConnect: () => false,
+            },
+            () => captureOperatorToolGatewayContinuationContext(),
+          ),
           "receiver continuation",
-        );
-        const admission = prepareSystemAgentRunAdmission(
-          {},
-          "queued-cli-turn",
-          "main",
-          "test",
-          undefined,
-          accepted.authority,
         );
         try {
           occurrence.retire();
-          expect(sender.authority.assertCurrent).toThrow();
           if (revocation === "sender device removed") {
-            invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-          } else if (revocation === "sender role changed") {
-            setUserProfileRole(profile.id, "new-role");
+            persistDevices(stateDir, [], "both");
+          } else if (revocation === "sender role denied") {
+            occurrence.setConfig({
+              gateway: {
+                roles: {
+                  default: "blocked",
+                  definitions: {
+                    blocked: { agents: "*", sessions: { others: "none" }, scopes: [] },
+                  },
+                },
+              },
+            });
           }
-          const prepare = withPluginRuntimeGatewayRequestScope(
-            {
-              context: occurrence.context,
-              client: senderClient,
-              isWebchatConnect: () => false,
-            },
-            () =>
-              fixture.prepare({
+          const prepare = accepted.runWithRequester(async () => {
+            const admission = prepareSystemAgentRunAdmission(
+              {},
+              "queued-cli-turn",
+              "main",
+              "test",
+              undefined,
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+            );
+            try {
+              const context = await fixture.prepare({
                 runId: "queued-cli-turn",
                 provider: "claude-cli",
                 model: "opus",
@@ -143,21 +146,24 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
                   ? { abortSignal: AbortSignal.abort(new Error("agent run aborted")) }
                   : {}),
                 config: {},
-              }),
-          );
-          if (rejection) {
-            // Fresh admission refuses changed sender policy; explicit Stop also prevents start.
-            await expect(prepare).rejects.toThrow(rejection);
-            return;
-          }
-          const context = await prepare;
-          try {
-            expect(context.params.admittedRunContext).toBeDefined();
-          } finally {
-            await context.preparedBackend.cleanup?.();
+              });
+              try {
+                expect(context.params.admittedRunContext).toBeDefined();
+              } finally {
+                await context.preparedBackend.cleanup?.();
+              }
+            } finally {
+              admission.close();
+            }
+          });
+          if (revocation === "explicit stop") {
+            await expect(prepare).rejects.toThrow("agent run aborted");
+          } else if (revocation !== "none") {
+            await expect(prepare).rejects.toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+          } else {
+            await prepare;
           }
         } finally {
-          admission.close();
           accepted.release();
           sender.release();
           await fixture.settle();
