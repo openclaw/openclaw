@@ -102,7 +102,6 @@ const PROVENANCE_READS = new Set([
 ]);
 export const CAPABILITY_PROVENANCE_FILES = new Set([
   "src/agents/agent-tools.turn-authority.ts",
-  "src/agents/automations-run-scope.ts",
   "src/gateway/server-methods/cron-creator-authority-admission.ts",
   "src/gateway/skill-library-authoring.ts",
 ]);

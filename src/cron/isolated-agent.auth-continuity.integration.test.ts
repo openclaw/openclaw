@@ -475,6 +475,7 @@ it.each([
       await writeConfig(state, cfg);
       const { CronService } = await import("./service.js");
       const { createNoopLogger } = await import("./service.test-harness.js");
+      const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
       const { createTestGatewayScheduler } =
         await import("../test-utils/gateway-scheduler-clock.js");
       const { createDirectChatContext } =
@@ -493,6 +494,8 @@ it.each([
           defaultAgentId: "main",
           log: createNoopLogger(),
           enqueueSystemEvent() {},
+          admitScheduledOccurrence: ({ job }) =>
+            admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
           onEvent(event) {
             if (event.action === "finished") {
               finished.push(event);

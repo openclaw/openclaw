@@ -14,7 +14,7 @@ const AttachmentPreviewStrip = lazy(() => import("./chat-attachment-preview-stri
 });
 
 // Keep the live region mounted so changes in the number of files are announced.
-export function AttachmentReadStatus(props: { pendingReads: number }) {
+export function AttachmentReadStatus(props: { pendingReads: number; videoStatus?: string }) {
   return (
     <div
       class="chat-attachments-status sr-only"
@@ -22,14 +22,15 @@ export function AttachmentReadStatus(props: { pendingReads: number }) {
       aria-live="polite"
       aria-atomic="true"
     >
-      {props.pendingReads > 0
-        ? t(
-            props.pendingReads === 1
-              ? "chat.composer.preparingAttachmentCount"
-              : "chat.composer.preparingAttachmentsCount",
-            { count: String(props.pendingReads) },
-          )
-        : undefined}
+      {props.videoStatus ??
+        (props.pendingReads > 0
+          ? t(
+              props.pendingReads === 1
+                ? "chat.composer.preparingAttachmentCount"
+                : "chat.composer.preparingAttachmentsCount",
+              { count: String(props.pendingReads) },
+            )
+          : undefined)}
     </div>
   );
 }
