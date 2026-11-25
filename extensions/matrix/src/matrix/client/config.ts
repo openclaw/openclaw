@@ -69,27 +69,18 @@ function credentialsMatchBackfillAuthLineage(params: {
 
 type MatrixLoginResponse = { access_token?: string; user_id?: string; device_id?: string };
 
-// Cached tokens confirmed by whoami in this process; avoids a round-trip on every auth resolve.
-const verifiedCachedMatrixTokens = new Set<string>();
-
 async function isCachedMatrixTokenInvalidated(params: {
-  accountId: string;
   homeserver: string;
   accessToken: string;
   ssrfPolicy?: MatrixResolvedConfig["ssrfPolicy"];
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<boolean> {
-  const key = `${params.accountId}\u0000${params.homeserver}\u0000${params.accessToken}`;
-  if (verifiedCachedMatrixTokens.has(key)) {
-    return false;
-  }
   try {
     await fetchMatrixWhoamiIdentity(params);
   } catch (err) {
     // Only a definitive token rejection drops the cache; transient failures keep it.
     return isMatrixAccessTokenInvalidatedError(err);
   }
-  verifiedCachedMatrixTokens.add(key);
   return false;
 }
 
@@ -515,7 +506,6 @@ export async function resolveMatrixAuth(params?: {
     if (
       !canPasswordLogin ||
       !(await isCachedMatrixTokenInvalidated({
-        accountId,
         homeserver: cachedAuth.homeserver,
         accessToken: cachedAuth.accessToken,
         ssrfPolicy: cachedAuth.ssrfPolicy,
