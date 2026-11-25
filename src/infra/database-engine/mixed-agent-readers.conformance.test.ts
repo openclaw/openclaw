@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { collectAuthProfileEnvSecretRefIds } from "../../agents/auth-profiles/env-secret-refs.js";
 import { resolveSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { prepareFreshSharedAuthStoreWriteAsync } from "../../agents/auth-profiles/shared-store-bootstrap-async.js";
 import { prepareAgentAuthProfileRowsRead } from "../../agents/auth-profiles/sqlite-read.js";
@@ -13,6 +15,11 @@ import {
   withAuthProfileStoreAtEffect,
 } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import {
+  clearGatewayRunConfigEnvironment,
+  selectGatewayRunEnvironment,
+} from "../../cli/gateway-cli/pre-bootstrap.js";
+import { createConfigIO } from "../../config/io.factory.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionParticipantsReadOnly } from "../../config/sessions/session-accessor.sqlite-participant-read.js";
@@ -20,6 +27,8 @@ import { appendTranscriptMessage } from "../../config/sessions/session-accessor.
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+import { clearMissingManagedServiceEnvKeys } from "../../daemon/service-managed-env.js";
+import { createNonExitingRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -33,14 +42,17 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withDatabaseEngineSelection } from "./context.js";
 import {
   mixedAgentConnection,
   mixedAgentPairs,
   useMixedAgentPair,
 } from "./mixed-agent.conformance.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 // These are owner/transport tests: both physical stores are real, including their worker opens.
 describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
@@ -77,7 +89,13 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
       withEngineStoreAdmission(() => openOpenClawStateDatabase());
       const store: AuthProfileStore = {
         version: 1,
-        profiles: { fixture: { type: "api_key", provider: "fixture", key: "synthetic" } },
+        profiles: {
+          fixture: {
+            type: "api_key",
+            provider: "fixture",
+            keyRef: { source: "env", provider: "default", id: "MIXED_AUTH_KEY" },
+          },
+        },
       };
       for (const options of [
         { agentId: "main" },
@@ -123,6 +141,62 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         } finally {
           await reader.dispose();
         }
+        const environment = { MIXED_AUTH_KEY: "synthetic-inherited", STALE_AUTH_KEY: "stale" };
+        clearMissingManagedServiceEnvKeys({
+          environment,
+          managedKeys: ["MIXED_AUTH_KEY", "STALE_AUTH_KEY"],
+          presentKeys: [],
+          preserveKeys: withEngineStoreAdmission(() =>
+            collectAuthProfileEnvSecretRefIds({
+              agentDirs: [path.dirname(database.path)],
+              env: process.env,
+            }),
+          ),
+        });
+        expect.soft(environment).toEqual({ MIXED_AUTH_KEY: "synthetic-inherited" });
+        const snapshot = await createConfigIO({
+          observe: false,
+          pluginValidation: "core-only",
+        }).readConfigFileSnapshot();
+        const config = {
+          ...snapshot.sourceConfig,
+          plugins: { enabled: false },
+          agents: {
+            ownership: "explicit",
+            entries: { main: { agentDir: path.dirname(database.path) } },
+          },
+        };
+        const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+        const configBefore = fs.readFileSync(configPath);
+        await withEnvAsync(
+          {
+            OPENCLAW_HOME: fixture.root,
+            INVOCATION_ID: "mixed-auth-fixture",
+            MIXED_AUTH_KEY: "synthetic-inherited",
+            STALE_AUTH_KEY: "stale",
+            OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "MIXED_AUTH_KEY,STALE_AUTH_KEY",
+          },
+          async () => {
+            try {
+              fs.writeFileSync(configPath, JSON.stringify(config));
+              const anchorBefore = fs.readFileSync(database.path);
+              // Early selection precedes runtime engine installation and must ignore ambient selection.
+              expect(
+                await withDatabaseEngineSelection(
+                  { effectiveEngines: resolveDatabaseFamilyEngines({}) },
+                  () =>
+                    selectGatewayRunEnvironment({ opts: {}, runtime: createNonExitingRuntime() }),
+                ),
+              ).toBe(true);
+              expect(process.env.MIXED_AUTH_KEY).toBe("synthetic-inherited");
+              expect(process.env.STALE_AUTH_KEY).toBeUndefined();
+              expect(fs.readFileSync(database.path)).toEqual(anchorBefore);
+            } finally {
+              clearGatewayRunConfigEnvironment();
+              fs.writeFileSync(configPath, configBefore);
+            }
+          },
+        );
         withEngineStoreAdmission(() => closeOpenClawAgentDatabaseByPath(database.path));
         await closeOpenClawAgentDatabaseByPathAsync(database.path);
         retireSqliteDatabaseAdmissionForPath(database.path);
