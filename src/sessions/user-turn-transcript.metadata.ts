@@ -46,6 +46,14 @@ export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["send
   };
 }
 
+/** Reads the display-only credit for an approved suggestion from stored or supplied metadata. */
+export function readSuggestedBy(value: unknown): UserTurnInput["suggestedBy"] {
+  const record = asOptionalRecord(value);
+  const id = normalizeOptionalString(record?.id);
+  const name = normalizeOptionalString(record?.name);
+  return id ? { id, ...(name ? { name } : {}) } : undefined;
+}
+
 export function buildPersistedUserTurnMetadata(
   input: UserTurnInput,
   normalizedMedia: readonly unknown[],
@@ -53,6 +61,7 @@ export function buildPersistedUserTurnMetadata(
   const senderId = normalizeOptionalString(input.sender?.id);
   const senderName = normalizeOptionalString(input.sender?.name);
   const senderUsername = normalizeOptionalString(input.sender?.username);
+  const suggestedBy = readSuggestedBy(input.suggestedBy);
   const externalChannelTurn =
     input.display !== false && (!input.provenance || input.provenance.kind === "external_user");
   const senderIdentity = externalChannelTurn
@@ -80,6 +89,7 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(suggestedBy ? { suggestedBy } : {}),
     ...(externalChannelTurn && input.sender?.forwarded === true ? { forwarded: true } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
     ...(input.appContext ? { appContext: structuredClone(input.appContext) } : {}),
