@@ -253,5 +253,5 @@ if (options.mode === "node-cache-qualified-measurement") {
     });
   });
 } else {
-  throw new Error(`Unhandled benchmark mode: ${options.mode}`);
+  throw new Error("Unhandled benchmark mode");
 }

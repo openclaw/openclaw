@@ -101,12 +101,14 @@ const modeFor = (row: Row): Mode =>
 // them.
 const WRITER_GRANT: TurnGrant = {
   owner: false,
+  automations: "self",
   skillAuthoring: true,
   questionReplace: true,
   commands: "none",
 };
 const OWNER_GRANT: TurnGrant = {
   owner: true,
+  automations: "manage",
   skillAuthoring: true,
   questionReplace: true,
   commands: "all",

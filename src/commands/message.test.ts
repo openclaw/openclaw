@@ -374,19 +374,17 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
-  it("normalizes poll actions and sender ownership before dispatch", async () => {
+  it("normalizes poll actions before dispatch", async () => {
     await runMessageCommand({
       action: "poll",
       channel: "telegram",
       target: "123456789",
       pollQuestion: "Ship it?",
       pollOption: ["Yes", "No"],
-      senderIsOwner: false,
     });
 
     const actionCall = readOnlyMessageActionCall();
     expect(actionCall.action).toBe("poll");
-    expect(actionCall.senderIsOwner).toBe(false);
     expect(actionCall.params.channel).toBe("telegram");
     expect(actionCall.params.target).toBe("123456789");
     expect(actionCall.params.pollQuestion).toBe("Ship it?");

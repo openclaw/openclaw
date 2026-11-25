@@ -177,6 +177,12 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
+/* An iframe swallows the drag events of a file dropped over it, so widgets
+   and previews yield to the chat until the drag ends. */
+.chat[data-attachment-drop-active] iframe {
+  pointer-events: none;
+}
+
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
@@ -3349,4 +3355,18 @@ openclaw-chat-ci-details {
 .chat-pane__chat-toggle[aria-pressed="true"] {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+.chat-catalog-image {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.chat-catalog-image img {
+  max-width: min(40vw, 12rem);
+  max-height: 6rem;
+  object-fit: contain;
 }
