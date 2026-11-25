@@ -10,10 +10,11 @@ enum IOSOpenClawIDFeature {
         OpenClawIDNodeNativeEndpoint.isPackaged
     }
 
-    /// No staging native client is registered for iOS yet; a build supplies one through
-    /// `OpenClawIDClientID` in Info.plist. Its redirect is `ai.openclaw.ios:/oauth/callback`.
+    /// The staging "OpenClaw for iOS" native client; its redirect is `ai.openclaw.ios:/oauth/callback`.
+    static let stagingClientID = "GowfnkQNWyllNYcatbyHsFEQayOmAyyg"
+
     static func configuration(info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> OpenClawIDConfiguration? {
-        .current(stagingClientID: "", callbackScheme: "ai.openclaw.ios", info: info)
+        .current(stagingClientID: Self.stagingClientID, callbackScheme: "ai.openclaw.ios", info: info)
     }
 
     /// Device, pending member request and Discovery session of this iPhone or iPad.
