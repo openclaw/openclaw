@@ -27,7 +27,6 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run/lane-runtime.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
@@ -418,6 +417,9 @@ export async function executePluginOwnedProcess(params: {
       context: params.context,
       abortSignal: signal,
     });
+    // This watchdog owns the suspension-adjusted execution budget. A second wall-clock
+    // deadline can stop the attempt before this timer credits a host pause.
+    run.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(undefined);
     watchdog = createCliPluginWatchdog({
       provider: run.provider,
       model: params.context.modelId,
@@ -439,9 +441,6 @@ export async function executePluginOwnedProcess(params: {
         controller.abort(error);
       },
       onOverallDeadlineChange: (deadlineAtMs) => {
-        run.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(
-          deadlineAtMs + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-        );
         if (outstanding.awaitingContinuation) {
           params.onContinuationHoldChange?.(deadlineAtMs);
         }

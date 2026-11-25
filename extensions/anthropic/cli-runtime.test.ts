@@ -766,6 +766,8 @@ describe("Claude native stdio boundary", () => {
     { scenario: "steer-hook-repeat", results: 1 },
     { scenario: "steer-hook-rewrite", results: 1 },
     { scenario: "steer-after-result", results: 2 },
+    { scenario: "steer-after-interim", results: 2 },
+    { scenario: "steer-after-interim-stopped", results: 2 },
     { scenario: "steer-idle-trailer", results: 1 },
     { scenario: "steer-notification-replay", results: 2 },
     { scenario: "steer-completed-notification-replay", results: 2 },
@@ -802,6 +804,26 @@ describe("Claude native stdio boundary", () => {
         hook ? steering : undefined,
       );
       const records = await running;
+      if (scenario.startsWith("steer-after-interim")) {
+        expect(records.find((record) => record.openclaw_interim_result === true)).toMatchObject({
+          openclaw_continuation_wait: true,
+        });
+        expect(
+          records.find(
+            (record) => record.type === "command_lifecycle" && record.state === "started",
+          ),
+        ).toMatchObject({ openclaw_continuation_wait: false });
+      }
+      if (scenario === "steer-after-interim-stopped") {
+        expect(
+          records.find(
+            (record) =>
+              record.type === "system" &&
+              record.subtype === "task_notification" &&
+              record.status === "stopped",
+          ),
+        ).toMatchObject({ openclaw_continuation_wait: false });
+      }
       const tagged = records.filter((record) => record.user_message_uuid !== undefined);
       expect(tagged.map((record) => record.type)).toEqual(
         expect.arrayContaining(["stream_event", "assistant", "result"]),

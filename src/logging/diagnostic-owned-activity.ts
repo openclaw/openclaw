@@ -209,12 +209,10 @@ export function beginDiagnosticBackendActivity(params: {
       if (deadlineAtMs === undefined) {
         holdWait?.close();
         holdWait = undefined;
-      } else if (holdWait) {
-        holdWait.updateDeadline(deadlineAtMs);
-      } else {
+      } else if (!holdWait) {
         holdWait = attempt?.beginWait({
+          // The CLI watchdog owns the active-time bound, including host suspension.
           kind: "runtime_owned",
-          deadlineAtMs,
           releaseStartsSemanticWindow: true,
           isCurrent: ownsAttempt,
         });

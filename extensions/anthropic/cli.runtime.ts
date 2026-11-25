@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
@@ -15,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import { writeTurnEvent } from "./cli-runtime-events.js";
 import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
@@ -319,15 +319,11 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
   turn.heldResult = undefined;
   // Releasing an answer for an already-started input is not a background wait.
   turn.awaitingContinuation = false;
-  if (
-    !turn.events.write({
-      ...heldResult,
-      openclaw_interim_result: true,
-      openclaw_continuation_wait: false,
-    })
-  ) {
-    await once(turn.events, "drain", { signal: turn.controller.signal });
-  }
+  await writeTurnEvent(turn, {
+    ...heldResult,
+    openclaw_interim_result: true,
+    openclaw_continuation_wait: false,
+  });
 }
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
@@ -388,7 +384,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     if (injected && injectedUuid && message.state === "started") {
       turn.promptInputUuid = injectedUuid;
       injected.started.resolve();
+      turn.awaitingContinuation = false;
       await emitHeldInterimResult(turn);
+      await writeTurnEvent(turn, { ...message, openclaw_continuation_wait: false });
     } else if (
       injected &&
       injectedUuid &&
@@ -416,9 +414,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         turn.pendingBackgroundTaskIds.size === 0
       ) {
         turn.heldResult = undefined;
-        if (!turn.events.write(heldResult)) {
-          await once(turn.events, "drain", { signal: turn.controller.signal });
-        }
+        await writeTurnEvent(turn, heldResult);
         completeTurn(session, turn);
       }
     }
@@ -478,7 +474,11 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         taskId &&
         !parentRuns &&
         message.status !== "stopped" &&
-        session.taskOwners.get(taskId) === turn.inputUuid))
+        session.taskOwners.get(taskId) === turn.inputUuid) ||
+      (message.subtype === "task_notification" &&
+        message.status === "stopped" &&
+        turn.pendingBackgroundTaskIds.size === 0 &&
+        turn.taskNotifications.size === 0))
   ) {
     turn.awaitingContinuation = false;
   }
@@ -552,9 +552,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
           ...outputMessage,
           openclaw_continuation_wait: turn.awaitingContinuation,
         };
-  if (!turn.events.write(hostMessage)) {
-    await once(turn.events, "drain", { signal: turn.controller.signal });
-  }
+  await writeTurnEvent(turn, hostMessage);
   if (completesTurn) {
     completeTurn(session, turn);
   }
@@ -720,16 +718,12 @@ export async function* executeClaudeCli(
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.
-          if (
-            !turn.events.write({
-              type: "result",
-              subtype: "success",
-              is_error: false,
-              result: "",
-            })
-          ) {
-            await once(turn.events, "drain", { signal: turn.controller.signal });
-          }
+          await writeTurnEvent(turn, {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "",
+          });
           completeTurn(session, turn);
           session.handle.close("idle");
           await session.handle.waitForExit();

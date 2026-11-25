@@ -211,7 +211,8 @@ for await (const line of createInterface({ input: process.stdin })) {
         continue;
       }
       pendingInputUuid = message.uuid;
-      if (scenario === "steer-after-result") {
+      if (scenario === "steer-after-result" || scenario.startsWith("steer-after-interim")) {
+        if (scenario.startsWith("steer-after-interim")) tasks([{ task_id: "held-agent", task_type: "local_agent" }]);
         result({ interim: true });
         lifecycle("completed", firstInputUuid);
       }
@@ -376,7 +377,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       } else {
         injectedRerunContext = response;
       }
+      if (scenario === "steer-after-interim-stopped") system("task_notification", { task_id: "held-agent", status: "stopped" });
       lifecycle("started", pendingInputUuid);
+      if (scenario === "steer-after-interim") system("task_notification", { task_id: "held-agent", status: "stopped" });
       if (scenario === "steer-after-result") {
         system("init", { capabilities: ["msg_lifecycle_v1"] });
       }
@@ -461,7 +464,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     } else if (id.startsWith("prior-")) {
       priorResponses[id] = response;
       if (Object.keys(priorResponses).length === 3) {
-        lifecycle("started", pendingInputUuid);
+        if (scenario === "steer-after-interim-stopped") system("task_notification", { task_id: "held-agent", status: "stopped" });
+      lifecycle("started", pendingInputUuid);
         result({ matchedInputUuid: pendingInputUuid, priorResponses });
       }
     } else if (id.startsWith("limit-")) {
