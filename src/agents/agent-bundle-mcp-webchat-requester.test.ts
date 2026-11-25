@@ -6,7 +6,7 @@ import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-
 import { materializeRequesterScopedMcpToolsForHarnessRun } from "../plugin-sdk/agent-harness-runtime.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import {
   bindSessionMcpRuntimeTestScheduler,
@@ -63,7 +63,7 @@ afterEach(async () => {
 
 function steerAsGrace(operation: ReturnType<typeof createReplyOperation> | undefined) {
   operation!.personalToolParticipants!.accept({
-    operatorAuthority: createAdmittedRunOperatorAuthority({
+    operatorAuthority: createTestOperatorAuthority({
       profileId: "grace-profile",
       canonicalIdentity: { profileId: "grace-profile" },
       scopes: ["operator.read", "operator.write"],
@@ -87,7 +87,7 @@ async function withTurn<T>(
   stampRequester = true,
 ) {
   const stop = new AbortController();
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     canonicalIdentity: { profileId },
     scopes: ["operator.read", "operator.write"],
