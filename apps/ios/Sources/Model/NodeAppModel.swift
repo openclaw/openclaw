@@ -4710,7 +4710,9 @@ extension NodeAppModel {
                 forceTalkPermissionUpgradeRequest: forceTalkPermissionUpgradeRequest,
                 ingressPrincipal: principal,
                 deviceIdentityProfile: reconnectOptions.deviceIdentityProfile),
-            forceExplicitScopes: forceTalkPermissionUpgradeRequest,
+            // An owner's tunnel re-pairs within its membership ceiling, so ask for it outright rather than
+            // inheriting the scopes of an earlier pairing.
+            forceExplicitScopes: forceTalkPermissionUpgradeRequest || self.openClawIDOwnerRoute(gatewayID),
             allowStoredDeviceAuth: allowStoredDeviceAuth)
     }
 
