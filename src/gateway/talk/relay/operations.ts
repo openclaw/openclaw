@@ -30,6 +30,7 @@ import {
 } from "../voice-selection.js";
 import { createRelayAgentRunRegistration } from "./agent-consult.js";
 import { scheduleRelayCancellationDeadline } from "./cancellation-deadline.js";
+import { rejectRelaySessionClose } from "./close-recovery.js";
 import {
   submitForcedTalkRealtimeRelayToolResult,
   submitRelayAgentControlProviderResults,
@@ -44,7 +45,6 @@ import {
 } from "./provider-results.js";
 import {
   MAX_AUDIO_BASE64_BYTES,
-  RELAY_SESSION_TTL_MS,
   broadcastRelaySessionClosed,
   broadcastToOwner,
   cancelRelayTurn,
@@ -119,13 +119,13 @@ export function closeRelaySession(
     // A close that failed settlement admission drained the accepted transcript
     // but never ran the durable voice close, and the session stays in the
     // draining set for exactly this retry. Re-attempt the real close through
-    // the voice owner once settlement authority is available (#204615).
+    // the voice owner once settlement authority is available (#204615). The
+    // disposition selected by the initial close is reused: a later retry must
+    // not recompute it (a completed voice replacement is no longer visible in
+    // the change registry, which would silently turn a detach into an abort
+    // and skip retained unspoken answers).
     if (session.closing.voiceCloseRetryable && !session.voiceSessionClose) {
-      const disposition =
-        options?.disposition ??
-        (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
-          ? "detach"
-          : "abort");
+      const disposition = session.closing.disposition ?? "abort";
       const retry = closeRelayVoiceSession(session, disposition);
       session.closing.retryCompletion = retry;
       void retry.catch((error: unknown) => {
@@ -137,10 +137,16 @@ export function closeRelaySession(
     }
     return session.closing.completion;
   }
+  const disposition =
+    options?.disposition ??
+    (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
+      ? "detach"
+      : "abort");
   const completion = createDeferredCore();
   const closing: NonNullable<RelaySession["closing"]> = {
     reason,
     completion: completion.promise,
+    disposition,
   };
   session.closing = closing;
   const close = async (admissionFailure?: { error: unknown }) => {
@@ -184,53 +190,6 @@ export function closeRelaySession(
   return completion.promise;
 }
 
-async function rejectRelaySessionClose(
-  session: RelaySession,
-  closing: NonNullable<RelaySession["closing"]>,
-  error: unknown,
-  finish: (closeVoice: () => Promise<void>) => Promise<void>,
-): Promise<never> {
-  closing.reason = "error";
-  closing.runTranscript = () => false;
-  session.voiceTranscriptQueue.seal();
-  // The flush below is local to this failure branch. Do NOT latch it into
-  // `session.voiceSessionClose`: the durable voice-session record is still
-  // open here, and a latched bare flush makes every later
-  // `closeRelayVoiceSession()` return early without calling
-  // `closeRelayVoiceSessionRecord()`, leaving the record open until the
-  // six-hour stale reaper while the relay already broadcast "closed"
-  // (#204615). Leave the latch unset so a later pass can run the real close
-  // once settlement authority is available; reuse a real close that was
-  // already latched elsewhere.
-  const accepted = session.voiceSessionClose ?? session.voiceTranscriptQueue.flush();
-  let cleanupError: unknown;
-  try {
-    await finish(() => accepted);
-  } catch (error) {
-    cleanupError = error;
-  }
-  // The teardown (bridge.close + flush) has settled. Only now may a later
-  // close attempt retry the durable close: provider teardown callbacks that
-  // re-enter closeRelaySession during bridge.close() must join this close,
-  // not consume the recovery attempt while the same refusal still holds
-  // (#204615).
-  closing.voiceCloseRetryable = true;
-  // Re-arm the expiry timer so a retained failure always gets another
-  // bounded pass through the same close owner, including when the expiry
-  // timer itself initiated this close (#204615).
-  const cleanupTimer = setTimeout(() => {
-    void closeRelaySession(session, "completed");
-  }, RELAY_SESSION_TTL_MS);
-  cleanupTimer.unref();
-  session.cleanupTimer = cleanupTimer;
-  if (cleanupError !== undefined) {
-    throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
-      cause: cleanupError,
-    });
-  }
-  throw error;
-}
-
 function finishRelaySessionClose(
   session: RelaySession,
   reason: "completed" | "error",
@@ -240,6 +199,7 @@ function finishRelaySessionClose(
   preparation?: Promise<unknown>,
 ): Promise<void> {
   const disposition =
+    closing.disposition ??
     options?.disposition ??
     (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
       ? "detach"

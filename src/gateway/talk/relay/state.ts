@@ -322,6 +322,8 @@ export type RelaySession = {
     reason: "completed" | "error";
     completion?: Promise<void>;
     runTranscript?: (run: () => boolean) => boolean;
+    /** Disposition selected by the initial close; recovery reuses it. */
+    disposition?: "abort" | "detach";
     /** Set when close admission failed: a later close attempt may retry the durable voice close. */
     voiceCloseRetryable?: boolean;
     /** Shared promise for the retried durable close, joined by later callers. */

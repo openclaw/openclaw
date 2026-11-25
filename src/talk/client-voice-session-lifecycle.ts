@@ -92,6 +92,16 @@ export function captureClientVoiceSessionSettlementContext(
   return { ...captureSqliteWorkerStateContext(selected), admission: selected.admission };
 }
 
+/** Run `run` outside any inherited settlement context.
+
+ * A delayed recovery (e.g. an expiry timer) must not carry the released
+ * settlement ownership of the branch that scheduled it: capture would match
+ * the inactive owner and reject before fresh admission (#204615).
+ */
+export function runOutsideClientVoiceSessionSettlement<T>(run: () => T): T {
+  return current.run(undefined, run);
+}
+
 /** Retain accepted work before a bounded queue or provider can yield. */
 export function captureClientVoiceSessionSettlement(source?: OpenClawStateWorkerContext) {
   const inherited = current.getStore();
