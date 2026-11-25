@@ -166,23 +166,23 @@ export async function resolveWorktreeForPath(params: {
   if (records.length === 0) {
     return undefined;
   }
-  const bases = new Map<string, string>();
-  for (const record of records) {
-    bases.set(record.id, await realpathOrResolve(record.path));
-  }
-  const seen = new Set<string>();
-  for (const candidate of params.candidatePaths) {
-    if (!candidate || seen.has(candidate)) {
+  // Paths are canonical at creation/migration; keep registry order for overlapping roots.
+  const bases = new Map(records.map((record, index) => [record.path, index] as const).toReversed());
+  for (const candidate of new Set(params.candidatePaths)) {
+    if (!candidate) {
       continue;
     }
-    seen.add(candidate);
-    const real = await realpathOrResolve(candidate);
-    for (const record of records) {
-      const base = bases.get(record.id);
-      if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
-        context.admission.assertCurrent();
-        return { context, record };
+    let first = records.length;
+    for (let current = await realpathOrResolve(candidate); ; current = path.dirname(current)) {
+      first = Math.min(first, bases.get(current) ?? records.length);
+      if (path.dirname(current) === current) {
+        break;
       }
+    }
+    const record = records[first];
+    if (record) {
+      context.admission.assertCurrent();
+      return { context, record };
     }
   }
   context.admission.assertCurrent();

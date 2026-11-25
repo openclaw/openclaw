@@ -1,5 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sessionShareControlUiOrigin } from "./original-url.js";
 
 type SessionShareConfigSnapshot = ReturnType<PluginRuntime["config"]["current"]>;
 
@@ -37,17 +38,23 @@ export function sessionShareNodeBinding(config: SessionShareConfigSnapshot, node
   return {
     ...(isRecord(binding) && typeof binding.owner === "string" ? { owner: binding.owner } : {}),
     linkGitHubIdentities: isRecord(binding) && binding.linkGitHubIdentities === true,
+    controlUiOrigin: sessionShareControlUiOrigin(
+      isRecord(binding) ? binding.controlUiOrigin : undefined,
+    ),
+    controlUiBasePath:
+      isRecord(binding) && typeof binding.controlUiBasePath === "string"
+        ? binding.controlUiBasePath
+        : "",
   };
 }
 
-export function sessionShareGatewayEnabled(config: SessionShareConfigSnapshot): boolean {
+export function sessionShareGatewaySourceEnabled(config: SessionShareConfigSnapshot): boolean {
   const share = sessionShareConfig(config).share;
   return (
     config.plugins?.enabled !== false &&
     config.plugins?.entries?.["session-share"]?.enabled !== false &&
     isRecord(share) &&
-    share.gateway === true &&
-    config.gateway?.sessionControl?.publicationReadEnabled === true
+    share.gateway === true
   );
 }
 

@@ -62,6 +62,8 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     subagentControlScope: entry.subagentControlScope,
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
+    inheritedToolPolicySource: entry.inheritedToolPolicySource,
+    delegatedOperatorSource: entry.delegatedOperatorSource,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
     archivedAt: entry.archivedAt,

@@ -338,7 +338,9 @@ it.each([
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
         "Stored parent",
       );
-      expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
+      await waitForSolid(() =>
+        expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull(),
+      );
       expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
       expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
       if (outcome === "holding") {

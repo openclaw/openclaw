@@ -82,6 +82,9 @@ export async function persistCliAssistantSettlement(params: {
       {
         key,
         text: reply.text,
+        assistantItemIds: output.assistantOccurrences
+          ?.filter((item) => item.key === key)
+          .map((item) => item.id),
         timestamp: Date.now(),
         native: { sessionId: reply.cliSessionId, entryId: reply.externalId },
       },
@@ -109,6 +112,11 @@ export async function persistCliAssistantSettlement(params: {
         runParams,
         // Dispatch owns visible source-reply mirrors and their idempotency keys.
         text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? remainingText),
+        assistantItemIds: output.assistantOccurrences
+          ?.filter((item) =>
+            finalKey ? item.key === finalKey : !segments.some((row) => row.key === item.key),
+          )
+          .map((item) => item.id),
         ...(nativeFinal
           ? {
               nativeIdentity: nativeFinal.identity,
@@ -213,7 +221,7 @@ async function settleCliAssistantSegments(params: {
         assertCurrent: () => {
           assertOwned();
           // Cancellation ends execution, not the admitted owner's metadata cleanup.
-          (params.runParams.assertSettlementCurrent ?? params.runParams.assertCurrent)?.();
+          params.runParams.assertSettlementCurrent?.();
         },
         // The owned transcript writer (lease) asserted above fences every rewrite.
       },
@@ -249,6 +257,7 @@ export async function persistCliAssistantSegment(
     modelId,
     stopReason: "stop",
     segmentKey: key,
+    assistantItemIds: segment.assistantItemIds,
     ...(segment.itemId ? { itemId: cliCommentaryItemId(runParams.runId, segment.itemId) } : {}),
     timestamp: segment.timestamp,
     ...(segment.native

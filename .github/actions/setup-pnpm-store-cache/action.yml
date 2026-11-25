@@ -30,6 +30,9 @@ outputs:
   store-cache-primary-key:
     description: Exact pnpm store cache key used for restore/save.
     value: ${{ steps.pnpm-store-cache.outputs.cache-primary-key }}
+  store-cache-path:
+    description: Workspace-relative archive path shared by cache publishers and readers.
+    value: ${{ steps.pnpm-store.outputs.cache-path }}
   store-path:
     description: Configured pnpm store root, including bootstrap archives and registry metadata.
     value: ${{ steps.pnpm-store.outputs.path }}
@@ -86,6 +89,10 @@ runs:
         echo "PNPM_CONFIG_STORE_DIR=$store_path" >> "$GITHUB_ENV"
         echo "PNPM_CONFIG_CACHE_DIR=${PNPM_CONFIG_CACHE_DIR:-$store_path/cache}" >> "$GITHUB_ENV"
         echo "path=$store_path" >> "$GITHUB_OUTPUT"
+        # Cache versions include the literal path input, not just the key. Keep
+        # the archive identity independent of hosted/self-hosted checkout roots.
+        cache_path="$(node -p 'require("node:path").relative(process.argv[1], process.argv[2]) || "."' "$GITHUB_WORKSPACE" "$store_path")"
+        echo "cache-path=$cache_path" >> "$GITHUB_OUTPUT"
 
     - name: Restore pnpm store cache
       id: pnpm-store-cache
@@ -93,7 +100,7 @@ runs:
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ steps.pnpm-store.outputs.path }}
+        path: ${{ steps.pnpm-store.outputs.cache-path }}
         key: pnpm-store-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-pnpm.outputs.package-manager }}-${{ hashFiles(inputs.lockfile-path) }}${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && '-fresh' || '' }}
         restore-keys: |
           pnpm-store-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-pnpm.outputs.package-manager }}-

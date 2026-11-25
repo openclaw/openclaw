@@ -3,7 +3,7 @@ import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
-import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { createConfigIO, readConfigFileSnapshotForWrite } from "../../config/io.js";
 import {
   resolveConfigPathCandidate,
   resolveGatewayPort,
@@ -18,14 +18,18 @@ import {
   withDaemonRuntimePinMigration,
   readDaemonRuntimePin,
 } from "../../daemon/runtime-pin-state.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
+import type { GatewayServiceEnvironmentValueSource } from "../../daemon/service-types.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
+  hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import type {
   GatewayService,
+  GatewayServiceCommandConfig,
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
 } from "../../daemon/service.js";
@@ -34,6 +38,7 @@ import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervi
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
+import type { GatewayLifecycleFacts } from "./lifecycle-context.js";
 
 type GatewayServiceRepairParams = {
   service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
@@ -42,6 +47,7 @@ type GatewayServiceRepairParams = {
   json: boolean;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
+  beforeServiceMutation?: () => void | Promise<void>;
 };
 
 type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
@@ -49,6 +55,7 @@ type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
   message: string;
   warnings?: string[];
   loaded: boolean;
+  lifecycle: GatewayLifecycleFacts;
 };
 
 const GATEWAY_TARGET_ENV_KEYS = [
@@ -265,11 +272,67 @@ export async function repairLoadedGatewayServiceForStart(
       },
     });
 
+  const plannedCommand = {
+    programArguments,
+    workingDirectory,
+    environment: Object.fromEntries(
+      Object.entries(environment).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    environmentValueSources: Object.fromEntries(
+      Object.entries(environmentValueSources ?? {}).filter(
+        (entry): entry is [string, GatewayServiceEnvironmentValueSource] => entry[1] !== undefined,
+      ),
+    ),
+  };
+  let command: GatewayServiceCommandConfig = plannedCommand;
+  const previousCommand = params.state.command;
+  if (previousCommand?.managedOverrides?.environment) {
+    const effectiveEnvironment = { ...plannedCommand.environment };
+    const effectiveSources = { ...plannedCommand.environmentValueSources };
+    for (const key of new Set([
+      ...Object.keys(plannedCommand.environment),
+      ...Object.keys(previousCommand.environment ?? {}),
+    ])) {
+      if (!hasGatewayServiceEnvironmentOverride(previousCommand, [key])) {
+        continue;
+      }
+      const value = previousCommand.environment?.[key];
+      if (value === undefined) {
+        delete effectiveEnvironment[key];
+        delete effectiveSources[key];
+      } else {
+        effectiveEnvironment[key] = value;
+        effectiveSources[key] = previousCommand.environmentValueSources?.[key] ?? "inline";
+      }
+    }
+    command = {
+      ...plannedCommand,
+      environment: effectiveEnvironment,
+      environmentValueSources: effectiveSources,
+      managedDefinition: plannedCommand,
+      managedOverrides: previousCommand.managedOverrides,
+    };
+  }
+  const env = mergeGatewayServiceEnv(installEnv, command);
+  // Token preparation can persist fresh auth; capture it before install activates the Gateway.
+  const config = await createConfigIO({
+    env,
+    observe: false,
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
+  })
+    .readBestEffortConfig()
+    .catch(() => undefined);
+  const lifecycle: GatewayLifecycleFacts = { command, env, config };
+
   await params.service.install({
     runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
     env: installEnv,
     stdout: params.stdout,
     warn: params.warn,
+    beforeMutation: params.beforeServiceMutation,
     programArguments,
     workingDirectory,
     environment,
@@ -289,5 +352,6 @@ export async function repairLoadedGatewayServiceForStart(
         : "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
+    lifecycle,
   };
 }

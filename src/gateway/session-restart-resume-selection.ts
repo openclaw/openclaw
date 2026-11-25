@@ -2,12 +2,13 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import {
-  listLiveSubagentRootSessions,
+  listLiveSubagentSessions,
   listYieldWaitingSessions,
   resolveRootSubagentRequester,
+  restartSessionOwnerKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { restartResumeSkipReason } from "../config/sessions/session-run-lifecycle-projection.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -16,16 +17,44 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
+import { getRpcSourceForSignal } from "../sessions/session-controller.rpc-sources.js";
 import {
   activeSessionOperations,
   getOperationBackendRunIds,
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { captureSessionRestartOperatorSource } from "./session-system-turn-authority.js";
+
+/** Capture the interrupted execution's source, never a later steering participant. */
+function captureSessionRestartOperatorSource(
+  operation: ReplyOperation,
+): QueuedOperatorRecoverySource | undefined {
+  try {
+    const requester = operation.personalToolParticipants?.resolve(undefined, {
+      allowTurnOwner: () => true,
+    });
+    if (requester) {
+      return captureQueuedOperatorRecoverySource(requester.operatorAuthority);
+    }
+    const claim = getSessionControllerEntryForOperation(operation).mailbox?.claim;
+    const sources =
+      claim?.operation === operation && !claim.released && !claim.releaseRequested
+        ? claim.sources
+        : [];
+    return sources.length > 1
+      ? { kind: "unavailable" }
+      : captureQueuedOperatorRecoverySource(sources[0]?.operatorAuthority);
+  } catch {
+    // A failed known source cannot fall back to the session principal.
+    return { kind: "unavailable" };
+  }
+}
 
 export type SessionIdentity = {
   agentId: string;
@@ -35,6 +64,7 @@ export type SessionIdentity = {
   needsResume: boolean;
   scheduledAutomation?: boolean;
   parked?: boolean;
+  directChat?: boolean;
   operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
 };
 
@@ -44,29 +74,27 @@ export async function selectLiveRestartResumeSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<Map<string, SessionIdentity>> {
   const sessions = new Map<string, SessionIdentity>();
+  const chatRoots = new Set<string>();
   const inputs: Array<Partial<SessionIdentity> & { sessionKey: string }> = [];
   const add = (input: (typeof inputs)[number]) => inputs.push(input);
   const select = async (input: (typeof inputs)[number]) => {
-    const root = input.parked
-      ? input
-      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch(
-          (error: unknown) => {
-            subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
-              sessionKey: input.sessionKey,
-              error,
-            });
-            return undefined;
-          },
-        );
-    if (!root) {
-      return;
-    }
-    const agentId =
-      root.agentId ?? parseAgentSessionKey(root.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
-    const storePath =
-      root.storePath ??
-      (root.sessionKey === input.sessionKey ? input.storePath : undefined) ??
-      resolveSessionStorePathCore(cfg.session?.store, { agentId });
+    const inputAgentId =
+      input.agentId ??
+      parseAgentSessionKey(input.sessionKey)?.agentId ??
+      resolveDefaultAgentId(cfg);
+    const start = {
+      agentId: inputAgentId,
+      sessionKey: input.sessionKey,
+      storePath: await preparePhysicalSessionStorePath(
+        { agentId: inputAgentId, sessionKey: input.sessionKey, storePath: input.storePath },
+        cfg,
+      ),
+    };
+    const root =
+      input.parked || input.directChat
+        ? start
+        : await resolveRootSubagentRequester(start, cfg, chatRoots);
+    const { agentId, storePath } = root;
     const skip =
       (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
         ? "incognito"
@@ -75,7 +103,10 @@ export async function selectLiveRestartResumeSessions(
       summary.record(agentId, root.sessionKey, skip);
       return;
     }
-    const key = JSON.stringify([agentId, root.sessionKey]);
+    const key = restartSessionOwnerKey(root);
+    if (input.directChat) {
+      chatRoots.add(key);
+    }
     const existing = sessions.get(key);
     if (!existing) {
       summary.record(agentId, root.sessionKey, "persistence-incomplete");
@@ -83,20 +114,21 @@ export async function selectLiveRestartResumeSessions(
         agentId,
         storePath,
         sessionKey: root.sessionKey,
-        sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
+        sessionId: root === start ? input.sessionId : undefined,
         needsResume: input.needsResume !== false,
-        scheduledAutomation: root.sessionKey === input.sessionKey && input.scheduledAutomation,
+        scheduledAutomation: root === start && input.scheduledAutomation,
         parked: input.parked,
-        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
+        directChat: input.directChat,
+        operatorSource: root === start ? input.operatorSource : undefined,
       });
     } else {
-      existing.scheduledAutomation ||=
-        root.sessionKey === input.sessionKey && input.scheduledAutomation;
+      existing.scheduledAutomation ||= root === start && input.scheduledAutomation;
       existing.needsResume =
         !existing.scheduledAutomation &&
         (existing.needsResume || (!input.parked && input.needsResume !== false));
-      if (root.sessionKey === input.sessionKey && input.operatorSource) {
-        existing.operatorSource = input.operatorSource;
+      if (root === start) {
+        existing.sessionId ??= input.sessionId;
+        existing.operatorSource ??= input.operatorSource;
       }
     }
   };
@@ -113,10 +145,23 @@ export async function selectLiveRestartResumeSessions(
       continue;
     }
     const { target, mailbox } = getSessionControllerEntryForOperation(operation);
+    const claim = mailbox?.claim?.operation === operation ? mailbox.claim : undefined;
+    const input = claim?.inputs[0];
+    const source = claim?.sources[0]?.run;
+    const provenance = source?.inputProvenance;
+    // A new chat input owns its turn, even if the dashboard was originally a child.
+    // A steer into a delegated operation is not its originating input.
+    const directChat =
+      parseAgentSessionKey(operation.key)?.rest.startsWith("dashboard:") &&
+      ((input?.protocolRunId &&
+        getRpcSourceForSignal(input.protocolRunId, input.abortSignal)?.adapter.kind ===
+          "chat-send" &&
+        (!provenance || provenance.kind === "external_user")) ||
+        (source?.internalEventExecution &&
+          provenance?.kind === "internal_system" &&
+          provenance.sourceTool === "restart"));
     // Cron owns interrupted occurrences, including those targeting an ordinary conversation.
-    let scheduledAutomation =
-      mailbox?.claim?.operation === operation &&
-      mailbox.claim.sources.some((source) => source.run.scheduledAutomation);
+    let scheduledAutomation = claim?.sources.some((item) => item.run.scheduledAutomation);
     if (scheduledAutomation) {
       for (const runId of getOperationBackendRunIds(operation) ?? []) {
         if (getAgentRunContext(runId)?.acceptedUserReply) {
@@ -131,6 +176,7 @@ export async function selectLiveRestartResumeSessions(
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
       operatorSource: captureSessionRestartOperatorSource(operation),
+      directChat: Boolean(directChat),
       scheduledAutomation,
       // Completed replies can retain execution custody only to settle workspace uploads.
       needsResume:
@@ -152,16 +198,17 @@ export async function selectLiveRestartResumeSessions(
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
   }
-  const roots = listLiveSubagentRootSessions();
-  const waiting = [...listYieldWaitingSessions()];
-  for (const root of await roots) {
-    add(root);
-  }
-  for (const session of waiting) {
-    add(session);
-  }
-  for (const input of inputs) {
-    await select(input);
+  inputs.push(...listLiveSubagentSessions(), ...listYieldWaitingSessions());
+  // Register independent owners with their original custody before resolving delegated edges.
+  for (const input of inputs.toSorted(
+    (a, b) => Number(Boolean(b.directChat)) - Number(Boolean(a.directChat)),
+  )) {
+    await select(input).catch((error: unknown) => {
+      subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+        sessionKey: input.sessionKey,
+        error,
+      });
+    });
   }
   return sessions;
 }

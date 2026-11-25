@@ -399,11 +399,13 @@ export function projectTranscriptIndex(
       // Settled items keep their identity across unrelated live-tail changes.
       // Reactions replace their map; active and continuation rows never enter this memo.
       const revision = rowRevisions(item, [key, props.messageReactions], () => {
-        const messages = groups.flatMap((group) =>
-          group.messages.map(({ message }) => [
-            message && typeof message === "object" ? messageRevision(message) : message,
-            props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
-          ]),
+        const messages = groups.flatMap<unknown>((group) =>
+          group.compaction
+            ? [group.compaction]
+            : group.messages.map(({ message }) => [
+                message && typeof message === "object" ? messageRevision(message) : message,
+                props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+              ]),
         );
         const content = JSON.stringify(
           item.kind === "agent-run-frame"
@@ -674,30 +676,57 @@ export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   contentRows: readonly PlacedContentRow[],
-): readonly TranscriptRow<ChatRenderItem>[] {
-  const key = contentRows.flatMap((row) => [row.key, row.after]);
+  compactActivity: boolean,
+) {
+  if (!compactActivity && !contentRows.length) {
+    return rows;
+  }
+  const key = [compactActivity, ...contentRows.flatMap((row) => [row.key, row.after])];
   return presentationRows(rows, key, () => {
-    if (!contentRows.length) {
-      return rows;
-    }
-    const placed = Map.groupBy(
-      contentRows.filter((row) => row.after !== undefined),
-      (row) => row.after,
-    );
-    const take = (after: string | null) => {
-      const found = placed.get(after) ?? [];
-      placed.delete(after);
-      return found;
-    };
-    const result: TranscriptRow<ChatRenderItem>[] = take(null);
-    for (const row of rows) {
-      result.push(row);
-      result.push(...take(row.key));
+    const placed = contentRows.length ? Map.groupBy(contentRows, (row) => row.after) : undefined;
+    const trailing = placed?.get(undefined);
+    let result: TranscriptRow<ChatRenderItem>[] | undefined = placed
+      ? (placed.get(null) ?? [])
+      : undefined;
+    placed?.delete(undefined);
+    placed?.delete(null);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index]!;
+      const next = rows[index + 1];
+      const after = placed?.get(row.key);
+      const item = row.kind === "item" ? row.item : undefined;
+      const following = next?.kind === "item" ? next.item : undefined;
+      // Inserted content breaks visual adjacency; it never transfers run ownership.
+      if (
+        compactActivity &&
+        !after &&
+        row.kind === "item" &&
+        following?.kind === "group" &&
+        following.compaction &&
+        !following.runId &&
+        !following.startsActivityGroup &&
+        (item?.kind === "activity-run" ||
+          (item?.kind === "agent-run-frame" &&
+            (item.outcome.kind === "active" ||
+              (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
+            item.parts.every((part) => part.kind === "activity-run")))
+      ) {
+        (result ??= rows.slice(0, index)).push({
+          ...row,
+          compactActivity: true,
+          revision: row.revision && row.revision + ":compact-activity",
+        });
+      } else {
+        result?.push(row);
+      }
+      if (after) {
+        result?.push(...after);
+        placed?.delete(row.key);
+      }
     }
     // An anchor outside these rows keeps its content visible at the end.
-    return result.concat(
-      [...placed.values()].flat(),
-      contentRows.filter((row) => row.after === undefined),
-    );
+    return placed
+      ? (result ?? []).concat([...placed.values()].flat(), trailing ?? [])
+      : (result ?? rows);
   });
 }

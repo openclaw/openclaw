@@ -28,7 +28,7 @@ import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { resolveRemoteControlUiHttpRoute } from "./remote-control-ui-http-routing.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
@@ -259,7 +259,7 @@ export function createGatewayControlUiIngressFactory(params: {
             ? error
             : new GatewayControlUiIngressError(
                 "forbidden",
-                "Remote ingress principal authority changed; reopen the binding under current authority.",
+                "Remote ingress principal binding changed. Reopen the binding and try again.",
               );
         invalidated.abort(denial);
         prepared.release();
@@ -335,6 +335,9 @@ export function createGatewayControlUiIngressFactory(params: {
             const display = projectUserProfileDisplay(row);
             return {
               bindingId,
+              pluginId,
+              audienceId: options.audienceId,
+              principal,
               ...(principal.kind === "delegated-person" ? { admission: principal.admission } : {}),
               ...(admission ? { openclawIdPrincipal: admission.principal } : {}),
               ...(recoverySource ? { recoverySource } : {}),
@@ -380,9 +383,6 @@ export function createGatewayControlUiIngressFactory(params: {
     const principalSignal = authority.signal;
     const resolvePrincipal = () => authority.resolve();
     const assertPrincipalCurrent = authority.assertCurrent;
-    const closeBinding = async () => {
-      authority.close();
-    };
     const requestPrincipal = async <T>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -433,7 +433,7 @@ export function createGatewayControlUiIngressFactory(params: {
         preparedSessionProfile: principalSnapshot.preparedSessionProfile,
         internal,
       };
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority,
@@ -670,7 +670,7 @@ export function createGatewayControlUiIngressFactory(params: {
     const binding: GatewayIngressPrincipalBindingV1 = {
       request: requestPrincipal,
       openControlUi,
-      close: closeBinding,
+      close: async () => authority.close(),
     };
     try {
       host.admissionSignal.throwIfAborted();

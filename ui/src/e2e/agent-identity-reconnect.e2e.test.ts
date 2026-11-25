@@ -63,7 +63,13 @@ suite.define(() => {
       const beforeProfiles = await Promise.all(
         unaffected.map(async (method) => (await gateway.getRequests(method)).length),
       );
-      for (const changedPaths of [["browser.profiles.temporary"], ["browser.profiles"]]) {
+      for (const changedPaths of [
+        ["browser.profiles.temporary"],
+        ["browser.profiles"],
+        ["ui.prefs.sidebarEntries"],
+        ["logging.level"],
+        ["browser.headless"],
+      ]) {
         await gateway.emitGatewayEvent("config.changed", { changedPaths });
         await page.clock.runFor(1_000);
       }

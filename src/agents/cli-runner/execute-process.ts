@@ -374,7 +374,7 @@ export async function executeCliProcess(params: {
         },
         onInterrupted: (reason) => {
           streamingParser?.finish();
-          const partialOutput = streamingParser?.getOutput();
+          const partialOutput = streamingParser?.getOutput(true);
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
             throw refuseStream(partialOutput.errorText, partialOutput, {
               code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
@@ -427,7 +427,7 @@ export async function executeCliProcess(params: {
       let processCancelled = false;
       const assertProcessCurrent = () => {
         if (processCancelled) {
-          throw new Error("CLI process authority is no longer active");
+          throw new Error("The CLI process was stopped. Start a new turn to retry.");
         }
       };
       const abortManagedRun = () => {
@@ -548,7 +548,7 @@ export async function executeCliProcess(params: {
     }
   }
 
-  const streamedJsonlOutput = streamingParser?.getOutput();
+  const streamedJsonlOutput = streamingParser?.getOutput(Boolean(terminalInterruption));
   const parseOutput = () =>
     parseCliOutput({
       raw: readStdout(),

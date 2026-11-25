@@ -50,8 +50,12 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
+  stateUpgradeLiveStateDir?: string,
 ): T {
-  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
+  return captures.run(
+    { ...captures.getStore(), backup, fullBackups: new Map(), stateUpgradeLiveStateDir },
+    operation,
+  );
 }
 
 /** Only the general Doctor backup owner admits full images for this maintenance run. */
@@ -251,6 +255,7 @@ function* updateSqliteMigrationSteps<T>(
       if (before !== expected) {
         capture.accept(key, expected, before);
       }
+      options?.beforeExclusive?.();
       if (mode !== "exclusive") {
         // Start WAL in normal mode before retaining exclusion so it can be released.
         db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native WAL coordination before retaining exclusion.

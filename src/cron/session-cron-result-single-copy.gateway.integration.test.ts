@@ -14,8 +14,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
-// A scheduled reply must reach the model once: its own turn already holds it in the
-// conversation. Only the provider endpoint is synthetic; Gateway, cron and sessions are real.
+// A scheduled reply must reach the model once, including results from another session.
+// Only the provider endpoint is synthetic; Gateway, cron and sessions are real.
 type Api = "openai-responses" | "anthropic-messages";
 type Turn = { role: string; text: string };
 
@@ -193,11 +193,8 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
         JSON.stringify(message.content).includes(REPLY),
     );
     return {
-      // Anthropic merges adjacent assistant messages, so count text occurrences, not turns.
-      modelCopies: next
-        .at(-1)
-        ?.filter((turn) => turn.role === "assistant")
-        .reduce((sum, turn) => sum + turn.text.split(REPLY).length - 1, 0),
+      // Anthropic merges adjacent messages, so count text occurrences, not turns.
+      modelCopies: next.at(-1)?.reduce((sum, turn) => sum + turn.text.split(REPLY).length - 1, 0),
       displayRows: shown.length,
     };
   }
@@ -233,5 +230,11 @@ describe.each<Api>(["openai-responses", "anthropic-messages"])("%s", (api) => {
     await send(sessionKey, "Hello.");
     await runCron({ sessionTarget: "isolated", sessionKey, payload });
     await expect(observe(sessionKey)).resolves.toEqual({ modelCopies: 1, displayRows: 1 });
+    expect(requests.at(-1)?.filter((turn) => turn.text.includes(REPLY))).toEqual([
+      {
+        role: "user",
+        text: expect.stringContaining("[OpenClaw background result]"),
+      },
+    ]);
   }, 60_000);
 });

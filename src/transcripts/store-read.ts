@@ -31,8 +31,7 @@ import {
   sessionFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
-import type { TranscriptsSummary } from "./summary.js";
-import type { TranscriptSessionDescriptor } from "./types.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
 
 export class TranscriptLibraryError extends Error {
   constructor(

@@ -1,15 +1,13 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Command } from "commander";
-import { create as createTar } from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as cliTestHelpers from "./templates-cli.test-helpers.js";
 
-const enabledTemplatesLabsConfig = {
+const enabledTemplatesConfig = {
   gateway: { controlUi: { experimental: { templates: true } } },
 };
 
@@ -130,8 +128,8 @@ const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line)
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
-    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
+    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesConfig);
+    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesConfig);
     mocks.listConfiguredMcpServers.mockReset().mockResolvedValue({
       ok: true,
       mcpServers: {},
@@ -165,9 +163,13 @@ describe("templates cli", () => {
     vi.restoreAllMocks();
   });
 
-  it("blocks local Add while Templates Labs is off", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("blocks local Add while Templates is off", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--dry-run", "--json"])).toMatchObject({
       ok: false,
       error: { code: "templates_labs_disabled" },
@@ -287,7 +289,7 @@ describe("templates cli", () => {
     const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     if (agentId) {
       mocks.loadConfig.mockReturnValue({
-        ...enabledTemplatesLabsConfig,
+        ...enabledTemplatesConfig,
         agents: { entries: { "demo-agent": {} } },
       });
     }
@@ -377,8 +379,10 @@ describe("templates cli", () => {
     });
   });
 
-  it("does not Add when Labs was switched off after planning", async () => {
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("does not Add when Templates was disabled after planning", async () => {
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--json"])).toMatchObject({
       status: "failed",
       error: { code: "templates_labs_disabled" },
@@ -386,11 +390,13 @@ describe("templates cli", () => {
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
 
-  it("stops Add effects when Labs turns off after apply begins", async () => {
+  it("stops Add effects when Templates is disabled after apply begins", async () => {
     const commitEffect = vi.fn();
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (_plan, options) => {
       await Promise.resolve();
-      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+        gateway: { controlUi: { experimental: { templates: false } } },
+      });
       options.assertForwardCurrent?.();
       commitEffect();
     });
@@ -509,68 +515,9 @@ async function registryFixture(
     manifest["evil\u202ekey\u009b31m"] = true;
   }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
-  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
-  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
-  const bytes = await readFile(archive);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
-  const name = "@acme/demo-agent";
-  const pkg = {
-    name,
-    family: "template",
-    displayName: "Demo",
-    channel: "community",
-    isOfficial: false,
-    updatedAt: 1,
-    latestVersion: failure === "version" ? "latest" : "1.2.3",
-  };
-  const artifact = {
-    kind: "npm-pack",
-    sha256: failure === "digest" ? "0".repeat(64) : sha256,
-    npmIntegrity,
-  };
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const route = decodeURIComponent(url.pathname);
-    if (route.endsWith("/artifact/download")) {
-      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
-    }
-    if (route.endsWith("/artifact")) {
-      return Response.json({ package: pkg, version: "1.2.3", artifact });
-    }
-    if (route.endsWith("/security")) {
-      return Response.json({
-        package: pkg,
-        release: {
-          version: "1.2.3",
-          artifactKind: "npm-pack",
-          artifactSha256: artifact.sha256,
-          npmIntegrity,
-        },
-        overview: "Synthetic security review.",
-        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
-        verdict: failure === "trust" ? "suspicious" : "benign",
-        trust: {
-          scanStatus: "clean",
-          moderationState: "approved",
-          blockedFromDownload: false,
-          reasons: [],
-          pending: false,
-          stale: false,
-        },
-      });
-    }
-    if (route === "/api/v1/packages/" + name) {
-      return Response.json({
-        package: {
-          ...pkg,
-          ...(failure === "family" ? { family: "plugin" } : {}),
-          ...(failure === "name" ? { name: "@acme/other" } : {}),
-        },
-        owner: { handle: "acme" },
-      });
-    }
-    throw new Error("Unexpected registry request: " + route);
-  });
-  return { name, integrity: "sha256:" + sha256 };
+  return await cliTestHelpers.mockRegistryPackage(
+    tempDirs,
+    root,
+    failure === "dependency" || failure === "manifest" ? undefined : failure,
+  );
 }

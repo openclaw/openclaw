@@ -6,7 +6,7 @@ import { sidebarSession } from "./sidebar-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar New session" });
 suite.define(() => {
-  it("keeps New session in the Sessions header, then opens the same agent from the mobile drawer", async () => {
+  it("keeps New session in the Sessions header and adds it above Home in the mobile rail", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -61,8 +61,29 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
         await navigationDrawerToggle(page).click();
         await page.locator(".shell--nav-drawer-open").waitFor();
-        await create.waitFor();
-        await create.focus();
+        const railCreate = nav
+          .locator(".sidebar-rail")
+          .getByRole("link", { name: "New session", exact: true });
+        await railCreate.waitFor();
+        expect(await create.isVisible()).toBe(true);
+        // Measure both controls in the same frame while the drawer slides in.
+        const alignment = await nav.evaluate((element) => {
+          const railPlus = element
+            .querySelector(".sidebar-rail .sidebar-new-session")!
+            .getBoundingClientRect();
+          const home = element.querySelector(".sidebar-footer-bar__home")!.getBoundingClientRect();
+          return {
+            plusX: railPlus.x,
+            homeX: home.x,
+            plusBottom: railPlus.bottom,
+            homeTop: home.top,
+          };
+        });
+        expect(alignment.plusX).toBe(alignment.homeX);
+        expect(alignment.plusBottom).toBeLessThanOrEqual(alignment.homeTop);
+        await nav.locator('[data-navigation-view="online"]').click();
+        await nav.locator(".sidebar-online").waitFor();
+        await railCreate.focus();
         await page.keyboard.press("Enter");
         await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=main" });
         await page.locator(".new-session-page__message").waitFor();

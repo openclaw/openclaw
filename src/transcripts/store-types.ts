@@ -1,5 +1,8 @@
-import type { TranscriptsSummary } from "./summary.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 export type TranscriptReadEntry = {
   session: TranscriptSessionDescriptor;

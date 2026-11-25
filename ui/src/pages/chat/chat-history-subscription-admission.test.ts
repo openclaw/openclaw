@@ -130,3 +130,41 @@ it.each<[string, boolean]>([
     expect(state.chatSessionMessageSubscription).toBeNull();
   }
 });
+
+it.each([false, true])(
+  "subscribes authenticated people with only session read (recipient capability: %s)",
+  async (advertised) => {
+    const key = "agent:main:creator";
+    const messages = [{ role: "assistant", content: "Readable conversation" }];
+    const state = makeChatHost({
+      sessionKey: key,
+      requestHandlers: {
+        "sessions.messages.subscribe": (params: { includeApprovals?: boolean }) => {
+          if (!advertised && params.includeApprovals) {
+            throw new Error("missing scope: operator.approvals");
+          }
+          return { key, includeApprovals: params.includeApprovals };
+        },
+        "chat.history": () => ({ messages }),
+      },
+    });
+    onTestFinished(() => state.sessions.dispose());
+    state.hello = {
+      ...state.hello!,
+      auth: { role: "operator", scopes: ["operator.sessions.read"] },
+      features: { capabilities: advertised ? ["session-approval-recipients-v1"] : [] },
+    };
+    state.selfUser = { id: "creator", identity: { type: "profile", id: "creator" } };
+    await expect(syncSelectedSessionMessageSubscription(state)).resolves.toBe(true);
+    expect(requestCalls(state.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject(
+      advertised ? { includeApprovals: true } : { key },
+    );
+    if (!advertised) {
+      expect(requestCalls(state.request, "sessions.messages.subscribe")[0]?.[1]).not.toMatchObject({
+        includeApprovals: true,
+      });
+    }
+    await loadChatHistory(state, { deferBranches: true });
+    expect(state.chatMessages).toEqual(messages);
+  },
+);

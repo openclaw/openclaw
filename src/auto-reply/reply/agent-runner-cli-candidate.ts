@@ -1,3 +1,4 @@
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -21,6 +22,7 @@ import {
 } from "../../agents/media-generation-activity.js";
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { assertParticipationRuntime } from "../../agents/participation-ceiling.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -62,6 +64,7 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const accessProgram = resolveCyberAccessProgramForProvider(
     params.candidateRun.cyberAccessProgram,
     params.provider,
@@ -521,10 +524,7 @@ export async function runCliFallbackCandidate(
                     }),
                 }),
             authProfileId,
-            assertSettlementCurrent: () => {
-              assertSettlementCurrent();
-              scheduledInference?.assertCurrent(params.provider);
-            },
+            assertSettlementCurrent,
             // The CLI owner rechecks this after awaits and before credential/transport effects.
             assertCurrent: scheduledInference
               ? () => {

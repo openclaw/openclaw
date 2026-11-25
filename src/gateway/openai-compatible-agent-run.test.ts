@@ -76,7 +76,6 @@ function createOperatorRunFixture() {
     sessionKey: "agent:main:visitor-work",
     runId: "compat-request",
     messageChannel: "webchat",
-    senderIsOwner: false,
     operatorScopes: ["operator.sessions.write"],
     requestAuth: {
       authMethod: "trusted-proxy",
@@ -227,13 +226,10 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(authority, "Expected retained membership authority");
           res.destroy();
           req.destroy();
-          expect(() => authority.assertCurrent()).not.toThrow();
           // Replacing membership affects a new start, not this admitted child.
           membership.clear();
           const replacement = { ...principal, peerKey: `iroh:${"22".repeat(32)}` };
           membership.set(replacement.peerKey, replacement);
-          expect(() => authority.assertCurrent()).not.toThrow();
-          expect(() => authority.reauthorize?.()).toThrow();
         } finally {
           admission?.close();
           res.destroy();
@@ -259,7 +255,6 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(authority, "Expected the original operator authority");
           expect(authority.profileId).toBe(fixture.person.id);
           expect(authority.scopes).toEqual(["operator.sessions.write"]);
-          expect(() => authority.assertCurrent()).not.toThrow();
           child = prepareAgentRunAdmission({
             cfg: fixture.cfg,
             facts: {
@@ -280,12 +275,11 @@ describe("OpenAI-compatible operator run authority", () => {
           }
           fixture.request.abort();
           expect(options.abortSignal?.aborted).toBe(true);
-          expect(authority.signal?.aborted).toBe(false);
+          expect(authority.signal?.aborted).not.toBe(true);
           const childAuthority = readAdmittedRunOperatorAuthority(childContext);
           assert(childAuthority, "Detached work lost its original operator authority");
-          expect(() => childAuthority.assertCurrent()).not.toThrow();
           child.close();
-          expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          expect(() => authority.retain?.()).toThrow(/Operator execution ended/);
         } finally {
           await close();
           child?.close();
@@ -301,10 +295,9 @@ describe("OpenAI-compatible operator run authority", () => {
         const fixture = createOperatorRunFixture();
         const context = fixture.host.current;
         assert(context, "Expected the current Gateway context");
-        let tentative = fixture.cfg;
         let committed = fixture.cfg;
         if (changed === "committed config") {
-          context.getRuntimeConfig = () => tentative;
+          context.getRuntimeConfig = () => fixture.cfg;
           context.getCommittedRuntimeConfig = () => committed;
         }
         const { entered, settlement, running, close } = startPendingCommand(fixture.params);
@@ -314,7 +307,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(authority, "Expected the original operator authority");
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
-            expect(options.abortSignal?.aborted).toBe(true);
+            expect(options.abortSignal?.aborted).toBe(false);
           } else if (changed === "role") {
             setUserProfileRole(fixture.person.id, "blocked");
             invalidateOperatorRolePolicy(fixture.person.id);
@@ -331,23 +324,10 @@ describe("OpenAI-compatible operator run authority", () => {
                 },
               },
             };
-            tentative = restricted;
-            expect(() => authority.assertCurrent()).not.toThrow();
-            tentative = fixture.cfg;
-            expect(() => authority.assertCurrent()).not.toThrow();
             committed = restricted;
           }
           settlement.resolve(completedResult);
-          if (changed === "grant") {
-            expect(() => authority.assertCurrent()).toThrow();
-            await expect(running).rejects.toThrow();
-          } else {
-            expect(() => authority.assertCurrent()).not.toThrow();
-            await expect(running).resolves.toBe(completedResult);
-            if (changed !== "host") {
-              expect(() => authority.reauthorize?.()).toThrow();
-            }
-          }
+          await expect(running).resolves.toBe(completedResult);
         } finally {
           await close();
         }
@@ -453,23 +433,33 @@ describe("OpenAI-compatible operator run authority", () => {
     });
   });
 
-  it.each(["owner", "system"] as const)(
-    "preserves %s authority without requiring a person-bound Gateway capture",
-    async (actor) => {
+  it.each([
+    { authMethod: "token", scopes: ["operator.admin", "operator.write"], owner: true },
+    { authMethod: "none", scopes: ["operator.write"], owner: false },
+  ] as const)(
+    "admits the $authMethod owner credential as the owner principal with its own scopes",
+    async ({ authMethod, scopes, owner }) => {
       await withOpenClawTestState({ label: "compat-run-owner" }, async () => {
         const fixture = createOperatorRunFixture();
-        fixture.params.resolveGatewayContext = undefined;
-        fixture.params.senderIsOwner = true;
-        fixture.params.requestAuth.operatorAccessAuthority = undefined;
-        if (actor === "owner") {
-          fixture.params.requestAuth.authenticatedUserProfile!.profileId = "gateway-owner";
-        } else {
-          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
-        }
+        const profile = await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
+        fixture.params.operatorScopes = scopes;
+        fixture.params.requestAuth = {
+          authMethod,
+          trustDeclaredOperatorScopes: authMethod === "none",
+          ...(authMethod === "token" ? { operatorRoleActor: { kind: "system" as const } } : {}),
+          authenticatedUserProfile: gatewayProfile(
+            profile.id,
+            "Synthetic owner",
+            profile.updatedAt,
+          ),
+        };
         vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          expect(options.operatorAuthority).toBeUndefined();
-          expect(options.abortSignal).toBe(fixture.request.signal);
-          expect(options.senderIsOwner).toBe(true);
+          expect(options.operatorAuthority).toMatchObject({
+            profileId: "gateway-owner",
+            scopes,
+            grant: { owner, skillAuthoring: true, questionReplace: true },
+          });
+          expect(options.senderIsOwner).toBe(owner);
           return completedResult;
         });
         await expect(runOpenAiCompatibleAgentCommand(fixture.params)).resolves.toBe(
@@ -512,7 +502,6 @@ describe("OpenAI-compatible command admission", () => {
         sessionKey: "agent:main:main",
         runId: "http-run",
         messageChannel: "webchat",
-        senderIsOwner: true,
         requestAuth: {
           authMethod: "token",
           trustDeclaredOperatorScopes: false,
@@ -528,7 +517,7 @@ describe("OpenAI-compatible command admission", () => {
         await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
         expect(executed).toHaveBeenCalledOnce();
       } else {
-        await expect(pending).rejects.toThrow("Gateway requester authority changed");
+        await expect(pending).rejects.toThrow("Gateway requester changed during admission");
         expect(executed).not.toHaveBeenCalled();
       }
     },

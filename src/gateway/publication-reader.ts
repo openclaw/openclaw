@@ -1,4 +1,3 @@
-import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { PairedDeviceTokenIdentity } from "../infra/device-pairing-core.types.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
@@ -32,30 +31,7 @@ export class PublicationTransportAdmissionError extends Error {
 export function isPublicationTransportScope(scope: string): scope is PublicationTransportScope {
   return scope === PUBLICATION_READ_SCOPE || scope === PUBLICATION_STEER_SCOPE;
 }
-const admissions = new WeakMap<PublicationTransportAdmission, () => void>();
-
-/** Reader epochs remain until the separate reader correction; writer checks only admission. */
-function capturePublicationEnablement(scope: PublicationTransportScope): () => void {
-  const reader = scope === PUBLICATION_READ_SCOPE;
-  const config = readRuntimeConfig().gateway?.sessionControl;
-  if ((reader ? config?.publicationReadEnabled : config?.publicationWriteEnabled) !== true) {
-    return () => {
-      throw new PublicationTransportAdmissionError({ reason: "purpose-disabled", scope });
-    };
-  }
-  if (!reader) {
-    return () => {};
-  }
-  const epoch = runtimeConfigPublication.publicationReadDisableEpoch;
-  return () => {
-    if (
-      epoch !== runtimeConfigPublication.publicationReadDisableEpoch ||
-      readRuntimeConfig().gateway?.sessionControl?.publicationReadEnabled !== true
-    ) {
-      throw new PublicationTransportAdmissionError({ reason: "invalid-admission" });
-    }
-  };
-}
+const admissions = new WeakSet<PublicationTransportAdmission>();
 
 export function isPublicationTransportEnabled(scope: PublicationTransportScope): boolean {
   const config = readRuntimeConfig().gateway?.sessionControl;
@@ -79,7 +55,6 @@ export function isPublicationTransportCurrent(
     return false;
   }
   try {
-    admissions.get(admission)!();
     return isPublishedPairedDeviceTokenExact(admission, "operator", [admission.scope]);
   } catch {
     return false;
@@ -101,9 +76,7 @@ export async function preparePublicationTransportAdmission(input: {
   token?: string;
   hasHumanIdentity: boolean;
 }): Promise<PublicationTransportAdmission | undefined> {
-  const requestedScope = input.requestedScopes.find(isPublicationTransportScope);
-  const requested = requestedScope !== undefined;
-  const assertEnabled = requestedScope ? capturePublicationEnablement(requestedScope) : undefined;
+  const requested = input.requestedScopes.some(isPublicationTransportScope);
   const device =
     input.authMethod === "device-token" && input.deviceId
       ? await readCurrentPairedDevice(input.deviceId, (row) => row)
@@ -122,7 +95,6 @@ export async function preparePublicationTransportAdmission(input: {
     !input.publicKey ||
     !input.token ||
     !scope ||
-    !assertEnabled ||
     !isSingleton(input.requestedScopes, scope) ||
     !isSingleton(input.scopes, scope) ||
     !isSingleton(storedScopes, scope)
@@ -138,9 +110,13 @@ export async function preparePublicationTransportAdmission(input: {
   if (!identity) {
     throw new PublicationTransportAdmissionError({ reason: "invalid-admission" });
   }
+  // Validate the caller before revealing the switch. The handshake is admitted once;
+  // later toggles gate new connections and new requests, never an admitted one.
+  if (!isPublicationTransportEnabled(scope)) {
+    throw new PublicationTransportAdmissionError({ reason: "purpose-disabled", scope });
+  }
   const admission = Object.freeze({ ...identity, scope });
-  assertEnabled();
-  admissions.set(admission, assertEnabled);
+  admissions.add(admission);
   return admission;
 }
 

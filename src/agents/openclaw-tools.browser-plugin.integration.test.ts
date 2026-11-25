@@ -21,7 +21,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import type { resolvePluginTools } from "../plugins/tools.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
@@ -31,10 +30,8 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
 const hoisted = vi.hoisted(() => ({ resolvePluginTools: vi.fn<typeof resolvePluginTools>() }));
@@ -405,39 +402,6 @@ describe("createOpenClawTools browser plugin integration", () => {
       messageActionTurnCapability: token,
     });
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
-  });
-
-  it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
-    const config: OpenClawConfig = { plugins: { enabled: true } };
-    const pluginRegistry = createEmptyPluginRegistry();
-    const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    prepareOwnedPluginLoadContext(
-      { config, workspaceDir: "/tmp" },
-      process.env,
-      pluginRegistry,
-      metadataSnapshot,
-    );
-    const loadContext = getPluginRuntimeLoadContext(pluginRegistry);
-    expectDefined(loadContext, "expected prepared plugin load context");
-    const params = resolveTools({
-      config,
-      workspaceDir: "/tmp",
-      preparedModelRuntime: {
-        ...createEmptyPreparedModelRuntimeFixture({
-          agentDir: "/tmp/agent",
-          config,
-          metadataSnapshot,
-          createStores: vi.fn(),
-        }),
-        workspaceDir: "/tmp",
-        pluginRegistry,
-      },
-    });
-    expect(params.preparedRuntime).toEqual({
-      loadContext,
-      metadataSnapshot,
-      registry: pluginRegistry,
-    });
   });
 
   it.each(["environment", "profile", "plugin"] as const)(

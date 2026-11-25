@@ -1,3 +1,4 @@
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -76,6 +77,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { assertParticipationRuntime } from "./participation-ceiling.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -130,11 +132,7 @@ async function runCliAgentInternal(
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
-  const assertSettlementCurrent = () => {
-    (params.assertSettlementCurrent ?? params.assertCurrent)?.();
-    modelExecution?.assertCurrent();
-    generation?.assertCurrent();
-  };
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -170,6 +168,10 @@ async function runCliAgentInternal(
       modelExecution?.signal,
       generation ? generationAbortController.signal : undefined,
     ].filter((signal) => signal !== undefined);
+    // Stop ends model execution, not custody of already-completed transcript rows.
+    const assertSettlementCurrent = generation
+      ? composeSessionSourceAssertion([params.assertSettlementCurrent, generation.assertCurrent])
+      : params.assertSettlementCurrent;
     const runParams =
       modelExecution || generation
         ? {

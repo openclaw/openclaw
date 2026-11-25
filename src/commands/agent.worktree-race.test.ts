@@ -12,6 +12,7 @@ import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { holdWorkspacePreparationSnapshot } from "../agents/workspace-preparation-queue.test-support.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { initializeGitFixture } from "../agents/worktrees/git-fixture.test-support.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -167,12 +168,24 @@ describe("agent command worktree admission", () => {
     });
   });
 
-  it("fails closed before workspace setup when the session's bound worktree was removed", async () => {
+  it("refuses a removed workspace, then admits its explicitly restored idle checkout", async () => {
     await withTempHome(async (home) => {
-      const { id } = await createSessionWorktree(home, true);
-      await managedWorktrees.remove({ id, reason: "manual-delete", allowSnapshotLoss: true });
-      await expect(prepareSession()).rejects.toThrow("managed worktree was removed");
+      const { id, nested } = await createSessionWorktree(home, true);
+      const saved = path.join(nested, "saved.txt");
+      await fs.writeFile(saved, "saved command work\n");
+      await managedWorktrees.remove({ id, reason: "idle-gc" });
+      await expect(prepareSession()).rejects.toThrow("This session's worktree was removed");
       expect(ensureAgentWorkspace).not.toHaveBeenCalled();
+      await managedWorktrees.restore({ id });
+      await updateRegistryWorktree(process.env, id, { lastActiveAt: 1 });
+      const prepared = await prepareSession();
+      try {
+        expect(await fs.readFile(saved, "utf8")).toBe("saved command work\n");
+        expect(prepared.runLease).toBeDefined();
+        expect(ensureAgentWorkspace).toHaveBeenCalled();
+      } finally {
+        await prepared.runLease?.release();
+      }
     });
   });
 });

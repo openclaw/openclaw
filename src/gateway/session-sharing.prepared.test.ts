@@ -68,8 +68,8 @@ it("keeps retained policies isolated across memberships and current across autho
 
     client.authenticatedUserProfile = undefined;
     prepareGatewayRecipientProfile(client);
-    expect(() => member!.policy(cfg, [identityId])).toThrow("Gateway requester authority changed");
-    expect(() => outsider!.policy(cfg, [])).toThrow("Gateway requester authority changed");
+    expect(() => member!.policy(cfg, [identityId])).toThrow("Gateway requester identity changed");
+    expect(() => outsider!.policy(cfg, [])).toThrow("Gateway requester identity changed");
   });
 });
 

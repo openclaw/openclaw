@@ -649,7 +649,7 @@ describe("remote Control UI ingress production composition", () => {
         ? { ...principalOptions, recoveryId: "issued-transport-grant" }
         : undefined,
     );
-    const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+    const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
     const binding = await factory.bindPrincipal(principalOptions);
     try {
       await binding.request("voicewake.get", {});
@@ -834,7 +834,7 @@ describe("remote Control UI ingress production composition", () => {
             ? { ...options, recoveryId: `original-${role}-app` }
             : undefined,
         );
-        const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+        const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
         const ephemeral = await factory.bindPrincipal(options);
         try {
           await ephemeral.request("users.self", {});
@@ -850,7 +850,7 @@ describe("remote Control UI ingress production composition", () => {
         try {
           const durableCapture = vi.spyOn(
             operatorRunAuthority,
-            "captureGatewayOperatorRunAuthority",
+            "prepareGatewayOperatorRunAuthority",
           );
           let snapshot;
           try {
@@ -871,14 +871,17 @@ describe("remote Control UI ingress production composition", () => {
               context: gatewayContext,
               assertCurrent() {},
             });
-          recovered = await restore();
-          expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
-          expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe(
-            role === "operator" ? "write" : "view",
-          );
-          expect(recovered.authority.scopes).not.toContain("operator.admin");
+          if (role === "operator") {
+            recovered = await restore();
+            expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
+            expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe("write");
+            expect(recovered.authority.scopes).not.toContain("operator.admin");
+          } else {
+            // A read-only requester's saved source starts no new work.
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
+          }
           resumable = false;
-          await expect(restore()).rejects.toThrow("original ingress grant");
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
           resumable = true;
           await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
             "operator.admin",
@@ -918,7 +921,6 @@ describe("remote Control UI ingress production composition", () => {
             ).toMatchObject({ ok: true });
             setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
             await expect(binding.request("voicewake.get", {})).rejects.toThrow();
-            expect(recovered?.authority.assertCurrent).toThrow();
             await expect(restore()).rejects.toThrow();
             await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
           });

@@ -498,6 +498,25 @@ it.each([false, true])(
   },
 );
 
+it("keeps completed prose but not Claude's synthetic interruption notice on Stop", () => {
+  const segments: Cli.CliCommentarySegment[] = [];
+  const parser = createClaudeParser({ onCommentarySegment: (segment) => segments.push(segment) });
+  parser.push(
+    joinJsonlFrames(
+      init("native"),
+      nativeText("reply", "Saved before Stop.", { stop_reason: null }),
+      nativeText("notice", "[Request interrupted by user]", { model: "<synthetic>" }),
+      "",
+    ),
+  );
+  parser.flushCompletedSegments();
+  expect(segments.map((segment) => segment.text)).toEqual(["Saved before Stop."]);
+  expect(parser.getOutput()).toMatchObject({
+    text: "Saved before Stop.",
+    resumeCheckpointId: "reply",
+  });
+});
+
 it.each([false, true])("identifies only snapshot-owned output with commentary=%s", (commentary) => {
   const parser = createClaudeParser({ onCommentaryText: commentary ? () => {} : undefined });
   finishFrames(

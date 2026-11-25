@@ -14,6 +14,7 @@ import {
   orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
+  RESERVED_FOR_MEDIA_MATCH,
   mergeCliHistoryRow,
   type CliHistoryMergeStore,
   type HistoryMatch,
@@ -77,8 +78,8 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
-      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
+      native_tool_bytes INTEGER, text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, media_key TEXT,
+      media_prompt INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
     this.database
@@ -89,7 +90,7 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_text ON messages(role, text, consumed, id);
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
       CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
-      CREATE INDEX match_image ON messages(image_key, consumed, id);
+      CREATE INDEX match_media ON messages(media_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
       CREATE UNIQUE INDEX history_ordinal ON messages(ordinal);
@@ -180,13 +181,14 @@ export class CliSessionHistoryIndex {
         message_id: parameter((row) => row.message_id),
         payload: parameter((row) => row.payload),
         bytes: parameter((row) => row.bytes),
+        native_tool_bytes: parameter((row) => row.native_tool_bytes),
         role: parameter((row) => row.role),
         text: parameter((row) => row.text),
         drift_text: parameter((row) => row.drift_text),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
-        image_key: parameter((row) => row.image_key),
-        image_mentions: parameter((row) => row.image_mentions),
+        media_key: parameter((row) => row.media_key),
+        media_prompt: parameter((row) => row.media_prompt),
         metadata: parameter((row) => row.metadata),
         consumed: parameter((row) => row.consumed),
         ordinal: parameter((row) => row.ordinal),
@@ -313,8 +315,23 @@ export class CliSessionHistoryIndex {
     if (this.hasAggregates) {
       this.coverage.setLocalUsers(readCliHistoryCoverageUsers(this.database));
     }
+    // Reserve only correlated uploads; unmarked native histories still use the text fallback.
+    executeSqliteQuerySync(
+      this.database,
+      this.db
+        .updateTable("messages")
+        .set({ consumed: RESERVED_FOR_MEDIA_MATCH })
+        .where("consumed", "=", 0)
+        .where(
+          "media_key",
+          "in",
+          this.db.selectFrom("imports").select("media_key").where("media_key", "is not", null),
+        ),
+    );
     const candidates = () =>
-      this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
+      this.db
+        .selectFrom("messages")
+        .select(["id", "text", "metadata", "role", "import_ref", "bytes", "native_tool_bytes"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
@@ -327,17 +344,17 @@ export class CliSessionHistoryIndex {
           .orderBy("id", "desc")
           .limit(1),
     );
-    const matchImage = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
+    const matchMedia = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
         candidates()
           .where(
-            "image_key",
+            "media_key",
             "=",
             parameter((key) => key),
           )
           .where("local_seq", "is not", null)
-          .where("consumed", "=", 0)
+          .where("consumed", "=", RESERVED_FOR_MEDIA_MATCH)
           .orderBy("id")
           .limit(1),
     );
@@ -389,7 +406,7 @@ export class CliSessionHistoryIndex {
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
     const matchers = { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) };
-    const consume = prepareSqliteQuerySync<Pick<HistoryRow, "id" | "metadata" | "external_key">>(
+    const consume = prepareSqliteQuerySync<Parameters<CliHistoryMergeStore["consume"]>[0]>(
       this.database,
       (parameter) =>
         this.db
@@ -398,6 +415,8 @@ export class CliSessionHistoryIndex {
             metadata: parameter((row) => row.metadata),
             consumed: 1,
             external_key: parameter((row) => row.external_key),
+            import_ref: parameter((row) => row.import_ref),
+            bytes: parameter((row) => row.bytes),
           })
           .where(
             "id",
@@ -407,7 +426,7 @@ export class CliSessionHistoryIndex {
     );
     const store: CliHistoryMergeStore = {
       matchExternal,
-      matchImage,
+      matchMedia,
       matchers,
       consume,
       onMatch: this.hasAggregates
@@ -431,13 +450,14 @@ export class CliSessionHistoryIndex {
             "import_ref",
             "message_id",
             "bytes",
+            "native_tool_bytes",
             "role",
             "text",
             "drift_text",
             "timestamp",
             "external_key",
-            "image_key",
-            "image_mentions",
+            "media_key",
+            "media_prompt",
             "metadata",
             "consumed",
             "ordinal",
@@ -497,21 +517,17 @@ export class CliSessionHistoryIndex {
       this.database,
       this.db
         .selectFrom("messages")
-        .select(["id", "local_seq", "metadata", "ordinal", "bytes"])
+        .select(["id", "local_seq", "import_ref", "metadata", "ordinal", "bytes"])
         .where("ordinal", ">=", start)
         .where("ordinal", "<", end)
         .orderBy("ordinal"),
     ).rows;
   }
 
-  message(id: number): unknown {
+  importedMessage(id: number): unknown {
     const row = executeSqliteQueryTakeFirstSync(
       this.database,
-      this.db
-        .selectFrom("messages")
-        .innerJoin("imports", "imports.id", "messages.import_ref")
-        .select("imports.payload")
-        .where("messages.id", "=", id),
+      this.db.selectFrom("imports").select("payload").where("id", "=", id),
     );
     return row?.payload ? JSON.parse(row.payload) : undefined;
   }

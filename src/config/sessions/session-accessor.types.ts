@@ -479,6 +479,8 @@ export type SessionTranscriptTurnPersistOptions = {
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
+  /** Publication only: native live intervals owned by this exact keyed assistant row. */
+  assistantItemReceipt?: { idempotencyKey: string; itemIds: readonly string[] };
   /**
    * Accept appended or matched messages synchronously after guarded SQLite commit.
    * Explicit completion work is joined before owner drain or transcript publication.

@@ -11,10 +11,15 @@ import {
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { shouldDropAssistantHistoryMessage } from "./chat-display-projection.sanitize.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+// The local row is unavailable to text matching, but its exact media import can still consume it.
+export const RESERVED_FOR_MEDIA_MATCH = 2;
 
 // v2026.11.1-v2026.11.3 wrote gap notes with an optional replay block.
 // Fresh sessions could carry the gap alone; both shapes are comparison-only.
@@ -105,9 +110,9 @@ function extractComparableText(
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeImport
-      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
-      : {}),
+    cliImageTurnKey: isClaudeImport
+      ? (storedImageTurnKey ?? (stripResult.stripped ? readCliImageTurnContext(joined) : undefined))
+      : undefined,
     ...(normalized ? { text: normalized } : {}),
     ...(driftNoteText ? { driftNoteText } : {}),
   };
@@ -135,17 +140,59 @@ export type HistoryRow = {
   message_id: string | null;
   payload: string | null;
   bytes: number;
+  // Extra display bytes for joining a row: native tool blocks or a canonical string's text wrapper.
+  native_tool_bytes: number | null;
   role: string | null;
   text: string | null;
   drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
-  image_key: string | null;
-  image_mentions: number;
+  media_key: string | null;
+  media_prompt: number;
   metadata: string | null;
   consumed: number;
   ordinal: number | null;
 };
+
+// The runner saves the transformed text, not the native tool arguments. Only the
+// display index may join the sanitized native calls back onto that exact row.
+export function localCliHistoryToolJoinBytes(message: unknown): number | null {
+  const record = asOptionalRecord(message);
+  const meta = asOptionalRecord(record?.["__openclaw"]);
+  if (record?.role !== "assistant" || meta?.importedFrom !== "claude-cli" || !meta.externalId) {
+    return null;
+  }
+  const display = projectAssistantDisplayContent(record);
+  if (shouldDropAssistantHistoryMessage(display)) {
+    return null;
+  }
+  if (typeof display.content === "string") {
+    return JSON.stringify([{ type: "text", text: "" }]).length - JSON.stringify("").length;
+  }
+  return Array.isArray(display.content) &&
+    display.content.some((block: unknown) => asOptionalRecord(block)?.type === "text") &&
+    !display.content.some((block: unknown) => isToolCallContentType(asOptionalRecord(block)?.type))
+    ? 0
+    : null;
+}
+
+function nativeToolBytes(record: Record<string, unknown> | undefined): number | null {
+  if (
+    record?.role !== "assistant" ||
+    !Array.isArray(record.content) ||
+    !record.content.some((block: unknown) => asOptionalRecord(block)?.type === "text")
+  ) {
+    return null;
+  }
+  let bytes = 0;
+  for (const block of record.content) {
+    if (asOptionalRecord(block)?.type === "toolcall") {
+      bytes += Buffer.byteLength(JSON.stringify(block)) + 1; // Includes the array separator.
+    }
+  }
+  return bytes || null;
+}
+
 export function createCliHistoryRow(message: unknown, id: number, localSeq?: number): HistoryRow {
   const record = asOptionalRecord(message);
   const meta = asOptionalRecord(record?.["__openclaw"]);
@@ -154,10 +201,11 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     record && role
       ? extractComparableText(record, role, localSeq === undefined)
       : { hasCliImageMentions: false };
-  const localImage =
-    record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
+  const localMedia =
+    record?.role === "user" && readPersistedMediaFacts(record)?.some(isMeaningfulMediaFact);
   const entryId = normalizeOptionalString(meta?.id);
   const serialized = JSON.stringify(message);
+  const externalKey = resolveImportedExternalIdentityKey(meta);
   return {
     id,
     local_seq: localSeq ?? null,
@@ -165,26 +213,35 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     message_id: entryId === undefined ? null : JSON.stringify(entryId),
     payload: localSeq === undefined ? serialized : null,
     bytes: Buffer.byteLength(serialized, "utf8"),
+    native_tool_bytes:
+      localSeq !== undefined
+        ? localCliHistoryToolJoinBytes(message)
+        : externalKey && meta?.importedFrom === "claude-cli"
+          ? nativeToolBytes(record)
+          : null,
     role: role ?? null,
     text: comparable.text === undefined ? null : JSON.stringify(comparable.text),
     drift_text:
       comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
     timestamp: asFiniteNumber(record?.timestamp) ?? null,
-    external_key: resolveImportedExternalIdentityKey(meta) ?? null,
-    image_key:
+    external_key: externalKey ?? null,
+    media_key:
       localSeq === undefined
         ? (comparable.cliImageTurnKey ?? null)
-        : localImage
+        : localMedia
           ? ((entryId ? hashCliImageTurnEntryId(entryId) : comparable.cliImageTurnKey) ?? null)
           : null,
-    image_mentions: comparable.hasCliImageMentions ? 1 : 0,
+    media_prompt: comparable.hasCliImageMentions || comparable.cliImageTurnKey ? 1 : 0,
     metadata: meta ? JSON.stringify(meta) : null,
     consumed: 0,
     ordinal: null,
   };
 }
 
-export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
+export type HistoryMatch = Pick<
+  HistoryRow,
+  "id" | "text" | "metadata" | "role" | "import_ref" | "native_tool_bytes" | "bytes"
+>;
 export type HistoryTextMatch = {
   role: string;
   text: string;
@@ -197,11 +254,13 @@ type HistoryTextMatchers = Record<
 >;
 export type CliHistoryMergeStore = {
   matchExternal: (key: string) => HistoryMatch | undefined;
-  matchImage: (key: string) => HistoryMatch | undefined;
+  matchMedia: (key: string) => HistoryMatch | undefined;
   matchers: HistoryTextMatchers;
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
-  consume: (row: Pick<HistoryRow, "id" | "metadata" | "external_key">) => void;
+  consume: (
+    row: Pick<HistoryRow, "id" | "metadata" | "external_key" | "import_ref" | "bytes">,
+  ) => void;
   onMatch?: (
     imported: Omit<HistoryRow, "payload">,
     matched: HistoryMatch,
@@ -213,7 +272,7 @@ export function mergeCliHistoryRow(
   imported: Omit<HistoryRow, "payload">,
   store: CliHistoryMergeStore,
 ): boolean {
-  const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
+  const { matchExternal, matchMedia, matchers, minimumOrder, consume } = store;
   const advance = (matched: Pick<HistoryRow, "id" | "text">) => {
     for (const text of new Set([
       imported.text,
@@ -226,14 +285,27 @@ export function mergeCliHistoryRow(
   };
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
   if (duplicate) {
+    if (
+      imported.native_tool_bytes &&
+      duplicate.native_tool_bytes !== null &&
+      duplicate.import_ref === null
+    ) {
+      consume({
+        id: duplicate.id,
+        metadata: duplicate.metadata,
+        external_key: imported.external_key,
+        import_ref: imported.id,
+        bytes: duplicate.bytes + duplicate.native_tool_bytes + imported.native_tool_bytes,
+      });
+    }
     store.onMatch?.(imported, duplicate, true);
     advance(duplicate);
     return true;
   }
-  if (imported.image_mentions && imported.image_key) {
-    duplicate = matchImage(imported.image_key);
+  if (imported.media_key) {
+    duplicate = matchMedia(imported.media_key);
   }
-  if (!duplicate && !imported.image_mentions) {
+  if (!duplicate && !imported.media_prompt) {
     const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
     for (const text of [imported.text, imported.drift_text]) {
       if (!text || !imported.role) {
@@ -255,7 +327,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
-    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
+    store.onMatch?.(imported, duplicate, Boolean(imported.media_prompt));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)
@@ -272,6 +344,8 @@ export function mergeCliHistoryRow(
       id: duplicate.id,
       metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
+      import_ref: duplicate.import_ref,
+      bytes: duplicate.bytes,
     });
     advance(duplicate);
     return true;
@@ -369,9 +443,46 @@ export type CliHistoryIndex = {
   rows: (
     start: number,
     end: number,
-  ) => Pick<HistoryRow, "id" | "local_seq" | "metadata" | "ordinal" | "bytes">[];
-  message: (id: number) => unknown;
+  ) => Pick<HistoryRow, "id" | "local_seq" | "import_ref" | "metadata" | "ordinal" | "bytes">[];
+  importedMessage: (id: number) => unknown;
   localOrdinal: (seq: number) => number | undefined;
   ordinal: (messageId: string) => number | undefined;
   close: () => void;
 };
+
+export function materializeCliHistoryRow(
+  index: CliHistoryIndex,
+  row: ReturnType<CliHistoryIndex["rows"]>[number],
+  local: unknown,
+): Record<string, unknown> | undefined {
+  const imported =
+    row.import_ref === null ? undefined : asOptionalRecord(index.importedMessage(row.import_ref));
+  let record = row.local_seq === null ? imported : asOptionalRecord(local);
+  if (!record) {
+    return undefined;
+  }
+  if (row.local_seq !== null && Array.isArray(imported?.content)) {
+    // Keep the canonical text and attachments in the first native text slot. No
+    // native text/reasoning or visibility metadata crosses the identity join.
+    const display = projectAssistantDisplayContent(record);
+    const canonical =
+      typeof display.content === "string"
+        ? [{ type: "text", text: display.content }]
+        : display.content;
+    if (Array.isArray(canonical)) {
+      const content: unknown[] = [];
+      let inserted = false;
+      for (const block of imported.content) {
+        const type = asOptionalRecord(block)?.type;
+        if (type === "toolcall") {
+          content.push(block);
+        } else if (!inserted && type === "text") {
+          content.push(...canonical);
+          inserted = true;
+        }
+      }
+      record = { ...display, content };
+    }
+  }
+  return { ...record, ...(row.metadata ? { __openclaw: JSON.parse(row.metadata) } : {}) };
+}

@@ -13,7 +13,6 @@ import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
-import * as gitReleasePaths from "../../infra/git-release-paths.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
@@ -29,14 +28,8 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import {
-  isolateGitIdentity,
-  runFixtureGit as git,
-} from "../../infra/update-runner-git-candidate.test-support.js";
-import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
@@ -136,8 +129,6 @@ const { runUpdateFinalizationDoctorInFreshProcess } =
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
 
 beforeEach(() => {
-  // These cases cover the in-place Git runner Windows checkouts and package-to-Git switches use.
-  vi.spyOn(gitReleasePaths, "usesGitReleases").mockReturnValue(false);
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
     stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
   );
@@ -189,8 +180,6 @@ it.each([
   "package",
   "relative-node",
   "exited-writer",
-  "git",
-  "git-edited",
   "verification",
   "newer-schema",
   "activated-boot",
@@ -212,14 +201,10 @@ it.each([
     // newer-schema: Doctor commits a schema this (previous) build cannot open, then fails.
     const newerSchema = scenario === "newer-schema";
     const sharedVersion = independentPlugin || newerSchema ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
-    const gitInstall = scenario === "git" || scenario === "git-edited";
-    const outsideWrite = [
-      "git-edited",
-      "intervening",
-      "post-migration-write",
-      "schema-neutral-write",
-    ].includes(scenario);
-    const preservesMigrated = outsideWrite && scenario !== "git-edited";
+    const outsideWrite = ["intervening", "post-migration-write", "schema-neutral-write"].includes(
+      scenario,
+    );
+    const preservesMigrated = outsideWrite;
     const candidateSchemas =
       scenario === "schema-neutral-write"
         ? { state: 15, agent: 21 }
@@ -348,90 +333,6 @@ it.each([
         worker,
         `if(process.argv[2]==='--doctor') await import(${JSON.stringify(entry)});
          else await import(${JSON.stringify(actualWorker)});\n`,
-      );
-    }
-    let beforeGitSha: string | undefined;
-    const writeGitRuntime = async (root: string) => {
-      const sha = await git(root, "rev-parse", "HEAD");
-      const dist = path.join(root, "dist");
-      await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
-      await Promise.all([
-        writeJson(path.join(dist, "build-info.json"), { commit: sha, buildId: sha }),
-        writeJson(path.join(dist, ".buildstamp"), { head: sha }),
-        writeJson(path.join(dist, ".runtime-postbuildstamp"), { head: sha }),
-        fs.writeFile(path.join(dist, "control-ui", "index.html"), "ready"),
-        fs.writeFile(path.join(dist, "entry.js"), "import './index.js';\n"),
-      ]);
-    };
-    if (gitInstall) {
-      isolateGitIdentity();
-      await git(packageRoot, "init", "--initial-branch=main");
-      await git(packageRoot, "config", "user.name", "OpenClaw Test");
-      await git(packageRoot, "config", "user.email", "openclaw@example.com");
-      await fs.writeFile(
-        path.join(packageRoot, ".gitignore"),
-        "dist/\nnode_modules/\n.artifacts/\n",
-      );
-      await git(packageRoot, "add", ".");
-      await git(packageRoot, "commit", "-m", "previous installation");
-      beforeGitSha = await git(packageRoot, "rev-parse", "HEAD");
-      await writeGitRuntime(packageRoot);
-      const remote = path.join(base, "remote");
-      await git(base, "clone", "--quiet", packageRoot, remote);
-      await git(remote, "config", "user.name", "OpenClaw Test");
-      await git(remote, "config", "user.email", "openclaw@example.com");
-      await fs.copyFile(
-        path.join(swapFixture.params.stage.packageRoot, "package.json"),
-        path.join(remote, "package.json"),
-      );
-      await git(remote, "add", ".");
-      await git(remote, "commit", "-m", "candidate installation");
-      await git(packageRoot, "remote", "add", "origin", remote);
-      await git(packageRoot, "fetch", "origin");
-      await git(packageRoot, "branch", "--set-upstream-to=origin/main", "main");
-      mocks.runGitUpdate.mockImplementation(
-        async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) =>
-          updateGitCheckout({
-            gitRoot: packageRoot,
-            startedAt: Date.now(),
-            timeoutMs: 5000,
-            defaultCommandEnv: undefined,
-            runCommand: async (argv, options) => {
-              if (argv[0] !== "pnpm") {
-                return runCommandWithTimeout(argv, options);
-              }
-              if (argv[1] === "build") {
-                await fs.cp(
-                  path.join(swapFixture.params.stage.packageRoot, "dist"),
-                  path.join(options.cwd!, "dist"),
-                  { recursive: true },
-                );
-                await writeGitRuntime(options.cwd!);
-              }
-              return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
-            },
-            opts: {
-              inspectGitTarget: params.inspectGitTarget,
-              beforeGitMutation: params.beforeGitMutation,
-              validateCandidate: params.validateCandidate,
-              onTransaction: async (transaction) => {
-                await params.onTransaction?.(transaction);
-                observePluginCohort();
-              },
-              runGitDoctor: async (root, results) => {
-                const step = await runPackageUpdateDoctor({
-                  ...params,
-                  root,
-                  results,
-                  managedServiceEnv: params.getManagedServiceEnv(),
-                });
-                if (scenario === "git-edited") {
-                  await fs.appendFile(path.join(root, "package.json"), "\n");
-                }
-                return step;
-              },
-            },
-          }),
       );
     }
     starts.length = 0;
@@ -680,7 +581,7 @@ it.each([
       return { ok: true, score: 7, summary: "Fixture retained runtime serves restored data" };
     });
     let verifySettledHistory: (() => void) | undefined;
-    try {
+    {
       const operation = withUpdateCommandTerminalResult(
         (registerRun) => {
           registerRun(run);
@@ -689,7 +590,7 @@ it.each([
               admit(await executor.enter(packageRoot)),
             );
             const params = {
-              ...executionParams(gitInstall ? "git" : "package"),
+              ...executionParams("package"),
               root: packageRoot,
               packageInstallTarget: swapFixture.params.installTarget,
               opts,
@@ -716,10 +617,6 @@ it.each([
               loadPluginCohortRecovery(run.runId, { env: serviceEnv, allowNativeRead: true })
                 ?.cohort.transactionId,
             ).toBe(cohortTransactionId);
-            if (gitInstall) {
-              assert(databaseBackup, "Git update must capture pre-migration databases");
-              retainedSnapshotDirectory = databaseBackup.directory;
-            }
             if (scenario === "exited-writer") {
               // Capture under maintenance custody must not rebuild the source WAL index.
               const captured = execution.result.steps.find(
@@ -764,25 +661,19 @@ it.each([
               );
             if (outsideWrite) {
               const reason =
-                scenario === "git-edited"
-                  ? "Git checkout changed after activation"
-                  : scenario === "intervening"
-                    ? "databases changed after snapshot capture"
-                    : "restoring the backup would discard later writes";
+                scenario === "intervening"
+                  ? "databases changed after snapshot capture"
+                  : "restoring the backup would discard later writes";
               expect(starts).toEqual(scenario === "intervening" ? ["1.0.0", "1.0.0"] : ["1.0.0"]);
               const rollback = execution.result.steps.find(
                 (step) => step.name === "database rollback",
               );
               expect(rollback).toMatchObject({ exitCode: 1, cwd: retainedSnapshotDirectory });
               for (const file of files) {
-                if (scenario === "git-edited") {
-                  expect(readDatabase(file).rows).toEqual(candidateRows);
-                } else {
-                  expect(readDatabase(file).rows).toContainEqual({
-                    rowid: 99,
-                    value: scenario === "intervening" ? "after-capture" : "after-migration",
-                  });
-                }
+                expect(readDatabase(file).rows).toContainEqual({
+                  rowid: 99,
+                  value: scenario === "intervening" ? "after-capture" : "after-migration",
+                });
                 expect(readDatabase(file).version).toBe(migratedVersions[file === shared ? 0 : 1]);
                 await expectNoMigratedFile(file);
                 expectSnapshot(file);
@@ -801,10 +692,6 @@ it.each([
               });
               expect(readState()).toEqual(preserved);
               expect(await readVersion(packageRoot)).toBe("2.0.0");
-              if (scenario === "git-edited") {
-                expect(await git(packageRoot, "diff", "--name-only")).toBe("package.json");
-                expect(await git(packageRoot, "rev-parse", "HEAD")).not.toBe(beforeGitSha);
-              }
               expect(restart).not.toHaveBeenCalled();
               if (preservesMigrated) {
                 expect(await readServing()).toMatchObject({ version: "2.0.0" });
@@ -949,10 +836,6 @@ it.each([
             expect(
               loadPluginCohortRecovery(run.runId, { env: serviceEnv, allowNativeRead: true }),
             ).toBeUndefined();
-            if (beforeGitSha) {
-              expect(await git(packageRoot, "rev-parse", "HEAD")).toBe(beforeGitSha);
-              expect(await git(packageRoot, "status", "--porcelain")).toBe("");
-            }
             verifySettledHistory = () => {
               const record = getUpdateRun(run.runId, { env });
               expect(record).toMatchObject(
@@ -1014,8 +897,6 @@ it.each([
         await operation;
       }
       verifySettledHistory?.();
-    } finally {
-      await opts.run?.sourceArtifactLock?.release();
     }
   },
 );

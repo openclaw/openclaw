@@ -1144,7 +1144,6 @@ describe("chat state render lifecycle", () => {
       chatMessagesBySession: new Map(),
       chatRunId: "run-1",
       chatStream: null,
-      chatStreamSegments: [],
       chatStreamRenderFrame: null,
       chatStreamStartedAt: 1,
       lastError: null,

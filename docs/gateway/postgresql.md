@@ -35,8 +35,9 @@ manual qualification can run all three majors. See the
 | CLI and interactive setup/onboard                 | Supported                               | Includes one-shot commands and Doctor; PostgreSQL `onboard --reset` deliberately refuses.                                                                                                                                      |
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
-| Update admission, forward migrations and recovery | Supported                               | Exact captures and state/agent rollback; independent writes can prevent automatic recovery.                                                                                                                                    |
-| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. Stable PG → current is not applicable; [evidence and service/turn limits](#published-stable-upgrade-qualification). |
+| Update admission, forward migrations and recovery | Supported                               | Release trials use protected server-side copies, with no size refusal or in-place trial fallback. Legacy capture/restore has separate generation checks.                                                                       |
+| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
+| Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
 | Mixed engines                                     | Supported                               | All four state/agent pairs and independently selected plugin families; one shared PostgreSQL connection configuration.                                                                                                         |
 | Independent Gateways on one server                | Supported                               | Separate databases recommended; distinct namespaces in one database also tested. One live Gateway per store.                                                                                                                   |
@@ -54,7 +55,7 @@ manual qualification can run all three majors. See the
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
 | Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
 | Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
-| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
+| Native Windows package update with PG state       | Qualification pending                   | 2026.11.5 supports PostgreSQL state and agent stores. A published-package upgrade on Windows still needs qualification. [Evidence](#native-windows-qualification).                                                             |
 | Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
@@ -63,6 +64,10 @@ Anchors, client credentials, daemon runtime pins, quarantine, managed-update and
 package-activation journals remain **local by design**, not missing PostgreSQL
 families. There are no other configurable families. Device caches, external
 read-only sources and file artifacts also remain outside engine selection.
+
+Protected-copy prerequisites, including database `CREATE`, apply to release trials.
+An ordinary start after a manual package upgrade keeps the existing in-place
+migration-on-open path and does not acquire copy-only privilege requirements.
 
 ## Server-major qualification
 
@@ -142,12 +147,10 @@ patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched se
 build used state **32** / agent **34**; this run does not qualify the later state
 33 / agent 35–36 migrations.
 
-**Package update with PostgreSQL state is not yet applicable.** No published
-release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
-inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
-the configuration but its bundled runtime selects SQLite for state and agent
-stores, with PostgreSQL enabled only for Workboard. Requalify published-release
-updates when a version selecting PostgreSQL state and agent stores ships.
+**Package update with PostgreSQL state still needs Windows qualification.**
+Published 2026.11.5 supports PostgreSQL state and agent stores. The earlier
+Windows service runs used development builds and do not establish package-update
+continuity from that release.
 
 The previous-main update and managed rollback attempts did not complete.
 Separate handoff-path and candidate-admission fixes landed in
@@ -840,16 +843,44 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
-`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
-imports into the server named by the DSN in that environment variable instead,
-for restore drills against a staging database; the restored configuration keeps
-the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+#### Run an isolated restore drill
+
+To rehearse a full archive restore while the source Gateway runs, give the
+restore CLI its own state directory and config path. The CLI needs offline
+ownership of its selected state directory even when the import uses a separate
+PostgreSQL database.
+
+1. [Provision a dedicated staging database and role](#provision-a-database-and-runtime-role)
+   with the extensions required by the captured stores. Export its DSN as
+   `STAGING_PG_DSN` using your secret manager. If the archived config's default
+   environment secret provider has an allowlist, it must include that name.
+2. From a shell with that variable set, use a trusted backup archive. Use a
+   temporary directory outside the source installation's state, config, and
+   agent directories. The example creates a fresh CLI directory and a separate
+   restore target under that temporary directory.
+
+   ```bash
+   archive=/path/to/trusted-backup.tar.gz
+   drill_dir="$(mktemp -d)"
+   mkdir -m 700 "$drill_dir/cli"
+
+   OPENCLAW_STATE_DIR="$drill_dir/cli" \
+     OPENCLAW_CONFIG_PATH="$drill_dir/cli/openclaw.json" \
+     openclaw backup restore "$archive" --target "$drill_dir/restored" \
+       --postgres-connection-env STAGING_PG_DSN
+   ```
+
+3. Check that restore reports success and inspect the staged files and restored
+   stores in the staging database. Keep the restored installation offline during
+   the drill. The DSN override applies only to the import, and the restored
+   config still points to the archived connection.
 
 ### Recover a retained agent store
 
@@ -945,6 +976,15 @@ To recover these scopes:
 
 ## Published-stable upgrade qualification
 
+[OpenClaw 2026.11.5](https://www.npmjs.com/package/openclaw/v/2026.11.5) ships
+PostgreSQL support for shared state and agent stores. The Linux published-driver
+CI cell installs that release against PostgreSQL 17, writes a session and
+transcript through the Gateway, and runs the installed updater with
+`--no-restart` against the candidate package. It checks both PostgreSQL schema
+versions and reads the same session and transcript from the candidate Gateway.
+The matched-backup rollback evidence below comes from the separate 2026.10.5
+SQLite upgrade.
+
 The qualification below used [OpenClaw 2026.10.5](https://www.npmjs.com/package/openclaw/v/2026.10.5).
 Its packaged configuration schema does not support `database.engine=postgres`,
 so a native 2026.10.5-PostgreSQL → current upgrade is **not applicable**. Users on
@@ -994,8 +1034,9 @@ The native-client support rows above retain their own qualification scope.
 
 Use `openclaw update` for supported update admission. The
 [published-stable qualification](#published-stable-upgrade-qualification) covers
-SQLite update, PostgreSQL adoption and matched-backup rollback, with foreground
-Gateway verification. Its service and live-turn limits still apply.
+SQLite update, PostgreSQL adoption and matched-backup rollback, and a separate
+PostgreSQL-to-PostgreSQL upgrade cell, with foreground Gateway verification.
+Its service and live-turn limits still apply.
 
 Before stopping the previous Gateway or changing data, it checks the target's declared engine and PostgreSQL
 family support against selected families and retained physical stores. Explicit
@@ -1009,28 +1050,85 @@ matching server store's version without migrating it. An older server schema can
 therefore reach the stopped-writer migration phase; a newer schema or mismatched
 anchor identity still refuses the update.
 
-Update Doctor and `openclaw update repair` select the configured engines before
-reading maintenance state. Doctor inspects configured PostgreSQL agents without
-opening them as runtime stores, then applies their forward migrations with writers
-stopped. Transcript migration detection uses the selected engine's catalog. The local
-anchors remain identity files; SQLite repair and reclamation leave them untouched.
-Gateway startup still requires the completed PostgreSQL migration.
+Preparation checks the PostgreSQL copy prerequisites while the previous Gateway
+serves. A schema-changing update uses a **private server-side copy**, without a
+size-based admission rule:
+
+1. After the previous Gateway and other writers stop, the candidate copies each
+   affected PostgreSQL store into a fresh private namespace. Required SQLite
+   migration inputs stay in the same private upgrade tree, including mixed-engine
+   state/agent pairs.
+2. It runs and validates the forward migrations against private inputs only.
+   The original PostgreSQL application schema and rows remain unchanged.
+3. Only after all private migrations pass does it write the durable swap plan
+   and publish the new anchors. Original anchors stay with their recovery generation.
+4. If the trial fails, the resident launcher restores the previous release,
+   anchors, and local migration originals. The old anchors select the original
+   namespaces. Rollback needs no PostgreSQL restore or launcher SQL.
+
+Writes made only during the failed trial are discarded, as with SQLite trials.
+Restoring anchors does not repair an unavailable PostgreSQL server. Recovery is
+confirmed only when the previous Gateway reports ready.
+
+For stores selected for protection, the release path uses the server-side carrier,
+regardless of `database.postgres.recoveryCaptures`, with **no portable-export
+fallback**. If the copy or migration cannot be prepared, the candidate refuses
+through the existing configuration-refusal exit (78) and names the obstruction.
+Restore missing copy privileges or namespace ownership before retrying; see
+[runtime role requirements](#provision-a-database-and-runtime-role).
+
+Store size does not refuse the release update and never selects an in-place
+trial path. An ordinary non-trial Gateway start still uses its normal migration
+owner.
+
+The copy preserves and verifies schema, table, column, and sequence grants,
+including grant options and schema-specific default privileges. Existing reader,
+backup, and reporting roles keep their access. If the configured login cannot
+assume a source owner or grantor role, preparation refuses and names the required
+administrator action.
+
+Expect a longer restart for protected copies: copying runs after the old Gateway
+stops. Each protected schema-changing update changes the affected store's namespace
+name. Update operator tooling tied to a namespace, including dump scripts,
+grant-management scripts, and monitoring, to use the namespace selected by the current anchor.
+Allow space for at least the original and private server copies, plus indexes,
+WAL, temporary work, and any retained generations. There is no portable local
+row export on this release path. The existing release-trial deadline still
+bounds copy, migration, and startup together; the maintenance statement limits
+below do not extend it. The estimate is an admission bound, not a completion
+guarantee.
+
+Namespace retention follows the paired anchor generations. Keep the active,
+immediate-prior, and pinned or recovery generations. Pruning drops only
+update-created namespaces or namespaces with verified ownership, never a foreign
+or uncertain namespace. A failed drop retains the pair and reports a warning;
+it does not fail or undo a serving release. These same-server copies do not
+replace a verified off-server backup.
+
+`--no-restart` does not copy or migrate PostgreSQL until the next actual Gateway
+start. A release that needs no schema change does not make this protected copy.
+
+**In-place updates and standalone Doctor keep their existing migration owner.** Update Doctor
+and `openclaw update repair` select the configured engines before reading
+maintenance state. Doctor inspects configured PostgreSQL agents without opening
+them as runtime stores, then applies forward migrations with writers stopped.
+Transcript migration detection uses the selected engine's catalog. Local anchors
+remain identity files; SQLite repair and reclamation leave them untouched.
 The delegated update Doctor installs the same one-shot database role as standalone
 Doctor before maintenance, so its PostgreSQL reads and cleanup can finish. This
 repair must be present in the candidate runtime; Gateway access remains worker-only.
 
-Before mutation, the updater captures exact PostgreSQL rows, sequence allocation
-state, schema facts, and matching anchors alongside local SQLite state and config.
-Recovery restores into fresh namespaces and publishes matching anchors. It
+The legacy updater captures exact PostgreSQL rows, sequence allocation state,
+schema facts, and matching anchors alongside local SQLite state and config.
+Its recovery restores into fresh namespaces, publishes matching anchors, and
 preserves current update-run history. Independent writes, changed recovery
 generations, or uncertain custody/commit outcomes prevent automatic restore and
-retain captures for recovery. This is not an unconditional rollback guarantee.
-See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
-These captures are portable SQLite images by default. To keep their rows on the
-server and skip the local export, set `database.postgres.recoveryCaptures: "server"`;
-see [server recovery captures](/reference/database-engines#server-recovery-captures)
-for the durability and cleanup trade. [Original state captures](/cli/update/repair-and-recovery#original-state-captures)
-stay portable either way.
+retain captures. Those captures are portable SQLite images by default;
+`database.postgres.recoveryCaptures: "server"` selects the
+[server recovery carrier](/reference/database-engines#server-recovery-captures)
+where supported. [Original state captures](/cli/update/repair-and-recovery#original-state-captures)
+stay portable either way. This legacy restore is not the release trial's
+anchor-only rollback. See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
 
 Store owners run consecutive forward schema migrations under a writer transaction.
 Admission verifies the generated destination schema before publication. Missing
@@ -1038,11 +1136,12 @@ migrations, newer schemas, and drift refuse admission; use a compatible binary
 or restore a matched backup. Never edit version/fingerprint metadata. Doctor's
 state migrations take their own exact backup before mutation.
 
-PostgreSQL schema upgrades run through `openclaw doctor --fix` or the normal
-update flow with writers stopped. A direct Gateway start on an older schema
-refuses and directs you to Doctor. With the Gateway and embedded writers stopped,
-run `openclaw doctor --fix` before restarting. Doctor takes a backup and applies
-the consecutive migrations needed by each store:
+Outside protected release-managed startup, PostgreSQL schema upgrades run through
+`openclaw doctor --fix` or the legacy update flow with writers stopped. A direct
+Gateway start that cannot prepare a protected upgrade refuses and directs you to
+Doctor. Stop the Gateway and embedded writers, then run the target release's
+`openclaw doctor --fix` before restarting. Doctor takes a backup and applies the
+consecutive migrations needed by each store:
 
 - State 32 and agent 34 add nullability-aware PostgreSQL index ordering.
 - State 33 and agent 35 extend that ordering to partial indexes whose predicates
@@ -1057,6 +1156,14 @@ and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-sch
 Older binaries require the verified pre-upgrade backup and matching build;
 reinstalling an older package does not reverse these migrations.
 
+An installation already stranded by an earlier unprotected migration has no
+original namespace for anchor rollback. Use a known-good build compatible with
+the current schema, or restore a verified matched pre-migration backup with its
+matching release while writers are stopped. Verify which installation the
+managed service selects; replacing a global package alone does not prove that
+selection changed. Do not lower version markers or drop namespaces to force an
+older build to start.
+
 After a PostgreSQL major-version upgrade, `REINDEX` the
 `idx_memory_index_sources_exact_path`, `idx_memory_index_sources_basename`, and
 `idx_memory_index_sources_stem` indexes because `normalize()` follows PostgreSQL's
@@ -1070,7 +1177,15 @@ settings. The synchronous bridge has a 120-second deadline. If it expires, the
 process root terminates the whole I/O service, resetting every connection assigned
 to that service (roughly a quarter of the process's PostgreSQL connections) with
 an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
-deadline covers a wedged service or a black-holed network. Offline port and restore
+deadline covers a wedged service or a black-holed network. Schema admission and
+migration transactions (including update generation fingerprints), first-use search
+extension builds, and explicit search rebuilds use a one-hour statement timeout and
+a bridge deadline of one hour plus 30 seconds. Lock waits still stop after 60 seconds.
+The maintenance statement limit is transaction-local; nested rebuilds restore the
+caller's limit on success or rollback, and ordinary requests keep their runtime limits.
+This lets large stores finish maintenance that would otherwise fail on every retry
+at the runtime deadline. Work exceeding the maintenance budget still fails.
+Offline port and restore
 materialization use a direct asynchronous client with a one-hour statement timeout;
 those statements do not pass through the synchronous bridge.
 These are not per-operation config options.
@@ -1317,7 +1432,8 @@ the heartbeat reports lease loss as before.
 
 If another store remains unavailable, restart the Gateway through its service owner.
 
-The 120-second bridge deadline also has an unknown outcome and resets the whole
+An expired bridge deadline (120 seconds for runtime requests, one hour plus
+30 seconds for maintenance) also has an unknown outcome and resets the whole
 I/O service, including its other assigned connections. Check the recorded result
 through the owning feature after connectivity recovers; a lost reply does not
 prove that the write rolled back. Do not blindly repeat an operation that could

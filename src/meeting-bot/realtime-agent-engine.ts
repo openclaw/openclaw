@@ -2,8 +2,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
 import {
-  convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
+  createMeetingCaptureMulawEncoder,
 } from "./realtime-audio-format.js";
 import {
   createMeetingRealtimeHarness,
@@ -27,6 +27,10 @@ export async function startMeetingAgentRealtimeEngine(
   let sttSession: RealtimeTranscriptionSession | null = null;
   let realtimeReady = false;
   let ttsQueue = Promise.resolve();
+  const inputEncoder =
+    params.config.chrome.audioFormat === "pcm16-24khz"
+      ? createMeetingCaptureMulawEncoder()
+      : undefined;
   const agentLogScope = params.logPrefix ? `${params.logPrefix} agent` : "agent";
   const resolved = await resolveMeetingRealtimeTranscriptionProvider({
     config: params.config,
@@ -42,13 +46,39 @@ export async function startMeetingAgentRealtimeEngine(
     }),
   );
 
-  const stop = async () => {
+  const sendInputAudio = (audio: Buffer) => {
+    if (!harness.recordInputAudio(audio)) {
+      return;
+    }
+    const encoded = inputEncoder?.process(audio) ?? audio;
+    if (encoded.length > 0) {
+      sttSession?.sendAudio(encoded);
+    }
+  };
+
+  const stop = async (drainInput = true) => {
     if (stopped) {
       await stopPromise;
       return;
     }
     stopped = true;
-    stopPromise = (async () => {
+    stopPromise = Promise.resolve().then(async () => {
+      if (drainInput && realtimeReady) {
+        try {
+          const buffered = params.transport.drainInput?.();
+          if (buffered?.length) {
+            sendInputAudio(buffered);
+          }
+          const tail = inputEncoder?.drain();
+          if (tail?.length) {
+            sttSession?.sendAudio(tail);
+          }
+        } catch (error) {
+          params.logger.warn(
+            `${params.platform.logScope} ${agentLogScope} input drain failed: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       harness.close();
       try {
         sttSession?.close();
@@ -69,12 +99,12 @@ export async function startMeetingAgentRealtimeEngine(
       } finally {
         await params.transport.dispose();
       }
-    })();
+    });
     await stopPromise;
   };
 
   const stopAfterFailure = (source: string) => {
-    void stop().catch((error: unknown) => {
+    void stop(false).catch((error: unknown) => {
       params.logger.warn(
         `${params.platform.logScope} ${agentLogScope} ${source} cleanup failed: ${formatErrorMessage(error)}`,
       );
@@ -236,18 +266,17 @@ export async function startMeetingAgentRealtimeEngine(
       if (stopped || !realtimeReady || audio.byteLength === 0) {
         return;
       }
-      if (!harness.recordInputAudio(audio)) {
-        return;
-      }
-      sttSession?.sendAudio(
-        convertMeetingBridgeAudioForStt(audio, params.config.chrome.audioFormat),
-      );
+      sendInputAudio(audio);
     });
 
     await sttSession.connect();
+    if (!stopped) {
+      // Discard browser samples buffered while the transcription provider was connecting.
+      params.transport.drainInput?.();
+    }
   } catch (error) {
     try {
-      await stop();
+      await stop(false);
     } catch (cleanupError) {
       params.logger.debug?.(
         `${params.platform.logScope} ${agentLogScope} failed-start cleanup ignored: ${formatErrorMessage(cleanupError)}`,

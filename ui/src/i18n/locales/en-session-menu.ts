@@ -6,8 +6,6 @@ const sharedSessions = registerSessionOrganizationSharedEnglish.catalog.sessions
 
 const catalog = {
   sessionsView: {
-    personalGroupAdd: sharedSessions.personalGroupAdd,
-    personalGroupNew: sharedSessions.personalGroupNew,
     advanced: "Advanced",
     searchGroups: "Search groups",
     noGroupsMatch: "No groups match your search.",

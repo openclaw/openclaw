@@ -17,6 +17,7 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import {
@@ -488,6 +489,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             storePath: params.storePath,
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
+            assertSettlementCurrent,
             prompt: cliPrompt,
             runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
@@ -649,7 +651,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     hasRepliedRef: params.runContext.hasRepliedRef,
     /** Session-scoped settings every embedded turn of the session runs with. */
     permissionMode: params.sessionEntry?.permissionMode,
-    sessionRoot: params.sessionEntry?.sessionRoot,
+    sessionRoot:
+      readRunOperatorAuthority(params)?.participationCeiling?.source?.root ??
+      params.sessionEntry?.sessionRoot,
     blindPrompt: params.sessionEntry?.blindPrompt,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),

@@ -33,15 +33,40 @@ function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
 }
 const text = (...args) => decoder.decode(git(args)).trim();
+// This invocation keeps one Git executable and repository. Reuse only captured
+// bytes, never authority or signature validation; new payloads still pass Git's
+// collision checks and large evidence remains uncached.
+const capturedHashes = new Map();
+const capturedHashEntries = 1024;
+const capturedHashBudget = 8 * 1024 * 1024;
+let capturedHashBytes = 0;
+
 function hash(bytes, write = false) {
+  const key =
+    !write && bytes.length <= capturedHashBudget ? `${bytes.length}:${digest(bytes)}` : undefined;
+  const cached = key && capturedHashes.get(key);
+  if (cached && cached.bytes.equals(bytes)) {
+    return cached.oid;
+  }
   // Hash the captured bytes through stdin, never re-read the authority pathname.
-  return decoder
+  // Object writes must run even when these bytes were previously checked.
+  const oid = decoder
     .decode(
       git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
         input: bytes,
       }),
     )
     .trim();
+  if (
+    key &&
+    !cached &&
+    capturedHashes.size < capturedHashEntries &&
+    capturedHashBytes + bytes.length <= capturedHashBudget
+  ) {
+    capturedHashes.set(key, { bytes: Buffer.from(bytes), oid });
+    capturedHashBytes += bytes.length;
+  }
+  return oid;
 }
 
 function exactKeys(value, keys) {

@@ -16,6 +16,8 @@ import {
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { WorktreeRestoreError } from "../../agents/worktrees/errors.js";
+import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../agents/worktrees/git.js";
 import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
@@ -278,13 +280,36 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       return;
     }
     const id = normalizeOptionalString(params.id) ?? params.id;
-    const record = await managedWorktrees.restore({
-      id,
-      ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
-      ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
-    });
-    commitGuard?.();
-    respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new Error("Worktree restore timed out")),
+      WORKTREE_CHECKOUT_TIMEOUT_MS,
+    );
+    timer.unref();
+    try {
+      const record = await managedWorktrees.restore({
+        id,
+        ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
+        commitGuard,
+        signal: opts.signal ? AbortSignal.any([opts.signal, deadline.signal]) : deadline.signal,
+      });
+      commitGuard?.();
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+    } catch (error) {
+      const reason = deadline.signal.aborted
+        ? "timeout"
+        : error instanceof WorktreeRestoreError
+          ? error.reason
+          : "restore-failed";
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        `Workspace restore failed (${reason}): ${String(error)}. Check the source repository, available disk space, and conflicting checkouts, then retry Restore or start a new conversation.`,
+        { details: { restoreReason: reason }, retryable: false },
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }),
   "worktrees.branches": worktreeHandler(validateWorktreesBranchesParams, async (opts, params) => {
     const { respond } = opts;

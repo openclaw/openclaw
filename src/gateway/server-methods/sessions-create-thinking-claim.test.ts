@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -116,14 +117,7 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
       if (workerScriptName(filename) === "gateway-state-owner-heartbeat.worker.js") {
         return actual.createCpuTrackedWorker(...args);
       }
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-      });
+      return actual.createCpuTrackedWorker(filename, withWorkerPreload(options, preload));
     },
   };
 });

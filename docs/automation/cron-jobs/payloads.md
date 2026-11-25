@@ -144,6 +144,17 @@ switch, or reset, a linked detached job keeps that conversation's workspace,
 memory, and sandbox requirement. A new occurrence checks the creator's device and grant.
 A removed or archived conversation pauses the job.
 
+An agent-created job cannot use another conversation’s saved workspace or
+worktree, even when the same person owns both conversations. OpenClaw rejects
+that target when you create, retarget, edit the execution, or enable the job.
+Create the automation from an authenticated turn in the target conversation
+with `sessionTarget: "session:<that conversation’s session key>"` instead.
+Existing invalid jobs can still be paused, renamed, or removed; recreate them
+from their intended conversation rather than changing workspace paths or
+relaxing filesystem restrictions. Named sessions without a saved workspace
+binding and operator-created jobs retain their existing behavior. The run-time
+check remains in place if a target acquires a workspace binding after creation.
+
 Stored jobs are unchanged: a source is never inferred for an existing job, so
 jobs created before this behavior keep their recorded ownership check. Binding
 an older job that names its conversation only by key from an authenticated
@@ -473,6 +484,11 @@ The script may return an object with these optional fields:
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+
+Before starting a script or condition check that reuses a prepared Docker sandbox,
+OpenClaw checks the container's state. If it has stopped, sandbox provisioning starts
+the existing container before the evaluation begins. A stop during an evaluation
+can still fail that run. Recovery happens before the next evaluation begins.
 
 Plugin reloads invalidate cached script preparation. If a plugin retires during setup,
 OpenClaw refreshes the tools once before starting the script, within the original

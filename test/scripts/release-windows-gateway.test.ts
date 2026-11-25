@@ -1,22 +1,17 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const { gh, pauseBuild } = vi.hoisted(() => ({ gh: vi.fn(), pauseBuild: vi.fn() }));
+const { gh } = vi.hoisted(() => ({ gh: vi.fn() }));
 vi.mock("node:child_process", () => ({ execFileSync: gh }));
-vi.mock("node:timers/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:timers/promises")>()),
-  setTimeout: pauseBuild,
-}));
 const nativeProcess =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 const core = "openclaw/openclaw";
 const packaging = "openclaw/openclaw-windows-packaging";
-const releases = "openclaw/releases";
 const sha = "a".repeat(40);
 const tooling = "b".repeat(40);
 const packagingHead = "c".repeat(40);
@@ -33,22 +28,14 @@ type Fixture = {
   release?: Record<string, unknown>;
   signedTag?: Record<string, unknown>;
   previous?: Record<string, unknown>[];
-  source?: Record<string, unknown>;
-  storeSource?: Record<string, unknown>;
-  build?: Record<string, unknown>;
-  artifacts?: { name: string; expired: boolean }[];
   largeHistory?: boolean;
   incompleteHistory?: boolean;
-  expiredBundle?: boolean;
-  ambiguousStore?: boolean;
-  pendingBuild?: boolean;
-  cancelDuringBuildWait?: boolean;
+  ambiguousBuild?: boolean;
 };
 
 beforeEach(() => {
   vi.resetModules();
   gh.mockReset();
-  pauseBuild.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -62,18 +49,11 @@ afterEach(() => {
 
 async function run(mode: "request" | "publish", fixture: Fixture = {}) {
   const releaseTag = fixture.tag ?? tag;
-  const releaseVersion = releaseTag.slice(1);
-  const releaseChannel = releaseTag.includes("-beta.") ? "beta" : "stable";
   const directory = temps.make("windows-gateway-release-");
   const evidence = join(directory, "evidence.json");
   const dispatches: Dispatch[] = [];
   const parentPath =
     mode === "request" ? "openclaw-release-publish.yml" : "windows-gateway-release.yml";
-  let requestCancelled = false;
-  let buildPending = fixture.pendingBuild || fixture.cancelDuringBuildWait || false;
-  pauseBuild.mockImplementation(async () => {
-    requestCancelled = fixture.cancelDuringBuildWait ?? false;
-  });
   process.argv = [process.execPath, "scripts/windows-gateway-release.mjs", mode];
   process.exitCode = undefined;
   for (const [name, value] of Object.entries({
@@ -88,66 +68,16 @@ async function run(mode: "request" | "publish", fixture: Fixture = {}) {
   })) {
     vi.stubEnv(name, value);
   }
-  const source = {
-    repository: `https://github.com/${core}`,
-    requestedRef: sha,
-    resolvedCommit: sha,
-    packageVersion: releaseVersion,
-    workflowRunId: "51",
-    packagingCommit: packagingHead,
-    workflowRef: `${packaging}/.github/workflows/gateway-msix.yml@refs/heads/main`,
-    githubRef: "refs/heads/main",
-    eventName: "workflow_dispatch",
-    releaseChannel,
-    signingMode: releaseChannel === "beta" ? "official" : "store",
-    releaseIdentitySource: {
-      repository: `https://github.com/${core}`,
-      resolvedCommit: sha,
-      packageVersion: releaseVersion,
-      releaseTag,
-      channel: releaseChannel,
-    },
-    ...fixture.source,
-  };
-  const storeSource = {
-    runId: "51",
-    runAttempt: 2,
-    packagingCommit: packagingHead,
-    releaseTag: `${releaseTag}-msix.1`,
-    releaseChannel,
-    bundleName: `OpenClawGateway-${releaseVersion}-msix.1-store.msixbundle`,
-    bundleSha256: "e".repeat(64),
-    ...fixture.storeSource,
-  };
   gh.mockImplementation((binary: string, args: string[], options: { input?: string }) => {
     expect(binary).toBe("gh");
-    if (args[0] === "run") {
-      const destination = args[args.indexOf("--dir") + 1];
-      if (!destination) {
-        throw new Error("Missing download directory");
-      }
-      const name = args[args.indexOf("--name") + 1];
-      if (name === "openclaw-source-resolution") {
-        writeFileSync(join(destination, "source-resolution.json"), JSON.stringify(source));
-      } else if (name === "store-release-source-2") {
-        writeFileSync(join(destination, "store-source.json"), JSON.stringify(storeSource));
-      } else {
-        throw new Error(`Unexpected artifact download: ${name}`);
-      }
-      return "";
-    }
     const endpoint = args.find((arg) => arg.startsWith("repos/"));
     if (!endpoint) {
       throw new Error("Missing GitHub endpoint");
     }
     if (options.input) {
       dispatches.push({ endpoint, body: JSON.parse(options.input) });
-      const id = endpoint.includes("gateway-msix.yml")
-        ? 51
-        : endpoint.includes("windows-store-publish.yml")
-          ? 61
-          : 41;
-      return JSON.stringify(fixture.ambiguousStore && id === 61 ? {} : { workflow_run_id: id });
+      const id = endpoint.includes("gateway-msix.yml") ? 51 : 41;
+      return JSON.stringify(fixture.ambiguousBuild ? {} : { workflow_run_id: id });
     }
     let value: unknown;
     if (endpoint.endsWith("/actions/runs/10")) {
@@ -158,7 +88,7 @@ async function run(mode: "request" | "publish", fixture: Fixture = {}) {
         event: "workflow_dispatch",
         head_branch: "main",
         head_sha: tooling,
-        status: requestCancelled ? "cancelled" : "in_progress",
+        status: "in_progress",
         run_attempt: 1,
         run_number: 10,
         ...fixture.current,
@@ -220,30 +150,6 @@ async function run(mode: "request" | "publish", fixture: Fixture = {}) {
       }
     } else if (endpoint.endsWith("/git/ref/heads/main")) {
       value = { object: { sha: packagingHead } };
-    } else if (endpoint.endsWith("/actions/runs/51")) {
-      value = {
-        repository: { full_name: packaging },
-        head_repository: { full_name: packaging },
-        path: ".github/workflows/gateway-msix.yml",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: packagingHead,
-        run_attempt: 2,
-        status: buildPending ? "in_progress" : "completed",
-        conclusion: "success",
-        ...fixture.build,
-      };
-      buildPending = false;
-    } else if (endpoint.includes("/artifacts?")) {
-      const artifacts = fixture.artifacts ?? [
-        { name: "openclaw-source-resolution", expired: false },
-        {
-          name: "openclaw-gateway-msix-store-submission-2",
-          expired: fixture.expiredBundle ?? false,
-        },
-        { name: "store-release-source-2", expired: false },
-      ];
-      value = { items: artifacts, total_count: artifacts.length };
     } else {
       throw new Error(`Unexpected endpoint: ${endpoint}`);
     }
@@ -294,76 +200,41 @@ describe("Gateway Store release handoff", () => {
     },
   );
 
-  it("builds the exact payload and requests central approval for only that successful run", async () => {
-    const result = await run("publish");
-    expect(result.status).toBe(0);
-    expect(result.dispatches).toEqual([
-      {
-        endpoint: `repos/${packaging}/actions/workflows/gateway-msix.yml/dispatches`,
-        body: {
-          ref: "main",
-          inputs: { openclaw_ref: sha, signing_mode: "store", publish_release: "false" },
+  it.each([tag, "v2026.10.7-beta.2"])(
+    "starts an official %s release and lets build completion own Store approval",
+    async (releaseTag) => {
+      const result = await run("publish", { tag: releaseTag });
+      expect(result.status).toBe(0);
+      expect(result.dispatches).toEqual([
+        {
+          endpoint: `repos/${packaging}/actions/workflows/gateway-msix.yml/dispatches`,
+          body: {
+            ref: "main",
+            inputs: {
+              openclaw_ref: sha,
+              ...(releaseTag.includes("-beta.")
+                ? { release_channel: "beta", gateway_version: releaseTag.slice(1) }
+                : {}),
+              signing_mode: "official",
+              publish_release: "true",
+              request_store_publication: "true",
+            },
+          },
         },
-      },
-      {
-        endpoint: `repos/${releases}/actions/workflows/windows-store-publish.yml/dispatches`,
-        body: {
-          ref: "main",
-          inputs: { product: "gateway", run_id: "51", channel: "production", automatic: "true" },
-        },
-      },
-    ]);
-    expect(result.evidence).toMatchObject({
-      state: "store-approval-pending",
-      buildRunId: "51",
-      storeRunId: "61",
-      storeRepository: releases,
-      storeChannel: "production",
-      storeSource: { runId: "51", runAttempt: 2, releaseChannel: "stable" },
-    });
-    expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining(`https://github.com/${releases}/actions/runs/61`),
-    );
-    expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining("Release-manager approval and Microsoft acceptance remain pending"),
-    );
-  });
+      ]);
+      expect(result.evidence).toMatchObject({ state: "building", buildRunId: "51" });
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("publication is not complete yet"),
+      );
+      // Any attempt to poll or inspect the not-yet-completed build is rejected by
+      // the fixture. This request must finish without consuming build lifetime.
+    },
+  );
 
   it("does not buffer oversized irrelevant run metadata while checking replay history", async () => {
     const result = await run("request", { largeHistory: true });
     expect(result.status).toBe(0);
     expect(result.evidence).toMatchObject({ state: "requested", requestRunId: "41" });
-  });
-
-  it.each([
-    { resolvedCommit: tooling },
-    {
-      releaseIdentitySource: {
-        repository: `https://github.com/${core}`,
-        resolvedCommit: tooling,
-        packageVersion: "2026.10.8",
-        releaseTag: "v2026.10.8",
-        channel: "stable",
-      },
-    },
-    { packagingCommit: tooling },
-    { signingMode: "unsigned" },
-  ])("does not submit a mismatched source snapshot: %j", async (source) => {
-    const result = await run("publish", { source });
-    expect(result.status).toBe(1);
-    expect(result.dispatches).toHaveLength(1);
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Do not submit this build"));
-  });
-
-  it.each([
-    { build: { conclusion: "failure" } },
-    { build: { head_branch: "feature" } },
-    { expiredBundle: true },
-    { cancelDuringBuildWait: true },
-  ])("keeps failed, foreign, expired, and revoked builds out of the Store: %j", async (fixture) => {
-    const result = await run("publish", fixture);
-    expect(result.status).toBe(1);
-    expect(result.dispatches).toHaveLength(1);
   });
 
   it.each([
@@ -389,135 +260,18 @@ describe("Gateway Store release handoff", () => {
     expect(result.dispatches).toEqual([]);
   });
 
-  it.each([
-    [tag, "production"],
-    ["v2026.10.7-beta.2", "development"],
-  ])(
-    "retains an ambiguous %s Store dispatch without claiming delivery",
-    async (releaseTag, target) => {
-      const result = await run("publish", { tag: releaseTag, ambiguousStore: true });
-      expect(result.status).toBe(1);
-      expect(result.dispatches).toHaveLength(2);
-      expect(result.evidence).toMatchObject({
-        state: "store-dispatch-attempted",
-        buildRunId: "51",
-        storeChannel: target,
-      });
-      expect(result.evidence.storeRunId).toBeUndefined();
-    },
-  );
-});
-
-describe("Gateway beta MSIX handoff", () => {
-  const betaTag = "v2026.10.7-beta.2";
-
-  it.each(["openclaw-release-publish.yml", "openclaw-release-promote.yml"])(
-    "requests the published beta from %s",
-    async (parent) => {
-      const result = await run("request", {
-        tag: betaTag,
-        current: { path: `.github/workflows/${parent}` },
-      });
-      expect(result.status).toBe(0);
-      expect(result.dispatches).toEqual([
-        {
-          endpoint: `repos/${core}/actions/workflows/windows-gateway-release.yml/dispatches`,
-          body: { ref: "main", inputs: { tag: betaTag, release_sha: sha } },
-        },
-      ]);
-    },
-  );
-
-  it("waits for the exact official beta build and requests central Development approval", async () => {
-    const result = await run("publish", { tag: betaTag, pendingBuild: true });
-    expect(result.status).toBe(0);
-    expect(result.dispatches).toEqual([
-      {
-        endpoint: `repos/${packaging}/actions/workflows/gateway-msix.yml/dispatches`,
-        body: {
-          ref: "main",
-          inputs: {
-            release_channel: "beta",
-            gateway_version: "2026.10.7-beta.2",
-            openclaw_ref: sha,
-            signing_mode: "official",
-            publish_release: "true",
-          },
-        },
-      },
-      {
-        endpoint: `repos/${releases}/actions/workflows/windows-store-publish.yml/dispatches`,
-        body: {
-          ref: "main",
-          inputs: { product: "gateway", run_id: "51", channel: "development", automatic: "true" },
-        },
-      },
-    ]);
-    expect(result.evidence).toMatchObject({
-      state: "store-approval-pending",
-      buildRunId: "51",
-      storeRunId: "61",
-      storeChannel: "development",
-      storeSource: { runId: "51", runAttempt: 2, releaseChannel: "beta" },
-    });
-  });
-
-  it.each([
-    { source: { releaseChannel: "stable" } },
-    { source: { signingMode: "store" } },
-    {
-      source: {
-        releaseIdentitySource: {
-          repository: `https://github.com/${core}`,
-          resolvedCommit: sha,
-          packageVersion: "2026.10.7-beta.2",
-          releaseTag: betaTag,
-          channel: "stable",
-        },
-      },
-    },
-    { storeSource: { runId: "52" } },
-    { storeSource: { runAttempt: 1 } },
-    { storeSource: { packagingCommit: tooling } },
-    { storeSource: { releaseChannel: "stable" } },
-    { storeSource: { releaseTag: `${tag}-msix.1` } },
-    { storeSource: { bundleName: "OpenClawGateway-2026.10.7-msix.1-store.msixbundle" } },
-    { storeSource: { bundleSha256: "not-a-sha256" } },
-    { build: { conclusion: "failure" } },
-    { cancelDuringBuildWait: true },
-  ])("does not route unverified or revoked beta artifacts to Development: %j", async (fixture) => {
-    const result = await run("publish", { tag: betaTag, ...fixture });
+  it("retains an ambiguous build dispatch without starting another", async () => {
+    const result = await run("publish", { ambiguousBuild: true });
     expect(result.status).toBe(1);
     expect(result.dispatches).toHaveLength(1);
-  });
-
-  it.each([
-    { bundleAttempt: 1, witnessAttempt: 2, expiredWitness: false },
-    { bundleAttempt: 2, witnessAttempt: 1, expiredWitness: false },
-    { bundleAttempt: 2, witnessAttempt: 2, expiredWitness: true },
-  ])("rejects stale or expired current-attempt Store artifacts: %j", async (artifact) => {
-    const result = await run("publish", {
-      tag: betaTag,
-      artifacts: [
-        { name: "openclaw-source-resolution", expired: false },
-        {
-          name: `openclaw-gateway-msix-store-submission-${artifact.bundleAttempt}`,
-          expired: false,
-        },
-        {
-          name: `store-release-source-${artifact.witnessAttempt}`,
-          expired: artifact.expiredWitness,
-        },
-      ],
-    });
-    expect(result.status).toBe(1);
-    expect(result.dispatches).toHaveLength(1);
+    expect(result.evidence).toMatchObject({ state: "build-dispatch-attempted", packagingHead });
+    expect(result.evidence.buildRunId).toBeUndefined();
   });
 
   it.each([
     { tag: "v2026.10.7-alpha.1" },
     { tag: "v2026.9.33" },
-    { tag: betaTag, release: { prerelease: false } },
+    { tag: "v2026.10.7-beta.2", release: { prerelease: false } },
     { release: { prerelease: true } },
   ])("rejects unsupported or misclassified releases before dispatch: %j", async (fixture) => {
     const result = await run("publish", fixture);

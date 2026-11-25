@@ -48,6 +48,102 @@ A gateway is one trust domain. Everyone who can message a tool-enabled agent sha
 
 If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead, ideally on separate OS users or hosts: [Security trust model](/gateway/security/trust-model).
 
+### Participate collaborator policy
+
+Participate lets an explicitly invited collaborator send bounded agent inputs
+without general operator write authority. For a documentation collaborator,
+use this definition under `gateway.roles.definitions`:
+
+```json5
+{
+  collaborator: {
+    sessions: {
+      others: "invited",
+      maxInvitedAccess: "send",
+      invitedPermission: "read-only",
+      invitedTools: [
+        "read",
+        "ls",
+        "web_search",
+        "web_fetch",
+        "tool_search",
+        "tool_describe",
+        "dispatch_action",
+      ],
+    },
+    scopes: ["operator.sessions.read"],
+    agents: ["main"],
+  },
+}
+```
+
+Assign the role, then grant **Participate** on the intended session. The role
+ceiling alone does not grant membership. The session must use Gateway-local
+OpenClaw execution; native/CLI runtimes and remote workers cannot enforce this
+participant ceiling.
+
+`invitedPermission` sets the participant's permission ceiling: `read-only`,
+`guarded`, `workspace` (the default), or `full`. The effective mode is the lower
+of that ceiling and the session's mode; ordinary model/tool and host policy can
+narrow it further. Workspace mode uses the configured command reviewer. Any
+human approval goes only to the session creator or an administrator, never the
+participant. File tools stay inside the session root even in full mode. This is
+not an OS sandbox for shell commands; use sandbox isolation for untrusted code.
+
+For opted-in roles with `maxInvitedAccess`, `sandbox: "required"` applies to the
+role's own sessions. An invited participant uses the other session's sandbox
+settings, with the permission, tool and file boundaries above; invited members
+can read its workspace at their granted level. This does not let them start an
+unsandboxed session of their own. Roles without `maxInvitedAccess` keep their
+sandbox requirement when opening other sessions too.
+
+`invitedTools` replaces the default list, as in the example above; `[]` permits no
+tools. To keep the defaults and add browser access instead, use:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedPermission: "read-only",
+    invitedAlsoAllow: ["browser"],
+  },
+}
+```
+
+Both fields require `maxInvitedAccess` and `others: "invited"`. Setting both is a
+config error, even if either list is empty. Omit both, or use
+`invitedAlsoAllow: []`, to keep the defaults. These include file, shell, web,
+discovery, skill, image, progress, GitHub publication, and native child tools.
+Both lists accept ordinary tool names, groups, and wildcards for core, plugin,
+and MCP tools that are otherwise offered and authorized. There is no fixed upper
+allowlist, but the `openclaw` tool and Gateway configuration, role, membership,
+and restart mutations remain denied, even with `"*"`. Installing, uninstalling,
+enabling, or disabling plugins changes Gateway configuration and is also denied.
+Plugin reload is denied because it can approve new plugin capabilities.
+Agent policy can still deny
+any listed tool. There is no per-person tool override: duplicate the role to give
+one person a different policy.
+
+Listing tools intentionally delegates agent or Gateway capabilities. Existing
+role and scope checks use the admitted participant, not the session creator.
+Plugin JavaScript, MCP servers, desktop access, and channel credentials may use
+agent-owned or shared resources; this tool policy does not sandbox them.
+Allowing `exec` keeps permission ceilings, approvals, and sandbox policy in force;
+its starting directory and file tools remain bounded to the session root.
+
+`sessions_spawn` permits hidden, same-agent, Gateway-local OpenClaw children, not
+visible sessions, other roots, agents, workers, or runtimes. Children retain the
+original invitation, root, tool and permission ceilings; each new child turn
+rechecks current access. Child exec approvals require the original session
+creator, not the participant or an unrelated administrator.
+
+Each accepted input captures its resolved tool list. Queued and recovered work
+must satisfy both the retained and current policies as independent restrictions,
+so widening the role does not widen an old input. See
+[operator scopes](/gateway/operator-scopes#named-operator-roles) for the exact
+default list and child restrictions.
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
@@ -120,7 +216,7 @@ For coding work, verified GitHub identity pays off at the commit: with **Git co-
 
 Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
-To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the two read-only session commands. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
+To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the read-only session commands: the two base commands, plus an optional catalog pair for relationship filters and **Open original**. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
 
 ### Step 5: Bound what each person can do
 
@@ -157,6 +253,8 @@ Each role supplies a policy: which sessions they can touch, which agents they ca
 ```
 
 Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
+
+A guest's CLI stays within a session-only device grant. `openclaw gateway call` requests the session scope for session methods such as `sessions.list`, and `openclaw tui` connects with the grant itself. Until the grant is stored, a connection cannot know it: its request is refused with a scope-upgrade request that reports the approved scopes, and the CLI retries within them. The TUI stores the grant with the device token the Gateway returns, and later connections then fit it and file no request. `openclaw gateway call` stores no token, and a trusted-proxy Gateway returns none to the TUI, so behind trusted-proxy auth each connection is refused once before it retries. Set [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants) to have the Gateway connect such devices within their grant from the first connection, with no request at all. Methods that need a Gateway-wide scope, such as `status`, and the TUI's command list and pending approvals stay unavailable.
 
 For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
@@ -723,7 +821,9 @@ openclaw connect <join-url> --service \
 ```
 
 Approve the intended device on the receiver and confirm the two-command
-allowlist. Move selected source sessions into the **Team** group. Subagents and
+allowlist. For relationship filters and **Open original**, add the optional
+catalog pair as described in [Session Share](/plugins/session-share#open-original-on-a-paired-node).
+Move selected source sessions into the **Team** group. Subagents and
 incognito sessions remain excluded. Removing the group revokes new reads but
 cannot retract text someone already read.
 
@@ -798,17 +898,17 @@ to establish that the service can complete work.
 
 ## Troubleshooting
 
-| Symptom                                                       | Check                                                                                                            |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                       |
-| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.               |
-| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.  |
-| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                  |
-| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.              |
-| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname. |
-| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                    |
-| Shared sessions are missing or names do not link              | Check source group, node account/state, two-command allowlist, receiver role, and verified numeric GitHub IDs.   |
-| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                |
+| Symptom                                                       | Check                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Browser works; agent cannot provide session links             | Set this server's `gateway.publicOrigin`; prepare a new turn after reload.                                         |
+| Access succeeds but Gateway rejects the connection            | Check loopback trust, forwarded client addresses, required identity headers, and `allowedOrigins`.                 |
+| Administrator signs in as an observer                         | Assign the real profile's administrative role and grant the verified identity `operator.admin`, then reconnect.    |
+| OIDC migration creates another person                         | Verify the sign-in email and explicitly link its alias to the existing profile.                                    |
+| GitHub login looks right but publication uses another account | Check the system/agent/personal publication selection and repository Git authentication separately.                |
+| Chat works but widgets fail                                   | Check the distinct sandbox origin, tunnel port, and absence of an interactive Access challenge on that hostname.   |
+| Node join receives HTTP 302                                   | Supply machine Access authentication on every required route.                                                      |
+| Shared sessions are missing or names do not link              | Check source group, node account/state, session command allowlist, receiver role, and verified numeric GitHub IDs. |
+| Update fails despite free disk                                | Check service temporary-space quota, filesystem metadata, and retained snapshots before retrying.                  |
 
 ## When to split things up
 

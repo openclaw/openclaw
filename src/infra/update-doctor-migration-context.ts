@@ -37,6 +37,8 @@ export const updateDoctorMigrationContext = new AsyncLocalStorage<{
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
   fullBackups?: Map<string, DoctorMigrationFullBackup>;
+  /** The startup owner already retained the originals before this private Doctor pass. */
+  stateUpgradeLiveStateDir?: string;
 }>();
 
 export function hasUpdateDoctorMigrationCapture(): boolean {
@@ -80,6 +82,8 @@ export function getDoctorMigrationBackup(
 }
 
 export type UpdateSqliteMigrationOptions = {
+  /** Prepare the admitted connection after verifying its preimage, before native exclusion. */
+  beforeExclusive?: () => void;
   /** Close a one-shot native owner before publishing its final generation. */
   close?: () => void;
   retainExclusive?: boolean;

@@ -125,6 +125,18 @@ describe("block HTML islands", () => {
     expect(quote.blocks.map(({ type }) => type)).toEqual(["details"]);
   });
 
+  it.each([
+    [2147483646, [2147483646, 2147483647]],
+    [2147483647, [1, 2]],
+  ] as const)(
+    "keeps every HTML list label in Telegram's integer range: start=%i",
+    (start, values) => {
+      const block = single(`<ol start="${start}"><li>a</li><li>b</li></ol>`);
+      assert(block.type === "list");
+      expect(block.items.map((item) => item.value)).toEqual(values);
+    },
+  );
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',

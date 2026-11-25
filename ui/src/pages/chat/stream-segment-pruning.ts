@@ -1,29 +1,17 @@
-import {
-  readSessionMessageIdentity,
-  readAssistantStreamSegmentIdentity,
-} from "@openclaw/gateway-client/browser";
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import { streamCausalInterval } from "./stream-causal-boundary.ts";
-import {
-  hasAssistantStreamPartReplacement,
-  visibleAssistantStreamParts,
-  type ToolStreamReconciliationState,
-} from "./stream-reconciliation.ts";
+import type { ToolStreamReconciliationState } from "./stream-reconciliation.ts";
 import type { ToolStreamState } from "./tool-stream-contract.ts";
 import {
+  createSegmentToolRefReader,
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-
-type AssistantMessageVisibility = (message: unknown) => boolean;
-type StreamVisibility = (stream: string) => boolean;
 
 function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
@@ -52,21 +40,6 @@ export function prunePersistedAssistantStreamSegments(
 ): void {
   const identity = readAssistantStreamSegmentIdentity(message);
   if (!identity) {
-    const row = readSessionMessageIdentity(message);
-    const runId = row?.runId;
-    if (runId && row.idempotencyKey?.startsWith(`cli-assistant:${runId}:seg:`)) {
-      const text = extractText(message)?.trim();
-      // Retain cumulative coordinates; only this run's covered indexed display retires.
-      state.chatStreamSegments = pruneAccumulatedStreamSegments(
-        state.chatStreamSegments,
-        runId,
-        (segment) =>
-          segment.runId === runId &&
-          streamSegmentUsesAccumulatedText(segment) &&
-          Boolean(segment.text.trim()) &&
-          Boolean(text?.startsWith(segment.text.trim())),
-      );
-    }
     return;
   }
   const segments = state.chatStreamSegments.filter((segment) => {
@@ -79,46 +52,6 @@ export function prunePersistedAssistantStreamSegments(
   if (segments.length !== state.chatStreamSegments.length) {
     state.chatStreamSegments = segments;
   }
-}
-
-export function pruneHistoryReplacedStreamSegments(
-  messages: unknown[],
-  state: ToolStreamReconciliationState,
-  opts: {
-    isHiddenAssistantMessage: AssistantMessageVisibility;
-    isHiddenStreamText: StreamVisibility;
-  },
-): boolean {
-  const replacedIndexes = new Set<number>();
-  for (const part of visibleAssistantStreamParts(state, {
-    includeCurrent: false,
-    isHiddenStreamText: opts.isHiddenStreamText,
-  })) {
-    if (part.segmentIndex === undefined || part.itemId) {
-      continue;
-    }
-    const interval = streamCausalInterval(messages, part);
-    if (
-      hasAssistantStreamPartReplacement(
-        messages,
-        part,
-        opts.isHiddenAssistantMessage,
-        interval.start,
-        interval.end,
-      )
-    ) {
-      replacedIndexes.add(part.segmentIndex);
-    }
-  }
-  if (replacedIndexes.size === 0) {
-    return false;
-  }
-  state.chatStreamSegments = pruneAccumulatedStreamSegments(
-    state.chatStreamSegments,
-    state.chatRunId,
-    (_segment, index) => replacedIndexes.has(index),
-  );
-  return true;
 }
 
 export function prunePersistedToolStreamMessages(
@@ -140,7 +73,7 @@ export function prunePersistedToolStreamMessages(
       return identity === undefined || !persistedToolIds.has(identity);
     });
   });
-  let toolIndexedSegmentIndex = 0;
+  const readToolRef = createSegmentToolRefReader(liveToolRefs);
   state.chatStreamSegments = pruneAccumulatedStreamSegments(
     state.chatStreamSegments,
     state.chatRunId,
@@ -148,22 +81,10 @@ export function prunePersistedToolStreamMessages(
       if (segment.persisted === true) {
         return false;
       }
-      const explicitToolCallId = normalizeOptionalString(segment.toolCallId);
-      const usesItemId = streamSegmentHasItemId(segment);
-      const indexedToolRef = usesItemId ? undefined : liveToolRefs[toolIndexedSegmentIndex];
-      if (!usesItemId) {
-        toolIndexedSegmentIndex += 1;
-      }
-      const segmentRunId = normalizeOptionalString(segment.runId);
-      const toolIdentity = explicitToolCallId
-        ? resolveMatchingLiveToolIdentity(
-            {
-              id: explicitToolCallId,
-              ...(segmentRunId ? { runId: segmentRunId } : {}),
-            },
-            liveToolRefs,
-          )
-        : indexedToolRef?.identity;
+      const { callId, runId, indexed } = readToolRef(segment);
+      const toolIdentity = callId
+        ? resolveMatchingLiveToolIdentity({ id: callId, runId }, liveToolRefs)
+        : indexed?.identity;
       return Boolean(toolIdentity && persistedToolIds.has(toolIdentity));
     },
   );

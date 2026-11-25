@@ -2,6 +2,7 @@
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -222,6 +223,7 @@ describe("buildContextReply", () => {
     "projects session window (resolved=%s authored=%s harness=%s)",
     async (resolved, authored, persistedHarness, expected) => {
       const params = makeParams("/context json", false, { contextTokens: 200_000 });
+      const model = expectDefined(params.model, "context fixture model");
       params.sessionEntry = {
         ...params.sessionEntry,
         sessionId: "local-context",
@@ -232,9 +234,7 @@ describe("buildContextReply", () => {
         contextTokens: 32_768,
         contextTokensSource: "resolved-v1",
       };
-      params.thinkingCatalog = [
-        { provider: params.provider, id: params.model, contextWindow: resolved },
-      ];
+      params.thinkingCatalog = [{ provider: params.provider, id: model, contextWindow: resolved }];
       if (authored !== undefined) {
         params.cfg = {
           models: {
@@ -243,7 +243,7 @@ describe("buildContextReply", () => {
                 baseUrl: "http://127.0.0.1:11434",
                 models: [
                   {
-                    id: params.model,
+                    id: model,
                     name: "Qwen 2.5 7B",
                     reasoning: false,
                     input: ["text"],

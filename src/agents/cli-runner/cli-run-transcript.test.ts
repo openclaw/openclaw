@@ -10,6 +10,8 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
+import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
+import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   initializeGlobalHookRunner,
@@ -24,7 +26,12 @@ import {
 } from "../../sessions/transcript-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { transformCliResultText } from "../cli-output-results.js";
-import { createClaudeParser, joinJsonlFrames } from "../cli-output.test-helpers.js";
+import {
+  claudeMessageStart,
+  claudeTextDelta,
+  createClaudeParser,
+  joinJsonlFrames,
+} from "../cli-output.test-helpers.js";
 import { isIntermediateAssistantTranscriptMessage } from "../embedded-agent-runner/message-visibility.js";
 import {
   createCliAssistantSegmentQueue,
@@ -37,6 +44,8 @@ import {
   buildCliAssistantTranscriptUsage,
   persistCliAssistantTranscript,
 } from "./cli-run-transcript.js";
+import { createCliEventHandlers } from "./execute-events.js";
+import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { buildPreparedContext } from "./prepared-context.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-coordination-transcript-");
@@ -108,12 +117,12 @@ function nativeTool() {
   };
 }
 
-function snapshot(uuid: string, text: string, stop_reason: string | null = null) {
+function snapshot(uuid: string, text: string, stop_reason: string | null = null, id = uuid) {
   return {
     type: "assistant",
     uuid,
     message: {
-      id: uuid,
+      id,
       role: "assistant",
       stop_reason,
       content: [{ type: "text", text }],
@@ -433,6 +442,95 @@ it.each([false, true])(
     expect(await transcriptMessages(target)).toMatchObject([{ display, stopReason: "aborted" }]);
   },
 );
+
+it("retires only the committed Claude snapshot from the cumulative Gateway stream", async () => {
+  const { target, runParams } = await transcriptFixture("live-occurrences");
+  const { runId, sessionKey } = runParams;
+  const base = buildPreparedContext({ ...runParams, model: "claude-sonnet-4-6" });
+  const context = { ...base, params: { ...base.params, ...runParams } };
+  const warnings: string[] = [];
+  const queue = createCliAssistantSegmentQueue(context, (warning) => warnings.push(warning));
+  const handlers = createCliEventHandlers({
+    context,
+    toolTracking: createCliToolTracking(context),
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
+  const gateway = createAgentEventTestHarness();
+  gateway.register(runId, sessionKey, runId);
+  onTestFinished(() => gateway.handler.dispose());
+  onTestFinished(onAgentRuntimeEvent(gateway.handler));
+  onTestFinished(
+    onInternalSessionTranscriptUpdate((update) => {
+      gateway.handler.retireTranscript(update, Promise.resolve(true));
+    }),
+  );
+  const completed: string[] = [];
+  const held = { type: "result", openclaw_interim_result: true, result: "Ready" };
+  const parser = createClaudeParser({
+    onAssistantDelta: handlers.emitCliAssistantDelta,
+    onCompletedReply: (text) => completed.push(text),
+    onCommentarySegment: queue.push,
+  });
+  const push = (...records: unknown[]) => parser.push(joinJsonlFrames(...records, ""));
+  const live = () => gateway.chatRunState.resolveBuffer(runId).text;
+  push({ type: "system", subtype: "init", session_id: "native" }, claudeMessageStart("m1"), {
+    ...claudeTextDelta("Re", 0),
+    uuid: "partial-frame",
+    api_message_id: "m1",
+  });
+  expect(live()).toBe("Re"); // Available before Claude reveals the durable record UUID.
+  push(
+    snapshot("first", "Re", null, "m1"),
+    claudeTextDelta("ady"),
+    snapshot("first", "Ready", null, "m1"),
+    held,
+    held,
+  );
+  push(claudeMessageStart("m2"), claudeTextDelta("Ready"));
+  gateway.chatRunState.flushPendingText(runId);
+  expect(live()).toBe("Ready\n\nReady");
+  push(snapshot("second", "Ready", null, "m2"), held);
+  expect(completed).toEqual(["Ready", "Ready"]);
+  await queue.drain();
+  expect(live()).toBe("Ready");
+  expect(gateway.chat().at(-1)?.[1]).toMatchObject({
+    state: "delta",
+    replace: true,
+    deltaText: "Ready",
+  });
+  // A replay of the first UUID can have a fresh live occurrence, not a third durable row.
+  push(claudeMessageStart("m1"), claudeTextDelta("Ready"), snapshot("first", "Ready", null, "m1"));
+  await queue.drain();
+  expect(live()).toBe("Ready");
+  push(claudeMessageStart("unfinished"), claudeTextDelta("Still typing"));
+  parser.finish();
+  await queue.drain();
+  expect(live()).toBe("Still typing");
+  expect(await transcriptMessages(target)).toMatchObject(
+    ["first", "second"].map((uuid) => ({
+      idempotencyKey: `cli-assistant:${runId}:seg:native:${uuid}`,
+      content: [{ type: "text", text: "Ready" }],
+    })),
+  );
+  // Stop saves the unsnapshotted tail through the ordinary run-level fallback row.
+  await persistCliAssistantSettlement({
+    runParams,
+    modelId: context.modelId,
+    segments: queue.segments,
+    output: { ...parser.getOutput(true)!, terminalInterruption: { reason: "aborted" } },
+    sourceReplyWasDelivered: false,
+  });
+  expect((await transcriptContents(target)).at(-1)).toEqual([
+    { type: "text", text: "Still typing" },
+  ]);
+  expect(live()).toBe("");
+  expect(gateway.chat().at(-1)?.[1]).toMatchObject({
+    state: "delta",
+    replace: true,
+    deltaText: "",
+  });
+  expect(warnings).toEqual([]);
+});
 
 // Mid-run snapshots show in their own slot; the run outcome settles their stop reason (#196092).
 it.each(["completed", "interrupted", "stranded", "yielded"] as const)(
@@ -819,11 +917,9 @@ it("persists a pending completed snapshot when Stop precedes the terminal flush"
       const context = buildPreparedContext({ provider: "claude-cli", runId: runParams.runId });
       context.params = {
         ...context.params,
-
         ...runParams,
         abortSignal: controller.signal,
         assertCurrent: () => controller.signal.throwIfAborted(),
-        assertSettlementCurrent: () => {},
       };
       const warnings: string[] = [];
       const queue = createCliAssistantSegmentQueue(context, (message) => warnings.push(message));

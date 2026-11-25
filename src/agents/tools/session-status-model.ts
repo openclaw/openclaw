@@ -12,7 +12,9 @@ import {
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import { prepareAuthProfileProvider } from "../auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  NO_MODEL_CONFIGURED_MESSAGE,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
@@ -68,9 +70,10 @@ export async function patchSessionStatusModel(params: {
 
   const configured = resolveDefaultModelForAgent({ cfg, agentId });
   const raw = normalizeToolModelOverride(params.raw);
-  let modelSelection = { ...configured, isDefault: true };
+  let modelSelection = configured && { ...configured, isDefault: true };
   if (raw) {
-    const currentProvider = resolved.entry.providerOverride?.trim() || configured.provider;
+    const currentProvider =
+      resolved.entry.providerOverride?.trim() || configured?.provider || DEFAULT_PROVIDER;
 
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
@@ -131,9 +134,14 @@ export async function patchSessionStatusModel(params: {
     modelSelection = {
       ...selected.ref,
       isDefault:
-        selected.ref.provider === configured.provider && selected.ref.model === configured.model,
+        selected.ref.provider === configured?.provider && selected.ref.model === configured.model,
     };
   }
+  if (!modelSelection) {
+    // Resetting to the default needs a configured model.
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
+  const selection = modelSelection;
   const applySelection = async (entry: SessionEntry) => {
     const pinnedProfile = entry.authProfileOverride?.trim();
     const recordedProvider = pinnedProfile
@@ -144,9 +152,12 @@ export async function patchSessionStatusModel(params: {
       agentDir: params.agentDir,
       entry,
       currentProvider:
-        entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
-      selection: modelSelection,
-      explicitDefaultSelection: modelSelection.isDefault,
+        entry.providerOverride?.trim() ||
+        entry.modelProvider?.trim() ||
+        configured?.provider ||
+        selection.provider,
+      selection,
+      explicitDefaultSelection: selection.isDefault,
       recordedProvider,
       markLiveSwitchPending: true,
     });

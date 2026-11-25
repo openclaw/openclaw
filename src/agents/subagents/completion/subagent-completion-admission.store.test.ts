@@ -167,9 +167,8 @@ describe("native subagent completion worker admission", () => {
         }
         expect(await pending()).toEqual([]);
         expect(owner()?.delivery).toMatchObject({
-          status: receipt === "failed" ? "suspended" : "delivered",
-          disposition: receipt === "failed" ? "permanent_failure" : "delivered",
-          ...(receipt === "failed" ? { suspendedReason: "permanent_failure" } : {}),
+          status: "delivered",
+          disposition: "delivered",
         });
       });
     },
@@ -502,7 +501,7 @@ it("settles a requester cohort after concurrently admitted children complete", a
   });
 });
 
-it("retains a failed completion without creating another parent input after publication fails", async () => {
+it("retains history settlement without creating another parent input after publication fails", async () => {
   await withSubagentCompletionWorkerState(async (database) => {
     const { subagent } = armRequesterWake(requesterRecords());
     seedSubagentCompletionOwner({ subagent, databaseOptions: { database } });
@@ -525,8 +524,8 @@ it("retains a failed completion without creating another parent input after publ
     ).rejects.toMatchObject({ outcome: "committed", publication: "published" });
     expect(readCompletionSystemEvents(database)).toEqual([]);
     expect(subagentRuns.get(subagent.runId)?.delivery).toMatchObject({
-      status: "failed",
-      lastError: "Requester unavailable",
+      status: "delivered",
+      disposition: "delivered",
     });
     database.db.exec(
       "CREATE TRIGGER reject_replay BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'outcome replayed'); END",

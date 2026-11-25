@@ -30,7 +30,6 @@ import {
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
   resolvePreparedGatewayOperatorAccessAuthority,
-  resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
@@ -150,18 +149,16 @@ it.each([false, true])(
   "uses the profile assignment rather than membership/GitHub/default binding (default=%s)",
   (defaultRole) => {
     const { config, register } = fixture(defaultRole);
-    const { authorize, resume } = register();
+    const { authorize } = register();
     const access = resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, source);
     expect(access?.requiredPolicyPlugin).toBe(pluginId);
     expect(access?.gatewayAccessGrant).toEqual({ pluginId, grantId });
-    resumeGatewayOperatorAccessGrant(profile, config, { pluginId, grantId }, source);
     const expected = {
       config,
       profile: { profileId: profile.profileId, emails: profile.emails, assignedRole: "staff" },
       requiredByRole: true,
     };
     expect(authorize).toHaveBeenCalledExactlyOnceWith(expected);
-    expect(resume).toHaveBeenCalledExactlyOnceWith({ ...expected, grantId });
   },
 );
 
@@ -216,37 +213,6 @@ it("requires confirmation from a loaded profile policy", () => {
   expect(() =>
     resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, source),
   ).toThrow("[access-cause=access-record-inactive]");
-});
-
-it("refuses recovered work without its profile grant and retains the exact live grant", () => {
-  const { config, register, authority } = fixture();
-  expect(() => resumeGatewayOperatorAccessGrant(profile, config, null, source)).toThrow(
-    "[access-cause=policy-set-changed]",
-  );
-  expect(() =>
-    resumeGatewayOperatorAccessGrant(
-      profile,
-      config,
-      { pluginId: "member-access", grantId },
-      source,
-    ),
-  ).toThrow("[access-cause=policy-set-changed]");
-  expect(() =>
-    resumeGatewayOperatorAccessGrant(profile, config, { pluginId, grantId }, source),
-  ).toThrow("Gateway access policy is unavailable");
-  const { resume } = register();
-  expect(
-    resumeGatewayOperatorAccessGrant(
-      profile,
-      config,
-      { pluginId, grantId },
-      {
-        ...source,
-        retained: authority,
-      },
-    ),
-  ).toBe(authority);
-  expect(resume).not.toHaveBeenCalled();
 });
 
 it.each(["websocket", "http", "delegated"] as const)(

@@ -38,6 +38,8 @@ export type CliTerminalInterruption = {
 export type CliCommentarySegment = {
   itemId?: string;
   key?: string;
+  /** Live intervals claimed by this native snapshot, not its durable replay key. */
+  assistantItemIds?: string[];
   text: string;
   timestamp: number;
   native?: { entryId: string; sessionId: string };
@@ -50,6 +52,8 @@ export type CliOutput = {
   textParts?: string[];
   /** Parser-owned native snapshot boundaries in rawText (or text before transforms). */
   textSnapshotRanges?: { key: string; start: number; end: number }[];
+  /** Live intervals for settlement of a tail that did not get its own native snapshot. */
+  assistantOccurrences?: { id: string; key?: string }[];
   /** Completed held answers, excluding narration, mirrored by native identity in canonical history. */
   interimNativeReplies?: Array<{ text: string; cliSessionId: string; externalId: string }>;
   rawText?: string;
@@ -115,6 +119,7 @@ export type CliOutput = {
 
 export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
+  occurrenceId?: string;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
@@ -138,6 +143,8 @@ export type CliCompactionDelta =
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
+  /** The native call follows completed text in the cumulative assistant lane. */
+  followsAssistantText?: true;
   // Preserve the producer kind: a server-native start without its result is not a failed local call.
   kind: "tool_use" | "server_tool_use" | "mcp_tool_use";
   args: Record<string, unknown>;

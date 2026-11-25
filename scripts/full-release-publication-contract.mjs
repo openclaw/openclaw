@@ -13,12 +13,14 @@ import {
   publicationPackageNamePattern as packageName,
   publicationIntentInputs,
   publicationSourceJson,
+  validatePublicationArtifactSelection,
 } from "./lib/full-release-publication-inputs.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 export {
   decodePublicationDispatchEnvelope,
+  dispatchEnvelopeFromInputs,
   normalizePublicationIntent,
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
@@ -77,6 +79,7 @@ const coverageInputs = {
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   qualification_baselines_json: "qualificationBaselinesJson",
+  publication_artifact_source_json: "publicationArtifactSourceJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
 };
@@ -233,8 +236,7 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  // Pre-cutover evidence binds this empty field into its original digest.
-  // Retire with those release lines and their retained publication recovery.
+  // Pre-cutover evidence can bind these empty legacy fields into its digest.
   object(
     value.coverage,
     [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
@@ -252,14 +254,25 @@ function validatePublicationSourceFact(value, expected = {}) {
   if (
     coverageKeys.some(
       (key) =>
-        !["extension_test_exclude_patterns_json", "qualification_baselines_json"].includes(key) &&
-        !Object.hasOwn(value.coverage, key),
+        ![
+          "extension_test_exclude_patterns_json",
+          "qualification_baselines_json",
+          "publication_artifact_source_json",
+        ].includes(key) && !Object.hasOwn(value.coverage, key),
     )
   ) {
     throw new Error("source admission coverage is incomplete");
   }
   for (const entry of Object.values(value.coverage)) {
     text(entry, "source admission coverage");
+  }
+  const artifactSource = value.coverage.publication_artifact_source_json;
+  if (
+    artifactSource &&
+    JSON.stringify(validatePublicationArtifactSelection(JSON.parse(artifactSource))) !==
+      artifactSource
+  ) {
+    throw new Error("source admission publication artifact source is not canonical");
   }
   if (value.validationPurpose === "publish") {
     if (value.status !== "source-admitted" || !digest.test(value.inventoryDigest)) {
@@ -1057,7 +1070,9 @@ if (invokedAsMain) {
       );
       appendFileSync(
         process.env.GITHUB_OUTPUT,
-        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n`,
+        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n` +
+          `publication_artifact_source_json=${envelope.laneInputs?.publication_artifact_source_json ?? ""}\n` +
+          `preflight_first=${envelope.laneInputs?.preflight_first ?? "false"}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);

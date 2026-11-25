@@ -660,16 +660,21 @@ span.new-session-page__select {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-.new-session-page__device-folder {
-  flex-basis: 100%;
-  min-width: 0;
-  flex-wrap: wrap;
+.new-session-page__device-path-entry {
+  display: grid;
+  gap: 6px;
+  padding: var(--picker-inset);
+  font-size: 12px;
+  color: var(--muted);
 }
 
-.new-session-page__device-folder > span:last-child {
-  flex: 1 1 100%;
+.new-session-page__device-path-entry > span {
+  padding-inline-start: var(--picker-row-inset);
+}
+
+.new-session-page__device-path-entry input {
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .new-session-page__branch-field {
@@ -1047,6 +1052,9 @@ span.new-session-page__select {
      page and the identity centers in the space above the draft. Auto margins
      yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    /* The member step replaces the composer and needs the same space below it. */
+    --member-welcome-gap: 10px;
+
     flex: 1 0 auto;
     min-height: auto;
     margin-block: 0;
@@ -1716,13 +1724,6 @@ span.new-session-page__select {
   padding-inline: calc(var(--new-session-tray-edge) - 10px);
 }
 
-/* The device path and its explanation need their own content-sized row. */
-.new-session-page__context-tray
-  .new-session-page__triggers:has(> .new-session-page__device-folder) {
-  flex-wrap: wrap;
-  height: auto;
-}
-
 .new-session-page__context-tray .new-session-page__workspace {
   gap: 2px;
   border: 0;
@@ -1758,6 +1759,11 @@ span.new-session-page__select {
 .new-session-page__context-tray .new-session-page__trigger-label {
   min-inline-size: 8ch;
   max-width: 300px;
+
+  /* Checkout has no desktop loading placeholder to reserve label space for. */
+  &:where(#new-session-checkout-trigger > *) {
+    min-inline-size: 0;
+  }
 }
 
 .new-session-page__picker-chevron {
@@ -1833,8 +1839,11 @@ span.new-session-page__select {
   margin-inline-end: calc(var(--picker-row-inset) - 5px);
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover input,
-.new-session-page__context-tray .new-session-page__picker-popover input:is(:hover, :focus) {
+/* The picker panel owns field geometry in every input state, including touch focus. */
+.new-session-page__context-tray
+  .new-session-page__picker-popover
+  .new-session-page__picker-panel
+  input {
   /* A field stands a touch taller than the rows it sits with. */
   height: calc(var(--picker-row-height) + 2px);
   padding-inline: var(--picker-row-inset);
@@ -2295,7 +2304,10 @@ span.new-session-page__select {
     min-height: 52px;
   }
 
-  .new-session-page__context-tray .new-session-page__picker-popover input {
+  .new-session-page__context-tray
+    .new-session-page__picker-popover
+    .new-session-page__picker-panel
+    input {
     min-height: 40px;
   }
 }

@@ -57,6 +57,11 @@ else
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # The local mock needs a key without enabling public provider discovery.
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+  export OPENCLAW_UPGRADE_SURVIVOR_API_KEY="sk-openclaw-upgrade-survivor"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
@@ -965,6 +970,10 @@ assert_legacy_runtime_deps_symlink_repaired() {
 }
 
 read_installed_version() {
+  if [ "${1:-}" = "resident" ]; then
+    openclaw --version | sed -nE 's/^OpenClaw ([^ ]+).*/\1/p'
+    return "$?"
+  fi
   node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1] + "/package.json", "utf8")).version' "$(package_root)"
 }
 
@@ -1182,6 +1191,12 @@ assert_legacy_operator_update_noop() {
     # Retain the inferred monthly channel and opt into its loopback selector.
     update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
   else
+    # Keep the exact-version resolver, but use the registry serving this candidate.
+    update_env+=(
+      "OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY=${NPM_CONFIG_REGISTRY:?candidate registry required}"
+      OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE=1
+      "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+    )
     update_args+=(--tag "$candidate_version")
   fi
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" \
@@ -1193,40 +1208,53 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-// The isolated state directory records a service refusal without running the suggested command.
-assert(Array.isArray(result.steps), "second update did not report its steps");
-// Already-current updates still retire verified recovery artifacts, never packages.
-const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
-assert(cleanups.length <= 1, "second update repeated recovery cleanup");
-for (const { durationMs, diagnostics, ...step } of cleanups) {
-  assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
-  assert.deepEqual(step, {
-    name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
-  }, "second update recovery cleanup did not finish cleanly");
-  // The summary comes first; one line per removed or kept item may follow.
-  // Earlier releases reported one fixed sentence.
-  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
-    diagnostics.every((line) => typeof line === "string") &&
-    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
-      (diagnostics.length === 1 &&
-        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
-    "second update omitted its verified recovery cleanup outcome");
+// Current release updaters return their lifecycle record; historical candidates
+// still return command receipts, which retain their checks below.
+if (Object.hasOwn(result, "phase")) {
+  assert.equal(result.phase, "finished", "second update did not finish");
+  assert.deepEqual(result.steps.map(({ step, status }) => ({ step, status })), [
+    { step: "requested", status: "completed" },
+    { step: "staging", status: "skipped" },
+    { step: "plugins", status: "completed" },
+  ], "second update executed mutations or did not finish plugin maintenance");
+  assert.deepEqual(result.repair, [], "second update ran a repair");
+  assert(!result.origin.nextAction, "second update requested repair");
+} else {
+  // The isolated state directory records a service refusal without running the suggested command.
+  assert(Array.isArray(result.steps), "second update did not report its steps");
+  // Already-current updates still retire verified recovery artifacts, never packages.
+  const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
+  assert(cleanups.length <= 1, "second update repeated recovery cleanup");
+  for (const { durationMs, diagnostics, ...step } of cleanups) {
+    assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
+    assert.deepEqual(step, {
+      name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
+    }, "second update recovery cleanup did not finish cleanly");
+    // The summary comes first; one line per removed or kept item may follow.
+    // Earlier releases reported one fixed sentence.
+    assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+      diagnostics.every((line) => typeof line === "string") &&
+      (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+        (diagnostics.length === 1 &&
+          /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
+      "second update omitted its verified recovery cleanup outcome");
+  }
+  // Advisory guidance is product prose that releases reword; require one, not its text.
+  const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
+    .map(({ advisory, ...step }) => advisory ? {
+    ...step,
+    advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
+  } : step);
+  const expectedSteps = steps.length === 0 ? [] : [{
+    name: "managed-service-reconciliation",
+    command: "openclaw gateway install --force",
+    cwd: result.root ?? "",
+    durationMs: 0,
+    exitCode: 0,
+    advisory: { kind: "recoverable-maintenance", explained: true },
+  }];
+  assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 }
-// Advisory guidance is product prose that releases reword; require one, not its text.
-const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
-  .map(({ advisory, ...step }) => advisory ? {
-  ...step,
-  advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
-} : step);
-const expectedSteps = steps.length === 0 ? [] : [{
-  name: "managed-service-reconciliation",
-  command: "openclaw gateway install --force",
-  cwd: result.root ?? "",
-  durationMs: 0,
-  exitCode: 0,
-  advisory: { kind: "recoverable-maintenance", explained: true },
-}];
-assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
@@ -1421,12 +1449,15 @@ write_update_restart_service_env() {
   local dotenv_path="$OPENCLAW_STATE_DIR/.env"
   local tmp_path="$dotenv_path.tmp.$$"
   if [ -f "$dotenv_path" ]; then
-    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)=' "$dotenv_path" >"$tmp_path" || true
+    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL|OPENCLAW_UPGRADE_SURVIVOR_API_KEY)=' "$dotenv_path" >"$tmp_path" || true
   else
     : >"$tmp_path"
   fi
   # Managed restarts resolve auth and fixture routing from service-owned durable env.
   printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" >>"$tmp_path"
+  fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     printf 'OPENCLAW_CLAWHUB_URL=%s\n' "$OPENCLAW_CLAWHUB_URL" >>"$tmp_path"
   fi
@@ -1598,6 +1629,7 @@ ensure_candidate_selector_registry() {
 }
 
 update_candidate() {
+  last_update_restart_route=""
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
   local update_json="$UPDATE_JSON" update_err="$UPDATE_ERR"
@@ -1627,6 +1659,7 @@ update_candidate() {
   fi
   local update_start=""
   local update_end=""
+  local restart_route=""
   local previous_service_pid="" previous_systemctl_lines=0 verify_restart=0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && {
     [ "$after_repair" = "1" ] ||
@@ -1733,8 +1766,8 @@ update_candidate() {
     assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
     update_outcome="recoverable"
-  elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-successful-update-json "$update_json" "$expected_version" "$observation_root"; then
+  elif [ "$update_status" -eq 0 ] && restart_route="$(node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-successful-update-json "$update_json" "$expected_version" "$observation_root" "$verify_restart")"; then
     update_outcome="success"
   else
     echo "openclaw update failed before the recoverable post-core boundary" >&2
@@ -1760,7 +1793,15 @@ update_candidate() {
     if [ "$after_repair" = "1" ]; then
       CURRENT_PHASE="recovery-update-service-replacement"
     fi
-    assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
+    if [ "$restart_route" = "resident" ]; then
+      # The launcher stays resident; the authenticated serving proof below
+      # still exercises the new Gateway, not the npm frontend it replaced.
+      systemctl --user is-active --quiet openclaw-gateway.service || return 1
+      installed_version="$(read_installed_version "$restart_route")" || return "$?"
+    else
+      assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
+    fi
+    last_update_restart_route="$restart_route"
     update_restart_source="candidate-update"
     if [ "$SCENARIO" = "legacy-operator-state" ]; then
       update_restart_source="baseline-update"
@@ -1972,6 +2013,12 @@ prepare_restart_inference() {
     openclaw_e2e_start_mock_openai 44213 "$ARTIFACT_ROOT/restart-model.log")" || return "$?"
   openclaw_e2e_wait_mock_openai 44213 || return "$?"
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44213 || return "$?"
+  if [ "$SCENARIO" = "base" ] && [ "$LIVE_ENABLED" = "0" ]; then
+    # The first hop already proved the Anthropic config survives. This OpenAI-only
+    # restart must not send the fake Anthropic credential to its public catalog.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set \
+      plugins.entries.anthropic.enabled false --strict-json || return "$?"
+  fi
   restart_inference="mock-openai"
 }
 
@@ -2105,7 +2152,7 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
-    if [ "$membership_mode" = absent ]; then
+    if [ "$membership_mode" = absent ] && [ "${last_update_restart_route:-}" != resident ]; then
       phase recovery-membership-warning assert_managed_membership_warning || return "$?"
     fi
     if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
@@ -2203,7 +2250,7 @@ assert_survival() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
-  installed_version="$(read_installed_version)" || return "$?"
+  installed_version="$(read_installed_version "${last_update_restart_route:-}")" || return "$?"
   if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
     local expected_state_schema
     if [ "$CANDIDATE_KIND" = "tarball" ]; then
@@ -2759,8 +2806,10 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   if [ "$baseline_version" = "2026.9.6" ]; then
     phase refuse-sibling-candidate assert_sibling_published_refusal
   fi
+  # Isolate the successful update’s registrations from the baseline and refusal trial.
+  : > "$ARTIFACT_ROOT/sibling-registrations.jsonl"
   phase update-sibling-candidate update_candidate
-  phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
+  phase assert-sibling-update-imports node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-update-imports "$UPDATE_JSON"
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
   phase sibling-activation-previous-gateway-stop stop_gateway
   OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway

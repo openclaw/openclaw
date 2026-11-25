@@ -75,6 +75,12 @@ export function prepareSessionEntryReplacementPublication(
     ) {
       throw new Error(`Session publication lost its committed membership: ${key}`);
     }
+    const memberAccess: Record<
+      string,
+      NonNullable<import("./session-membership-facts.types.js").SessionMember["access"]>
+    > = JSON.parse(
+      postimage?.sideTables.memberAccessJson ?? committed?.row.member_access_json ?? "{}",
+    );
     const committedEntry = postimage?.entry ?? committed?.entry;
     if (!committedEntry) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
@@ -104,6 +110,7 @@ export function prepareSessionEntryReplacementPublication(
               : { participantCount: projectedEntry.participantCount }),
           },
           projectedEntry.sessionId,
+          ...(Object.keys(memberAccess).length ? ([memberAccess] as const) : ([] as const)),
         ],
         hasBoard: postimage?.sideTables.hasBoard ?? committed?.row.board_present === 1,
         activitySummaryWatermark: readSessionActivitySummary(projectedEntry)

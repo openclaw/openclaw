@@ -22,6 +22,7 @@ import {
 } from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
+  PreparedUserPreferenceUpdate,
   UserPreferenceCoauthorMutation,
   UserPreferenceError,
 } from "./user-preferences.types.js";
@@ -68,12 +69,15 @@ export async function setCanonicalUserPreferences(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
     assertCurrent?: () => void;
     expectedEntries?: Record<string, unknown>;
+    cronFailure?: PreparedUserPreferenceUpdate["cronFailure"];
     /** Internal authenticated-proxy import only; never accepted from preference RPC parameters. */
     trustedProxyGitCoauthor?: true;
     /** Internal current-policy projection; never accepted from preference RPC parameters. */
     organizationPolicy?: string | null;
   } = {},
-): Promise<Result<{ profileId: string }, UserPreferenceError> | undefined> {
+): Promise<
+  Result<{ profileId: string; acknowledgedAtMs?: number }, UserPreferenceError> | undefined
+> {
   const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries, options);
   if (!prepared.ok) {
     return prepared;
@@ -91,7 +95,7 @@ export async function setCanonicalUserPreferences(
       (scope) =>
         scope.execute({
           type: "userPreferences.write",
-          input: { profileId, update: prepared.value },
+          input: { profileId, update: { ...prepared.value, cronFailure: options.cronFailure } },
         }),
       {
         assertCurrent: options.assertCurrent,

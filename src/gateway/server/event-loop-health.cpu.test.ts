@@ -184,7 +184,10 @@ describe("CPU breakdown sampling", () => {
         vi.mocked(cpus).mockReturnValue([hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
       }
       if (failure === "invalid ticks") {
-        vi.mocked(cpus).mockReturnValue([hostCpu(Number.NaN, 0)]);
+        vi.mocked(cpus).mockImplementation(() => [
+          hostCpu(Number.NaN, 0),
+          hostCpu(now / 2, now / 2),
+        ]);
       }
       if (failure === "throw") {
         vi.mocked(cpus).mockImplementation(() => {

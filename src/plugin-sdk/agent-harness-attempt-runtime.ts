@@ -12,6 +12,7 @@ import {
 } from "../agents/embedded-agent-error-observation.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
+import { resolveEmbeddedSessionContextLimits } from "../agents/embedded-agent-runner/run/session-context-limits.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import { classifyFailoverReason } from "../agents/failover/classify.js";
 import {
@@ -324,18 +325,15 @@ export function selectSupportedReasoningEffort<TEffort extends string>(params: {
   );
 }
 
-/** Bound transcript reads to the model budget while preserving owned tool frames. */
+/**
+ * Bound harness transcript reads with the embedded runner's guard, so harness history also moves
+ * only at compaction. Past the guard, tool-result bodies are omitted before older turns drop.
+ * @param _contextTokenBudget Deprecated and ignored: the bound no longer depends on the budget.
+ */
 export function resolveAgentHarnessHistoryLimits(
-  contextTokenBudget?: number,
+  _contextTokenBudget?: number,
 ): SessionModelContextLimits {
-  return {
-    maxBytes: Math.min(
-      64 * 1024 * 1024,
-      Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
-    ),
-    maxEvents: 10_000,
-    toolResultOverflow: "omit",
-  };
+  return { ...resolveEmbeddedSessionContextLimits({}), toolResultOverflow: "omit" };
 }
 
 export function shouldIncludeAgentHarnessRuntimeContext(

@@ -346,6 +346,7 @@ export async function appendAssistantMessageToSessionTranscript(
 export async function appendExactAssistantMessageToSessionTranscript(
   params: SessionTranscriptAssistantAppendOptions & {
     message: SessionTranscriptAssistantMessage;
+    assistantItemIds?: readonly string[];
   },
 ): Promise<SessionTranscriptAppendResult> {
   const assertCurrent = () => params.assertCurrent?.();
@@ -523,6 +524,14 @@ async function appendExactAssistantMessageWithSource(
     ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode ?? "inline",
     onMessageCommitted: params.onMessageCommitted,
+    ...(explicitIdempotencyKey && params.assistantItemIds?.length
+      ? {
+          assistantItemReceipt: {
+            idempotencyKey: explicitIdempotencyKey,
+            itemIds: params.assistantItemIds,
+          },
+        }
+      : {}),
     publishWhen: params.prepareDisplayContent ? "always" : undefined,
     touchSessionEntry: true,
     messages: [

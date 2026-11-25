@@ -207,7 +207,7 @@ export function assertSharedGitHubPublicationClaimInDatabase(
     row.turn_claim_generation !== request.claim.placementGeneration ||
     !ownerMatches
   ) {
-    throw new Error("GitHub publication turn authority changed before recording.");
+    throw new Error("GitHub publication turn ended. Retry the publication.");
   }
 }
 

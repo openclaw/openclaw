@@ -318,6 +318,12 @@ never changes config; the app automatically walks down the ladder and finally
 offers a manual key/token step populated from the Gateway's active
 text-inference provider plugins. The selected provider owns its starter model
 and config, and the credential is verified the same way before it is saved.
+While detection still probes local tools and services, the app and the Control
+UI list the provider sign-in and key/token choices that
+`openclaw.setup.options` reads from config and plugin manifests, so you can
+start one right away. Results that arrive later add detected candidates without
+moving focus, changing your selection, or interrupting a sign-in or test you
+already started.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is
@@ -386,8 +392,8 @@ contract.
 
 Gemini CLI remains available as an explicitly configured runtime for normal
 agents, but Gemini CLI and Antigravity are not inference-gate setup routes.
-Use AI Studio API-key or Vertex AI for the inference gate. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for the inference gate. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 ## Switching to an agent
 

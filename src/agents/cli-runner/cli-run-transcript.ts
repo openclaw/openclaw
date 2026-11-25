@@ -31,8 +31,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
 import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
@@ -211,6 +211,7 @@ export async function persistCliAssistantTranscript(params: {
   /** Durable but held out of display until run settlement decides its disposition. */
   display?: false;
   segmentKey?: string;
+  assistantItemIds?: readonly string[];
   itemId?: string;
   timestamp?: number;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
@@ -246,8 +247,10 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      assistantItemIds: params.assistantItemIds,
       runId: runParams.runId,
       config: runParams.config,
+      assertCurrent: runParams.assertSettlementCurrent,
       onMessageCommitted: () => {
         committed = true;
       },

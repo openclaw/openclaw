@@ -16,6 +16,7 @@ export type AdmittedTemplateAgent = {
   config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
   chat: PreparedAgentChat;
   workspaceIdentity: string;
+  deviceTimeZone?: string;
   configured?: Initialization["configured"];
   preparing?: Initialization["preparing"];
   /** This request created the agent and chat, so it alone may remove them. */
@@ -31,7 +32,10 @@ export function templateInitializationCheckpoints(
     if (!pending.chat.checkpoint) {
       throw new Error("Template initialization checkpoint owner is unavailable");
     }
-    await pending.chat.checkpoint(initialization);
+    await pending.chat.checkpoint({
+      ...initialization,
+      ...(pending.deviceTimeZone ? { deviceTimeZone: pending.deviceTimeZone } : {}),
+    });
   };
   return {
     onAgentConfiguring: async (preparing) => {

@@ -50,7 +50,6 @@ vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease: ()
 // mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_LEASE_TTL_MS: 300_000,
-  hasActiveStartupMigrationLease: () => false,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
   createConfiguredGatewayLocalProbe: () => ({}),

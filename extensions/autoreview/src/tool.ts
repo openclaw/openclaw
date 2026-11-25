@@ -28,7 +28,13 @@ const autoReviewParameters = Type.Object(
       Type.Union(["P0", "P1", "P2", "P3"].map((value) => Type.Literal(value))),
     ),
     passes: Type.Optional(Type.Integer({ minimum: 1 })),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 1 })),
+    timeoutSeconds: Type.Optional(
+      Type.Number({
+        minimum: 1,
+        description:
+          "Whole-call budget in seconds: helper capture, pass admission, every reviewer pass, and delivery. The call fails with the stalled phase when it is exceeded.",
+      }),
+    ),
     prompt: Type.Optional(Type.String()),
     promptFiles: paths(),
     datasets: paths(),
@@ -244,270 +250,326 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
       }
       const params = input;
       const operation = new AbortController();
-      const callerSignal = signal ? AbortSignal.any([signal, operation.signal]) : operation.signal;
-      const directory = `/tmp/openclaw-autoreview-${randomUUID()}`;
-      const hostDirectory = await fs.mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "autoreview-"),
-      );
-      let helperRun: ReturnType<typeof python> | undefined;
-      const helperSettled = new AbortController();
-      const finishHelper = async () => {
-        if (!helperSettled.signal.aborted) {
-          operation.abort();
-        }
-        await helperRun?.catch((error: unknown) => {
-          if (!isAbort(error, callerSignal)) {
-            throw error;
-          }
-        });
-      };
-      const completeResult = (
-        completed: Awaited<ReturnType<typeof python>>,
-        engineFailure?: string,
-      ) => {
-        context.assertInvocationCurrent();
-        const failureMessage =
-          [completed.stderr, engineFailure].filter(Boolean).join("\n") ||
-          "Auto Review did not produce a complete validated report.";
-        if ((completed.code !== 0 && completed.code !== 1) || !completed.stdout) {
-          throw new Error(failureMessage);
-        }
-        const result: { code: number; report: unknown; status: unknown } = JSON.parse(
-          completed.stdout,
+      // The caller's timeoutSeconds bounds the whole call: helper capture, pass
+      // admission, reviewer passes, and delivery. Helper subprocesses cannot
+      // outlive it (issue #203402: a blocked Git read kept the call pending
+      // past its budget with no error). An omitted timeout keeps the parent
+      // lifetime plus the helper's per-pass timer exactly as before.
+      const budget = new AbortController();
+      const budgetSeconds = params.timeoutSeconds;
+      let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+      let stalledPhase = "starting the Auto Review helper";
+      const callerSignals = signal ? [signal, operation.signal] : [operation.signal];
+      if (budgetSeconds !== undefined) {
+        callerSignals.push(budget.signal);
+      }
+      const callerSignal = AbortSignal.any(callerSignals);
+      // The budget promise settles first only through rejection; a completed
+      // call wins the race below. Cleanup keeps running behind an abandoned
+      // work promise, so a stalled sandbox kill cannot extend the caller's wait.
+      const budgetExceeded =
+        budgetSeconds === undefined
+          ? null
+          : new Promise<never>((_resolve, reject) => {
+              budgetTimer = setTimeout(() => {
+                const error = new Error(
+                  `Auto Review exceeded its ${budgetSeconds} second timeoutSeconds budget while ${stalledPhase}. The stalled phase was aborted; retry or raise timeoutSeconds.`,
+                );
+                reject(error);
+                budget.abort(error);
+              }, budgetSeconds * 1000);
+              budgetTimer.unref?.();
+            });
+      const work = async () => {
+        const directory = `/tmp/openclaw-autoreview-${randomUUID()}`;
+        const hostDirectory = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "autoreview-"),
         );
-        if (result.code !== completed.code || !result.report) {
-          throw new Error(failureMessage);
-        }
-        const details = { report: result.report, status: result.status };
-        const text = JSON.stringify(details);
-        assertCompleteResult(text);
-        return { content: [{ type: "text" as const, text }], details };
-      };
-      const readRequest = async (pass: number, activeSignal: AbortSignal, plan?: PreparedPass) => {
-        const read = await python(
-          waitForRequest,
-          [`${directory}/handoff/${pass}.request.json`],
-          AbortSignal.any([activeSignal, helperSettled.signal]),
-        ).catch((error: unknown) => {
-          if (!activeSignal.aborted && isAbort(error, helperSettled.signal)) {
+        let helperRun: ReturnType<typeof python> | undefined;
+        const helperSettled = new AbortController();
+        const finishHelper = async () => {
+          if (!helperSettled.signal.aborted) {
+            operation.abort();
+          }
+          await helperRun?.catch((error: unknown) => {
+            if (!isAbort(error, callerSignal)) {
+              throw error;
+            }
+          });
+        };
+        const completeResult = (
+          completed: Awaited<ReturnType<typeof python>>,
+          engineFailure?: string,
+        ) => {
+          context.assertInvocationCurrent();
+          const failureMessage =
+            [completed.stderr, engineFailure].filter(Boolean).join("\n") ||
+            "Auto Review did not produce a complete validated report.";
+          if ((completed.code !== 0 && completed.code !== 1) || !completed.stdout) {
+            throw new Error(failureMessage);
+          }
+          const result: { code: number; report: unknown; status: unknown } = JSON.parse(
+            completed.stdout,
+          );
+          if (result.code !== completed.code || !result.report) {
+            throw new Error(failureMessage);
+          }
+          const details = { report: result.report, status: result.status };
+          const text = JSON.stringify(details);
+          assertCompleteResult(text);
+          return { content: [{ type: "text" as const, text }], details };
+        };
+        const readRequest = async (
+          pass: number,
+          activeSignal: AbortSignal,
+          plan?: PreparedPass,
+        ) => {
+          const read = await python(
+            waitForRequest,
+            [`${directory}/handoff/${pass}.request.json`],
+            AbortSignal.any([activeSignal, helperSettled.signal]),
+          ).catch((error: unknown) => {
+            if (!activeSignal.aborted && isAbort(error, helperSettled.signal)) {
+              return undefined;
+            }
+            throw error;
+          });
+          if (!read) {
             return undefined;
           }
-          throw error;
-        });
-        if (!read) {
-          return undefined;
-        }
-        if (read.code !== 0) {
-          throw new Error(read.stderr || "Auto Review request read failed.");
-        }
-        return readPreparedPass(read.stdout, params, pass, plan);
-      };
-      try {
-        context.assertInvocationCurrent();
-        helperRun = python(
-          runReview,
-          [skillRoot, helper, directory, ...helperArgs(params, directory)],
-          callerSignal,
-          undefined,
-          MAX_REPORT_BYTES,
-        );
-        void helperRun.then(
-          () => {
-            helperSettled.abort();
-          },
-          () => {
-            helperSettled.abort();
-          },
-        );
-        const first = await readRequest(1, callerSignal);
-        if (!first) {
-          return completeResult(await helperRun);
-        }
-        return await modelExecution.run(
-          { model: first.model, explicit: params.model !== undefined },
-          async (scope) => {
-            const revoke = () => operation.abort(scope.signal.reason);
-            scope.signal.addEventListener("abort", revoke, { once: true });
-            try {
-              scope.assertCurrent();
-              const cwd = path.join(hostDirectory, "workspace");
-              await fs.mkdir(cwd, { mode: 0o700 });
-              const { resolveAgentConfig } =
-                await import("openclaw/plugin-sdk/agent-scope-runtime");
-              scope.assertCurrent();
-              const config =
-                context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? {};
-              // A sandbox caller never supplies host configuration or grants host tool access.
-              const callerOverride = {
-                agents: {
-                  defaults: { systemAgent: { agentId: scope.agentId } },
-                  entries: {
-                    [scope.agentId]: {
-                      skills: [],
-                      contextInjection: "never",
-                      nativeRuntimeConsent: [],
-                      model: { primary: scope.model, fallbacks: [] },
-                      tools: clearToolAllowances(
-                        resolveAgentConfig(config, scope.agentId)?.tools?.byProvider,
-                      ),
+          if (read.code !== 0) {
+            throw new Error(read.stderr || "Auto Review request read failed.");
+          }
+          return readPreparedPass(read.stdout, params, pass, plan);
+        };
+        try {
+          context.assertInvocationCurrent();
+          stalledPhase = "capturing review changes in the sandbox helper";
+          helperRun = python(
+            runReview,
+            [skillRoot, helper, directory, ...helperArgs(params, directory)],
+            callerSignal,
+            undefined,
+            MAX_REPORT_BYTES,
+          );
+          void helperRun.then(
+            () => {
+              helperSettled.abort();
+            },
+            () => {
+              helperSettled.abort();
+            },
+          );
+          stalledPhase = "waiting for the helper to prepare pass 1";
+          const first = await readRequest(1, callerSignal);
+          stalledPhase = "waiting for the helper to deliver the final report";
+          if (!first) {
+            return completeResult(await helperRun);
+          }
+          return await modelExecution.run(
+            { model: first.model, explicit: params.model !== undefined },
+            async (scope) => {
+              const revoke = () => operation.abort(scope.signal.reason);
+              scope.signal.addEventListener("abort", revoke, { once: true });
+              try {
+                stalledPhase = "preparing the reviewer execution scope";
+                scope.assertCurrent();
+                const cwd = path.join(hostDirectory, "workspace");
+                await fs.mkdir(cwd, { mode: 0o700 });
+                const { resolveAgentConfig } =
+                  await import("openclaw/plugin-sdk/agent-scope-runtime");
+                scope.assertCurrent();
+                const config =
+                  context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? {};
+                // A sandbox caller never supplies host configuration or grants host tool access.
+                const callerOverride = {
+                  agents: {
+                    defaults: { systemAgent: { agentId: scope.agentId } },
+                    entries: {
+                      [scope.agentId]: {
+                        skills: [],
+                        contextInjection: "never",
+                        nativeRuntimeConsent: [],
+                        model: { primary: scope.model, fallbacks: [] },
+                        tools: clearToolAllowances(
+                          resolveAgentConfig(config, scope.agentId)?.tools?.byProvider,
+                        ),
+                      },
                     },
                   },
-                },
-                tools: {
-                  ...clearToolAllowances(config.tools?.byProvider),
-                  deny: ["*"],
-                  toolSearch: false,
-                  codeMode: { enabled: false },
-                },
-              };
-              const timeoutSeconds = first.engine_timeout_seconds ?? null;
-              let engineFailure: string | undefined;
-              for (let pass = 1; pass <= first.passes && !helperSettled.signal.aborted; pass++) {
-                scope.assertCurrent();
-                const request = pass === 1 ? first : await readRequest(pass, scope.signal, first);
-                if (!request) {
-                  break;
-                }
-                const argv = [
-                  process.execPath,
-                  entry,
-                  "agent",
-                  "exec",
-                  "--json",
-                  "--code-mode",
-                  "direct",
-                  "--message-file",
-                  "-",
-                  "--config-override",
-                  JSON.stringify(callerOverride),
-                  "--cwd",
-                  cwd,
-                ];
-                if (params.model !== undefined) {
-                  argv.push("--model", scope.model);
-                }
-                if (first.thinking !== null) {
-                  argv.push("--thinking", first.thinking);
-                }
-                if (timeoutSeconds !== null) {
-                  // Updated helpers delegate this limit to the process runner. Preserve
-                  // the native attempt timer for older helpers instead of refusing them.
-                  argv.push(
-                    "--timeout",
-                    first.timeout_owner === "host" ? "0" : String(Math.ceil(timeoutSeconds)),
-                  );
-                }
-                scope.assertCurrent();
-                if (helperSettled.signal.aborted) {
-                  break;
-                }
-                const result = await runCommandWithTimeout(argv, {
-                  cwd,
-                  input: request.prompt,
-                  signal: AbortSignal.any([scope.signal, helperSettled.signal]),
-                  timeoutMs: timeoutSeconds === null ? undefined : timeoutSeconds * 1000,
-                  env: { OPENCLAW_NO_RESPAWN: "1" },
-                  outputCapture: "head",
-                  maxOutputBytes: { stdout: MAX_RESULT_BYTES, stderr: 64_000 },
-                  terminateOnOutputLimit: true,
-                  killProcessTree: true,
-                  // Native startup must finish its abort cleanup before forced termination.
-                  killGraceMs: 5_000,
-                  beforeInput: () => {
-                    scope.assertCurrent();
-                    helperSettled.signal.throwIfAborted();
+                  tools: {
+                    ...clearToolAllowances(config.tools?.byProvider),
+                    deny: ["*"],
+                    toolSearch: false,
+                    codeMode: { enabled: false },
                   },
-                }).catch((error: unknown) => {
-                  if (!scope.signal.aborted && helperSettled.signal.aborted) {
-                    return undefined;
-                  }
-                  throw error;
-                });
-                scope.assertCurrent();
-                if (!result || helperSettled.signal.aborted) {
-                  break;
-                }
-                const succeeded =
-                  result.code === 0 &&
-                  result.termination === "exit" &&
-                  !result.outputLimitExceeded &&
-                  !result.stdoutTruncatedBytes &&
-                  result.cleanup !== "uncertain";
-                if (!succeeded) {
-                  const { redactSensitiveText } = await import("openclaw/plugin-sdk/logging-core");
+                };
+                const timeoutSeconds = first.engine_timeout_seconds ?? null;
+                let engineFailure: string | undefined;
+                for (let pass = 1; pass <= first.passes && !helperSettled.signal.aborted; pass++) {
                   scope.assertCurrent();
-                  const detail = redactSensitiveText(result.stderr, { mode: "tools" }).slice(-4096);
-                  const failure =
-                    result.termination === "timeout"
-                      ? `Reviewer process timed out after ${timeoutSeconds} seconds`
-                      : "Reviewer command failed";
-                  engineFailure =
-                    `${failure} (exit ${result.code ?? "none"}, ${result.termination}, cleanup ${result.cleanup ?? "unknown"}, output limit ${result.outputLimitExceeded ?? false}, truncated stdout ${result.stdoutTruncatedBytes ?? 0}). ${detail}`.trim();
-                }
-                const response = JSON.stringify({
-                  run_id: request.run_id,
-                  pass,
-                  prompt_sha256: request.prompt_sha256,
-                  status: succeeded ? "done" : "failed",
-                  output: succeeded ? result.stdout : null,
-                  model: succeeded ? scope.model : null,
-                });
-                if (Buffer.byteLength(response) > MAX_RESULT_BYTES) {
-                  throw new Error(
-                    "Auto Review's complete engine result exceeds the exchange limit.",
-                  );
-                }
-                const spool = `${directory}/handoff.${request.run_id}.${pass}.response.json`;
-                try {
-                  const submitted = await python(
-                    submitResponse,
-                    [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
-                    scope.signal,
-                    response,
-                  );
-                  if (submitted.code !== 0) {
-                    throw new Error(
-                      submitted.stderr || "Auto Review rejected the response submission.",
+                  if (pass > 1) {
+                    stalledPhase = `waiting for the helper to prepare pass ${pass}`;
+                  }
+                  const request = pass === 1 ? first : await readRequest(pass, scope.signal, first);
+                  if (!request) {
+                    break;
+                  }
+                  const argv = [
+                    process.execPath,
+                    entry,
+                    "agent",
+                    "exec",
+                    "--json",
+                    "--code-mode",
+                    "direct",
+                    "--message-file",
+                    "-",
+                    "--config-override",
+                    JSON.stringify(callerOverride),
+                    "--cwd",
+                    cwd,
+                  ];
+                  if (params.model !== undefined) {
+                    argv.push("--model", scope.model);
+                  }
+                  if (first.thinking !== null) {
+                    argv.push("--thinking", first.thinking);
+                  }
+                  if (timeoutSeconds !== null) {
+                    // Updated helpers delegate this limit to the process runner. Preserve
+                    // the native attempt timer for older helpers instead of refusing them.
+                    argv.push(
+                      "--timeout",
+                      first.timeout_owner === "host" ? "0" : String(Math.ceil(timeoutSeconds)),
                     );
                   }
-                } catch (error) {
-                  // The helper owns the outcome; retiring its exchange can reject a late submit.
-                  if (!scope.signal.aborted && helperSettled.signal.aborted) {
-                    return completeResult(await helperRun!, engineFailure);
+                  scope.assertCurrent();
+                  if (helperSettled.signal.aborted) {
+                    break;
                   }
-                  if (!scope.signal.aborted && engineFailure) {
-                    const submissionFailure =
-                      error instanceof Error ? error.message : String(error);
+                  stalledPhase = `running reviewer pass ${pass}`;
+                  const result = await runCommandWithTimeout(argv, {
+                    cwd,
+                    input: request.prompt,
+                    signal: AbortSignal.any([scope.signal, helperSettled.signal]),
+                    timeoutMs: timeoutSeconds === null ? undefined : timeoutSeconds * 1000,
+                    env: { OPENCLAW_NO_RESPAWN: "1" },
+                    outputCapture: "head",
+                    maxOutputBytes: { stdout: MAX_RESULT_BYTES, stderr: 64_000 },
+                    terminateOnOutputLimit: true,
+                    killProcessTree: true,
+                    // Native startup must finish its abort cleanup before forced termination.
+                    killGraceMs: 5_000,
+                    beforeInput: () => {
+                      scope.assertCurrent();
+                      helperSettled.signal.throwIfAborted();
+                    },
+                  }).catch((error: unknown) => {
+                    if (!scope.signal.aborted && helperSettled.signal.aborted) {
+                      return undefined;
+                    }
+                    throw error;
+                  });
+                  scope.assertCurrent();
+                  if (!result || helperSettled.signal.aborted) {
+                    break;
+                  }
+                  const succeeded =
+                    result.code === 0 &&
+                    result.termination === "exit" &&
+                    !result.outputLimitExceeded &&
+                    !result.stdoutTruncatedBytes &&
+                    result.cleanup !== "uncertain";
+                  if (!succeeded) {
+                    const { redactSensitiveText } =
+                      await import("openclaw/plugin-sdk/logging-core");
+                    scope.assertCurrent();
+                    const detail = redactSensitiveText(result.stderr, { mode: "tools" }).slice(
+                      -4096,
+                    );
+                    const failure =
+                      result.termination === "timeout"
+                        ? `Reviewer process timed out after ${timeoutSeconds} seconds`
+                        : "Reviewer command failed";
+                    engineFailure =
+                      `${failure} (exit ${result.code ?? "none"}, ${result.termination}, cleanup ${result.cleanup ?? "unknown"}, output limit ${result.outputLimitExceeded ?? false}, truncated stdout ${result.stdoutTruncatedBytes ?? 0}). ${detail}`.trim();
+                  }
+                  const response = JSON.stringify({
+                    run_id: request.run_id,
+                    pass,
+                    prompt_sha256: request.prompt_sha256,
+                    status: succeeded ? "done" : "failed",
+                    output: succeeded ? result.stdout : null,
+                    model: succeeded ? scope.model : null,
+                  });
+                  if (Buffer.byteLength(response) > MAX_RESULT_BYTES) {
                     throw new Error(
-                      `${engineFailure}\nResponse submission failed: ${submissionFailure}`,
-                      {
-                        cause: error,
-                      },
+                      "Auto Review's complete engine result exceeds the exchange limit.",
                     );
                   }
-                  throw error;
+                  const spool = `${directory}/handoff.${request.run_id}.${pass}.response.json`;
+                  stalledPhase = `delivering the response for reviewer pass ${pass}`;
+                  try {
+                    const submitted = await python(
+                      submitResponse,
+                      [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
+                      scope.signal,
+                      response,
+                    );
+                    if (submitted.code !== 0) {
+                      throw new Error(
+                        submitted.stderr || "Auto Review rejected the response submission.",
+                      );
+                    }
+                  } catch (error) {
+                    // The helper owns the outcome; retiring its exchange can reject a late submit.
+                    if (!scope.signal.aborted && helperSettled.signal.aborted) {
+                      return completeResult(await helperRun!, engineFailure);
+                    }
+                    if (!scope.signal.aborted && engineFailure) {
+                      const submissionFailure =
+                        error instanceof Error ? error.message : String(error);
+                      throw new Error(
+                        `${engineFailure}\nResponse submission failed: ${submissionFailure}`,
+                        {
+                          cause: error,
+                        },
+                      );
+                    }
+                    throw error;
+                  }
                 }
-              }
-              const completed = await helperRun!;
-              scope.assertCurrent();
-              return completeResult(completed, engineFailure);
-            } finally {
-              try {
-                await finishHelper();
+                stalledPhase = "waiting for the helper to deliver the final report";
+                const completed = await helperRun!;
+                scope.assertCurrent();
+                return completeResult(completed, engineFailure);
               } finally {
-                scope.signal.removeEventListener("abort", revoke);
+                try {
+                  await finishHelper();
+                } finally {
+                  scope.signal.removeEventListener("abort", revoke);
+                }
               }
-            }
-          },
-          callerSignal,
-        );
-      } finally {
-        operation.abort();
-        try {
-          await finishHelper();
+            },
+            callerSignal,
+          );
         } finally {
-          await fs.rm(hostDirectory, { recursive: true, force: true });
+          operation.abort();
+          try {
+            await finishHelper();
+          } finally {
+            await fs.rm(hostDirectory, { recursive: true, force: true });
+          }
         }
+      };
+      if (!budgetExceeded) {
+        return await work();
+      }
+      try {
+        return await Promise.race([work(), budgetExceeded]);
+      } finally {
+        clearTimeout(budgetTimer);
       }
     },
   };

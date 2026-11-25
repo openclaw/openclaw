@@ -57,6 +57,7 @@ export type ChatHistoryResult = {
   inFlightRun?: {
     runId: string;
     text?: string;
+    textFromMessage?: number | number[];
     startedAt?: number;
     sessionAbortable?: boolean;
     events?: AgentEventPayload[];

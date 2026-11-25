@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
-import * as modelsConfigState from "../../agents/models-config-state.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type * as CompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -23,7 +20,6 @@ import {
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import * as diagnosticEvents from "../../infra/diagnostic-events.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as profileReader from "../../state/user-profile-list.js";
@@ -39,7 +35,6 @@ import type {
   LlmCompleteParams,
   LlmIsolatedAgentRuntimeCompleteParams,
 } from "./runtime-llm.types.js";
-import * as runtimeLogging from "./runtime-logging.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<typeof CompletionRuntime.acquireSimpleCompletionModelForAgent>(),
@@ -60,9 +55,9 @@ const cfg: OpenClawConfig = {
 };
 const selection = { provider: "test-provider", modelId: "allowed", agentDir: "/tmp/model-policy" };
 const operatorSource = {
+  canonicalIdentity: null,
   profileId: "model-reader",
   scopes: ["operator.write"],
-  assertCurrent() {},
 };
 const preparePolicy = (allow = ["test-provider/allowed"]) =>
   prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main", allow }, manifestPlugins: [] });
@@ -91,20 +86,12 @@ function isolatedAnswer() {
 }
 
 function requester() {
-  let active = true;
   const release = vi.fn();
   const retain = vi.fn(() => release);
   return {
     release,
     retain,
-    retire: () => {
-      active = false;
-    },
-    authority: operator(() => {
-      if (!active) {
-        throw new Error("requester retired");
-      }
-    }, retain),
+    authority: operator(retain),
   };
 }
 
@@ -120,10 +107,9 @@ function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
   return awaitGateBeforeSettlement(started, pending, "completion settled before work started");
 }
 
-function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {
-  return createAdmittedRunOperatorAuthority({
+function operator(retain?: () => () => void) {
+  return createTestOperatorAuthority({
     ...operatorSource,
-    assertCurrent,
     retain,
     modelPolicy: preparePolicy(),
   });
@@ -510,7 +496,9 @@ describe("operator model policy on plugin completions", () => {
           ),
         );
         const rejected = expect(pending).rejects.toThrow(
-          scenario === "restricted model" ? "cannot use this model" : /authority|request ended/,
+          scenario === "restricted model"
+            ? "cannot use this model"
+            : /authority|request ended|could not start/,
         );
         try {
           await Promise.race([started.promise, pending]);
@@ -540,21 +528,16 @@ describe("operator model policy on plugin completions", () => {
   );
 
   it.each(["restricted", "unrestricted"] as const)(
-    "aborts only a removed in-flight model from an initially %s source",
+    "preserves admitted models and siblings from an initially %s source while denying the next start",
     async (initial) => {
       let policy =
         initial === "restricted"
           ? preparePolicy(["test-provider/model-a", "test-provider/model-b"])
           : undefined;
-      const observers = new Set<() => void>();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         get modelPolicy() {
           return policy;
-        },
-        onModelPolicyChanged: (listener) => {
-          observers.add(listener);
-          return () => observers.delete(listener);
         },
       });
       const firstStarted = createDeferredCore();
@@ -590,22 +573,26 @@ describe("operator model policy on plugin completions", () => {
       });
       const work = new AsyncWorkScope();
       const llm = completion();
-      const run = (model: string) =>
-        work.track(() =>
-          asOperator(authority, () => llm.complete({ ...request("direct"), model })),
-        );
+      const run = (model: string, source = authority) =>
+        work.track(() => asOperator(source, () => llm.complete({ ...request("direct"), model })));
       const first = run("model-a");
       // Vitest's manual mock loader shares import callstacks; overlap provider work after import.
       const second = waitForWork(firstStarted.promise, first).then(() => run("model-b"));
       try {
         await waitForWork(started.promise, Promise.all([first, second]));
         policy = preparePolicy(["test-provider/model-b"]);
-        observers.forEach((listener) => listener());
-        expect(signals.get("model-a")?.aborted).toBe(true);
+        expect(signals.get("model-a")?.aborted).toBe(false);
         expect(signals.get("model-b")?.aborted).toBe(false);
-        expect(() => authority.assertCurrent()).not.toThrow();
+        const nextAuthority = createTestOperatorAuthority({
+          ...operatorSource,
+          modelPolicy: policy,
+        });
+        await expectDenied(
+          run("model-a", nextAuthority),
+          expect.stringContaining("cannot use this model"),
+        );
         finishA.resolve();
-        await expectDenied(first, expect.stringContaining("cannot use this model"));
+        await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
         finishB.resolve();
         await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
       } finally {
@@ -614,7 +601,6 @@ describe("operator model policy on plugin completions", () => {
         await Promise.allSettled([first, second]);
         await work.drain();
       }
-      expect(observers.size).toBe(0);
     },
   );
   it.each([
@@ -624,8 +610,6 @@ describe("operator model policy on plugin completions", () => {
     { mode: "isolated", source: "unbound-operator", denial: "selected model" },
     { mode: "direct", source: "missing-binding", denial: "missing binding" },
     { mode: "direct", source: "agent-tool", denial: "prepared model" },
-    { mode: "direct", source: "agent-tool", denial: "retired requester" },
-    { mode: "isolated", source: "agent-tool", denial: "retired requester" },
   ] as const)(
     "rejects $denial before $mode provider execution from $source",
     async ({ mode, source, denial }) => {
@@ -634,22 +618,16 @@ describe("operator model policy on plugin completions", () => {
       } else if (denial === "prepared model") {
         mocks.acquire.mockResolvedValue(preparedModel("blocked", "blocked"));
       }
-      const authority = operator(() => {
-        if (denial === "retired requester") {
-          throw new Error("requester retired");
-        }
-      });
+      const authority = operator();
       await expectDenied(
         completeAs(authority, mode, source),
-        denial === "retired requester"
-          ? "requester retired"
-          : denial === "missing binding"
-            ? "Plugin model completion requires its current Gateway binding."
-            : expect.stringContaining(
-                source === "unbound-operator"
-                  ? "requires original Gateway authority"
-                  : "cannot use this model",
-              ),
+        denial === "missing binding"
+          ? "Plugin model completion requires its current Gateway binding."
+          : expect.stringContaining(
+              source === "unbound-operator"
+                ? "Plugin model completion requires its current Gateway binding."
+                : "cannot use this model",
+            ),
       );
       if (denial !== "prepared model") {
         expect(mocks.acquire).not.toHaveBeenCalled();
@@ -698,46 +676,12 @@ describe("operator model policy on plugin completions", () => {
   });
 
   it.each(["direct", "isolated"] as const)(
-    "rechecks a retired requester after awaited %s pricing before publishing usage",
-    async (mode) => {
-      const started = createDeferredCore();
-      const resume = createDeferredCore();
-      const { authority, retire, release, retain } = requester();
-      using pricing = vi
-        .spyOn(modelsConfigState, "captureModelsJsonCostSource")
-        .mockImplementation(async () => {
-          started.resolve();
-          await resume.promise;
-          return { providers: undefined };
-        });
-      using log = vi.spyOn(runtimeLogging, "writeRuntimeLog").mockImplementation(() => {});
-      using diagnostic = vi.spyOn(diagnosticEvents, "emitTrustedDiagnosticEvent");
-      mocks.isolated.mockResolvedValue({ ...isolatedAnswer(), usage: { input: 1, output: 1 } });
-      const llm = completion({ ...cfg, diagnostics: { enabled: true } });
-      const pending = withWork(() => asOperator(authority, () => llm.complete(request(mode))));
-      try {
-        await waitForWork(started.promise, pending);
-        retire();
-        resume.resolve();
-        await expectDenied(pending, "requester retired");
-        expect(pricing).toHaveBeenCalledOnce();
-        expect(log).not.toHaveBeenCalled();
-        expect(diagnostic).not.toHaveBeenCalled();
-        expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending]);
-      }
-    },
-  );
-
-  it.each(["direct", "isolated"] as const)(
-    "codes source revocation during %s work before the next guard",
+    "stops %s work through the admitted Stop signal",
     async (mode) => {
       const controller = new AbortController();
-      const revocation = new Error("source revoked");
+      const stop = new Error("Stop requested");
       const started = createDeferredCore();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         signal: controller.signal,
       });
@@ -747,36 +691,30 @@ describe("operator model policy on plugin completions", () => {
         }
         started.resolve();
         await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(revocation), { once: true });
+          signal.addEventListener("abort", () => reject(stop), { once: true });
         });
       });
       const pending = completeAs(authority, mode);
       await Promise.race([started.promise, pending]);
-      controller.abort(revocation);
-      await expectDenied(pending);
+      controller.abort(stop);
+      if (mode === "direct") {
+        await expect(pending).rejects.toBe(stop);
+      } else {
+        await expect(pending).rejects.toMatchObject({
+          name: "LlmCompleteError",
+          code: "LLM_COMPLETION_ABORTED",
+        });
+      }
       expect(mocks.complete).not.toHaveBeenCalled();
     },
   );
 
-  it.each([
-    { mode: "direct", result: "answer" },
-    { mode: "isolated", result: "answer" },
-    { mode: "direct", result: "denial" },
-    { mode: "isolated", result: "denial" },
-  ] as const)(
-    "retains the requester through $mode cleanup after returning the $result",
-    async ({ mode, result }) => {
+  it.each(["direct", "isolated"] as const)(
+    "retains the requester through %s cleanup after returning the answer",
+    async (mode) => {
       const cleanup = createDeferredCore();
-      const { authority, retire, release, retain } = requester();
+      const { authority, release, retain } = requester();
       if (mode === "direct") {
-        if (result === "denial") {
-          mocks.complete.mockImplementation(async (params) => {
-            void trackAsyncWork(() => cleanup.promise);
-            retire();
-            params.assertCurrent?.();
-            throw new Error("retired completion passed its guard");
-          });
-        }
         mocks.acquire.mockImplementation(async () => ({
           ...preparedModel(),
           async [Symbol.asyncDispose]() {
@@ -784,12 +722,8 @@ describe("operator model policy on plugin completions", () => {
           },
         }));
       } else {
-        mocks.isolated.mockImplementation(async (params) => {
+        mocks.isolated.mockImplementation(async () => {
           void trackAsyncWork(() => cleanup.promise);
-          if (result === "denial") {
-            retire();
-            params.assertCurrent?.();
-          }
           return isolatedAnswer();
         });
       }
@@ -798,11 +732,7 @@ describe("operator model policy on plugin completions", () => {
         const pending = work.track(() =>
           asOperator(authority, () => completion().complete(request(mode))),
         );
-        if (result === "answer") {
-          await expect(pending).resolves.toMatchObject({ text: "Allowed answer." });
-        } else {
-          await expectDenied(pending);
-        }
+        await expect(pending).resolves.toMatchObject({ text: "Allowed answer." });
         expect(retain).toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
       } finally {

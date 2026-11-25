@@ -744,6 +744,11 @@ Git never reopens the authority pathname, and hashing does not spool captured by
 to temporary storage. Reconstructed blobs still use Git's `-w` object write;
 signatures, authority checks, and operation supervision are unchanged. Pipe, spawn,
 and Git failures fail closed.
+Within one invocation, repeated non-writing hashes reuse a successful native Git
+result only after the captured bytes compare equal. Reuse retains at most 1,024
+payloads and 8 MiB; larger or excess payloads still use Git. Every authority file
+is reread and every signature and tree check still runs. Object writes always
+invoke Git, including after a read hash of identical bytes.
 
 ## Rerun failed CI tests
 

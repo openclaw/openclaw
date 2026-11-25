@@ -63,6 +63,7 @@ import type {
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { readSessionSourceChecks } from "./session-source-predicate.worker.js";
@@ -558,12 +559,12 @@ export function readExactSessionEntriesWithLifecycle(
                     source: { agentId: database.agentId, path: database.path },
                     databaseIdentity: `file:${identity}`,
                     placeholders,
-                    members: selected.value.map(({ sessionKey }) => ({
-                      sessionKey,
-                      identityIds: listSessionMembersInDatabase(database, sessionKey).map(
-                        (member) => member.identityId,
+                    members: selected.value.map(({ sessionKey }) =>
+                      sessionMemberSharingFacts(
+                        sessionKey,
+                        listSessionMembersInDatabase(database, sessionKey),
                       ),
-                    })),
+                    ),
                   },
                 };
               }

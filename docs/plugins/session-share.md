@@ -53,11 +53,48 @@ In the source Control UI, move the sessions you want to share into the **Team** 
 
 `share.involvingProfileId` matches the canonical human owner (including a trusted creator only when no owner is assigned) or a profile participant. A recorded mention alone never qualifies. This publication filter is distinct from Activity filters. Merged profile IDs resolve to the same person; personal hide/show choices do not change this selection. Names, email addresses, GitHub logins, shortened Activity URL IDs, remote attribution IDs, and unqualified channel sender IDs do not select a person. Unknown profile IDs publish nothing. There is no `involvingMe`: a source node has no authenticated viewer to bind it to.
 
-A valid, nonempty `share.groups` selection is always required. The optional person selector combines with groups using **AND**: the session must be in one of the exact `groups` **and** match the selected owner or participant. Group names within `groups` combine with **OR**. Missing, empty, or malformed groups publish nothing, including with a person selector. Removing `involvingProfileId` while retaining groups intentionally returns to group-only publication; an empty or malformed person value publishes nothing.
+A valid, nonempty `share.groups` selection is always required. The optional person selector combines with groups using **AND**: the session must be in one of the exact `groups` **and** match the selected owner or participant. Group names within `groups` combine with **OR**. Missing, empty, or malformed groups publish nothing, including with a person selector. For node sharing, removing `involvingProfileId` while retaining groups intentionally returns to group-only publication; an empty or malformed person value publishes nothing.
 
 Subagents, incognito sessions, drafts, and adopted rows from other session catalogs are never published, even when they belong to a selected group. This also excludes named or resumed sessions with recorded spawn lineage; a user-created fork remains eligible.
 
 With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Changing filters or removing a session's matching group or person involvement revokes new and in-flight transcript reads; a receiver that already read text may retain that text.
+
+## Filter shared sessions by person
+
+The sidebar's **Owned by me** and **Involving me** filters can query a supporting
+source before pagination. Ownership uses the canonical human owner, with a
+trusted creator as fallback only when no owner is assigned. Involvement also
+includes canonical participants and recorded mentions, but not personal Activity
+hide/show overrides. The request filter intersects the source's groups and any
+configured `share.involvingProfileId`; it never grants access to other sessions.
+
+The receiver resolves the selected local profile through its verified numeric
+GitHub account ID. The source must link that account to exactly one canonical
+profile. Missing or ambiguous links retain the authorized legacy rows with visible
+partial-filter guidance and existing client-side matching. Local catalogs keep their
+existing client-side filters. Reads and imports retain the source-applied filter
+of the selected host; a fallback host does not claim source filtering.
+
+Node sources must advertise and the receiver must approve both optional commands:
+
+- `openclaw.sessions.catalog.list.v1`
+- `openclaw.sessions.catalog.read.v1`
+
+The original `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1` commands
+remain unchanged. Filtered node snapshots are query-scoped and use the same
+bounded refresh permit pool as ordinary node discovery. Pages and lookups reuse
+that snapshot; pending discovery reports a retryable loading state. Outbound Gateway sources must advertise both
+`session-share.catalog.list` and `session-share.catalog.read` in their
+connection capabilities. Those filtered methods require the same publication-read
+host switch, approved device, groups and configured `share.involvingProfileId` as
+ordinary Gateway publication. A request target is a selector, not an authentication
+claim, and can only narrow that source-owned selection.
+
+Older or unapproved sources retain authorized rows with partial-filter guidance.
+Only an unavailable identity link or an unapproved optional command permits a
+legacy-list fallback; timeouts, cursor mismatches and other access errors do not.
+Update and approve the source for complete relationship filtering, or choose
+**All owners** for ordinary browsing.
 
 ## Outbound Gateway pull
 
@@ -66,18 +103,18 @@ of accepting an inbound source node. No listener or tunnel is added on the
 receiver. On the source, explicitly set
 `gateway.sessionControl.publicationReadEnabled: true` and the plugin option
 `share.gateway: true`, select `share.groups`,
-and set `share.involvingProfileId`. Add the exact approved reader device IDs to
+and set `share.involvingProfileId` for all Gateway publication reads. Add the exact approved reader device IDs to
 `share.gatewayDeviceIds`. Missing or empty device grants publish nothing over
 Gateway RPC. The device reads sessions matching both the groups and canonical
-person; it does not become that person. Requests cannot change these filters.
+person; it does not become that person. Requests cannot widen these source filters.
 Merged profile IDs remain supported; unknown or removed people publish nothing.
 
 The host switch is off unless it is exactly `true`. Plugin installation,
-authentication and stored grants do not turn it on. Disabling it retires current
-reader connections and pending disclosures, including when it is turned back on
-before their next check. Start a new connection after re-enabling. Unrelated
-configuration changes do not retire the host reader admission. Ordinary clients
-and node-based sharing are unchanged. An explicitly enabled reader connection
+authentication and stored grants do not turn it on. Each connection and read
+request checks it at admission. Disabling denies new reads without revoking an
+already admitted request, which may finish. Existing connections can read again
+after re-enabling. Source permissions and device grants remain independently
+enforced. Ordinary clients and node-based sharing are unchanged. An explicitly enabled reader connection
 may remain inert when no source plugin methods are available.
 
 On the receiver, configure a source under `gateways`:
@@ -149,7 +186,7 @@ openclaw plugins enable session-share
 openclaw devices join-code
 ```
 
-The enable command applies the running Gateway's plugin lifecycle without restarting it. Keep the join URL private. On the source machine, use that URL with exactly the two read-only commands:
+The enable command applies the running Gateway's plugin lifecycle without restarting it. Keep the join URL private. On the source machine, use that URL with the two legacy read-only commands (or all four commands when enabling the optional catalog features below):
 
 ```bash
 openclaw connect <join-url> --service \
@@ -166,7 +203,8 @@ openclaw devices approve <requestId>
 openclaw nodes list
 ```
 
-Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. The catalog only recognizes nodes advertising both commands. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
+Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. A node set up for [Open original](#open-original-on-a-paired-node) also declares both optional catalog commands. The catalog recognizes nodes
+advertising both legacy commands; the optional pair enables links and relationship filters. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
 
 ## Read shared sessions
 
@@ -214,11 +252,99 @@ Receiver-side identity settings are optional and keyed by the node ID shown by `
 
 Without node-specific settings, attribution stays remote. Source-local profile IDs are namespaced as remote identities, never interpreted directly as profiles on the receiver. Source and receiver settings may coexist in one plugin configuration.
 
+## Open original on a paired node
+
+The shared-session menu can open an eligible session in a separate tab on the source Control UI. The shared view on the receiver stays read-only. The source asks for its own sign-in and applies its own permissions. Only paired node sources support this action; outbound Gateway sources do not provide original links.
+
+Nothing is enabled by default, and both machines need a release that includes this action. Follow the steps in order: the Gateway withholds a command that is not allowed at the moment the node connects.
+
+1. On the receiver, add both catalog commands to the existing `gateway.nodes.commands.allow` array. Preserve any commands already present. A matching `gateway.nodes.commands.deny` entry overrides it.
+
+   ```json5
+   {
+     gateway: {
+       nodes: {
+         commands: {
+           allow: ["openclaw.sessions.catalog.list.v1", "openclaw.sessions.catalog.read.v1"],
+         },
+       },
+     },
+   }
+   ```
+
+2. On the receiver, set the source Control UI address for that node:
+
+   ```json5
+   {
+     plugins: {
+       entries: {
+         "session-share": {
+           config: {
+             nodes: {
+               "<nodeId>": {
+                 controlUiOrigin: "https://team.example.com",
+                 controlUiBasePath: "/openclaw",
+               },
+             },
+           },
+         },
+       },
+     },
+   }
+   ```
+
+   `controlUiOrigin` is an HTTP(S) origin with no credentials, path, query, or fragment. Set `controlUiBasePath` only when the source serves its Control UI under a path prefix. Choose the address yourself. Never copy it from a node IP address or from anything the source sends.
+
+3. On the source, replace the saved command allowlist with all four IDs. `--commands` replaces the saved list, so repeat the two read commands:
+
+   ```bash
+   openclaw node install --force \
+     --commands openclaw.sessions.list.v1,openclaw.sessions.read.v1,openclaw.sessions.catalog.list.v1,openclaw.sessions.catalog.read.v1
+   ```
+
+   For a foreground node, pass the same list to `openclaw node run`.
+
+4. On the receiver, approve the widened command surface and confirm that the node now has four commands:
+
+   ```bash
+   openclaw nodes pending
+   openclaw nodes approve <requestId>
+   openclaw nodes describe --node <nodeId>
+   ```
+
+The source returns only a source-relative path, and only for a session that its current routing still resolves to the stored session. The receiver joins that path to the origin you configured. Links follow the source's current routing; they are not permanent session addresses.
+
+The receiver uses the catalog pair for every list/read when the node advertises both commands, and the legacy pair otherwise. It requests original paths only when the pair and `controlUiOrigin` are configured. If the pair was not allowed on the receiver when the node connected, the Gateway withholds it, so the receiver uses the legacy pair: shared sessions stay readable, relationship filters fall back to client-side matching with guidance, and **Open original** stays disabled. Allow the pair, then restart the source node and approve the request in `openclaw nodes pending`.
+
+### Relationship filtering
+
+The same optional catalog pair serves **Owned by me**, **Involving me**, and
+**Open original**. Complete the numbered receiver/source setup above; no additional
+command variants are needed. List accepts `profileRelation` and
+`includeOriginalPath` (default `false`); read accepts `profileRelation`.
+The relationship is `owned` or `involving`, with a numeric `github-account` target.
+Gateway sources advertise `session-share.catalog.list` and
+`session-share.catalog.read` in `features.methods`; legacy `session-share.list`
+and `session-share.read` remain unchanged. Gateway catalog list does not accept
+`includeOriginalPath`, and Gateway sources cannot supply original links.
+
+When a source is older or an identity cannot be linked, the receiver keeps
+authorized rows and client-side matching with
+visible partial-results guidance. This is not a complete source-side involvement
+query. Slow refreshes remain pending and can be retried; failures do not imply
+an empty source. Each host records whether it actually applied the relation.
+
 ## Security boundary
 
 The source chooses what to publish; the receiver trusts the paired device for the identity claims attached to that publication. Attribution is display metadata and never grants access.
 
-With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
+With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The optional catalog pair is also read-only. With `includeOriginalPath: true`, the list adds a source-relative Control UI path to listed rows and no other session content. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
+
+An approved reader can supply any numeric GitHub account ID. The source does not
+authenticate that target: results can disclose whether the account resolves and
+its owner, participant, or mention membership within sessions already published
+to that reader. Direct source profile-ID targets are not accepted. A relationship
+only narrows the publication; it grants no access.
 
 Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Included text is not secret-masked. Review credentials and other sensitive content before publishing. Choose publication filters deliberately and treat received transcripts as untrusted text.
 
@@ -247,6 +373,10 @@ Refresh the catalog. The source may be offline, the session may have been delete
 **Catalog refreshes sometimes take 30 seconds**
 
 When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs refreshes that take at least one second, at most once per minute. Progressive callers see a loading host while these refreshes run. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
+
+**Open original is disabled**
+
+Check each step in [Open original on a paired node](#open-original-on-a-paired-node). `openclaw nodes describe --node <nodeId>` on the receiver must list `openclaw.sessions.catalog.list.v1`, and the node needs a valid `controlUiOrigin`. If you allowed the command after the source connected, run `openclaw node restart` on the source, then approve the request shown by `openclaw nodes pending`. A session whose stored address no longer matches the source's current routing has no link.
 
 **Names do not link to local profiles**
 

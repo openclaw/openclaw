@@ -76,7 +76,6 @@ export type ChatTranscriptSession = {
     renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay?: JSX.Element,
     header?: TranscriptHeader | null,
     presented?: PresentationValue,
     applicationContext?: ApplicationContext,
@@ -98,7 +97,6 @@ export type TranscriptRenderSnapshot<T> = {
   renderRow: (row: TranscriptRow<T>) => TranscriptContent;
   announcement: TranscriptAnnouncement | null;
   announce: boolean;
-  overlay: JSX.Element;
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;

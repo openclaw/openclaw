@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
-import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
+import { decodeCliRecords, readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -16,7 +16,8 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
 /** Own chunk framing and turn budgets together, including the unterminated final line. */
 export function createCliJsonlStreamInput(params: {
   claudeStreamJson: boolean;
-  onLine: (line: string) => void;
+  onCustomLine: (line: string, rawLine: string) => boolean;
+  onRecord: (record: Record<string, unknown>) => void;
   hasError: () => boolean;
   onError: (error: string) => void;
 }) {
@@ -30,25 +31,52 @@ export function createCliJsonlStreamInput(params: {
     buffer.pending = "";
     return false;
   };
+  const accountClaudeLine = (lineChars: number, countsFrame = false) => {
+    if (countsFrame && ++countedClaudeFrames > limits.maxTurnLines) {
+      return reject("lines", limits.maxTurnLines);
+    }
+    rawChars += lineChars + 1;
+    return rawChars <= limits.maxTurnRawChars || reject("raw", limits.maxTurnRawChars);
+  };
+  const onLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line && !params.claudeStreamJson) {
+      return;
+    }
+    if (++rawLines > limits.maxTurnLines && !params.claudeStreamJson) {
+      reject("lines", limits.maxTurnLines);
+      return;
+    }
+    if (!line) {
+      accountClaudeLine(rawLine.length);
+      return;
+    }
+    if (params.onCustomLine(line, rawLine)) {
+      return;
+    }
+    const records = decodeCliRecords(line);
+    if (params.claudeStreamJson) {
+      const record = records.length === 1 ? records[0] : undefined;
+      const charge = chargeClaudeStreamJsonLine(record, rawLine);
+      if (!accountClaudeLine(charge.chars, charge.countsFrame)) {
+        return;
+      }
+    }
+    for (const record of records) {
+      params.onRecord(record);
+    }
+  };
   return {
-    buffer,
+    accountClaudeLine,
     get rawLines() {
       return rawLines;
     },
-    countLine() {
-      rawLines += 1;
-      return (
-        params.claudeStreamJson ||
-        rawLines <= limits.maxTurnLines ||
-        reject("lines", limits.maxTurnLines)
-      );
-    },
-    accountClaudeLine: (lineChars: number, countsFrame = false) => {
-      if (countsFrame && ++countedClaudeFrames > limits.maxTurnLines) {
-        return reject("lines", limits.maxTurnLines);
+    finish() {
+      const tail = buffer.pending;
+      buffer.pending = "";
+      if (tail && !params.hasError()) {
+        onLine(tail);
       }
-      rawChars += lineChars + 1;
-      return rawChars <= limits.maxTurnRawChars || reject("raw", limits.maxTurnRawChars);
     },
     push: (chunk: string) => {
       if (!chunk || params.hasError()) {
@@ -63,7 +91,7 @@ export function createCliJsonlStreamInput(params: {
       }
       if (
         !frameBoundedCliJsonlChunk(buffer, chunk, (line) => {
-          params.onLine(line);
+          onLine(line);
           return !params.hasError();
         })
       ) {

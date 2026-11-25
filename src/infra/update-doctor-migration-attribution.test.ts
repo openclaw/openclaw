@@ -168,8 +168,21 @@ it.each([
   "read-only reader opens",
   "last writable reader closes",
   "read-only reader opens before admission",
+  "read-only reader rebuilds a checkpointed index",
 ])("migrates a captured WAL database when its %s without writing", async (transition) => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  if (transition === "read-only reader rebuilds a checkpointed index") {
+    const writer = new DatabaseSync(pathname);
+    const pin = new DatabaseSync(pathname, { readOnly: true });
+    pin.prepare("SELECT * FROM retained").all();
+    writer.exec(
+      "UPDATE retained SET value = 8; UPDATE retained SET value = 7; PRAGMA wal_checkpoint(TRUNCATE);",
+    );
+    writer.close();
+    pin.close();
+    expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+    expect(fs.readFileSync(`${pathname}-shm`).readUInt32LE(8)).not.toBe(0);
+  }
   // SQLite only removes the zero-write WAL index when a writable handle closes.
   const reader =
     transition === "last writable reader closes" ? new DatabaseSync(pathname) : undefined;
@@ -181,9 +194,13 @@ it.each([
   }
   const { receipt, warnings } = await withCapture(env, generations, async () => {
     reader?.close();
-    if (transition === "read-only reader opens") {
+    if (
+      transition === "read-only reader opens" ||
+      transition === "read-only reader rebuilds a checkpointed index"
+    ) {
       using readOnly = new DatabaseSync(pathname, { readOnly: true });
-      readOnly.prepare("SELECT * FROM retained").all();
+      readOnly.prepare("PRAGMA user_version").get();
+      readOnly.prepare("SELECT name FROM sqlite_master").all();
     }
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
     using database = new DatabaseSync(pathname);
@@ -335,7 +352,7 @@ it.each(["already exclusive", "retain exclusive"])(
   },
 );
 
-it.each(["different content", "same content"])(
+it.each(["different content", "same content", "different content with a rebuilt index"])(
   "rejects a captured WAL database after an outside commit with %s",
   async (change) => {
     const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
@@ -347,6 +364,12 @@ it.each(["different content", "same content"])(
         writer.exec("UPDATE retained SET value = 7;");
       }
       writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      if (change === "different content with a rebuilt index") {
+        writer.close();
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        reader.prepare("PRAGMA user_version").get();
+        reader.prepare("SELECT name FROM sqlite_master").all();
+      }
       using database = new DatabaseSync(pathname);
       expect(() => migrate(database, pathname)).toThrow(
         "SQLite migration source changed after update capture:",
@@ -502,22 +525,28 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
 );
 
 it.each([
-  { version: "2026.9.7", ownsRun: true },
-  { version: "2026.9.8", ownsRun: true },
-  { version: "2026.9.33", ownsRun: true },
-  { version: "2026.9.34", ownsRun: true },
-  { version: "2026.9.37", ownsRun: true },
-  { version: "2026.9.37", ownsRun: false },
-  { version: "2026.10.33", ownsRun: true },
+  { version: "2026.9.7", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.8", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.33", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.34", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "fresh" },
+  { version: "2026.9.37", ownsRun: true, profile: "restored" },
+  { version: "2026.9.37", ownsRun: false, profile: "fresh" },
+  { version: "2026.10.33", ownsRun: true, profile: "fresh" },
 ])(
-  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun)",
-  async ({ version, ownsRun }) => {
+  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun, profile=$profile)",
+  async ({ version, ownsRun, profile }) => {
     const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
     const parent = readUpdateRunDriver(ownsRun ? process.pid : process.ppid);
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
     // The updater closes its ledger writer before handing the inventory to Doctor.
     await closeOpenClawStateDatabaseAsync();
     const shared = fs.realpathSync(resolveOpenClawStateSqlitePath(env));
+    if (profile === "restored") {
+      // The published updater restores a standalone rollback-journal image.
+      using restoredState = new DatabaseSync(shared);
+      restoredState.exec("PRAGMA journal_mode=DELETE");
+    }
     // Earlier parents can inspect a single store without requesting the shared ledger.
     const missing = path.join(root, "missing.sqlite");
     const paths =
@@ -541,6 +570,12 @@ it.each([
           )
         : readUpdateDatabaseGenerations(paths);
       const { receipt } = await withCapture(env, capture, async () => {
+        if (profile === "restored") {
+          await openOpenClawStateDatabaseForDoctor({ env });
+          // Agent maintenance needs a second writer while Doctor retains its state handle.
+          using leaseWriter = new DatabaseSync(shared, { timeout: 0 });
+          leaseWriter.exec("BEGIN IMMEDIATE; ROLLBACK");
+        }
         using db = new DatabaseSync(pathname);
         migrate(db, pathname);
       });
