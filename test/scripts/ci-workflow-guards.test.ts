@@ -7550,7 +7550,10 @@ it("pins generated publisher and maturity owners before credentials and selected
     );
     expect(finalPublishers, file).toHaveLength(1);
     expect(finalPublishers[0]?.index, file).toBe(finalPublishers[0]!.length - 1);
-    if (file === CONTROL_UI_LOCALE_REFRESH_WORKFLOW || file === NATIVE_APP_LOCALE_REFRESH_WORKFLOW) {
+    if (
+      file === CONTROL_UI_LOCALE_REFRESH_WORKFLOW ||
+      file === NATIVE_APP_LOCALE_REFRESH_WORKFLOW
+    ) {
       const preflight = workflow.jobs["publisher-preflight"];
       const early = requiredWorkflowStep(preflight.steps, "Reconcile stale generated locale PR");
       expect(early.with?.mode).toContain("reconcile-stale");
