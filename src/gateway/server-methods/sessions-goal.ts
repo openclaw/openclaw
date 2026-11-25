@@ -239,7 +239,12 @@ async function handleSessionGoalMutation(
             deliver: false,
           },
         },
-        { ...identity, action: "resume", ...(request.note ? { note: request.note } : {}) },
+        {
+          ...identity,
+          action: "resume",
+          ...(request.expectedStatus ? { expectedStatus: request.expectedStatus } : {}),
+          ...(request.note ? { note: request.note } : {}),
+        },
       );
       return;
     }

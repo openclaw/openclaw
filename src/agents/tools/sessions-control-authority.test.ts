@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -16,6 +17,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
   captureSessionControlAuthority,
@@ -233,6 +235,114 @@ describe("prepared session control target", () => {
     await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
       "session control source revoked",
     );
+  });
+
+  it("resumes an authorized blocked target through the existing Goal RPC", async () => {
+    const goal = createSessionGoalFixture("blocked-goal", "Verify the synthetic artifact", {
+      status: "blocked",
+      tokenBudget: 1000,
+      tokensUsed: 250,
+    });
+    const { scope, entry } = seedTarget("goal-resume", {
+      createdActor: { type: "human", source: "profile", id: callerId },
+      goal,
+    });
+    const { authority } = issueAuthority(callerId);
+    const started = { status: "started", runId: "resumed-run", goalId: goal.id };
+    const requests: Parameters<AgentToolGatewayRequestCaller>[0][] = [];
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: Parameters<AgentToolGatewayRequestCaller>[0],
+    ): Promise<T> => {
+      requests.push(request);
+      expect(request.method).toBe("sessions.goal.update");
+      request.sessionMutationCommitGuard?.();
+      expect(request.params).toMatchObject({
+        sessionKey: scope.sessionKey,
+        sessionId: entry.sessionId,
+        goalId: goal.id,
+        action: "resume",
+        note: "The operator supplied the missing artifact.",
+        operationId: expect.any(String),
+        issuedAtMs: expect.any(Number),
+      });
+      return started as T;
+    };
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:dashboard:orchestrator",
+      config: cfg,
+      senderIsOwner: false,
+      sessionControlAuthority: authority,
+      callGateway,
+    });
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:orchestrator",
+        operatorAuthority: authority,
+      },
+      () =>
+        tool.execute("resume-blocked", {
+          action: "goal_resume",
+          sessionKey: scope.sessionKey,
+          expectedSessionId: entry.sessionId,
+          note: "The operator supplied the missing artifact.",
+        }),
+    );
+    expect(result.details).toEqual(started);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("never treats a resume note as authority or hides a rejected Resume", async () => {
+    const goal = createSessionGoalFixture("blocked-goal", "Verify the synthetic artifact", {
+      status: "blocked",
+    });
+    const { scope, entry } = seedTarget("goal-refusals", {
+      createdActor: { type: "human", source: "profile", id: callerId },
+      goal,
+    });
+    const { authority, revoke } = issueAuthority(callerId);
+    const callGateway = vi.fn(async () => {
+      throw new Error("Target still has active work; wait for settlement.");
+    });
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:dashboard:orchestrator",
+      config: cfg,
+      callGateway,
+    });
+    const args = {
+      action: "goal_resume",
+      sessionKey: scope.sessionKey,
+      expectedSessionId: entry.sessionId,
+      note: "Approved by the operator",
+    };
+    await expect(tool.execute("no-grant", args)).rejects.toThrow(/current operator write grant/);
+    const invoke = (changes = {}) =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:orchestrator",
+          operatorAuthority: authority,
+        },
+        () => tool.execute("resume-refused", { ...args, ...changes }),
+      );
+    await expect(invoke({ expectedSessionId: "stale-session" })).rejects.toThrow(/target changed/);
+    await expect(invoke({ note: " " })).rejects.toThrow(/note/);
+    await expect(invoke({ sessionKey: "agent:main:dashboard:orchestrator" })).rejects.toThrow(
+      /finish the current reply/,
+    );
+    replaceSessionEntrySync(scope, { ...entry, goal: { ...goal, status: "paused" } });
+    await expect(invoke()).rejects.toThrow(/existing blocked goal/);
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      createdActor: { type: "human", source: "profile", id: otherId },
+    });
+    await expect(invoke()).rejects.toThrow(/session creator/);
+    replaceSessionEntrySync(scope, entry);
+    expect(callGateway).not.toHaveBeenCalled();
+    await expect(invoke()).rejects.toThrow(/Target still has active work/);
+    revoke();
+    await expect(invoke()).rejects.toThrow(/revoked/);
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("rejects an assignee's self-archive before reporting it as scheduled", async () => {

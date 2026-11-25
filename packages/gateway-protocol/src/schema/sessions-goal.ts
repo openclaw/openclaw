@@ -59,7 +59,14 @@ export const SessionsGoalUpdateParamsSchema = Type.Union([
   }),
   closedObject({
     ...GoalOperationIdentity,
-    action: stringLiteralUnion(["pause", "resume", "complete", "block"]),
+    action: Type.Literal("resume"),
+    /** Optional compare-and-resume condition, evaluated by the Goal writer. */
+    expectedStatus: Type.Optional(Type.Literal("blocked")),
+    note: Type.Optional(Type.String({ maxLength: 2_000 })),
+  }),
+  closedObject({
+    ...GoalOperationIdentity,
+    action: stringLiteralUnion(["pause", "complete", "block"]),
     note: Type.Optional(Type.String({ maxLength: 2_000 })),
   }),
 ]);

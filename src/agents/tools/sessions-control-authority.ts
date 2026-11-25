@@ -1,3 +1,4 @@
+import { getSessionGoal } from "../../config/sessions/goals.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,7 +21,7 @@ export async function prepareSessionControlTarget(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
-  operation: "archive" | "restore" | "stop";
+  operation: "archive" | "restore" | "stop" | "resume";
   authority?: AdmittedRunOperatorAuthority;
 }) {
   // Identity-only callers compose their own invocation guard. In particular, accepted
@@ -148,7 +149,19 @@ export async function prepareSessionControlTarget(params: {
         release();
       }
     });
-    return { sessionId, lifecycleRevision, assertCurrent, release };
+    // Sharing projections contain identity and access facts, not the live Goal payload.
+    const snapshot =
+      params.operation === "resume"
+        ? await getSessionGoal({
+            agentId: facts.storageTarget.agentId,
+            sessionKey: facts.storageTarget.canonicalKey,
+            storePath: facts.storageTarget.storePath,
+            persist: false,
+          })
+        : undefined;
+    assertCurrent();
+    const goal = snapshot?.status === "found" ? snapshot.goal : undefined;
+    return { sessionId, lifecycleRevision, goal, assertCurrent, release };
   } catch (error) {
     release();
     throw error;

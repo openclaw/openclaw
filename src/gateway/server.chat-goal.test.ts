@@ -16,6 +16,7 @@ import * as runtimePlugins from "../agents/runtime-plugins.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import * as goalOperationReads from "../config/sessions/goals-operations-read.js";
+import { createSessionGoal, updateSessionGoalStatus } from "../config/sessions/goals.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -47,6 +48,7 @@ import type {
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
+import { registerOrchestratorGoalResumeCases } from "./server.chat-goal-orchestrator.test-support.js";
 import { registerGoalReplacementCases } from "./server.chat-goal-replacement.test-support.js";
 import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
@@ -317,6 +319,16 @@ describe("Goal chat admission and continuation", () => {
   });
 
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+
+  registerOrchestratorGoalResumeCases({
+    scope,
+    runEmbeddedAgent,
+    rpc,
+    getContext: () => context,
+    profileClient,
+    waitForDispatchEnd,
+  });
+
   registerGoalReplacementCases(scope, runEmbeddedAgent, rpc, goalStart, () => context, client);
 
   registerGoalChatRestartSettlementCase({

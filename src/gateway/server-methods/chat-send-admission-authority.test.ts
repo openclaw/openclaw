@@ -33,6 +33,7 @@ import {
 } from "./chat-send-admission.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
+import { createChatSendPendingInputAdmission } from "./chat-send-work-admission.js";
 import type { SessionMutationAuthorization } from "./types.js";
 
 installGatewayTestHooks();
@@ -367,3 +368,23 @@ it.each(["revocation", "role change"] as const)(
     }
   },
 );
+
+it("transfers an accepted Goal Resume input from its caller guard to run custody", () => {
+  let callerOpen = true;
+  let custodyOpen = true;
+  const admission = createChatSendPendingInputAdmission({
+    runId: "synthetic-goal-resume",
+    sessionMutationCommitGuard: () => {
+      if (!callerOpen) throw new Error("caller completed");
+    },
+    assertCustodyLifetimeCurrent: () => {
+      if (!custodyOpen) throw new Error("run custody closed");
+    },
+  });
+  expect(admission.assertCurrent).not.toThrow();
+  callerOpen = false;
+  expect(admission.assertCurrent).toThrow("caller completed");
+  expect(admission.assertAdmittedCurrent).not.toThrow();
+  custodyOpen = false;
+  expect(admission.assertAdmittedCurrent).toThrow("run custody closed");
+});

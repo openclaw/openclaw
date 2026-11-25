@@ -193,9 +193,23 @@ OpenClaw exposes three goal tools to agent harnesses:
 | `create_goal` | Create a goal only when explicitly requested. Replaces a completed goal; fails if an unfinished goal exists. |
 | `update_goal` | Mark the goal `complete` or `blocked`.                                                                       |
 
-The model cannot pause, resume, clear, or replace an unfinished goal. Those stay
-operator/session controls through `/goal` and reset commands, so the agent
-cannot quietly move an unfinished target. An explicitly requested `create_goal`
+The three goal tools cannot pause, resume, clear, or replace an unfinished goal.
+Those remain operator/session controls through `/goal` and reset commands.
+An explicitly authorized orchestrator can use `sessions` with `action: "goal_resume"`
+to resume another session's blocked goal. Supply its `sessionKey`,
+`expectedSessionId` from `sessions_list`, and a `note` explaining what changed.
+This requires a current authenticated operator write grant and access as the
+session creator or an administrator; an assignment or an approval-sounding note
+alone grants no authority. The existing Goal Resume operation preserves the goal
+identity and history, and applies its normal budget and run-admission rules.
+Pending action approvals remain separate. Paused, limited, and completed goals
+continue to use the explicit operator controls.
+
+The calling session cannot resume itself while this tool is running. Finish its
+current reply and use Goal Resume afterward. If the target still has active work,
+wait for it to settle and review its current state before retrying. An ordinary
+"continue" message can authorize current-turn work without resuming automatic
+pursuit. An explicitly requested `create_goal`
 can replace a completed goal; it must not be used to invent more work after
 achievement.
 
