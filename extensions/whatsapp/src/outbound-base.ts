@@ -16,7 +16,7 @@ import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
-import { toWhatsappJid } from "./targets-runtime.js";
+import { requireWhatsAppTargetFacts } from "./target-facts.js";
 
 type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
 type WhatsAppSendOptions = Parameters<WhatsAppSendMessage>[2];
@@ -40,7 +40,7 @@ const dispatchMessage = async (
   const replyToId = params.replyToId?.trim();
   let quotedMessageKey: WhatsAppSendOptions["quotedMessageKey"];
   if (replyToId) {
-    const targetJid = toWhatsappJid(params.to);
+    const targetJid = requireWhatsAppTargetFacts({ target: params.to }).wireDelivery.jid;
     const cachedMeta = lookupInboundMessageMetaForTarget(lookupAccountId, targetJid, replyToId);
     quotedMessageKey = {
       id: replyToId,

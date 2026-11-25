@@ -30,8 +30,6 @@ import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
 import {
-  isWhatsAppGroupJid,
-  isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
   normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppAllowFromEntries,
@@ -43,11 +41,26 @@ import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { createWhatsAppPluginBase } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
+import { resolveWhatsAppTargetFacts } from "./target-facts.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
+
+function resolveWhatsAppTargetInfo(raw: string) {
+  const resolution = resolveWhatsAppTargetFacts({ target: raw });
+  if (!resolution.ok) {
+    return null;
+  }
+  const facts = resolution.facts;
+  return {
+    to: facts.wireDelivery.preserveJidAsAuthorizedTarget
+      ? facts.wireDelivery.jid
+      : facts.normalizedTarget,
+    chatType: facts.chatType,
+  };
+}
 
 function resolveEnabledWhatsAppAgentReactions(cfg: OpenClawConfig, accountId?: string) {
   if (!cfg.channels?.whatsapp) {
@@ -138,28 +151,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
         resolveOutboundSessionRoute: (params) => {
-          const normalized = normalizeWhatsAppTarget(params.target);
-          if (!normalized) {
+          const resolution = resolveWhatsAppTargetFacts({ target: params.target });
+          if (!resolution.ok) {
             return null;
           }
-          const isGroup = normalized.endsWith("@g.us");
-          const isNewsletter = normalized.endsWith("@newsletter");
-          const chatType = isGroup ? "group" : isNewsletter ? "channel" : "direct";
+          const facts = resolution.facts;
+          const routeTarget = facts.wireDelivery.preserveJidAsAuthorizedTarget
+            ? facts.wireDelivery.jid
+            : facts.normalizedTarget;
           const route = buildChannelOutboundSessionRoute({
             cfg: params.cfg,
             agentId: params.agentId,
             channel: "whatsapp",
             accountId: params.accountId,
             recipientSessionExact: true,
-            peer: {
-              kind: chatType,
-              id: normalized,
-            },
-            chatType,
-            from: normalized,
-            to: normalized,
+            peer: facts.routePeer,
+            chatType: facts.chatType,
+            from: routeTarget,
+            to: routeTarget,
           });
-          return isGroup
+          return facts.chatType === "group"
             ? {
                 ...route,
                 sessionKey: resolveWhatsAppGroupSessionKey({
@@ -169,19 +180,27 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               }
             : route;
         },
-        inferTargetChatType: ({ to }) => {
-          const normalized = normalizeWhatsAppTarget(to);
-          return !normalized
-            ? undefined
-            : isWhatsAppGroupJid(normalized)
-              ? "group"
-              : isWhatsAppNewsletterJid(normalized)
-                ? "channel"
-                : "direct";
-        },
+        inferTargetChatType: ({ to }) => resolveWhatsAppTargetInfo(to)?.chatType,
         targetResolver: {
-          looksLikeId: looksLikeWhatsAppTargetId,
+          looksLikeId: (raw) =>
+            looksLikeWhatsAppTargetId(raw) || resolveWhatsAppTargetInfo(raw) !== null,
           hint: "<E.164|group JID|newsletter JID>",
+          resolveTarget: async ({ input }) => {
+            const target = resolveWhatsAppTargetInfo(input);
+            if (!target) {
+              return null;
+            }
+            return {
+              to: target.to,
+              kind:
+                target.chatType === "direct"
+                  ? ("user" as const)
+                  : target.chatType === "group"
+                    ? ("group" as const)
+                    : ("channel" as const),
+              source: "normalized" as const,
+            };
+          },
         },
       },
       message: whatsappMessageAdapter,

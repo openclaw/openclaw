@@ -2,9 +2,8 @@ import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
+const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid)$/i;
 const WHATSAPP_LEGACY_USER_JID_RE = /^(\d+)@c\.us$/i;
-const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 const NON_WHATSAPP_PROVIDER_PREFIX_RE = /^[a-z][a-z0-9-]*:/i;
 const WHATSAPP_NEWSLETTER_JID_RE = /^([0-9]+)@newsletter$/i;
 
@@ -34,43 +33,57 @@ export function isWhatsAppNewsletterJid(value: string): boolean {
 }
 
 export function isWhatsAppUserTarget(value: string): boolean {
-  return extractUserJidPhone(stripWhatsAppTargetPrefixes(value)) !== null;
+  const candidate = stripWhatsAppTargetPrefixes(value);
+  return WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LEGACY_USER_JID_RE.test(candidate);
 }
 
-function extractUserJidPhone(jid: string): string | null {
-  return (
-    (jid.match(WHATSAPP_USER_JID_RE) ??
-      jid.match(WHATSAPP_LEGACY_USER_JID_RE) ??
-      jid.match(WHATSAPP_LID_RE))?.[1] ?? null
-  );
-}
-
-export function normalizeWhatsAppTarget(value: string): string | null {
+/** Policy identity and delivery input must be derived from the same address parse. */
+export function parseWhatsAppTarget(value: string): {
+  normalizedTarget: string;
+  deliveryTarget: string;
+} | null {
   const candidate = stripWhatsAppTargetPrefixes(value);
   if (!candidate) {
     return null;
   }
   const groupJid = normalizeWhatsAppGroupJid(candidate);
   if (groupJid) {
-    return groupJid;
+    return { normalizedTarget: groupJid, deliveryTarget: groupJid };
   }
   const newsletterMatch = candidate.match(WHATSAPP_NEWSLETTER_JID_RE);
   if (newsletterMatch) {
-    return `${newsletterMatch[1]}@newsletter`;
+    const jid = `${newsletterMatch[1]}@newsletter`;
+    return { normalizedTarget: jid, deliveryTarget: jid };
   }
-  const phone = extractUserJidPhone(candidate);
-  if (phone) {
-    const normalized = normalizeE164(phone);
-    return normalized.length > 1 ? normalized : null;
+  const directMatch = candidate.match(WHATSAPP_USER_JID_RE);
+  const localPart = directMatch?.[1];
+  const server = directMatch?.[2]?.toLowerCase();
+  if (localPart && server) {
+    const normalizedTarget =
+      server === "lid" || server === "hosted.lid"
+        ? `${localPart}@${server}`
+        : normalizeE164(localPart);
+    return {
+      normalizedTarget,
+      // Ordinary phone JIDs must still pass through the phone-to-LID mapping.
+      deliveryTarget: server === "s.whatsapp.net" ? normalizedTarget : candidate,
+    };
   }
-  if (candidate.includes("@")) {
+  const legacyPhone = candidate.match(WHATSAPP_LEGACY_USER_JID_RE)?.[1];
+  if (
+    !legacyPhone &&
+    (candidate.includes("@") || NON_WHATSAPP_PROVIDER_PREFIX_RE.test(candidate))
+  ) {
     return null;
   }
-  if (NON_WHATSAPP_PROVIDER_PREFIX_RE.test(candidate)) {
-    return null;
-  }
-  const normalized = normalizeE164(candidate);
-  return normalized.length > 1 ? normalized : null;
+  const normalizedTarget = normalizeE164(legacyPhone ?? candidate);
+  return normalizedTarget.length > 1
+    ? { normalizedTarget, deliveryTarget: normalizedTarget }
+    : null;
+}
+
+export function normalizeWhatsAppTarget(value: string): string | null {
+  return parseWhatsAppTarget(value)?.normalizedTarget ?? null;
 }
 
 export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
