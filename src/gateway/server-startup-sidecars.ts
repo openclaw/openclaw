@@ -1,3 +1,7 @@
+import {
+  PreparedModelRuntimePublicationSupersededError,
+  PreparedModelRuntimeRefreshCancelledError,
+} from "../agents/prepared-model-runtime-admission-errors.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -173,9 +177,23 @@ export async function startGatewaySidecars(params: {
       () => import("./server/ws-connection/message-handler.js"),
     ),
   ]);
-  const failed = prepared.find((outcome) => outcome.status === "rejected");
-  if (failed?.status === "rejected") {
+  // Close seals model refresh admission. The publication it retires did not fail startup;
+  // any other rejection stays a startup failure, including while closing.
+  const closing = params.shouldCreatePostReadySidecars?.() === false;
+  const rejected = prepared.filter((outcome) => outcome.status === "rejected");
+  const failed = rejected.find(
+    ({ reason }) =>
+      !closing ||
+      !(
+        reason instanceof PreparedModelRuntimeRefreshCancelledError ||
+        reason instanceof PreparedModelRuntimePublicationSupersededError
+      ),
+  );
+  if (failed) {
     throw failed.reason;
+  }
+  if (rejected.length > 0) {
+    return 0;
   }
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();

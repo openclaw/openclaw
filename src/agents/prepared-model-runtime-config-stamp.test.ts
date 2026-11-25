@@ -17,6 +17,10 @@ import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import {
+  PreparedModelRuntimePublicationSupersededError,
+  PreparedModelRuntimeRefreshCancelledError,
+} from "./prepared-model-runtime-admission-errors.js";
+import {
   getPreparedModelRuntimePolicyConfigReader,
   getPreparedModelRuntimeAuthMaterializations,
   getPreparedModelRuntimeAuthStore,
@@ -332,13 +336,33 @@ describe("prepared model runtime config stamps", () => {
         );
       if (kind === "shutdown-fenced") {
         cancelPreparedModelRuntimeRefresh();
-        expect(refresh).toThrow("shutdown");
+        expect(refresh).toThrow(PreparedModelRuntimeRefreshCancelledError);
       } else {
         await refresh();
       }
       await expect(dispatch()).resolves.toBeUndefined();
     },
   );
+
+  it("supersedes a held startup publication when shutdown seals admission", async () => {
+    await using resources = new AsyncDisposableStack();
+    const startup = holdPublication(
+      resources,
+      {},
+      {
+        startup: true,
+        joinSupersedingPublication: true,
+        catalogMode: "static",
+      },
+    );
+    await startup.started;
+    cancelPreparedModelRuntimeRefresh();
+    startup.release();
+    // Gateway startup recognizes this type as retired by its own close.
+    await expect(startup.pending).rejects.toBeInstanceOf(
+      PreparedModelRuntimePublicationSupersededError,
+    );
+  });
 
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
     const staleConfig = { gateway: { reload: { mode: "off" as const } } };

@@ -8,6 +8,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { PreparedModelRuntimeRefreshCancelledError } from "./prepared-model-runtime-admission-errors.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import {
   PreparedModelRuntimeAuthPublicationOwner,
@@ -170,7 +171,11 @@ export function cancelPreparedModelRuntimeRefresh(): void {
   captureModelRuntimeLifetime();
   // Fence pending publications before cancellation can reenter a provider callback.
   refreshRequestEpoch += 1;
-  refreshCancellation.abort(new Error("prepared model runtime acquisition stopped for shutdown"));
+  refreshCancellation.abort(
+    new PreparedModelRuntimeRefreshCancelledError(
+      "prepared model runtime acquisition stopped for shutdown",
+    ),
+  );
 }
 
 async function closeModelRuntime(error: Error): Promise<void> {

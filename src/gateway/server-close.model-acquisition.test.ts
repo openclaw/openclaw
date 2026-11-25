@@ -155,6 +155,86 @@ it("joins managed reload acquisition during Gateway close", async () => {
   }
 });
 
+it.each(["settles", "keeps the independent failure of"] as const)(
+  "%s a deferred startup model publication cancelled by Gateway close",
+  async (expectation) => {
+    const fixture = await createGatewayMetadataCloseFixture("startup-model-close");
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    fixture.config.agents = {
+      defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/model` },
+      entries: { main: { workspace: fixture.state.workspaceDir } },
+    };
+    const entered = createDeferredCore();
+    const cancelled = createDeferredCore();
+    const started = createDeferredCore<Awaited<ReturnType<typeof fixture.start>>>();
+    const startupFailure = new Error("independent model acquisition failed");
+    const bridgeKey = `__startup_model_close_${path.basename(fixture.state.root)}`;
+    Object.defineProperty(globalThis, bridgeKey, {
+      configurable: true,
+      value: async (signal: AbortSignal) => {
+        signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+        entered.resolve();
+        await cancelled.promise;
+        if (expectation !== "settles") {
+          throw startupFailure;
+        }
+      },
+    });
+    await fs.writeFile(
+      path.join(fixture.rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: fixture.pluginId,
+        providers: [fixture.pluginId],
+        providerCatalogEntry: "./catalog.cjs",
+        configSchema: { type: "object", properties: {} },
+      }),
+    );
+    await fs.writeFile(
+      path.join(fixture.rootDir, "catalog.cjs"),
+      `module.exports = { id: ${JSON.stringify(fixture.pluginId)}, label: "Startup acquisition fixture", auth: [],
+        staticCatalog: { async run(ctx) {
+          await globalThis[${JSON.stringify(bridgeKey)}](ctx.signal);
+          return { provider: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1",
+            models: [{ id: "model", name: "Fixture", reasoning: false, input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024 }] } };
+        } }
+      };`,
+    );
+    const serverModule = await import("./server-start.js");
+    const start = serverModule.startGatewayServerCore;
+    const deferredStartup = vi
+      .spyOn(serverModule, "startGatewayServerCore")
+      .mockImplementation(async (...args) => {
+        const server = await start(...args);
+        started.resolve(server);
+        return server;
+      });
+    let starting: ReturnType<typeof fixture.start> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      starting = fixture.start(await fixture.reservePort());
+      void starting.catch(() => {});
+      const server = await started.promise;
+      // The listener is attached; deferred startup still awaits the held publication.
+      await entered.promise;
+      closing = server.close({ reason: "startup model publication fixture" });
+      void closing.catch(() => {});
+      await cancelled.promise;
+      // Close owns the publication it cancelled; a failure of its own still fails startup.
+      await (expectation === "settles"
+        ? expect(server.startupSettled).resolves.toBeUndefined()
+        : expect(server.startupSettled).rejects.toThrow(startupFailure.message));
+      await closing;
+    } finally {
+      cancelled.resolve();
+      await Promise.allSettled([starting, closing]);
+      deferredStartup.mockRestore();
+      await fixture.cleanup();
+      Reflect.deleteProperty(globalThis, bridgeKey);
+    }
+  },
+);
+
 vi.mock("../audit/audit-event-writer.js", async (importOriginal) => {
   const { createAuditEventWriter } =
     await importOriginal<typeof import("../audit/audit-event-writer.js")>();
