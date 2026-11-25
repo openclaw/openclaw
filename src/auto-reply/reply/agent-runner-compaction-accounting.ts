@@ -43,7 +43,11 @@ export function recordTurnCompaction(
     hasSameCompactionWriter(target, fact.target),
   );
   const previous = compaction.durable[index];
-  if (!previous && fact.count === 0) {
+  if (
+    !previous &&
+    fact.count === 0 &&
+    (compaction.durable.length > 0 || !fact.currentContextSnapshot)
+  ) {
     return;
   }
   if (previous) {

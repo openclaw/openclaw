@@ -210,6 +210,7 @@ function addTotalsToObject(target: CostUsageTotals, source: Float64Array, offset
   target.cacheReadCost += source[offset + 8]!;
   target.cacheWriteCost += source[offset + 9]!;
   target.missingCostEntries += source[offset + 10]!;
+  target.cacheUnmeasuredInput += source[offset + 11]!;
 }
 
 const summaryScratch = { days: new Float64Array(64 * TOTALS_WIDTH) };

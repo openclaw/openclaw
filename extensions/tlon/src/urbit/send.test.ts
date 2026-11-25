@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMediaStory, sendDm, sendGroupMessage } from "./send.js";
+import { buildMediaStory, sendClubMessage, sendDm, sendGroupMessage } from "./send.js";
 
 vi.mock("@urbit/aura", () => ({
   scot: vi.fn(() => "mocked-ud"),
@@ -25,6 +25,33 @@ describe("sendDm", () => {
     expect(poke).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe("~zod/mocked-ud");
     expect(result.receipt.primaryPlatformMessageId).toBe("~zod/mocked-ud");
+  });
+
+  it("sends club replies with a club action and conversation receipt", async () => {
+    const result = await sendClubMessage({ ...sender, clubId: "0v1.abcde", text: "club reply" });
+    expect(poke).toHaveBeenCalledWith({
+      app: "chat",
+      mark: "chat-club-action",
+      json: {
+        id: "0v1.abcde",
+        diff: {
+          uid: "0v0",
+          delta: {
+            writ: {
+              id: "~zod/mocked-ud",
+              delta: {
+                add: {
+                  memo: { content: [{ inline: ["club reply"] }], author: "~zod", sent: sentAt },
+                  kind: null,
+                  time: null,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.receipt.threadId).toBe("club:0v1.abcde");
   });
 
   it("passes numeric group reply ids through aura formatting", async () => {

@@ -182,3 +182,140 @@ it.for(["plain", "shared"] as const)(
       );
     }),
 );
+
+function writeProbePlugin(bundledDir: string, id: string, tool: string) {
+  const pluginDir = path.join(bundledDir, id);
+  writeJsonFile(path.join(pluginDir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version: "1.0.0",
+    type: "commonjs",
+    main: "index.cjs",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+    id,
+    configSchema: { type: "object", additionalProperties: false },
+    contracts: { tools: [tool] },
+  });
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+      api.registerTool({
+        name: ${JSON.stringify(tool)}, label: ${JSON.stringify(tool)}, description: "probe",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [{ type: "text", text: ${JSON.stringify(`${tool} ok`)} }] })
+      });
+    } };`,
+  );
+}
+
+it("keeps a run-bound grant's tools working after a plugin reload retires its generation", async ({
+  signal,
+}) =>
+  fixtureLifetime.run(async () => {
+    const root = fixtureLifetime.createTempDir("mcp-grant-generation-");
+    const bundledDir = path.join(root, "bundled");
+    const workspaceDir = path.join(root, "workspace");
+    const pluginIds = ["steady-probe", "reloaded-probe"];
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: {
+        allow: pluginIds,
+        entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
+      },
+      tools: { allow: ["steady_probe", "reloaded_probe"] },
+    };
+    const instances: PluginInstanceHandle[] = [];
+    const loadGeneration = () => {
+      const generation = withPluginCache(createPluginCache(), () => {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({ config, workspaceDir });
+        const pluginRegistry = loadPluginRegistryHandle({
+          config,
+          workspaceDir,
+          manifestRegistry: metadataSnapshot.manifestRegistry,
+          onlyPluginIds: pluginIds,
+        });
+        const record = pluginRegistry.plugins.find((plugin) => plugin.id === "reloaded-probe");
+        const reloaded = expectDefined(record && getPluginInstance(record), "plugin instance");
+        for (const plugin of pluginRegistry.plugins) {
+          const instance = getPluginInstance(plugin);
+          if (instance) {
+            instances.push(instance);
+          }
+        }
+        return { pluginRegistry, metadataSnapshot, reloaded };
+      });
+      setActivePluginRegistry(generation.pluginRegistry);
+      hooks.initializeGlobalHookRunner(generation.pluginRegistry);
+      return generation;
+    };
+    const admissions: Array<{ close: () => unknown }> = [];
+
+    await runQaGatewayFixture(
+      async () => {
+        vi.stubEnv("OPENCLAW_HOME", root);
+        vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+        vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+        writeProbePlugin(bundledDir, "steady-probe", "steady_probe");
+        writeProbePlugin(bundledDir, "reloaded-probe", "reloaded_probe");
+        configSnapshot.setRuntimeConfigSnapshot(config);
+        const original = loadGeneration();
+        await withPluginRuntimeGenerationScope(original, ensureMcpLoopbackServer);
+        const runtime = mcp.runtime();
+        const admission = mcp.prepareAdmission("generation-run", "mcp-generation-proof");
+        admissions.push(admission);
+        const admittedRunContext = await admission.admit("gateway", "gateway-generation-run");
+        // A CLI run mints its grant inside the generation it started on and builds tools
+        // under Cron management scope, so both happen in that generation's request scope.
+        const grant = withPluginRuntimeGenerationScope(original, () =>
+          mcp.captureGrant(
+            {
+              context: { sessionKey: "agent:main:generation-run", senderIsOwner: true },
+              runtimeOwnerToken: runtime.ownerToken,
+              admittedRunContext,
+              toolPolicyConfig: config,
+              withCronManagementToolConstruction: (run) => run(),
+            },
+            "capture-generation-run",
+          ),
+        );
+        const callTool = async (name: string) =>
+          await mcp.json(
+            await mcp.request(runtime, mcp.toolCall(name), {
+              token: grant.token,
+              captureKey: grant.captureKey,
+              sessionKey: "agent:main:generation-run",
+              signal,
+              connection: "close",
+            }),
+          );
+
+        // One plugin reloads while the run continues; the run's generation retires.
+        loadGeneration();
+        await original.reloaded.dispose();
+
+        // The unrelated plugin's tool and the reloaded plugin's tool both keep working,
+        // and later requests stay on the published generation.
+        for (const name of ["steady_probe", "reloaded_probe", "steady_probe"]) {
+          expect(await callTool(name)).toMatchObject({
+            result: { content: [{ type: "text", text: `${name} ok` }], isError: false },
+          });
+        }
+      },
+      ...[
+        closeMcpLoopbackServer,
+        () => Promise.all(admissions.map(async (admission) => await admission.close())),
+        () => Promise.all(instances.map((instance) => instance.dispose())),
+        () => resetPluginRuntimeStateForTest(),
+        () => hooks.resetGlobalHookRunner(),
+        () => configSnapshot.clearRuntimeConfigSnapshot(),
+        () => vi.unstubAllEnvs(),
+      ].map(
+        (cleanup) => () =>
+          fixtureLifetime.verifyCleanup(async () => {
+            await Promise.resolve(cleanup());
+          }),
+      ),
+    );
+  }));

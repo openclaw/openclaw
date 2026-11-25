@@ -48,7 +48,12 @@ try {
     ? findReleaseChangelog({ rootDir: path.dirname(path.resolve(file)), version })?.section
     : readFileSync(file, "utf8");
   const section = markdown && findChangelogSection(markdown, version);
-  if (section) process.stdout.write(section.replace(/^[^\n]*(?:\n|$)/u, ""));
+  if (section) {
+    // Code spans contain literal text, even when a command uses HTML-like placeholders.
+    process.stdout.write(section.replace(/^[^\n]*(?:\n|$)/u, "").replace(/`[^`\n]*`/gu,
+      (code) => code.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+    ));
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

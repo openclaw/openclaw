@@ -236,13 +236,31 @@ function selectionError(path: string, error: unknown, bundled = false): Error {
   );
 }
 
+function readPublishedSqliteLibrarySelection(): SqliteLibrarySelection | undefined {
+  // SAFETY: The runtime selector publishes this fact for the process and its worker threads.
+  return getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined;
+}
+
+/** Carry SQLite admission into a new process, including launches with a projected environment. */
+export function withSelectedSqliteLibraryEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!process.versions.bun || process.platform !== "darwin") {
+    return env;
+  }
+  // File-only worker operations can run before SQLite admission.
+  const selection = readPublishedSqliteLibrarySelection();
+  return selection &&
+    selection.source !== "runtime" &&
+    env.OPENCLAW_SQLITE_LIBRARY !== selection.path
+    ? { ...env, OPENCLAW_SQLITE_LIBRARY: selection.path }
+    : env;
+}
+
 function createRuntimeSelector(): ReturnType<typeof createSelector> {
   const isBun = Boolean(process.versions.bun);
   const sharedLibrary = isBun && process.platform === "darwin";
   let inherited: SqliteLibrarySelection | undefined;
   if (sharedLibrary && !isMainThread) {
-    // SAFETY: Only this selector publishes the chosen fact; workers inherit Node's structured clone.
-    inherited = getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined;
+    inherited = readPublishedSqliteLibrarySelection();
   }
   const select = createSelector();
   let published = false;

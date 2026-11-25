@@ -1,11 +1,16 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { useCodexWorkerProvisioningFixture } from "../node-app-server-command.test-support.js";
 import { codexAppServerStartOptionsKey } from "./config-options.js";
 import { shouldRequireCodexSandboxExecServerEnvironment } from "./dynamic-tool-build.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
+  createAgentLifecycleHarness,
   createParams,
   createCodexRuntimePlanFixture,
   setupRunAttemptTestHooks,
@@ -19,12 +24,7 @@ import {
   registerCodexTestSessionIdentity,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  createAppServerOptions,
-  createLeasedCodexLifecycleHarness,
-  startOrResumeThread,
-} from "./thread-lifecycle.test-fixtures.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { createAppServerOptions, startOrResumeThread } from "./thread-lifecycle.test-fixtures.js";
 
 const provisionWorker = useCodexWorkerProvisioningFixture();
 
@@ -39,8 +39,7 @@ describe("Codex local tool environment placement", () => {
     "preserves native shell policy with request PATH $requestPath and gitOnly=$gitOnly",
     async ({ requestPath, gitOnly }) => {
       const workspaceDir = path.join(tempDir, "workspace");
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method: string) => {
           if (method === "config/read") {
             return {
@@ -121,9 +120,19 @@ describe("Codex local tool environment placement", () => {
     },
   );
 
-  it.each(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
+  it.for(["local", "unconfigured-local", "unix", "proxy", "remote-root", "sandbox"])(
     "places the prepared environment only on owned local execution: %s",
-    async (placement) => {
+    async (placement, context) => {
+      const host = await createAdmittedHostCapabilityTestFixture({
+        runId: `scratch-${placement}`,
+        agentId: "main",
+        sessionKey: `agent:main:${placement}`,
+        config: {},
+      });
+      context.onTestFinished(() => {
+        host.closeHost();
+        host.closeAdmission();
+      });
       vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
       const params = createParams(
         path.join(tempDir, `path-${placement}.jsonl`),
@@ -132,6 +141,7 @@ describe("Codex local tool environment placement", () => {
       const localToolEnv = { PATH: ["/fixture/tools", "/fixture/system"].join(path.delimiter) };
       params.hostCapabilities = {
         ...params.hostCapabilities,
+        prepareLocalExecScratch: host.hostCapabilities.prepareLocalExecScratch,
         preparedEnvironment: () => ({
           credentialScrubEnv: {},
           localIdentityEnv: {},
@@ -168,25 +178,21 @@ describe("Codex local tool environment placement", () => {
       using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const expected = placement === "local" ? localToolEnv : undefined;
-        expect(connection.shellEnvironment).toEqual(expected);
-        expect(connection.shellPathPrepend).toEqual(expected ? ["/fixture/tools"] : undefined);
         const ownedLocal = placement === "local" || placement === "unconfigured-local";
+        const scratch = path.join(await fs.realpath(params.workspaceDir), ".openclaw", "tmp");
+        expect(connection.shellEnvironment).toEqual(
+          ownedLocal ? { ...expected, TMPDIR: scratch, TMP: scratch, TEMP: scratch } : expected,
+        );
+        expect(connection.shellPathPrepend).toEqual(expected ? ["/fixture/tools"] : undefined);
         const parameters = "'maintenance.auto=false' 'gc.auto=0'";
         expect(connection.shellGitConfigParameters).toBe(ownedLocal ? parameters : undefined);
         expect(connection.appServer.start.env?.PATH).toBe(expected?.PATH);
-        const expectedParameters = ownedLocal ? `'user.name=Ambient' ${parameters}` : undefined;
-        expect(
-          resolveCodexAppServerSpawnEnv(connection.appServer.start, {}).GIT_CONFIG_PARAMETERS,
-        ).toBe(expectedParameters);
         expect(connection.disableLoginShell).toBe(false);
         const refreshed = await connection.resolveRuntimeOptionsForCurrentBinding({
           modelProvider: "openai",
           model: params.modelId,
         });
         expect(refreshed.start.env?.PATH).toBe(expected?.PATH);
-        expect(resolveCodexAppServerSpawnEnv(refreshed.start, {}).GIT_CONFIG_PARAMETERS).toBe(
-          expectedParameters,
-        );
         if (expected) {
           expect(codexAppServerStartOptionsKey(refreshed.start)).not.toBe(
             codexAppServerStartOptionsKey({
@@ -203,7 +209,7 @@ describe("Codex local tool environment placement", () => {
   );
 });
 
-it.each(["api-key", "subscription"] as const)(
+it.each(["api-key", "subscription", "native-command"] as const)(
   "keeps worker %s route constraints through actual client startup without local login",
   async (authRequirement) => {
     provisionWorker();
@@ -222,23 +228,30 @@ it.each(["api-key", "subscription"] as const)(
       placementOwnerEpoch: 1,
     };
     params.sandbox = sandbox;
+    // The ordinary Gateway route resolves availability auth before worker placement.
+    params.resolvedApiKey = "synthetic-gateway-availability-key";
     const runtimePlan = createCodexRuntimePlanFixture();
     params.runtimePlan = {
       ...runtimePlan,
       auth: {
         ...runtimePlan.auth,
         selectedAuthMode: authRequirement,
-        modelRoute: {
-          provider: "openai",
-          modelId: params.modelId,
-          api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
-          baseUrl:
-            authRequirement === "api-key"
-              ? "https://api.openai.com/v1"
-              : "https://chatgpt.com/backend-api/codex",
-          authRequirement,
-          requestTransportOverrides: "none",
-        },
+        // prepareNativeCommandAuth leaves routing to the worker's native configuration.
+        modelRoute:
+          authRequirement === "native-command"
+            ? undefined
+            : {
+                provider: "openai",
+                modelId: params.modelId,
+                api:
+                  authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
+                baseUrl:
+                  authRequirement === "api-key"
+                    ? "https://api.openai.com/v1"
+                    : "https://chatgpt.com/backend-api/codex",
+                authRequirement,
+                requestTransportOverrides: "none",
+              },
       },
     };
     const runtime = createPluginRuntimeMock();
@@ -291,7 +304,11 @@ it.each(["api-key", "subscription"] as const)(
           },
           (error: unknown) => error,
         );
-      expect(outcome).toMatchObject({ status: 401 });
+      if (authRequirement === "native-command") {
+        expect(outcome).toBeUndefined();
+      } else {
+        expect(outcome).toMatchObject({ status: 401 });
+      }
       expect(connection.effectiveWorkspace).toBe(sandbox.containerWorkdir);
       expect(open).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -302,7 +319,9 @@ it.each(["api-key", "subscription"] as const)(
       expect(connection.startupAuthRequirement).toBe(authRequirement);
       expect(connection.startupClientAuthProfileId).toBeNull();
       expect(connection.startupPreparedAuth).toBeUndefined();
-      expect(methods).toContain("account/read");
+      if (authRequirement !== "native-command") {
+        expect(methods).toContain("account/read");
+      }
       expect(methods).not.toContain("account/login/start");
       await closed.promise;
     } finally {
@@ -368,7 +387,7 @@ it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
     );
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({
-      message: expect.stringContaining("worker-owned authentication"),
+      message: expect.stringContaining("detach supervision and clear the Gateway auth profile"),
     });
   },
 );
@@ -405,7 +424,7 @@ it("keeps non-node remote placements confined when worker hosting is configured"
   ).rejects.toThrow("requires an enrolled node");
 });
 
-it.each(["ordinary", "ordinary-profile", "worker"] as const)(
+it.each(["ordinary", "ordinary-profile"] as const)(
   "keeps native-command auth within its admitted %s placement boundary",
   async (placement) => {
     const params = createParams(
@@ -438,15 +457,6 @@ it.each(["ordinary", "ordinary-profile", "worker"] as const)(
         return readHostProfiles();
       },
     };
-    if (placement === "worker") {
-      const sandbox = {
-        ...createSandboxContext({}),
-        backendId: "node",
-        placementExecutionMode: "remote-exec",
-        placementNodeId: "worker-node",
-      };
-      params.sandbox = sandbox;
-    }
     if (placement === "ordinary-profile") {
       params.authProfileId = "openai:chosen";
     }

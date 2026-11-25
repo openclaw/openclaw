@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, vi } from "vitest";
+import { nativeObjectFixture } from "../helpers/mac-native.js";
 import {
   addon,
   artifactFixture,
@@ -77,7 +78,7 @@ function withMachResourceKind(
 describe.skipIf(process.platform !== "darwin")(
   "portable elevation native artifact verification",
   () => {
-    // The following archive case owns a new lifetime and must prepare successfully
+    // The following object case owns a new lifetime and must prepare successfully
     // after this failed flight; keep the failure probe ahead of the concurrent cases.
     it("rejects all borrowers of a failed native preparation", ({ mac }) =>
       mac.lifetime.run(async () => {
@@ -102,6 +103,39 @@ describe.skipIf(process.platform !== "darwin")(
           };
           expect(results).toEqual([rejected, rejected]);
           expect(tool).toHaveBeenCalledTimes(1);
+        } finally {
+          tool.mockRestore();
+        }
+      }));
+
+    it("compiles shared object slices without preparing full images", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const root = mac.createTempDir("mac-object-preparation-");
+        const tool = vi.spyOn(mac, "run");
+        try {
+          const requests = ["fat32", "fat64"] as const;
+          const outputs = await Promise.all(
+            requests.map((format) => nativeObjectFixture(path.join(root, format), format, mac)),
+          );
+          expect(outputs.map((bytes) => bytes.readUInt32BE(0))).toEqual([0xcafebabe, 0xcafebabf]);
+          const compilers = tool.mock.calls.filter(([command]) => command === "/usr/bin/xcrun");
+          expect(compilers).toHaveLength(2);
+          expect(compilers.map(([, args]) => args.slice(0, 4))).toEqual([
+            ["clang", "-arch", "arm64", "-c"],
+            ["clang", "-arch", "x86_64", "-c"],
+          ]);
+          expect(tool.mock.calls.filter(([command]) => command === "/usr/bin/lipo")).toHaveLength(
+            2,
+          );
+          for (const format of requests) {
+            const arches = await runMacFixtureTool(
+              "/usr/bin/lipo",
+              ["-archs", path.join(root, format, "object")],
+              root,
+              mac,
+            );
+            expect(arches.split(/\s+/u).toSorted()).toEqual(["arm64", "x86_64"]);
+          }
         } finally {
           tool.mockRestore();
         }

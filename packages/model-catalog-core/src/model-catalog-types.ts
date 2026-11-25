@@ -14,6 +14,8 @@ import {
 } from "../../llm-core/src/model-data.js";
 import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
+export type { DecisionAnswerCapabilities } from "./decision-answer-capabilities.js";
+
 export type {
   ModelInferenceCapabilities,
   ModelDecisionCapabilities,
@@ -53,6 +55,8 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   /** Whether the provider honors top-level `instructions` on Responses requests. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`; false sends the system prompt as input. */
+  cachesInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;

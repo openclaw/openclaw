@@ -51,6 +51,26 @@ it.each([
   },
 );
 
+it("preserves native toggle activation while its label refreshes", () => {
+  const [label, setLabel] = createSignal("Initial label");
+  const onChange = vi.fn();
+  const view = render(() => (
+    <SettingsToggle ariaLabel={label()} checked={false} onChange={onChange} />
+  ));
+  const input = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  input.addEventListener(
+    "click",
+    () => {
+      setLabel("Refreshed label");
+      flush();
+    },
+    { capture: true, once: true },
+  );
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
+  expect(input.checked).toBe(true);
+});
+
 it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);
   const onReselect = vi.fn();

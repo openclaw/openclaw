@@ -142,6 +142,7 @@ function startConnectionFixture(
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn<() => Promise<void>>(async () => undefined),
+    setLocalMcpAllowed: vi.fn(),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
@@ -514,6 +515,7 @@ it.each([
       GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
       GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
       GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+      GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY,
       GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
       GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
     ],
@@ -541,6 +543,7 @@ it.each([
         : {
             optional: {
               capturedExecPolicy: true,
+              execMemoryBoundary: true,
               nativeInference: 1,
               promptContext: 1,
               bundlePrefetch: 1,
@@ -551,6 +554,7 @@ it.each([
             disabled: { reason: disabledReason },
             workspace: {
               workspaceResultVersion: 2,
+              publicationIntegration: 1,
               ...((platform === "linux" || platform === "win32") && !bun
                 ? { workspaceQuiescence: 1 }
                 : {}),

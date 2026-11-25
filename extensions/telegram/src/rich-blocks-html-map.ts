@@ -26,6 +26,14 @@ const BLOCK_ISLAND_TAGS = new Set([
 ]);
 
 const MEDIA_SRC_RE = /^https:\/\//i;
+const HTML_HEADING_SIZES: Partial<Record<string, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  h1: 1,
+  h2: 2,
+  h3: 3,
+  h4: 4,
+  h5: 5,
+  h6: 6,
+};
 type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
@@ -142,6 +150,12 @@ function listToBlock(
     return undefined;
   }
   const items: InputRichBlockListItem[] = [];
+  // `<ol start="N">` numbers from N, matching the Markdown path's parsed markers.
+  const start =
+    node.name === "ol" ? strictNumber(parseHtmlAttrs(node.raw).get("start"), /^\d+$/u) : undefined;
+  // Telegram stores each label as int32; leave room for the last item too.
+  const firstValue =
+    start !== undefined && start <= 2 ** 31 - countChildren(node.children, "li") ? start : 1;
   for (const child of node.children) {
     if (child.kind !== "element") {
       continue;
@@ -163,7 +177,10 @@ function listToBlock(
         item.is_checked = true;
       }
     }
-    items.push(node.name === "ol" ? { ...item, value: items.length + 1 } : item);
+    // Without `type`, Telegram renders the item with a bullet even when `value` is set.
+    items.push(
+      node.name === "ol" ? { ...item, value: firstValue + items.length, type: "1" } : item,
+    );
   }
   if (items.length === 0) {
     return undefined;
@@ -388,9 +405,17 @@ function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBloc
 function elementToBlock(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock | undefined {
   if (!node.closed) {
     return undefined;
+  }
+  const headingSize = HTML_HEADING_SIZES[node.name];
+  if (headingSize) {
+    const start = node.start + node.raw.length;
+    // Heading bodies share the IR renderer's spans, decoded text, and whitespace.
+    const text = renderText(start, node.children.at(-1)?.end ?? start);
+    return text === "" ? undefined : { type: "heading", text, size: headingSize };
   }
   switch (node.name) {
     case "hr":
@@ -464,11 +489,12 @@ function elementToBlock(
 export function renderTelegramHtmlIsland(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock[] {
   if (node.name === "p") {
     return renderContent(node.children);
   }
-  const block = elementToBlock(node, renderContent);
+  const block = elementToBlock(node, renderContent, renderText);
   return block ? [block] : [{ type: "paragraph", text: htmlNodesToRichText([node]) }];
 }
 

@@ -7,6 +7,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,6 +22,7 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import { resolveProbeAuthSummary } from "../../gateway/probe.js";
 import {
   classifyGatewayStaleConnectionError,
   type GatewayStaleConnectionReason,
@@ -82,6 +84,7 @@ export type GatewayReachability = {
   channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
   authenticationError?: string;
+  operatorScopeWarning?: string;
   protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
@@ -115,6 +118,7 @@ export async function waitForGatewayHttpReadiness(params: {
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
+  host?: string;
   /** Software activation may finish while a channel needs operator attention. */
   requireChannelHealth?: boolean;
   signal?: AbortSignal;
@@ -131,7 +135,7 @@ export async function waitForGatewayHttpReadiness(params: {
     }
     const request = (pathname: "/healthz" | "/readyz") =>
       probe.requestHttp({
-        host: "127.0.0.1",
+        host: params.host ?? "127.0.0.1",
         pathname,
         port: params.port,
         timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
@@ -206,14 +210,27 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
-function isVerifiedUserRequiredResponse(error: unknown): boolean {
-  // The exact close-reason allowlist does not include this sentence. The
-  // structured code is the Gateway's correlated refusal, so the probe can stop.
-  return (
-    isGatewayProtocolResponseError(error) &&
-    readConnectErrorDetailCode(error.details) ===
-      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
-  );
+// Mirrors the canonical auth-rejection classification in
+// packages/gateway-protocol/src/connect-error-details.ts (the `authRejected`
+// predicate used by the Gateway's own auth-failure message owner). The hand
+// copied text allowlist in isGatewayAuthRejection drifts whenever a new auth
+// failure reason is added, so prefer the structured code the Gateway already
+// correlates with each refusal. This is correlation, not authentication: a
+// local listener that echoes a request can return a matching response ID and an
+// AUTH_/DEVICE_AUTH_ detail code, and PendingGatewayRequests.handleResponse
+// constructs and marks that error without authenticating the listener through
+// this marker. The probe treats a correlated structured refusal (the Gateway
+// paired the error with this specific request) as a terminal auth rejection; it
+// does not treat the code as proof of Gateway identity.
+function isGatewayAuthRejectionError(error: unknown): boolean {
+  if (!isGatewayProtocolResponseError(error)) {
+    return false;
+  }
+  const code = readConnectErrorDetailCode(error.details);
+  if (code === null || code === undefined) {
+    return false;
+  }
+  return code.startsWith("AUTH_") || code.startsWith("DEVICE_AUTH_");
 }
 
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
@@ -376,7 +393,7 @@ export async function confirmGatewayReachable(params: {
     if (
       (reason && isGatewayAuthRejection(reason)) ||
       isGatewayCredentialsRequiredError(error) ||
-      isVerifiedUserRequiredResponse(error)
+      isGatewayAuthRejectionError(error)
     ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }
@@ -396,6 +413,46 @@ export async function confirmGatewayReachable(params: {
       ((isGatewayAuthRejection(error.message) && error.message !== "device identity required") ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
+    const missingScope = isGatewayProtocolResponseError(error)
+      ? readMissingScopeError(error)
+      : null;
+    // The method refusal is authoritative about read access; hello supplies identity.
+    if (
+      missingScope?.missingScope === READ_SCOPE &&
+      resolveProbeAuthSummary({
+        authMetadataPresent: true,
+        connectLatencyMs: result.gatewayVersion === null ? null : 0,
+      }).capability === "connected_no_operator_scope" &&
+      configuredProbe
+    ) {
+      result.operatorScopeWarning =
+        "Gateway connected, but this CLI lacks operator.read scope; detailed health checks are unavailable. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+      const ready = await configuredProbe.requestHttp({
+        host: "127.0.0.1",
+        port: params.port,
+        pathname: "/readyz",
+        timeoutMs: Math.min(
+          params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+        ),
+        signal: params.signal,
+      });
+      const readiness = asOptionalRecord(tryParseJson(ready?.body ?? ""));
+      const failingChannels = readGatewayFailingChannels(ready);
+      result.reachable = ready?.statusCode === 200 && readiness?.ready === true;
+      if (failingChannels) {
+        const errors = failingChannels.map((id) => ({
+          id,
+          error: "channel readiness unavailable",
+        }));
+        if (params.allowHttpVerification) {
+          result.reachable = true;
+          result.channelRuntimeWarnings = errors;
+        } else {
+          result.channelProbeErrors = errors;
+        }
+      }
+    }
     if (
       (result.authenticationError || result.protocolMismatch) &&
       params.allowHttpVerification &&

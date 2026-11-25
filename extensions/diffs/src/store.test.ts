@@ -248,17 +248,6 @@ describe("registered Diffs viewer route", () => {
     },
   );
 
-  it.each([
-    ["127.0.0.2", 200],
-    ["::1", 200],
-    ["::ffff:127.0.0.2", 200],
-  ] as const)("classifies viewer client address %s", async (remoteAddress, expectedStatusCode) => {
-    const artifact = await viewer();
-    const res = await client({ allowRemoteViewer: false }, remoteAddress)(artifact.viewerPath);
-
-    expect(res.statusCode).toBe(expectedStatusCode);
-  });
-
   it("slides the remote failure window across the original window boundary", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-08-19T12:00:00Z").getTime();

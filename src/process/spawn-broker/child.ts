@@ -25,7 +25,8 @@ type ChildMessage = Exclude<
       | "pipe-prefix"
       | "execa-result"
       | "file-read-chunk"
-      | "file-read-result";
+      | "file-read-result"
+      | "file-output";
   }
 >;
 
@@ -65,6 +66,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
       handle?: SendHandle,
       initiateSpawn?: SpawnInitiation,
     ) => Promise<void>,
+    private fileOutputPending = false,
   ) {
     super();
     this.spawnfile = argv[0]!;
@@ -94,6 +96,11 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   /** Transport bookkeeping survives disposal of the caller's event listeners. */
   waitForClose(): Promise<void> {
     return this.completion.promise;
+  }
+
+  settleFileOutput(): void {
+    this.fileOutputPending = false;
+    this.finishClose();
   }
 
   attachPipe(fd: number, socket: Socket): void {
@@ -276,7 +283,13 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   }
 
   private finishClose(): void {
-    if (!this.exited || this.channel || this.pipes.size > 0 || this.closed) {
+    if (
+      !this.exited ||
+      this.channel ||
+      this.pipes.size > 0 ||
+      this.closed ||
+      this.fileOutputPending
+    ) {
       return;
     }
     this.closed = true;

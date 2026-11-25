@@ -151,10 +151,7 @@ export function resolvePlacementComposer(params: {
       placement?.state === "active" || placement?.state === "provisioning"
         ? placement.workerRuntimeInstall
         : undefined,
-    runError:
-      failureReason && !controls.restarting
-        ? { summary: t("chat.cloudWorkerFailed", { error: failureReason }) }
-        : null,
+    runError: failureReason && !controls.restarting ? { summary: failureReason } : null,
     failedUnavailableMessage: t("sessionsView.failedSessionUnavailable"),
   };
   if (params.startupPending || !params.row || canRecoverOnSend) {
@@ -240,8 +237,8 @@ export function resolveChatPaneWorkerPresentation(
         : undefined;
     label =
       worker?.providerId && worker.profileId
-        ? `${worker.providerId} · ${worker.profileId}`
-        : t("newSession.runsOn", { place: t("newSession.cloud") });
+        ? t("sessionsView.cloudDeviceProfile", { profile: worker.profileId })
+        : t("sessionsView.cloudDevice");
     stopKey = "sessionsView.stopCloudWorker";
   } else {
     label = t("sessionsView.runsOnWorker");

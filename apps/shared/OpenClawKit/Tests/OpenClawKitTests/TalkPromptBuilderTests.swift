@@ -2,20 +2,20 @@ import XCTest
 @testable import OpenClawKit
 
 final class TalkPromptBuilderTests: XCTestCase {
-    func testBuildIncludesTranscript() {
+    func testBuildPreservesDefaultPrompt() {
         let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("Talk Mode active."))
-        XCTAssertTrue(prompt.hasSuffix("\n\nHello"))
+        XCTAssertEqual(prompt, """
+        Talk Mode active. Reply in a concise, spoken tone.
+        You may optionally prefix the response with JSON (first line) to set ElevenLabs voice \
+        (id or alias), e.g. {"voice":"<id>","once":true}.
+
+        Hello
+        """)
     }
 
     func testBuildIncludesInterruptionLineWhenProvided() {
         let prompt = TalkPromptBuilder.build(transcript: "Hi", interruptedAtSeconds: 1.234)
         XCTAssertTrue(prompt.contains("Assistant speech interrupted at 1.2s."))
-    }
-
-    func testBuildIncludesVoiceDirectiveHintByDefault() {
-        let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("ElevenLabs voice"))
     }
 
     func testBuildExcludesVoiceDirectiveHintWhenDisabled() {

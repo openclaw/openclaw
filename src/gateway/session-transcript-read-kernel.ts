@@ -280,16 +280,22 @@ function selectSessionTranscriptProjection(
   throw new Error("Unsupported transcript history selection");
 }
 
+type VisitProjectionMessage = (
+  message: unknown,
+  seq: number,
+  entry?: Parameters<typeof sqliteMessageEventWithSeq>[0],
+) => void;
+
 function visitProjectionMessages(
   projection: CurrentTranscriptProjection,
-  visit: (message: unknown, seq: number) => void,
+  visit: VisitProjectionMessage,
 ): number {
   let count = 0;
   const visible = resolveVisibleMessagePositions(projection);
   for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
     const message = asOptionalRecord(entry.event)?.message;
     if (message !== undefined) {
-      visit(message, entry.seq);
+      visit(message, entry.seq, entry);
       count += 1;
     }
   }
@@ -392,7 +398,7 @@ export async function filterSessionMessageHistoryVisibility(
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
   async function visitSessionMessagesAsync(
     scope: SessionTranscriptReadScope,
-    visit: (message: unknown, seq: number) => void,
+    visit: VisitProjectionMessage,
   ): Promise<number> {
     const target = await access.resolveTarget(scope);
     return access.readSnapshot(target, (projection) => visitProjectionMessages(projection, visit));

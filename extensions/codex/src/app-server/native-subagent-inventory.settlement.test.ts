@@ -42,8 +42,9 @@ function observeAssignment(
   const recorded = createDeferred<void>();
   const consumed = createDeferred<void>();
   const mutate = store.mutate.bind(store);
-  vi.spyOn(store, "mutate").mockImplementation(async (identity, mutation, assertCurrent) => {
-    const result = mutate(identity, mutation, assertCurrent);
+  vi.spyOn(store, "mutate").mockImplementation(async (...args) => {
+    const [, mutation] = args;
+    const result = mutate(...args);
     if (mutation.kind === "consume-native-subagent-assignment") {
       consumed.resolve();
     }

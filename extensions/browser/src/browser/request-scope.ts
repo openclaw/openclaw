@@ -9,6 +9,8 @@ type BrowserRequestScope = {
   assertInvocationCurrent?: () => void;
   assertCurrent?: NonNullable<BrowserRequest["assertCurrent"]>;
 };
+// Read at request admission and in route handlers. Callbacks that outlive that point or run
+// from shared event listeners must bind to the owning request (`AsyncLocalStorage.snapshot()`).
 const requestScope = new AsyncLocalStorage<{ scope: BrowserRequestScope; active: boolean }>();
 
 /** Carry host-prepared policy through the in-process Browser transport. */

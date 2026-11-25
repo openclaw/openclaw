@@ -20,7 +20,7 @@ const posixIt = it.skipIf(process.platform === "win32");
 it("exposes credentials only to the trust-gated live step", () => {
   const live = step("Run live Gateway concurrency");
   expect(live.if).toBe(
-    "${{ inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}",
+    "${{ inputs.mode == 'gateway-concurrency' && inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}",
   );
   for (const scope of [job.env, ...job.steps.filter((candidate) => candidate !== live)]) {
     expect(JSON.stringify(scope)).not.toContain("secrets.");
@@ -37,6 +37,7 @@ posixIt.each([
     CONCURRENCY_OUTPUT: tempDirs.make("gateway-concurrency-admission-"),
     LIVE_REQUESTED: fixture.requested,
     SECRET_ELIGIBLE: fixture.eligible,
+    PERFORMANCE_MODE: "gateway-concurrency",
   });
   expect(result.status, result.stderr).toBe(fixture.status);
   if (fixture.status !== 0) {

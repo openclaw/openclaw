@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   SessionMembershipFact,
+  SessionMember,
   SessionParticipantRecord,
 } from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
@@ -41,7 +42,13 @@ export type SessionRowFacts =
       communicationBinding?: string;
       lifecycleChanged?: boolean;
     }
-  | { kind: "member"; sessionId: string; identityId: string; present: boolean }
+  | {
+      kind: "member";
+      sessionId: string;
+      identityId: string;
+      present: boolean;
+      access?: SessionMember["access"];
+    }
   | {
       kind: "owner";
       sessionId: string;
@@ -66,6 +73,8 @@ export type SessionRowChange =
       agentId?: string;
       storePath?: string;
       scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
+      /** Runtime aliases can select stored rows by session ID independently of their key. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */

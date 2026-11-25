@@ -5,6 +5,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
@@ -33,7 +34,6 @@ import {
   createFinalAssistant,
   createFinalizationParams,
   createLifecycleHarness,
-  flushDiagnosticEvents,
 } from "./lifecycle.test-support.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type { AgentHarness, AgentHarnessAttemptResult } from "./types.js";
@@ -78,7 +78,7 @@ describe("AgentHarness lifecycle runner", () => {
           runAgentHarnessLifecycleAttempt(harness, params),
         );
         emit({ ...preamble, itemId: "after-completion", phase: "end" });
-        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
         expect(diagnostics.events).toHaveLength(1);
         const captured = diagnostics.events[0];
         expect(captured?.event).toMatchObject({
@@ -136,7 +136,7 @@ describe("AgentHarness lifecycle runner", () => {
           ),
         ).rejects.toThrow("failed turn");
         emit("after-error");
-        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
         expect(diagnostics.events).toHaveLength(1);
       } finally {
         diagnostics.unsubscribe();
@@ -224,7 +224,7 @@ describe("AgentHarness lifecycle runner", () => {
     const result = await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
       assistant: createFinalAssistant(),
     }));
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
     diagnostics.unsubscribe();
 
     expect(result.outcome).toBe("answered");
@@ -247,7 +247,7 @@ describe("AgentHarness lifecycle runner", () => {
       assistant: emptyAssistant,
       usage: { input: 1, output: 0, total: 1 },
     }));
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
     diagnostics.unsubscribe();
 
     expect(result).toMatchObject({
@@ -275,7 +275,7 @@ describe("AgentHarness lifecycle runner", () => {
         throw new EmptySettledTurnFinalizationError(result);
       }),
     ).resolves.toMatchObject({ outcome: "empty", result });
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
     diagnostics.unsubscribe();
 
     expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
@@ -294,7 +294,7 @@ describe("AgentHarness lifecycle runner", () => {
         toolMetas: [],
       })),
     ).rejects.toThrow("unsupported result field: toolMetas");
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
     diagnostics.unsubscribe();
 
     const error = diagnostics.events[1]?.event as
@@ -344,7 +344,7 @@ describe("AgentHarness lifecycle runner", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }
@@ -396,7 +396,7 @@ describe("AgentHarness lifecycle runner", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }
@@ -418,7 +418,7 @@ describe("AgentHarness lifecycle runner", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }
@@ -464,7 +464,7 @@ describe("AgentHarness lifecycle runner", () => {
       attemptResult = await runWithDiagnosticTraceContext(harnessTrace, () =>
         runAgentHarnessLifecycleAttempt(harness, params),
       );
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }
@@ -517,7 +517,7 @@ describe("AgentHarness lifecycle runner", () => {
       await runWithDiagnosticTraceContext(harnessTrace, () =>
         runAgentHarnessLifecycleAttempt(harness, params),
       );
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }
@@ -550,7 +550,7 @@ describe("AgentHarness lifecycle runner", () => {
       await runWithDiagnosticTraceContext(harnessTrace, () =>
         runAgentHarnessLifecycleAttempt(harness, params),
       );
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }

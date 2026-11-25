@@ -1,7 +1,8 @@
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import { applySessionEntryPatch } from "../../plugin-sdk/session-store-runtime.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   adoptCronRunSessionMetadata,
@@ -66,6 +67,59 @@ it("keeps successive exact-run rows limited to their own provider rollover linea
     expect(cronSession.sessionEntry.usageFamilyKey).toBe(baseSessionKey);
   }
   expect(familySizes).toEqual([3, 3, 3, 3]);
+});
+
+it("stamps the occurrence's parent only through cron run preparation", async () => {
+  const entry: SessionEntry = { sessionId: "base-session", updatedAt: 1000, chatType: "direct" };
+  const cronSession: MutableCronSession = {
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+    store: {},
+    sessionEntry: entry,
+    lifecycleRevision: "run-revision",
+    systemSent: true,
+    isNewSession: true,
+    previousSessionId: undefined,
+    resetBoundaryPending: undefined,
+    initialSessionEntry: entry,
+  };
+  const runSessionKey = "agent:main:cron:job:run:base-session";
+  const parent = {
+    sessionKey: "agent:main:dashboard:parent",
+    sessionId: "2f1d2a4e-5c6b-4d7e-8f90-1a2b3c4d5e6f",
+    lifecycleRevision: "parent-revision",
+    senderIsOwner: true,
+  };
+  const load = (sessionKey = runSessionKey): InternalSessionEntry | undefined =>
+    loadSessionEntry({ storePath: cronSession.storePath, sessionKey });
+  const continuation = createCronRunContinuationSession({ cronSession, runSessionKey });
+  await continuation.initialize();
+  expect(load()?.scheduledMemoryParent).toBeUndefined();
+  await continuation.recordScheduledMemoryParent(parent);
+  expect(load()?.scheduledMemoryParent).toEqual(parent);
+
+  // Plugin session writes can neither forge nor replace the receipt.
+  const forged: Partial<SessionEntry> = Object.assign(
+    { label: "forged" },
+    { scheduledMemoryParent: { ...parent, sessionId: "x" } },
+  );
+  for (const sessionKey of [runSessionKey, "agent:main:dashboard:forged"]) {
+    await applySessionEntryPatch({
+      storePath: cronSession.storePath,
+      sessionKey,
+      patch: forged,
+      fallbackEntry: { sessionId: "forged-session", updatedAt: 1 },
+    });
+  }
+  expect(load()).toMatchObject({ label: "forged", scheduledMemoryParent: parent });
+  expect(load("agent:main:dashboard:forged")).toMatchObject({ label: "forged" });
+  expect(load("agent:main:dashboard:forged")?.scheduledMemoryParent).toBeUndefined();
+
+  // A retried attempt whose occurrence has no parent clears the earlier receipt.
+  await continuation.recordScheduledMemoryParent(undefined);
+  expect(load()?.scheduledMemoryParent).toBeUndefined();
+  await continuation.recordScheduledMemoryParent(parent);
+  await continuation.seal();
+  expect(load()?.scheduledMemoryParent).toEqual(parent);
 });
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-lineage-");

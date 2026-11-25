@@ -68,7 +68,7 @@ describe("structured_output", () => {
     const retry = await submit(result);
     expectRejected(retry);
     expect(retry.details).toMatchObject({ schemaError: expect.any(String) });
-    const frozen = peek(runId);
+    const frozen = { ...peek(runId) };
     expect(frozen).toMatchObject({ structured: undefined, invalidAttempts: 2 });
     expect(frozen?.schemaError).toBeTruthy();
     // A valid payload after the budget is spent is reported as unevaluated, not
@@ -108,7 +108,7 @@ describe("structured_output", () => {
     const persist = vi.fn();
     const { submit } = makeTool({ onStateChange: persist });
     await expect(submit({ count: "bad" })).rejects.toThrow("Retry once");
-    const previous = peek(runId);
+    const previous = { ...peek(runId) };
     const gate = createEnteredGate();
     persist.mockImplementationOnce(async () => {
       await gate.wait();

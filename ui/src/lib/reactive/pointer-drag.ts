@@ -15,7 +15,7 @@ type PointerDragSession = {
 };
 
 /** Own one pointer's capture and listeners; callers own admission, geometry, and commit policy. */
-export function createPointerDrag() {
+export function createPointerDrag(options?: { cancelOnEscape: boolean }) {
   let active: PointerDragSession | undefined;
   let disposed = false;
 
@@ -27,11 +27,7 @@ export function createPointerDrag() {
     active = undefined;
     current.stops.forEach((stop) => stop());
     // Releasing capture may synchronously emit lostpointercapture. It must not complete twice.
-    if (
-      typeof current.target.releasePointerCapture === "function" &&
-      (typeof current.target.hasPointerCapture !== "function" ||
-        current.target.hasPointerCapture(current.pointerId))
-    ) {
+    if (current.target.hasPointerCapture(current.pointerId)) {
       current.target.releasePointerCapture(current.pointerId);
     }
     if (event) {
@@ -53,7 +49,7 @@ export function createPointerDrag() {
         return false;
       }
       try {
-        target.setPointerCapture?.(event.pointerId);
+        target.setPointerCapture(event.pointerId);
       } catch (error) {
         // Synthetic pointer events have no browser-owned pointer to capture; window tracking works.
         if (!(error instanceof DOMException) || error.name !== "NotFoundError") {
@@ -76,6 +72,23 @@ export function createPointerDrag() {
         listen(target, "lostpointercapture", (next) => owns(next) && finish()),
         listen(view, "blur", () => finish()),
       ];
+      if (options?.cancelOnEscape) {
+        // A sortable gesture handles Escape before the Settings shell's back shortcut.
+        current.stops.push(
+          listen(
+            target.ownerDocument,
+            "keydown",
+            (key) => {
+              if (key.key === "Escape") {
+                key.preventDefault();
+                key.stopPropagation();
+                finish();
+              }
+            },
+            true,
+          ),
+        );
+      }
       return true;
     },
   };

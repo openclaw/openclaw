@@ -284,8 +284,11 @@ ${scenario}
 it("preserves imported bytes and permits only the Doctor-owned workspace repair", () => {
   const check = (actual: typeof original, workspace?: string) => () =>
     assertPreserved(actual, original, workspace);
+  const addedDefault = structuredClone(original);
+  Object.assign(addedDefault.shared.worktrees[0]!, { gc_protection_json: null });
   for (const [actual, workspace, accepted] of [
     [original, undefined, true],
+    [addedDefault, undefined, true],
     [migrated(), "/fixture/project", true],
     [migrated(), undefined, false],
     [original, "/fixture/project", false],
@@ -301,6 +304,8 @@ it("preserves imported bytes and permits only the Doctor-owned workspace repair"
     (value) => (value.agent.sessions[0]!.current_session_id = "replacement"),
     (value) => (value.agent.transcript[0]!.event_json = "rewritten"),
     (value) => (value.shared.project[0]!.id = "other"),
+    (value) => Object.assign(value.shared.worktrees[0]!, { gc_protection_json: '{"revision":1}' }),
+    (value) => Object.assign(value.shared.worktrees[0]!, { future_column: null }),
     (value) => (value.agent.sessions[1]!.entry_json = '{"changed":true}'),
     (value) => value.agent.sessions.pop(),
     (value) =>

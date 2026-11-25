@@ -5,7 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
-import { retirementCuts } from "./installed-recovery-observations.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
@@ -190,78 +189,8 @@ const omissions = {};
 const installedRecoveryLabels = [
   "installed recovery",
   "installed recovery install",
-  "installed recovery stdout",
-  "installed recovery stderr",
   "installed recovery driver error",
-  "installed recovery checkpoint",
 ];
-
-function installedRecoveryCurrent(value, sanitize) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const names =
-    value.cut === null
-      ? ["next-update", "next-update-status"]
-      : [
-          "displacement",
-          "missing-status",
-          "repair",
-          "repeat-repair",
-          "retirement",
-          "resume-retirement",
-          "completed-status",
-          "archive-completed",
-        ];
-  if (
-    (value.cut !== null && !retirementCuts.includes(value.cut)) ||
-    !names.includes(value.name) ||
-    !["running", "completed", "rejected"].includes(value.state)
-  ) {
-    throw new Error();
-  }
-  const prefix = value.cut === null ? "" : `${value.cut}/`;
-  for (const [stream, extension] of [
-    ["stdout", "out"],
-    ["stderr", "err"],
-  ]) {
-    if (value[stream] !== `${prefix}${value.name}.${extension}`) {
-      throw new Error();
-    }
-  }
-  const current = {
-    cut: value.cut,
-    name: value.name,
-    state: value.state,
-    stdout: value.stdout,
-    stderr: value.stderr,
-  };
-  for (const field of ["startedAt", "elapsedMs"]) {
-    if (value[field] !== undefined) {
-      if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
-        throw new Error();
-      }
-      current[field] = value[field];
-    }
-  }
-  if (value.state === "completed") {
-    if (
-      !Number.isInteger(value.status) ||
-      value.status < 0 ||
-      value.status > 255 ||
-      value.treeJoined !== true
-    ) {
-      throw new Error();
-    }
-    Object.assign(current, { status: value.status, treeJoined: true });
-  } else if (value.state === "rejected") {
-    if (typeof value.error !== "string") {
-      throw new Error();
-    }
-    current.error = sanitize(value.error, "installed recovery");
-  }
-  return current;
-}
 
 function installedRecoveryProjection(value, sanitize = (text) => text) {
   if (value?.availability !== "captured") {
@@ -273,48 +202,16 @@ function installedRecoveryProjection(value, sanitize = (text) => text) {
   ) {
     throw new Error();
   }
-  const current = installedRecoveryCurrent(value.current, sanitize);
-  const checkpoint = { availability: "unavailable" };
-  if (value.checkpoint?.availability === "captured") {
-    const observed = value.checkpoint;
-    const expectedCut =
-      current?.name === "displacement"
-        ? "displaced"
-        : current?.name === "retirement"
-          ? current.cut
-          : null;
-    if (
-      !expectedCut ||
-      observed.cut !== expectedCut ||
-      typeof observed.phase !== "string" ||
-      typeof observed.intent !== "string" ||
-      typeof observed.synced !== "boolean"
-    ) {
-      throw new Error();
-    }
-    Object.assign(checkpoint, {
-      availability: "captured",
-      cut: observed.cut,
-      phase: sanitize(observed.phase, "installed recovery checkpoint"),
-      intent: sanitize(observed.intent, "installed recovery checkpoint"),
-      synced: observed.synced,
-    });
-  }
   return {
     availability: "captured",
     runDirectory: value.runDirectory,
     status: value.status,
-    current,
-    checkpoint,
     driverError: {
       availability: value.driverError?.availability === "captured" ? "captured" : "unavailable",
     },
-    logs: Object.fromEntries(
-      ["install", "stdout", "stderr"].map((name) => [
-        name,
-        sanitize(value.logs?.[name] ?? null, `installed recovery ${name}`),
-      ]),
-    ),
+    logs: {
+      install: sanitize(value.logs?.install ?? null, "installed recovery install"),
+    },
   };
 }
 
@@ -332,15 +229,11 @@ function captureInstalledRecovery(artifactRoot, observationRoot) {
     ) {
       throw new Error();
     }
-    const current = installedRecoveryCurrent(summary.current, (text) => text);
-    const snapshot = {
+    return installedRecoveryProjection({
       availability: "captured",
       runDirectory: summary.runDirectory,
       status: summary.status,
-      current,
-      checkpoint: { availability: "unavailable" },
-      // Error snippets and encoded assertion values are not text-redactor input.
-      // Validate the owned private file, but publish only its availability.
+      // Assertion values stay private; publish only the error file's availability.
       driverError: {
         availability: readOwned(observationRoot, "driver.err", "installed recovery driver error")
           ? "captured"
@@ -349,40 +242,7 @@ function captureInstalledRecovery(artifactRoot, observationRoot) {
       logs: {
         install: readOwned(observationRoot, "install.log", "installed recovery install"),
       },
-    };
-    if (current) {
-      for (const stream of ["stdout", "stderr"]) {
-        snapshot.logs[stream] = readOwned(
-          observationRoot,
-          current[stream],
-          `installed recovery ${stream}`,
-        );
-      }
-      if (current.name === "displacement" || current.name === "retirement") {
-        const relative = `${current.cut}/${current.name}.fault.json.observed`;
-        const raw = readOwned(observationRoot, relative, "installed recovery checkpoint");
-        if (raw !== null) {
-          try {
-            const observed = JSON.parse(raw);
-            const checkpoint = {
-              availability: "captured",
-              cut: observed.cut,
-              phase: observed.row?.phase,
-              intent: JSON.parse(observed.row?.intent_json).kind,
-              synced: observed.synced,
-            };
-            snapshot.checkpoint = installedRecoveryProjection({
-              ...snapshot,
-              checkpoint,
-            }).checkpoint;
-          } catch {
-            // A partially written checkpoint must not hide the command's captured logs.
-            omissions["installed recovery checkpoint"] = reasons[3];
-          }
-        }
-      }
-    }
-    return installedRecoveryProjection(snapshot);
+    });
   } catch {
     omissions["installed recovery"] = reasons[3];
     return { availability: "unavailable" };
@@ -2288,7 +2148,7 @@ function failedUpdateContext(text, label) {
   try {
     // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
     const result = JSON.parse(text.slice(text.indexOf("{")));
-    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+    if (!["ok", "error"].includes(result?.status) || !Array.isArray(result.steps)) {
       return "";
     }
     const index = result.steps.findIndex(
@@ -2332,6 +2192,43 @@ function failedUpdateContext(text, label) {
   }
 }
 
+function diagnosticSanitizer(redactSensitiveText, outcome) {
+  return function sanitize(text, label) {
+    if (text === null || text === undefined) {
+      return null;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
+      throw new Error();
+    }
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
+    let result = "";
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
+        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
+        break;
+      }
+      result = next;
+    }
+    return result;
+  };
+}
+
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -2341,6 +2238,7 @@ export function publishDiagnostics(
   for (const label of Object.keys(omissions)) {
     delete omissions[label];
   }
+  const sanitize = diagnosticSanitizer(redactSensitiveText, outcome);
   if (outcome === "passed") {
     writeReport(
       artifactRoot,
@@ -2396,40 +2294,6 @@ export function publishDiagnostics(
     if (reasons.includes(snapshot.omissions?.[label])) {
       omissions[label] = snapshot.omissions[label];
     }
-  }
-  function sanitize(text, label) {
-    if (text === null || text === undefined) {
-      return null;
-    }
-    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
-      throw new Error();
-    }
-    let redacted = redactSensitiveText(text, { mode: "tools" });
-    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
-      const context = failedUpdateContext(text, label);
-      if (context) {
-        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
-        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
-      }
-    }
-    // Keep the latest startup/native events after redacting the whole input.
-    const tail =
-      label === "missing-load-path/baseline-gateway.log" ||
-      label === "native-assignment-messages.jsonl";
-    const lines = redacted.split(/(?<=\n)/u);
-    if (tail) {
-      lines.reverse();
-    }
-    let result = "";
-    for (const line of lines) {
-      const next = tail ? line + result : result + line;
-      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
-        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
-        break;
-      }
-      result = next;
-    }
-    return result;
   }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);

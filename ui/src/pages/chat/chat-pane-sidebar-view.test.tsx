@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
-import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "./chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
-import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
@@ -69,26 +68,20 @@ it("retains loading contents, primary input and outlet through resize and collap
   const primary = document.createElement("textarea");
   primary.value = "Draft survives the side panel";
   const layout = openSlot({ columns: [] }, "workspace");
-  let resize: (width: number) => void = () => {};
-  let changeOpen: (open: boolean) => void = () => {};
-  const mounted = mountSolid(() => {
-    const [width, setWidth] = createSignal(1400);
-    const [open, setOpen] = createSignal(true);
-    resize = setWidth;
-    changeOpen = setOpen;
-    return (
-      <SidebarRegionView
-        presentationId="loading-layout"
-        panelIdPrefix="chat-panel-loading-layout"
-        availableWidth={width()}
-        narrow={false}
-        callbacks={createNoopSidebarRegionCallbacks()}
-        layout={setSidebarOpen(fitSidebarLayout(layout, width())!, open())}
-        panelDefinitions={sidebarPanelDefinitions()}
-        primary={primary}
-      />
-    );
-  });
+  const [width, resize] = createSignal(1400);
+  const [open, changeOpen] = createSignal(true);
+  const mounted = mountSolid(() => (
+    <SidebarRegionView
+      presentationId="loading-layout"
+      panelIdPrefix="chat-panel-loading-layout"
+      availableWidth={width()}
+      narrow={false}
+      callbacks={createNoopSidebarRegionCallbacks()}
+      layout={setSidebarOpen(fitSidebarLayout(layout, width())!, open())}
+      panelDefinitions={sidebarPanelDefinitions()}
+      primary={primary}
+    />
+  ));
   flush();
   const panel = mounted.container.querySelector(".side-panel__panel")!;
   const placeholder = panel.querySelector("openclaw-panel-loading-skeleton")!;
@@ -98,11 +91,8 @@ it("retains loading contents, primary input and outlet through resize and collap
   expect(mounted.container.querySelector(".side-panel__panel")).toBe(panel);
   expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBe(placeholder);
   expect(placeholder.querySelector(".rows")).toBe(contents);
-  expect(
-    mounted.container
-      .querySelector<HTMLElement>(".sidebar-region")
-      ?.style.getPropertyValue("--side-panel-width"),
-  ).toBe("382px");
+  const region = mounted.container.querySelector<HTMLElement>(".sidebar-region")!;
+  expect(region.style.getPropertyValue("--side-panel-width")).toBe("382px");
   const outlet = mounted.container.querySelector(".sidebar-region__right-runtime")!;
   const retainedPanel = document.createElement("iframe");
   outlet.append(retainedPanel);
@@ -112,101 +102,99 @@ it("retains loading contents, primary input and outlet through resize and collap
   expect(primary.value).toBe("Draft survives the side panel");
   expect(mounted.container.querySelector(".sidebar-region__right-runtime")).toBe(outlet);
   expect(retainedPanel.parentElement).toBe(outlet);
-  expect(
-    mounted.container.querySelector(".sidebar-region")?.classList.contains("sidebar-region--open"),
-  ).toBe(false);
+  expect(region.classList.contains("sidebar-region--open")).toBe(false);
 });
 
-it("parks on owner events and reveals with the parent's next props", () => {
-  const owner = new EventTarget();
-  let presented = true;
-  const binding: PresentationBinding = { owner, isPresented: () => presented };
-  const content = document.createElement("input");
-  content.value = "Retained text";
-  let repaint: () => void = () => {};
-  const mounted = mountSolid(() => {
-    const [presentation, setPresentation] = createSignal(binding);
-    repaint = () => setPresentation({ ...binding });
-    const active = usePanePresentation(presentation);
-    return <Show when={active()}>{content}</Show>;
-  });
-  flush();
-  expect(mounted.container.querySelector("input")).toBe(content);
-  presented = false;
-  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-  flush();
-  expect(mounted.container.querySelector("input")).toBeNull();
-  presented = true;
-  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-  flush();
-  expect(mounted.container.querySelector("input")).toBeNull();
-  repaint();
-  flush();
-  expect(mounted.container.querySelector("input")).toBe(content);
-  expect(content.value).toBe("Retained text");
-});
-
-it("releases region refs when the panel column or its containing view unmounts", async () => {
-  let regionElement: HTMLElement | null = null;
-  let headerElement: HTMLElement | null = null;
-  let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
-  let loading: (value: boolean) => void = () => {};
-  const mounted = mountSolid(() => {
-    const [pending, setPending] = createSignal(false);
-    loading = setPending;
-    return (
-      <SidebarRegionView
-        presentationId="owned-region-refs"
-        panelIdPrefix="chat-owned-region-refs"
-        availableWidth={1400}
-        narrow={false}
-        layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
-        panelDefinitions={sidebarPanelDefinitions()}
-        callbacks={createNoopSidebarRegionCallbacks()}
-        onRegionElementRef={(element) => {
-          regionElement = element;
-          return () => {
-            if (regionElement === element) {
-              regionElement = null;
-            }
-          };
-        }}
-        onRegionViewRef={(element) => {
-          regionView = element;
-          return () => {
-            if (regionView === element) {
-              regionView = null;
-            }
-          };
-        }}
-        onHeaderElementRef={(element) => {
-          headerElement = element;
-          return () => {
-            headerElement = null;
-          };
-        }}
-      />
-    );
-  });
-  flush();
-  await waitForSolid(() => expect(regionView).not.toBeNull());
-  const shell = regionElement;
-  const firstView = regionView;
-  const header = headerElement;
-  expect(shell).toBe(mounted.container.querySelector(".sidebar-region"));
+it("routes portalled mobile events and releases refs when the region or view unmounts", async () => {
+  const mobileHost = createChatMobileHostFixture("portalled-events", { open: true });
+  const primary = document.createElement("textarea");
+  const refs: Record<"region" | "header" | "view", HTMLElement | null> = {
+    region: null,
+    header: null,
+    view: null,
+  };
+  const capture = (key: keyof typeof refs) => (element: HTMLElement) => {
+    refs[key] = element;
+    return () => {
+      if (refs[key] === element) {
+        refs[key] = null;
+      }
+    };
+  };
+  const [pending, loading] = createSignal(false);
+  const mounted = mountSolid(() => (
+    <SidebarRegionView
+      presentationId="portalled-events"
+      panelIdPrefix="chat-portalled-events"
+      availableWidth={400}
+      narrow
+      mobileHost={mobileHost}
+      layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
+      panelDefinitions={sidebarPanelDefinitions().map((definition) =>
+        definition.slot === "workspace"
+          ? Object.assign(definition, {
+              content: (
+                <>
+                  <input
+                    aria-label="Panel search"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && event.currentTarget.value === "nested") {
+                        event.preventDefault();
+                      }
+                    }}
+                  />
+                  <input aria-label="Read-only preview" readonly />
+                </>
+              ),
+            })
+          : definition,
+      )}
+      callbacks={createNoopSidebarRegionCallbacks()}
+      primary={primary}
+      onRegionElementRef={capture("region")}
+      onRegionViewRef={capture("view")}
+      onHeaderElementRef={capture("header")}
+    />
+  ));
+  await waitForSolid(() => expect(mounted.queryByLabelText("Panel search")).not.toBeNull());
+  const { region, view, header } = refs;
+  expect(region).toBe(mounted.container.querySelector(".sidebar-region"));
   expect(header).toBe(mounted.container.querySelector(".sidebar-region__header"));
-  expect(firstView).toBe(mounted.container.querySelector("openclaw-chat-sidebar-region"));
+  expect(view).toBe(mounted.container.querySelector("openclaw-chat-sidebar-region"));
+  const input = mounted.getByLabelText<HTMLInputElement>("Panel search");
+  expect(input.closest(".chat-mobile-host")).not.toBeNull();
+  input.focus();
+  expect(mobileHost.toggleExpanded).toHaveBeenCalledOnce();
+  mounted.getByLabelText("Read-only preview").focus();
+  primary.focus();
+  const escape = (init: KeyboardEventInit = {}) =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+  primary.dispatchEvent(escape());
+  expect(mobileHost.toggleExpanded).toHaveBeenCalledOnce();
+  expect(mobileHost.close).not.toHaveBeenCalled();
+  for (const control of [{ isComposing: true }, { keyCode: 229 }]) {
+    input.dispatchEvent(escape(control));
+    expect(mobileHost.close).not.toHaveBeenCalled();
+  }
+  input.value = "nested";
+  const nestedEscape = escape();
+  input.dispatchEvent(nestedEscape);
+  expect(nestedEscape.defaultPrevented).toBe(true);
+  expect(mobileHost.close).not.toHaveBeenCalled();
+  input.value = "";
+  const hostEscape = escape();
+  input.dispatchEvent(hostEscape);
+  expect(hostEscape.defaultPrevented).toBe(true);
+  expect(mobileHost.close).toHaveBeenCalledOnce();
   loading(true);
   flush();
-  expect(regionView).toBeNull();
-  expect(regionElement).toBe(shell);
-  expect(headerElement).toBe(header);
+  expect(refs.view).toBeNull();
+  expect(refs.region).toBe(region);
+  expect(refs.header).toBe(header);
   loading(false);
   flush();
-  await waitForSolid(() => expect(regionView).not.toBeNull());
-  expect(regionView).not.toBe(firstView);
+  await waitForSolid(() => expect(refs.view).not.toBeNull());
+  expect(refs.view).not.toBe(view);
   mounted.unmount();
-  expect(regionView).toBeNull();
-  expect(regionElement).toBeNull();
-  expect(headerElement).toBeNull();
+  expect(refs).toEqual({ region: null, header: null, view: null });
 });

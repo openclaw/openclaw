@@ -1,24 +1,36 @@
 import type { AssistantMessage, Context, ProviderReplayState } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
+import { createOpenAIResponsesCompactionSourceReader as createCheckpointReader } from "./openai-responses-compaction-checkpoint.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
+  resolveNewestOpenAIResponsesCompactionReplay,
   CompactionReplayRefreshRequiredError,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import {
+  getResponsesCompactionInputIdentity,
   isOpenAIResponsesCompactionOutput,
   readOpenAIResponsesCompactionWindow,
   type OpenAIResponsesCompactionOutput,
 } from "./openai-responses-compaction-window.js";
-import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
+import {
+  resolveResponsesContinuationRequest,
+  responsesContinuationPrefixFingerprint,
+} from "./openai-responses-continuation.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
+import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 
 const model = fixtures.createReplayModel();
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const inputMessage = (text: string) => ({
@@ -57,6 +69,219 @@ const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "chec
   });
 
 describe("Responses retained-user compaction replay", () => {
+  it("preserves the stored fingerprint format across cold input and checkpoint reuse", () => {
+    const expected = "2e4c46d232e604f48c543bb8c527980a035aaa79a5e00094144cbe0d94c073f4";
+    expect(responsesContinuationPrefixFingerprint([])).toBe(
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    );
+    expect(
+      responsesContinuationPrefixFingerprint([null, undefined, 0, false, "plain", Number.NaN]),
+    ).toBe("2f18b00a59863ec24aa78d3715349dd579df524507515581673536b46166f0aa");
+    const owner = freezeJsonSnapshot(
+      createAssistant([], compactionState("openai-responses-compaction")),
+    );
+    const frozen = freezeJsonSnapshot(fixtures.inputMessage("frozen input"));
+    const output = [fixtures.outputMessage("reply", "msg_provider")];
+    runWithAiTransportHost(
+      createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
+      () => {
+        for (let round = 0; round < 2; round++) {
+          const plan = buildOpenAIResponsesCompactionReplayPlan([owner], model, replayIdentity);
+          assert(plan.compaction);
+          const { input } = sanitizeResponsesImagePayload({ input: [plan.compaction, frozen] });
+          expect(responsesContinuationPrefixFingerprint(input, output)).toBe(expected);
+        }
+      },
+    );
+  });
+
+  it("resolves immutable publication from the active host", () => {
+    const replay = freezeJsonSnapshot(compactionState("openai-responses-compaction"));
+    const owner = createAssistant("", replay);
+    const read = () => resolveNewestOpenAIResponsesCompactionReplay([owner], model, replayIdentity);
+    const before = read();
+    assert(before?.mode === "compacted-prefix");
+    expect(getResponsesCompactionInputIdentity(before.item)).toBeUndefined();
+    runWithAiTransportHost(
+      createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
+      () => {
+        const during = read();
+        assert(during?.mode === "compacted-prefix");
+        expect(getResponsesCompactionInputIdentity(during.item)).toBeDefined();
+        expect(Object.isFrozen(during.item)).toBe(true);
+      },
+    );
+    const after = read();
+    assert(after?.mode === "compacted-prefix");
+    expect(getResponsesCompactionInputIdentity(after.item)).toBeUndefined();
+    expect(Object.isFrozen(after.item)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "publishes detached immutable checkpoint input (complete window=%s)",
+    (window) => {
+      runWithAiTransportHost(
+        createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
+        () => {
+          const owner = createAssistant(
+            [],
+            window ? undefined : compactionState("openai-responses-compaction"),
+          );
+          const item = {
+            type: "compaction" as const,
+            id: "cmp_saved",
+            encrypted_content: "opaque",
+            status: "completed" as const,
+          };
+          if (window) {
+            capture(owner, item, 0, [
+              inputMessage("saved"),
+              fixtures.outputMessage("answer", "msg_saved"),
+              item,
+            ]);
+          }
+          const replay = owner.providerReplay;
+          assert(replay);
+          const read = (source = replay) => {
+            const plan = buildOpenAIResponsesCompactionReplayPlan(
+              [createAssistant([], source)],
+              model,
+              replayIdentity,
+            );
+            return plan.compactedWindow ?? (plan.compaction ? [plan.compaction] : []);
+          };
+          expect(
+            read().every(
+              (entry) => !Object.isFrozen(entry) && !getResponsesCompactionInputIdentity(entry),
+            ),
+          ).toBe(true);
+          freezeJsonSnapshot(replay);
+          const first = read();
+          const kernel = createCheckpointReader(model, replayIdentity, () => ({
+            freezeJsonSnapshot,
+            isDeeplyFrozenPlainData,
+          }))(replay, 0);
+          assert(kernel?.mode === "complete-window" || kernel?.mode === "compacted-prefix");
+          const kernelInput = kernel.mode === "complete-window" ? kernel.output : [kernel.item];
+          expect(kernelInput).toEqual(first);
+          for (const [index, kernelItem] of kernelInput.entries()) {
+            const transportItem = first[index];
+            assert(transportItem);
+            expect(getResponsesCompactionInputIdentity(kernelItem)).toBe(
+              getResponsesCompactionInputIdentity(transportItem),
+            );
+          }
+          const second = read();
+          const replaced = read(freezeJsonSnapshot({ ...replay }));
+          expect(first).toHaveLength(window ? 3 : 1);
+          expect(second).toEqual(first);
+          expect(replaced).toEqual(first);
+          for (const [index, entry] of first.entries()) {
+            const next = second[index];
+            const replacement = replaced[index];
+            assert(next && replacement);
+            expect(Object.isFrozen(entry)).toBe(true);
+            expect(next).not.toBe(entry);
+            const identity = getResponsesCompactionInputIdentity(entry);
+            expect(identity).toBeDefined();
+            expect(getResponsesCompactionInputIdentity(next)).toBe(identity);
+            expect(getResponsesCompactionInputIdentity(replacement)).not.toBe(identity);
+          }
+          const messages: Context["messages"] = [owner];
+          const build = (mutableInput = false) =>
+            sanitizeResponsesImagePayload({
+              input: convertResponsesMessages(model, { messages }, new Set(["openai"]), {
+                ...replayIdentity,
+                retainUserProvenance: true,
+                mutableInput,
+              }),
+            }).input;
+          responsesContinuationPrefixFingerprint(build());
+          messages.push(freezeJsonSnapshot(fixtures.userMessage("new suffix")));
+          const appended = build();
+          const previousInput = build().slice(0, -1);
+          const continuation = {
+            lastRequest: { input: previousInput },
+            lastResponseId: "resp_compacted",
+            lastResponseItems: [],
+          };
+          const continued = resolveResponsesContinuationRequest(continuation, { input: appended });
+          expect(continued.continuationStatus).toBe("continued");
+          expect(continued.request).toEqual({
+            previous_response_id: "resp_compacted",
+            input: [appended.at(-1)],
+          });
+          // Equal rebuilt windows and mutable hook copies retain the same decision.
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: structuredClone(appended) })
+              .continuationStatus,
+          ).toBe("continued");
+          const edited = structuredClone(appended);
+          const checkpoint = edited.find((entry) => entry.type === "compaction");
+          assert(checkpoint);
+          checkpoint.encrypted_content = "edited-checkpoint";
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: edited }).continuationStatus,
+          ).toBe("history_changed");
+          const opaque = [...appended];
+          const firstOpaque = opaque[0];
+          assert(firstOpaque);
+          opaque[0] = Object.assign({}, firstOpaque, {
+            toJSON: () => ({ type: "message", role: "user", content: "hook edit" }),
+          });
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: opaque }).continuationStatus,
+          ).toBe("history_changed");
+          const sparse: typeof previousInput = [];
+          sparse.length = previousInput.length;
+          expect(
+            resolveResponsesContinuationRequest(
+              { ...continuation, lastRequest: { input: sparse } },
+              { input: appended },
+            ).continuationStatus,
+          ).toBe("history_changed");
+          const expected = responsesContinuationPrefixFingerprint(structuredClone(appended));
+          const stringify = vi.spyOn(JSON, "stringify");
+          try {
+            expect(responsesContinuationPrefixFingerprint(appended)).toBe(expected);
+            expect(
+              stringify.mock.calls.some(
+                ([value]) =>
+                  typeof value === "string" &&
+                  ["saved", "answer", "opaque", "opaque-previous"].includes(value),
+              ),
+            ).toBe(false);
+          } finally {
+            stringify.mockRestore();
+          }
+          const editable = build(true);
+          const editableFirst = editable[0];
+          assert(editableFirst);
+          expect(JSON.stringify(editable)).toBe(JSON.stringify(appended));
+          expect(getResponsesCompactionInputIdentity(editableFirst)).toBeUndefined();
+          Object.assign(editableFirst, { id: "hook-copy" });
+          expect(JSON.stringify(build())).toBe(JSON.stringify(appended));
+          const changed = { ...replay, data: "changed checkpoint" };
+          if (window) {
+            expect(() => read(changed)).toThrow(CompactionReplayRefreshRequiredError);
+            expect(
+              readOpenAIResponsesCompactionWindow(replay, {
+                ...model,
+                provider: "xai",
+                baseUrl: "https://api.x.ai/v1",
+              }),
+            ).toBeUndefined();
+            expect(read()).toEqual(first);
+          } else {
+            expect(read(changed)).toEqual([
+              { type: "compaction", id: replay.id, encrypted_content: "changed checkpoint" },
+            ]);
+          }
+        },
+      );
+    },
+  );
+
   it("requires rebuilding legacy retained-user state", () => {
     const context: Context = {
       systemPrompt: "current system instructions",

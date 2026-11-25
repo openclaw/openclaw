@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
+import { SqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -29,6 +30,8 @@ import {
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
 import {
+  expectLiveReadSourceFamily,
+  expectLiveReadSourceManifest,
   snapshotPreflightSourceManifest,
   snapshotSourceFamily,
 } from "./openclaw-database-preflight.test-support.js";
@@ -137,14 +140,14 @@ function createReleasedStateDatabase() {
   return fixture;
 }
 
-it("refuses released legacy audit state before changing any persistent artifact", async () => {
+it("refuses released legacy audit state without changing stored data", async () => {
   const { dir: stateDir, statePath, ready } = createReleasedStateDatabase();
   const before = snapshotPreflightSourceManifest(stateDir);
-  await expect(ready()).rejects.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-  expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
   await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
     foundVersion: 1,
   });
+  await expect(ready()).rejects.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
+  expectLiveReadSourceManifest(stateDir, before, statePath);
 });
 
 it("refuses a configured legacy agent database without mutating its WAL or creating stores", async () => {
@@ -162,7 +165,7 @@ it("refuses a configured legacy agent database without mutating its WAL or creat
   await expect(fixture.ready(config)).rejects.toBeInstanceOf(
     OpenClawAgentDatabaseMediaMigrationRequiredError,
   );
-  expect(snapshotPreflightSourceManifest(stateDir, agentPath)).toEqual(before);
+  expectLiveReadSourceManifest(stateDir, before, fixture.statePath, agentPath);
 });
 
 it("rejects a canonical configured agent path owned by another agent before writes", async () => {
@@ -178,7 +181,7 @@ it("rejects a canonical configured agent path owned by another agent before writ
   await expect(fixture.ready({ session: { store } })).rejects.toThrow(
     "belongs to agent beta; requested agent alpha",
   );
-  expect(snapshotPreflightSourceManifest(root)).toEqual(before);
+  expectLiveReadSourceManifest(root, before, fixture.statePath);
 });
 
 it("admits supported forward state migration with backup custody after the Doctor-owned audit repair", async () => {
@@ -190,7 +193,7 @@ it("admits supported forward state migration with backup custody after the Docto
   }
   const before = snapshotPreflightSourceManifest(stateDir);
   await expect(fixture.ready()).resolves.toBeUndefined();
-  expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+  expectLiveReadSourceManifest(stateDir, before, statePath);
   await withStateMigrationBackupForTest({ env: fixture.env }, () => fixture.state());
   const migrated = fixture.state();
   expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
@@ -224,6 +227,7 @@ it.each([false, true])(
     }
     const before = snapshotSourceFamily(statePath);
     const result = await fixture.inspect({ verifyCurrentSchemaShape: true });
+    expectFamilyEqual(snapshotSourceFamily(statePath), before);
     const indeterminate = damaged
       ? [
           expect.objectContaining({
@@ -244,6 +248,14 @@ it.each([false, true])(
       }),
     ]);
     expect(result.indeterminate).toEqual(indeterminate);
+    if (!damaged) {
+      await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
+        status: "exact",
+        foundVersion: supportedVersions.state - 1,
+        contentVersion: supportedVersions.state,
+        deferredPublication: expect.objectContaining({ runId: run.runId }),
+      });
+    }
     const olderTarget = await fixture.inspect(
       {
         verifyCurrentSchemaShape: true,
@@ -258,7 +270,7 @@ it.each([false, true])(
       expect.objectContaining({ foundVersion: supportedVersions.state - 1 }),
     ]);
     expect(olderTarget.indeterminate).toEqual(indeterminate);
-    expectFamilyEqual(snapshotSourceFamily(statePath), before);
+    expectLiveReadSourceFamily(statePath, before);
     if (damaged) {
       await expect(fixture.ready(undefined, "gateway-restart")).rejects.toThrow(
         /Gateway refused restart.*column definitions differ for worktrees/su,
@@ -273,12 +285,6 @@ it.each([false, true])(
         }),
       ).resolves.toMatchObject({
         incompatible: [expect.objectContaining({ foundVersion: supportedVersions.state })],
-      });
-      await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
-        status: "exact",
-        foundVersion: supportedVersions.state - 1,
-        contentVersion: supportedVersions.state,
-        deferredPublication: expect.objectContaining({ runId: run.runId }),
       });
     }
   },
@@ -427,6 +433,20 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
 
 it.each([
   {
+    name: "snapshot storage exhaustion",
+    error: new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)"),
+    guidance: "Free snapshot disk space or quota, then retry the inspection.",
+    restore: false,
+  },
+  {
+    name: "worker-hydrated snapshot quota exhaustion",
+    error: Object.assign(new Error("snapshot storage unavailable (code=EDQUOT)"), {
+      name: "SqliteSnapshotCapacityError",
+    }),
+    guidance: "Free snapshot disk space or quota, then retry the inspection.",
+    restore: false,
+  },
+  {
     name: "retryable snapshot contention",
     error: new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize"),
     guidance: "Wait a moment for write activity to settle, then retry the inspection.",
@@ -457,10 +477,11 @@ it.each([
   },
 );
 
-it("keeps retry and restore guidance with their affected agent databases", async () => {
+it("keeps capacity, retry, and restore guidance with their affected agent databases", async () => {
   const fixture = databaseFixture(tempDirs.make("doctor-mixed-readiness-"));
   const busy = fixture.agent("busy");
   const corrupt = fixture.agent("corrupt");
+  const full = fixture.agent("full");
   closeDatabases();
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((source, options) => {
@@ -470,13 +491,16 @@ it("keeps retry and restore guidance with their affected agent databases", async
     if (source === corrupt.path) {
       throw new Error("database disk image is malformed");
     }
+    if (source === full.path) {
+      throw new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)");
+    }
     return prepare(source, options);
   });
 
   await expect(
     withArtifactPreservingStateReads(() => fixture.doctor(), { agentDatabases: true }),
   ).rejects.toThrow(
-    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.`,
+    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.\nagent ${full.path}: snapshot storage unavailable (code=ENOSPC) Free snapshot disk space or quota, then retry the inspection.`,
   );
 });
 

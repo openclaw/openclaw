@@ -3,8 +3,11 @@ import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalo
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../test-utils/plugin-registration.js";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
-import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 
@@ -396,7 +399,8 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         id: "gemini-3.1-pro-preview",
         provider: providerId,
         reasoning: true,
-        ...(providerId === "google" ? { api, baseUrl } : {}),
+        // AI Studio Gemini text models default to Interactions regardless of the template.
+        ...(providerId === "google" ? { api: "google-interactions", baseUrl } : {}),
       });
     });
   });
@@ -569,7 +573,7 @@ export function describeOpenRouterProviderRuntimeContract(
         provider: "openrouter",
         api: "openai-completions",
         baseUrl: "https://openrouter.ai/api/v1",
-        maxTokens: 8192,
+        maxTokens: 32_768,
       });
     });
   });

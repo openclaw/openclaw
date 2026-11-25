@@ -466,6 +466,26 @@ export function loadPendingLegacyDeliveryPreparations(
   ) as LegacyQueuedDeliveryPreparation[];
 }
 
+/**
+ * Dead-letter the unsent replies of a deleted chat, so that a recreated key never
+ * sends them. A send that started stays with its recovery owner.
+ */
+export async function failChatDeliveries(
+  chat: { agentId: string; sessionKey: string },
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  for (const entry of await readOutboundDeliveries({ mode: "pending" }, stateDir, context)) {
+    if (
+      entry.recoveryState === undefined &&
+      entry.sessionGeneration?.agentId === chat.agentId &&
+      entry.sessionGeneration.sessionKey === chat.sessionKey
+    ) {
+      await failPendingDelivery({ id: entry.id, entry }, stateDir, context);
+    }
+  }
+}
+
 /** Move a queue entry out of the pending retry set. */
 export async function moveToFailed(
   id: string,

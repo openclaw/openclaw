@@ -1,8 +1,6 @@
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptAnnotation,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
+import type { UserTurnTranscriptAnnotation } from "./user-turn-transcript.types.js";
 
 /** Native annotation extends the admitted message without replacing any source facts. */
 export function prepareUserTurnTranscriptAnnotation(

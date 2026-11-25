@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { prepareDoctorHealthFlow, prepareDoctorStateSchema } from "./doctor-health-startup.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn<() => Promise<OpenClawConfig>>(),
@@ -43,6 +48,31 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
+
+it.skipIf(process.platform === "win32")(
+  "leaves private store permissions untouched before maintenance consent",
+  async () => {
+    const stateDir = dirs.make("doctor-startup-permissions-");
+    const directory = path.join(stateDir, "client");
+    const store = path.join(directory, "credentials.sqlite");
+    fs.mkdirSync(directory);
+    fs.writeFileSync(store, "existing credential bytes");
+    fs.chmodSync(directory, 0o2770);
+    fs.chmodSync(store, 0o660);
+    const before = [directory, store].map((file) => fs.lstatSync(file, { bigint: true }));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    mocks.command.mockResolvedValue({ code: 0, stdout: '{"BackendState":"Running"}' });
+
+    await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
+
+    for (const [index, file] of [directory, store].entries()) {
+      const after = fs.lstatSync(file, { bigint: true });
+      expect(after.mode).toBe(before[index]!.mode);
+      expect(after.ctimeNs).toBe(before[index]!.ctimeNs);
+    }
+    expect(fs.readFileSync(store, "utf8")).toBe("existing credential bytes");
+  },
+);
 
 it.each([
   ["package root", () => mocks.root],

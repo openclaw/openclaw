@@ -20,8 +20,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendNarrativeEntry } from "./dreaming-dreams-file.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
@@ -61,7 +59,6 @@ afterEach(async () => {
     }),
   );
   backgroundOwners.clear();
-  resetSystemEventsForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -77,6 +74,7 @@ async function createSweep(
     narrativeGate?: Promise<void>;
     timeoutSeconds?: number | null;
     managedBackground?: boolean;
+    remLookbackDays?: number;
   } = {},
 ) {
   const workspaceDir = await createTempWorkspace("sweep-narrative-");
@@ -125,7 +123,7 @@ async function createSweep(
                 rem: {
                   ...execution("xai/grok-4.1-fast"),
                   enabled: true,
-                  lookbackDays: 2,
+                  lookbackDays: options.remLookbackDays ?? 2,
                   minPatternStrength: 0,
                 },
                 deep: {
@@ -191,6 +189,7 @@ async function createSweep(
       subagent: {
         complete,
         forkSession: unexpectedSessionCall,
+        runForkedTurn: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,
@@ -207,11 +206,6 @@ async function createSweep(
   const beforeReply = registration[1] as BeforeReply;
   const run = async (trigger: "heartbeat" | "cron" = "heartbeat") => {
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
-      agentId: "main",
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
       { trigger, agentId: "main", workspaceDir, sessionKey },
@@ -227,7 +221,7 @@ async function createSweep(
   const service = registerService.mock.calls.find(
     ([entry]) => entry.id === "memory-core-dreaming",
   )?.[0];
-  if (!service?.stop) {
+  if (!service?.stop || service.apiVersion !== 2) {
     throw new Error("dreaming service lifecycle was not registered");
   }
   const serviceContext = {
@@ -430,6 +424,48 @@ describe("dreaming sweep diary publication", () => {
       expect(dreams).toContain("The archive glowed softly, entry 1.");
     }
     expect(sweep.narratives).toHaveLength(1);
+  });
+
+  it("publishes the entry when REM ingestion fills a full recall store", async () => {
+    const sweep = await createSweep({ remLookbackDays: 20 });
+    const recalledAt = new Date(NOW_MS - 60 * 60_000).toISOString();
+    // Light picks repeated recalls first; retention evicts them first because the
+    // other entries also recur in daily notes.
+    const recalls = Array.from({ length: 512 }, (_, index) => ({
+      key: `memory:recall:${String(index).padStart(3, "0")}`,
+      path: `memory/${DAY}.md`,
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet: `Stored observation ${index}.`,
+      recallCount: index < 10 ? 2 : 1,
+      dailyCount: index < 10 ? 0 : 5,
+      groundedCount: 0,
+      totalScore: 0.9,
+      maxScore: 0.9,
+      firstRecalledAt: recalledAt,
+      lastRecalledAt: recalledAt,
+      queryHashes: [],
+      recallDays: [DAY],
+      conceptTags: [],
+    }));
+    await shortTermTestState.writeRawRecallStore(sweep.workspaceDir, {
+      version: 1,
+      updatedAt: new Date(NOW_MS).toISOString(),
+      entries: Object.fromEntries(recalls.map((entry) => [entry.key, entry])),
+    });
+    // Only REM's lookback reaches this note, so its recalls arrive after Light's ingestion.
+    await fs.writeFile(
+      path.join(sweep.workspaceDir, "memory", "2026-03-19.md"),
+      Array.from(
+        { length: 12 },
+        (_, index) => `- Archived ledger item ${index + 1} has enough detail to create a chunk.\n`,
+      ).join("\n"),
+    );
+
+    expectHandled(await sweep.run());
+    expectNarrative(sweep);
+    expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
   });
 
   it("does not invent a diary entry for an empty sweep", async () => {

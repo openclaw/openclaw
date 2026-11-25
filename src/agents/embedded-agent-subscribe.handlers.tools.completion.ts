@@ -60,6 +60,7 @@ import {
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
   emitToolActivityEvent,
+  finalizeToolActivity,
   isExecToolName,
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -89,6 +90,7 @@ import {
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
+import { successfulToolUsage } from "./tool-usage.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -97,6 +99,7 @@ export async function prepareToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
   readResult: () => unknown,
+  nestedToolUsageId?: string | null,
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
@@ -119,10 +122,10 @@ export async function prepareToolExecutionEnd(
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
     }
-    const connectAction = readMcpConnectAction(result);
-    if (connectAction) {
-      ctx.state.latestMcpConnectAction = connectAction;
-    }
+  }
+  const connectAction = readMcpConnectAction(result);
+  if (connectAction) {
+    ctx.state.latestMcpConnectAction = connectAction;
   }
   try {
     ctx.params.onAgentToolResult?.({
@@ -229,12 +232,28 @@ export async function prepareToolExecutionEnd(
             ...(terminalErrorMessage ? { error: terminalErrorMessage } : {}),
             ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
             ...(validationErrorSummary ? { validationErrorSummary } : {}),
+            ...(evt.executionStarted === false && evt.errorKind === "unknown-tool"
+              ? { unknownTool: true as const }
+              : {}),
             timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
             middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
           },
         }
       : {}),
   });
+  const toolUsageId = nestedToolUsageId === undefined ? startData?.toolUsageId : nestedToolUsageId;
+  if (
+    ctx.params.toolUsageRecorder &&
+    toolUsageId &&
+    (trackedExecutionStarted ?? evt.executionStarted) === true &&
+    successfulToolUsage({
+      isError: observerIsError,
+      result,
+      executionStarted: terminal.executionStarted,
+    })
+  ) {
+    ctx.params.toolUsageRecorder.record(toolUsageId);
+  }
   ctx.state.lastToolError = terminal.lastToolError;
   const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
@@ -495,6 +514,9 @@ export async function prepareToolExecutionEnd(
       stream: "tool",
       data: createResultData(),
     });
+
+    ctx.state.toolActivityPresentation.complete(terminalMeta);
+    finalizeToolActivity(ctx);
 
     if (isExecToolName(toolName)) {
       const commandItemId = buildCommandItemId(toolCallId);

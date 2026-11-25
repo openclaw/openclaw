@@ -3,11 +3,13 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import {
+  SessionFileWorkspaceChangedError,
   SessionMutationAuthorizationChangedError,
   sessionMutationForbiddenError,
 } from "../session-mutation-authorization-error.js";
-import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
+import { isSessionOwnRequester } from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
+import { authorizeSessionWorkspaceRead } from "../session-workspace-read-policy.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -47,10 +49,11 @@ export function assertSessionFileReadPolicy(
     return;
   }
   readGatewayRequestMutationAuthority(options).assertCurrent();
-  const error = authorizeSessionAgentRun({
+  const error = authorizeSessionWorkspaceRead({
     cfg: options.context.getRuntimeConfig(),
     client: options.client,
     target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
+    unscopedHostRoot: target.unscopedHostRoot,
   });
   if (error) {
     throw new SessionMutationAuthorizationChangedError(error);
@@ -83,9 +86,10 @@ export function sessionFileWorkspaceMatches(
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
     previous?.worktree?.id === current?.worktree?.id &&
     isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
+    // A first turn records its empty selection; absent and empty both select no library skills.
     isDeepStrictEqual(
-      previous?.skillsSnapshot?.librarySelections,
-      current?.skillsSnapshot?.librarySelections,
+      previous?.skillsSnapshot?.librarySelections ?? [],
+      current?.skillsSnapshot?.librarySelections ?? [],
     )
   );
 }
@@ -190,7 +194,7 @@ export function createSessionFileReadAuthority(
         resolveSessionWorkspaceRoots(context.getRuntimeConfig(), agentId, source.entry).root !==
           source.root
       ) {
-        throw sessionMutationForbiddenError("Session workspace changed during file access");
+        throw new SessionFileWorkspaceChangedError();
       }
       if (usedHostRead && source.entry) {
         assertHostEntry(source.entry);

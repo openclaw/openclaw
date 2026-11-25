@@ -6,6 +6,7 @@ import {
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { createSessionAutomationSchedule } from "../../../lib/cron/session-automation-schedule-loader.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents, projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import {
@@ -29,8 +30,8 @@ import {
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import "../../../styles/chat/github-publication-mobile.css";
+import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { getChatOutputsCount } from "./chat-outputs-data.ts";
@@ -53,13 +54,11 @@ import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
+import "../../../styles/chat/details.css";
 import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
-import "../../../styles/chat/details.css";
-import { SessionAutomationResult } from "./session-automation-result.tsx";
-import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -100,7 +99,7 @@ type ChatDetailsMobileRootContent = {
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
   publicationEntry?: ChatDetailsMobileEntry;
   processes: ChatDetailsMobileProcessesProps["data"] | undefined;
-  /** Keep every native child; the host routes unlisted children through onSessionSelect. */
+  /** The root shows the native subagent collection; ordinary subsessions stay in the sidebar. */
   subagents: Omit<NonNullable<ChatDetailsMobileRootProps["subagents"]>, "rows">;
   /** One session-owned inventory, shared with desktop; never construct it in the opener. */
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };
@@ -234,7 +233,6 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        status: <SessionAutomationResult job={job} />,
         // Keep asynchronous schedule reads inside the rendered automations section.
         get description() {
           return job.autoDisabled

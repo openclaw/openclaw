@@ -32,15 +32,32 @@ export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
-/** Recorded session roots own bootstrap files; cwd alone never selects instructions. */
-export function resolveRunBootstrapWorkspaceDir(
+/**
+ * A recorded or confined execution root owns bootstrap files only when it checks out the agent
+ * workspace itself. Other roots, such as worktrees of a separate project repository, keep the
+ * agent's identity and instructions; callers layer that root's AGENTS.md as project context.
+ * cwd alone never selects instructions.
+ */
+export async function resolveRunBootstrapWorkspaceDir(
   params: Parameters<typeof resolveRootedRunRuntimeWorkspace>[0],
   fallback = params.bootstrapWorkspaceDir ?? params.workspaceDir,
-): string {
+): Promise<string> {
+  const agentWorkspace = resolveUserPath(fallback);
   const confined =
     params.requireWorkspaceOnly ||
     resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: params.agentId });
-  return resolveUserPath(params.sessionRoot ?? (confined ? params.workspaceDir : fallback));
+  const executionRoot = params.sessionRoot ?? (confined ? params.workspaceDir : undefined);
+  const root = executionRoot && resolveUserPath(executionRoot);
+  if (!root || root === agentWorkspace) {
+    return agentWorkspace;
+  }
+  const { runGitWorkerOperation } = await import("../infra/git-worker.js");
+  return (await runGitWorkerOperation({
+    type: "checkout.bootstrap-workspace",
+    input: { root, workspace: agentWorkspace },
+  }))
+    ? root
+    : agentWorkspace;
 }
 
 export function resolveRunWorkspaceDir(params: {

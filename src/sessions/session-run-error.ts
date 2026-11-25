@@ -14,6 +14,7 @@ import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
+import { HARNESS_UPDATE_REQUIRED_CODE, readRunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -25,6 +26,12 @@ type GatewaySessionRunFailure = {
   error: unknown;
   errorKind?: "state_contention";
   suppressErrorNotice?: boolean;
+  /** Host-authored copy already shown to the requester; wins over error-derived copy. */
+  notice?: string;
+  /** Desktop-only presentation metadata; never replaces shared content. */
+  desktopNotice?: string;
+  /** Provider error observation; only its bounded provider, failover reason and code are kept. */
+  errorObservation?: unknown;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -36,12 +43,16 @@ export async function recordGatewaySessionRunFailure(
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
   const error = truncateSessionRunError(sanitized, 512);
+  const cause = readRunFailureCause(params.errorObservation);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
-        : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+        : (params.notice ??
+          renderAssistantRequestFailureCopy({ storageFailure }) ??
+          // A host-created update error's message is the instruction the user needs.
+          (cause?.code === HARNESS_UPDATE_REQUIRED_CODE ? sanitized : undefined) ??
           renderCodexAppServerFailureCopy(sanitized) ??
           (isProviderRefusalNoticeText(sanitized)
             ? `Your request couldn't be completed: ${sanitized}`
@@ -54,7 +65,13 @@ export async function recordGatewaySessionRunFailure(
           "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
-    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+    details: {
+      runId,
+      error,
+      ...(params.desktopNotice ? { desktopNotice: params.desktopNotice } : {}),
+      ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+      ...(cause ? { cause } : {}),
+    },
   };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,

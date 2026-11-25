@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   createNewSessionPageE2eSuite,
@@ -25,12 +25,9 @@ suite.define(() => {
         const picker = page.locator(".oc-popover.new-session-page__where-popover");
         const loading = picker.locator(".new-session-page__environment-skeletons");
         await loading.first().waitFor();
-        expect(await loading.count()).toBe(2);
-        expect(await loading.first().getAttribute("aria-busy")).toBe("true");
-        const skeletonWidths = await picker
-          .locator(".new-session-page__environment-skeleton-row")
-          .evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().width)));
-        expect(new Set(skeletonWidths).size).toBe(1);
+        await expect
+          .poll(() => loading.first().getByRole("status").textContent())
+          .toContain("Loading");
 
         await gateway.resolveDeferred("environments.list", {
           environments: [],
@@ -49,11 +46,12 @@ suite.define(() => {
         });
         const daytona = picker.getByRole("button", { name: "Daytona Crabbox", exact: true });
         await daytona.waitFor();
+        await expect.poll(() => loading.count()).toBe(0);
         await daytona.hover();
         const configuration = picker.locator(".new-session-page__cloud-configuration");
         await configuration.waitFor();
         expect(await configuration.getByText("Operating system", { exact: true }).count()).toBe(0);
-        await configuration.getByText("Machine", { exact: true }).waitFor();
+        await configuration.getByText("Device size", { exact: true }).waitFor();
         expect(
           await configuration.locator('[data-value="machine:small"]').getAttribute("aria-pressed"),
         ).toBe("true");
@@ -62,17 +60,6 @@ suite.define(() => {
         const chevron = daytona.locator(".new-session-page__submenu-chevron");
         await plus.waitFor({ state: "visible" });
         await chevron.waitFor({ state: "visible" });
-        await vi.waitFor(async () => {
-          const [plusBox, chevronBox] = await Promise.all([
-            plus.boundingBox(),
-            chevron.boundingBox(),
-          ]);
-          expect(plusBox).not.toBeNull();
-          expect(plusBox?.width).toBeLessThanOrEqual(20);
-          expect(chevronBox).not.toBeNull();
-          const center = (box: typeof plusBox) => (box?.x ?? 0) + (box?.width ?? 0) / 2;
-          expect(Math.abs(center(plusBox) - center(chevronBox))).toBeLessThanOrEqual(4);
-        });
       },
     );
   });

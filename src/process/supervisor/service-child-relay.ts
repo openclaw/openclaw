@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
@@ -16,6 +16,7 @@ import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import type {
   ServiceChildControlMessage,
   ServiceChildRelayMessage,
+  ServiceChildRelayRelease,
   ServiceChildStart,
 } from "./service-child-protocol.js";
 import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
@@ -104,7 +105,28 @@ function runServiceChildRelay(): void {
   process.on("SIGINT", notifyParentLoss);
   process.on("message", (raw: unknown) => {
     // SAFETY: the spawned host is the sole sender on this private IPC channel.
-    const start = raw as ServiceChildStart | ServiceChildControlMessage;
+    const start = raw as ServiceChildStart | ServiceChildControlMessage | ServiceChildRelayRelease;
+    if (start?.type === "release") {
+      if (!generation || !anchor || start.generation !== generation) {
+        return;
+      }
+      // The anchor already gave up its group without signalling it. Released
+      // processes keep that group alive, so do not join its extinction here.
+      for (const fd of parentLineageFds) {
+        closeSync(fd);
+      }
+      parentLineageFds = [];
+      parentLineageReleased = true;
+      anchor.unref();
+      if (anchor.connected) {
+        anchor.disconnect();
+      }
+      process.exitCode = 0;
+      if (process.connected) {
+        process.disconnect?.();
+      }
+      return;
+    }
     if (start?.type === "cancel") {
       if (
         !generation ||
@@ -167,7 +189,7 @@ function runServiceChildRelay(): void {
         // The admitted host owns this entry; portable relays have no embedded image inventory.
         delete env.BUN_BE_BUN;
       }
-      anchor = spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
+      anchor = childProcess.spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,

@@ -5,6 +5,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { CapacityMeter } from "./solid/capacity-meter.tsx";
 import { workerCapacityPresentation } from "./solid/worker-capacity.tsx";
 
+const unavailableLabel = "Couldn’t load device capacity. Try again.";
 const renderCapacity = (params: Parameters<typeof workerCapacityPresentation>[0]) =>
   mountSolid(() => workerCapacityPresentation(params)?.meter).container;
 it("resizes filled pips while preserving retained slots", () => {
@@ -58,9 +59,8 @@ it.each([
     expect(container.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(filled);
     expect(fill?.style.width).toBe(width);
     expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
-    expect(meter?.getAttribute("aria-label")).toBe(
-      unavailable ? "Slot utilization unavailable" : `${total - available} of ${total} slots busy`,
-    );
+    const label = unavailable ? unavailableLabel : `${total - available} of ${total} slots busy`;
+    expect(meter?.getAttribute("aria-label")).toBe(label);
   },
 );
 

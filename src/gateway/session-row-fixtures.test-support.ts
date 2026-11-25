@@ -5,7 +5,9 @@ import {
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { projectSessionEntryUsageUpdate } from "../config/sessions/session-entry-usage.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { estimateAggregateUsageCostAsync } from "../utils/usage-format.js";
 import { clearStoredSessionRowTranscriptForTest } from "./session-row-backfill.test-support.js";
 import { writeSessionStore } from "./test-helpers.server.js";
 
@@ -42,6 +44,14 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
   });
   const usage = normalizeUsage(params.message.usage);
   const prepared = prepareSessionUsageUpdate({
+    estimatedCostUsd: await estimateAggregateUsageCostAsync({
+      usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider: params.message.provider,
+          model: params.message.model,
+        }),
+    }),
     usage,
     lastCallUsage: usage,
     providerUsed: params.message.provider,
@@ -49,12 +59,7 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
     preserveRuntimeModel: true,
   });
   if (prepared) {
-    await patchSessionEntryCore(scope, (entry) =>
-      projectSessionEntryUsageUpdate(entry, {
-        ...prepared.update,
-        estimatedCostUsd: prepared.estimateCost(entry),
-      }),
-    );
+    await patchSessionEntryCore(scope, (entry) => projectSessionEntryUsageUpdate(entry, prepared));
   }
   return params.message;
 }

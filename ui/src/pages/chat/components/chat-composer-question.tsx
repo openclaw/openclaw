@@ -1,6 +1,6 @@
 import { createEffect, createMemo, Show } from "solid-js";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import type { ComposerQuestions } from "./chat-composer-questions.ts";
-import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import "./chat-question-card-view.tsx";
 
@@ -16,10 +16,9 @@ export function ComposerQuestionDock(props: { panel: QuestionPanelProps | null }
 
 export function createComposerQuestionPanel(
   readQuestions: () => ComposerQuestions,
-  readComposition?: () => { key: string; value: string } | null,
   readTranscriptElement?: () => (() => HTMLElement | null) | undefined,
 ) {
-  // Disclosure is derived at the pane; only native IME/focus custody belongs here.
+  // Disclosure is derived at the pane; returning focus belongs to the composer.
   createEffect(
     () => {
       const questions = readQuestions();
@@ -28,31 +27,16 @@ export function createComposerQuestionPanel(
         (item) => item.key === questions.disclosure.activeQuestionKey,
       );
       return {
-        active: request?.asyncIdentity === null && !questions.disclosure.questionCollapsed,
-        source,
-        composition: readComposition?.(),
+        active: request?.restoreComposerOnClose === true && !questions.disclosure.questionCollapsed,
         state: questions.state,
       };
     },
-    ({ active, source, composition, state }) => {
-      if (
-        active &&
-        !state.questionTakeoverActive &&
-        source &&
-        composition?.key === source.draftKey
-      ) {
-        // Input cleanup may already have run; the captured IME preview still owns this draft.
-        commitComposerDraft(source.props, composition.value);
-      }
-      state.restoreComposerFocus ||= !active && state.questionTakeoverActive;
-      state.questionTakeoverActive = active;
-      if (active) {
-        state.composerComposing = false;
-      }
-      // A derived disclosure can mount the input before this effect applies.
+    ({ active, state }) => {
+      state.restoreComposerFocus ||= !active && state.questionFocusActive;
+      state.questionFocusActive = active;
       if (!active && state.restoreComposerFocus && state.composerTextarea?.isConnected) {
         state.restoreComposerFocus = false;
-        state.composerTextarea.focus({ preventScroll: true });
+        focusComposerInput(state.composerTextarea, { preventScroll: true });
       }
     },
   );
@@ -80,12 +64,13 @@ export function createComposerQuestionPanel(
       collapsed: questions.disclosure.questionCollapsed,
       onCollapsedChange: (collapsed) => {
         questions.setCollapsed(collapsed);
-        state.restoreComposerFocus = collapsed;
+        state.restoreComposerFocus =
+          collapsed && (request.restoreComposerOnClose || request.asyncIdentity !== null);
         if (collapsed) {
           queueMicrotask(() => {
             if (state.restoreComposerFocus && state.composerTextarea?.isConnected) {
               state.restoreComposerFocus = false;
-              state.composerTextarea.focus({ preventScroll: true });
+              focusComposerInput(state.composerTextarea, { preventScroll: true });
             }
           });
         }

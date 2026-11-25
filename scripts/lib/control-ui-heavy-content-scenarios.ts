@@ -1,9 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { projectAgentToolActivity } from "../../src/infra/agent-activity-events.js";
-import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+import type {
+  MockGatewayControls,
+  MockGatewayWindow,
+} from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createHeavyContentImageSources } from "./control-ui-heavy-content-images.ts";
+import { createHeavyWindowScenarios } from "./control-ui-heavy-window-scenarios.ts";
 import type {
   InteractionEvidence,
   InteractionScenario,
@@ -282,6 +286,16 @@ async function prepare(page: Page, gateway: MockGatewayControls) {
     throw new Error("The synthetic chat.send request did not include its run ID");
   }
   runs.set(page, runId);
+  await page.evaluate(() => {
+    // Mark delivery in the page, before the real fixture transport invokes the app.
+    // SAFETY: This scenario installs its synthetic Gateway before preparation.
+    const transport = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+    const emit = transport.emit.bind(transport);
+    transport.emit = (event, payload) => {
+      window.openclawEngineMarkGatewayInput?.();
+      emit(event, payload);
+    };
+  });
 }
 
 async function deliver(
@@ -1661,3 +1675,49 @@ heavyContentScenarios.push(
     },
   },
 );
+
+heavyContentScenarios.push(...createHeavyWindowScenarios(heavyContentFixtures));
+
+for (const shape of ["markdown", "line"] as const) {
+  const unit =
+    shape === "line"
+      ? "abcdefgh"
+      : "# Synthetic heading\n\nA **synthetic** paragraph with a [link](https://example.org).\n\n";
+  const text = unit.repeat(Math.ceil(1_048_576 / unit.length)).slice(0, 1_048_576);
+  heavyContentScenarios.push(
+    ...createHeavyWindowScenarios([{ id: `megabyte-${shape}`, text, kind: "huge" }]),
+  );
+  heavyContentScenarios.push({
+    id: `heavy-megabyte-${shape}-arrival`,
+    route: controlUiSessionPath(sessionKey),
+    fixture: { heavyContent: true },
+    resourceOnly: true,
+    expected:
+      "A one-MiB message retains its full source and displays the existing 140,000-character plain-text preview without Markdown parsing or syntax workers.",
+    setup: setupHeavyContentPage,
+    prepare,
+    run: async (page, gateway) => {
+      await gateway.emitChatFinal({ sessionKey, runId: runs.get(page)!, text });
+      const bubble = page.locator(`${pane} .chat-bubble`).last();
+      const fallback = bubble.locator(".markdown-plain-text-fallback");
+      await fallback.waitFor();
+      const shown = await fallback.evaluate(
+        (element) =>
+          (element.querySelector(".markdown-plain-text-source") ?? element).textContent ?? "",
+      );
+      if (
+        (await bubble.getAttribute("data-message-text")) !== text ||
+        !shown.startsWith(text.slice(0, 140_000)) ||
+        shown.length > 142_000
+      ) {
+        throw new Error("Megabyte fallback changed its source or bounded preview");
+      }
+      await frames(page);
+      return {
+        sourceChars: text.length,
+        shownChars: shown.length,
+        ...(await workerObservation(page)),
+      };
+    },
+  });
+}

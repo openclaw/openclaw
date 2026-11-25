@@ -117,6 +117,28 @@ it("publishes the config owner before presenting a raw Save and stays busy until
   expect(container.querySelector("textarea")).toBe(textarea);
 });
 
+it("dismisses the current invalid-config warning without promising a saved preference", async () => {
+  const { container, props } = renderConfigView({
+    schema,
+    valid: false,
+    configPath: "/test/first.json5",
+    formValue: { gateway: { mode: "invalid" } },
+    issues: [{ path: "gateway.mode", message: "Invalid mode" }],
+  });
+  const warning = () => container.querySelector(".config-validity-warning");
+  const dismiss = warning()!.querySelector<HTMLButtonElement>("button")!;
+  expect(dismiss.textContent).toBe("Dismiss warning");
+  dismiss.click();
+  await waitForSolid(() => expect(warning()).toBeNull());
+  expect(container.textContent).toContain("Invalid mode");
+  expect(props.onSave).not.toHaveBeenCalled();
+  expect(props.onFormPatch).not.toHaveBeenCalled();
+
+  props.configPath = "/test/second.json5";
+  renderConfigInto(props, container);
+  await waitForSolid(() => expect(warning()).not.toBeNull());
+});
+
 it.each(["Open", "Discard"])(
   "locks raw controls during %s without showing Saving",
   async (label) => {
@@ -209,7 +231,7 @@ it.each(["includeSections", "excludeSections"] as const)(
         "initial-draft",
       );
       field.setSelectionRange(1, 4);
-      renderConfigInto({ ...props, assistantName: "Unrelated publication" }, container);
+      renderConfigInto({ ...props, serverQueueMode: "interrupt" }, container);
       expect(container.querySelector("input.settings-input")).toBe(field);
       expect(field.value).toBe("initial-draft");
       expect(document.activeElement).toBe(field);

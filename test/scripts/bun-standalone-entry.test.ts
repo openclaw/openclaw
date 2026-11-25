@@ -1,22 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("preserves the runtime argv prefix through primary and child lazy profile dispatch", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-entry-"));
-  roots.push(root);
+  const root = tempDirs.make("standalone-entry-");
   const sourceUrl = (filename: string) => pathToFileURL(path.resolve(filename)).href;
   const scenarios = ["primary", "worker"].map((kind) => {
     const directory = path.join(root, kind);

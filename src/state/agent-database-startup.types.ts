@@ -1,4 +1,5 @@
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import type { AgentInputRecoveryAdmission } from "./agent-database-preparation-context.js";
 import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
@@ -6,6 +7,12 @@ import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-prefli
 export type PendingAgentDatabaseInspection = {
   target: { agentId?: string; path: string };
   result: Promise<OpenClawDatabaseSchemaPreflight>;
+};
+export type AgentRestartInputRecovery = Pick<
+  AgentInputRecoveryAdmission,
+  "sessions" | "deferred"
+> & {
+  run: () => Promise<void>;
 };
 type AgentDatabaseStartupPreparationInput = {
   agentId: string;
@@ -19,10 +26,12 @@ export type AgentDatabaseStartupActivation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
   openAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<AsyncDisposable | void>;
-  migrateAgent: (
-    input: AgentDatabaseStartupPreparationInput,
-  ) => Promise<void | { maintain?: () => Promise<void>; recoverInputs?: () => Promise<void> }>;
-  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
+  migrateAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | {
+    maintain?: () => Promise<void>;
+    recoverInputs?: AgentRestartInputRecovery;
+  }>;
+  /** Admission may fail after publication; its publisher owns withdrawal of retained inputs. */
+  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | (() => void)>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
   /** The Gateway owns full verification after bounded current-schema admission. */
   verifyIntegrity?: AgentDatabaseStartupVerifier;
@@ -44,7 +53,6 @@ export type PendingAgentDatabaseRecovery = {
   refusal: AgentDatabaseAdmissionRefusal;
   completion: Promise<void>;
   readReady?: Promise<void>;
-  inputReady?: Promise<void>;
   startedAt: number;
   phase: AgentDatabaseStartupPreparationPhase;
   phaseStartedAt: number;

@@ -9,7 +9,10 @@ import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
+/**
+ * Cold storage preserves logical owners; only activity and explicit cross-generation references
+ * (previous session, compaction checkpoints) protect bytes.
+ */
 export function readSessionColdStorageProtection(
   database: { db: EngineConnection },
   beforeMs: number,
@@ -65,11 +68,8 @@ export function readSessionColdStorageProtection(
     if (entry.previousSessionId) {
       protectedIds.add(entry.previousSessionId);
     }
-    for (const id of entry.usageFamilySessionIds ?? []) {
-      if (id !== row.current_session_id) {
-        protectedIds.add(id);
-      }
-    }
+    // Usage-family IDs are accounting lineage, not navigation: usage reads cold transcripts, and
+    // protecting the family pins every past run of a rotating (cron) session in SQLite forever.
     for (const checkpoint of readLegacyCompactionHistory(entry)) {
       // A self-reference is not cross-generation; the current window stays governed by activity.
       for (const id of [

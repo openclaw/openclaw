@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
@@ -64,6 +65,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
         for (const filter of filters) {
           if (filter.kinds?.includes(9)) {
             relayMocks.messageFilters.push(filter);
+            notifyStateChanged();
             carriesMessages = true;
           }
           for (const event of selectRelayEvents(filter)) {
@@ -96,8 +98,7 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
-// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
-// most of waitForSettled's budget before the reconnect even starts.
+// Reconnect scenarios wait on produced state; do not spend wall-clock time on backoff.
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   computeBackoff: () => 0,
@@ -105,7 +106,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
-import { setBuzzRuntime } from "./runtime.js";
+import { getBuzzRuntime, setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
 
@@ -130,6 +131,14 @@ let previousStateDir: string | undefined;
 let currentNowMs = START_SECONDS * 1_000;
 let handled: string[] = [];
 let gates = new Map<string, Promise<void>>();
+let testSignal: AbortSignal;
+let stateChanged = Promise.withResolvers<void>();
+
+function notifyStateChanged(): void {
+  const previous = stateChanged;
+  stateChanged = Promise.withResolvers<void>();
+  previous.resolve();
+}
 
 function nowSeconds(): number {
   return Math.floor(currentNowMs / 1000);
@@ -209,15 +218,14 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
 }
 
 async function waitForSettled(predicate: () => boolean | Promise<boolean>): Promise<void> {
-  for (let attempt = 0; attempt < 400; attempt += 1) {
+  for (;;) {
+    // Capture before reading: subscription/inbound publication can happen during an async read.
+    const changed = stateChanged.promise;
     if (await predicate()) {
       return;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
+    await withinTest(changed, testSignal);
   }
-  throw new Error("timed out waiting for the Buzz gateway to settle");
 }
 
 async function runGatewayProcess(
@@ -255,7 +263,9 @@ function openProcessBoundary(): void {
   gates = new Map();
 }
 
-beforeEach(() => {
+beforeEach(({ signal }) => {
+  testSignal = signal;
+  stateChanged = Promise.withResolvers<void>();
   vi.clearAllMocks();
   currentNowMs = START_SECONDS * 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => currentNowMs);
@@ -278,6 +288,7 @@ beforeEach(() => {
   inboundMocks.handleBuzzInbound.mockImplementation(
     async ({ message }: { message: BuzzInboundMessage }) => {
       handled.push(message.text);
+      notifyStateChanged();
       await gates.get(message.text);
     },
   );
@@ -315,6 +326,36 @@ afterEach(async () => {
 });
 
 describe("Buzz gateway cold-start recovery", () => {
+  it("waits for a pending state read before expecting relay subscriptions", async () => {
+    const runtime = getBuzzRuntime();
+    const open = runtime.state.openKeyedStore;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((...args) => {
+      const store = open(...args);
+      const entries = store.entries.bind(store);
+      store.entries = async (...entryArgs) => {
+        entered.resolve();
+        await release.promise;
+        return entries(...entryArgs);
+      };
+      return store;
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let failure: unknown;
+    const running = runGatewayProcess().catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(4_010);
+    } finally {
+      release.resolve();
+      vi.useRealTimers();
+      await running;
+    }
+    expect(failure).toBeUndefined();
+  });
   it("recovers late downtime messages from the persisted room activation floor", async () => {
     await runGatewayProcess();
     expect(roomSubscriptionSince()).toBe(START_SECONDS);

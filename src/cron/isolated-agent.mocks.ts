@@ -2,6 +2,7 @@
 // Isolated turns lazily consume this process-stable runtime after agent execution. Load it during
 // suite setup so first-test timings cover cron behavior rather than module initialization.
 import "../utils/usage-format.js";
+import "../model-catalog/usage-pricing.js";
 import { vi } from "vitest";
 
 const readPreparedModelCatalog = vi.hoisted(() => vi.fn());

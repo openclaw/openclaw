@@ -6,34 +6,101 @@ import {
   createOptimistic,
   createSignal,
   Errored,
+  lazy,
   onSettled,
   Show,
 } from "solid-js";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sharedRuntimeConfigProjection } from "../../../lib/reactive/shared-application-projections.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
-type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+const ReadAloudStatus = lazy(() => import("./chat-read-aloud-status.tsx"));
+
+type ReadAloudProps = {
+  text: string;
+  sessionKey?: string;
+  buttonRef?: (element: HTMLButtonElement) => void;
+};
+
+function speechAvailable(context: Pick<ApplicationContext, "gateway" | "runtimeConfig">) {
+  return (
+    Boolean(asOptionalRecord(currentDisplaySpeechConfig(context.runtimeConfig.state))?.tts) &&
+    canCallGatewayMethod(context.gateway.snapshot, "tts.speak", "operator.write")
+  );
+}
 
 export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
   return (
     <Show when={context}>
-      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
+      <ReadAloudControl input={props} />
     </Show>
   );
 }
 
-function ReadAloudControl(props: ReadAloudProps) {
+function ReadAloudControl(props: { input: ReadAloudProps }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = sharedRuntimeConfigProjection(context.runtimeConfig);
+  const [activated, setActivated] = createSignal(false);
+  let stopPlayback: (() => void) | undefined;
+  const connection = createMemo(
+    () => {
+      const { snapshot, connectionRevision } = gateway.read();
+      return [
+        snapshot.client,
+        snapshot.client?.recoveryScope,
+        snapshot.client?.offlineRecoveryRetired,
+        connectionRevision,
+        props.input.text,
+        props.input.sessionKey,
+        snapshot.phase === "connected" &&
+          snapshot.hello !== null &&
+          !canCallGatewayMethod(snapshot, "tts.speak", "operator.write"),
+      ] as const;
+    },
+    { equals: (before, after) => before.every((value, index) => value === after[index]) },
+  );
+  createEffect(connection, () => {
+    stopPlayback?.();
+    const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
+    // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
+    if (!runtime || !Object.hasOwn(runtime, "tts")) {
+      void context.runtimeConfig.ensureDisplayLoaded().catch(() => undefined);
+    }
+  });
+  const available = createMemo(() => {
+    config.read();
+    gateway.read();
+    return speechAvailable(context);
+  });
+  return (
+    // Unconfigured rows need no playback lifecycle. Once used, retain Stop through reconnects.
+    <Show when={available() || activated()}>
+      <ReadAloudPlayback
+        input={props.input}
+        available={available()}
+        onActivate={() => setActivated(true)}
+        onReady={(stop) => (stopPlayback = stop)}
+      />
+    </Show>
+  );
+}
+
+function ReadAloudPlayback(props: {
+  input: ReadAloudProps;
+  available: boolean;
+  onActivate: () => void;
+  onReady: (stop: (() => void) | undefined) => void;
+}) {
+  const context = useApplication();
   const playback = new GatewaySpeechPlayback();
   const [playing, setPlaying] = createOptimistic(false);
   const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
@@ -46,39 +113,16 @@ function ReadAloudControl(props: ReadAloudProps) {
     resolving = false;
     playback.stop();
   };
-  const playbackIdentity = createMemo(
-    () => {
-      const { snapshot, connectionRevision } = gateway.read();
-      return [
-        snapshot.client,
-        snapshot.client?.recoveryScope,
-        snapshot.client?.offlineRecoveryRetired,
-        connectionRevision,
-        props.text,
-        snapshot.phase === "connected" &&
-          snapshot.hello !== null &&
-          !canCallGatewayMethod(snapshot, "tts.speak", "operator.write"),
-      ] as const;
-    },
-    { equals: (before, after) => before.every((value, index) => value === after[index]) },
-  );
-  createEffect(playbackIdentity, () => {
-    stop();
-    setAttempt(undefined);
-    const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
-    // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
-    if (!runtime || !Object.hasOwn(runtime, "tts")) {
-      void context.runtimeConfig.ensureDisplayLoaded().catch(() => undefined);
-    }
+  onSettled(() => {
+    props.onReady(() => {
+      stop();
+      setAttempt(undefined);
+    });
+    return () => {
+      props.onReady(undefined);
+      stop();
+    };
   });
-  onSettled(() => stop);
-  const available = () => {
-    const runtime = currentDisplaySpeechConfig(config.read().state);
-    return (
-      Boolean(asOptionalRecord(runtime)?.tts) &&
-      canCallGatewayMethod(gateway.read().snapshot, "tts.speak", "operator.write")
-    );
-  };
   const presentPlayback = action(function* (pending: Promise<void>, isCurrent: () => boolean) {
     if (!isCurrent()) {
       return;
@@ -92,9 +136,10 @@ function ReadAloudControl(props: ReadAloudProps) {
       return;
     }
     const client = context.gateway.snapshot.client;
-    if (!client || !available()) {
+    if (!client || !speechAvailable(context)) {
       return;
     }
+    props.onActivate();
     const current = ++generation;
     const connectionGeneration = client.connectionGeneration;
     const isCurrent = () => current === generation && context.gateway.snapshot.client === client;
@@ -104,9 +149,12 @@ function ReadAloudControl(props: ReadAloudProps) {
       try {
         await playback.speak(
           client,
-          props.text,
+          props.input.text,
           "tts.speak",
-          () => isCurrent() && available() && client.connectionGeneration === connectionGeneration,
+          () =>
+            isCurrent() &&
+            speechAvailable(context) &&
+            client.connectionGeneration === connectionGeneration,
           resolveSpeechTextLimit(currentDisplaySpeechConfig(context.runtimeConfig.state)),
         );
       } catch (cause) {
@@ -127,18 +175,11 @@ function ReadAloudControl(props: ReadAloudProps) {
   };
   const label = () => t(playing() ? "chat.messages.stopReading" : "chat.messages.readAloud");
   return (
-    <Show when={playing() || available()}>
+    <Show when={playing() || props.available}>
       <openclaw-tooltip>
-        <span slot="content">
-          <Show when={!playing()} fallback={label()}>
-            <Errored fallback={(error) => formatUiError(error())}>
-              {outcome()}
-              {label()}
-            </Errored>
-          </Show>
-        </span>
+        <span slot="content">{label()}</span>
         <button
-          ref={(element) => props.buttonRef?.(element)}
+          ref={(element) => props.input.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}
@@ -147,12 +188,18 @@ function ReadAloudControl(props: ReadAloudProps) {
         >
           <Icon name={playing() ? "square" : "volume2"} />
         </button>
-        <Show when={!playing()}>
-          <Errored fallback={(error) => <span role="status">{formatUiError(error())}</span>}>
-            {outcome()}
-          </Errored>
-        </Show>
       </openclaw-tooltip>
+      <Show when={!playing()}>
+        <Errored
+          fallback={(error) => (
+            <ChatLazyBoundary>
+              <ReadAloudStatus error={error()} sessionKey={props.input.sessionKey} />
+            </ChatLazyBoundary>
+          )}
+        >
+          {outcome()}
+        </Errored>
+      </Show>
     </Show>
   );
 }

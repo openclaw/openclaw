@@ -8,11 +8,11 @@ import type {
   OutboundReplyFacts,
   RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
@@ -47,6 +47,11 @@ export type DurableDeliveryCompletion =
       sessionKey: string;
       storePath: string;
       sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+    }
+  | {
+      /** A plugin's session notice; recovery replays it only while that plugin is loaded. */
+      kind: "plugin-notice";
+      pluginId: string;
     };
 
 export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
@@ -71,7 +76,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   transcriptProvenance?: BackgroundSessionResultProvenance;
   channel: string;
   to: string;

@@ -1,7 +1,10 @@
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { unwrapToolCallForDisplay } from "../../agents/tool-display-call.js";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
 import * as tuiFormatters from "../tui-formatters.js";
@@ -121,6 +124,10 @@ function extractText(result?: ToolResult): string {
   return lines.join("\n");
 }
 
+function isJsonText(text: string): boolean {
+  return /^\s*[[{]/u.test(text) && safeParseJson(text) !== undefined;
+}
+
 function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
   if (toolName !== "exec" && toolName !== "wait") {
     return false;
@@ -167,10 +174,31 @@ export class ToolExecutionComponent extends Container {
   }
 
   setArgs(args: unknown) {
-    const display = resolveToolDisplay({ name: this.toolName, args });
+    const call = unwrapToolCallForDisplay({ name: this.toolName, args });
+    const display = resolveToolDisplay(call);
     this.title = display.label;
     this.refreshTitle();
-    const argLine = formatArgs(formatToolDetail(display), args);
+    const questions = asOptionalObjectRecord(call.args)?.questions;
+    const questionText =
+      display.name === "ask_user" && Array.isArray(questions)
+        ? questions
+            .slice(0, 3)
+            .flatMap((raw) => {
+              const question = asOptionalObjectRecord(raw);
+              const options = question?.options;
+              return [normalizeOptionalString(question?.question)].concat(
+                Array.isArray(options)
+                  ? options.slice(0, 4).map((option, index) => {
+                      const label = normalizeOptionalString(asOptionalObjectRecord(option)?.label);
+                      return label ? `${index + 1}. ${label}` : undefined;
+                    })
+                  : [],
+              );
+            })
+            .filter(Boolean)
+            .join("\n")
+        : undefined;
+    const argLine = formatArgs(questionText || formatToolDetail(display), args);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
   }
 
@@ -204,8 +232,9 @@ export class ToolExecutionComponent extends Container {
     this.isPartial = Boolean(opts?.partial);
     this.isError = !this.isPartial && Boolean(opts?.isError);
     this.refreshResult();
-    // Code Mode JSON is literal data; prose normalization can change values and escapes.
-    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
+    // JSON results are literal data; prose normalization can change values and escapes.
+    const text = extractText(result);
+    this.output.setText(text, isCodeModeResult(this.toolName, result) || isJsonText(text));
     this.images.setImages(extractTuiImageSources(result));
   }
 

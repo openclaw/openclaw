@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { prepareOperatorModelPolicyPresentation } from "./operator-model-presentation.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 
@@ -23,11 +24,31 @@ beforeEach(() => {
 
 afterAll(closeSessionSqliteDatabasesForTest);
 
+test("projects welcome metadata only for its configured agent", async () => {
+  const { agents } = await listAgentsForGateway({
+    agents: {
+      entries: {
+        briefing: {
+          description: " Follows your repositories. ",
+          recommendedPrompts: ["Set up a repository", "Brief me"],
+        },
+        plain: {},
+      },
+    },
+  });
+  expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
+    description: "Follows your repositories.",
+    recommendedPrompts: ["Set up a repository", "Brief me"],
+  });
+  const plain = agents.find((agent) => agent.id === "plain");
+  expect(plain).not.toHaveProperty("description");
+  expect(plain).not.toHaveProperty("recommendedPrompts");
+});
+
 type ModelCase = {
   name: string;
   cfg: OpenClawConfig;
   expected: { id: string; primary?: string; utility?: string; fallbacks?: string[] }[];
-  ready?: string;
 };
 
 describe("listAgentsForGateway model identity", () => {
@@ -51,7 +72,7 @@ describe("listAgentsForGateway model identity", () => {
               utilityModel: "helper@local-utility:ops",
               models: { "local-utility/ops": { alias: "helper" } },
             },
-            disabled: { utilityModel: "" },
+            disabled: { utilityModel: "", model: "openai/gpt-6-astra" },
           },
         },
       },
@@ -63,9 +84,8 @@ describe("listAgentsForGateway model identity", () => {
           fallbacks: ["openai/gpt-5.4"],
           utility: "local-utility/ops",
         },
-        { id: "disabled" },
+        { id: "disabled", primary: "openai/gpt-6-astra" },
       ],
-      ready: "disabled",
     },
     {
       name: "model-owned suffix",
@@ -77,21 +97,57 @@ describe("listAgentsForGateway model identity", () => {
       },
       expected: [{ id: "main", primary: "lmstudio/gemma-4-31b-it@q8_0" }],
     },
-  ])("projects $name without mutating config", async ({ cfg, expected, ready }) => {
+  ])("projects $name without mutating config", async ({ cfg, expected }) => {
     const original = structuredClone(cfg);
     const { agents } = await listAgentsForGateway(cfg);
     for (const { id, primary, utility, fallbacks } of expected) {
       const agent = agents.find((row) => row.id === id);
       expect(agent?.utilityModel).toBe(utility);
-      if (id === ready) {
-        expect(agent?.model?.primary).toBeTruthy();
-      } else {
-        expect(agent?.model).toEqual({
-          ...(primary ? { primary } : {}),
-          ...(fallbacks ? { fallbacks } : {}),
-        });
-      }
+      expect(agent?.model).toEqual({
+        ...(primary ? { primary } : {}),
+        ...(fallbacks ? { fallbacks } : {}),
+      });
     }
     expect(cfg).toEqual(original);
+  });
+});
+
+describe("thinking level an agent override falls back to", () => {
+  // Global Low, a shared per-model param of High, and coder's own Medium.
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault: "low",
+        models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
+      },
+      entries: { main: {}, coder: { thinkingDefault: "medium" } },
+    },
+  };
+
+  test("is reported only for agents with their own thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const row = (id: string) => agents.find((agent) => agent.id === id);
+    // Clearing coder's override resolves the per-model param before the global default.
+    expect(row("coder")).toMatchObject({
+      thinkingDefault: "medium",
+      thinkingInheritedDefault: "high",
+    });
+    expect(row("main")).toMatchObject({ thinkingDefault: "high" });
+    expect(row("main")).not.toHaveProperty("thinkingInheritedDefault");
+  });
+
+  test("is dropped by a model-restricted roster, which reports the override as thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const coder = agents.find((agent) => agent.id === "coder")!;
+    // The policy permits the configured model; the projection still resolves its own defaults.
+    const presentation = prepareOperatorModelPolicyPresentation({
+      cfg,
+      policy: { models: [], allows: () => true },
+    })!;
+    const projected = presentation.forAgent("coder").agent(coder);
+    expect(projected).not.toHaveProperty("thinkingInheritedDefault");
+    // The UI receives the override here, so it must not read it as the inherited level.
+    expect(projected.thinkingDefault).toBe("medium");
   });
 });

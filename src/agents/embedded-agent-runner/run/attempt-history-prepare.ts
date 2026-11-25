@@ -11,11 +11,15 @@ import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
+import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { describePastProjectMoves } from "../project-move-replay.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -24,13 +28,16 @@ import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
 function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
+  // Selection never reads entry timestamps, and these entries are neither persisted nor
+  // sent to the model. Context-engine messages may omit timestamps, so use a fixed value.
+  const timestamp = new Date(0).toISOString();
   const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
     (message, index) => ({
       entry: {
         type: "message",
         id: String(index),
         parentId: index ? String(index - 1) : null,
-        timestamp: new Date(message.timestamp).toISOString(),
+        timestamp,
         message,
         seq: index,
       },
@@ -115,7 +122,13 @@ export async function prepareEmbeddedAttemptHistory(
     });
     input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
-    const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    // Keep each keyed user row intact until prompt() has resolved the current turn.
+    // The stream boundary merges projected rows for providers requiring alternation.
+    let validated = await validateReplayTurns({
+      ...replayContext(),
+      messages: prior,
+      preserveUserTurns: true,
+    });
     input.setup.prepStages.mark("history-validation");
 
     if (
@@ -131,6 +144,13 @@ export async function prepareEmbeddedAttemptHistory(
         assertActive,
       );
       assertActive();
+      if (
+        sessionEntry?.priorWorkspace &&
+        attempt.model.api === "openai-completions" &&
+        !isLocalBaseUrl(attempt.model.baseUrl)
+      ) {
+        validated = describePastProjectMoves(validated);
+      }
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
         const entries = await readSessionEntrySummariesInWorker({
@@ -209,16 +229,25 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
-          }),
+          // A fork runs under its own key but keeps its source conversation's history window.
+          getHistoryLimitFromSessionKey(
+            attempt.sandboxSessionKey ?? attempt.sessionKey,
+            attempt.config,
+            {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+          ),
+          {
+            groupConsecutiveUserTurns:
+              transcriptPolicy.validateAnthropicTurns &&
+              shouldMergeConsecutiveTurns(transcriptPolicy, attempt.model.api),
+          },
         ),
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );
@@ -259,9 +288,12 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Restored history stays writable through preparation; published replies are complete.
+  // Seal restored model history once; transcript admission already seals retained messages.
   for (const message of messages) {
-    if (message.role === "assistant") {
+    if (
+      (message.role === "assistant" || message.role === "user" || message.role === "toolResult") &&
+      !isOwnedTranscriptPayload(message)
+    ) {
       freezeJsonSnapshot(message);
     }
   }

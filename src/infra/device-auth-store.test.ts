@@ -1,11 +1,11 @@
 import fs from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
 import * as tokens from "./device-auth-store.js";
 import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.js";
-import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -146,37 +146,36 @@ describe("local device token cache", () => {
     });
   });
 
-  it("rechecks live mutation authority after waiting for another local owner", async () => {
-    await withOpenClawTestState({ label: "credential-token-authority" }, async (state) => {
-      const lookup = { env: state.env, deviceId: "device", role: "operator" };
-      const original = await tokens.storeDeviceAuthToken({ ...lookup, token: "original" });
-      const release = await holdDeviceAuthWriterForTest(
-        state.statePath("client", "credentials.sqlite"),
-      );
-      let current = true;
-      const assertCurrent = vi.fn(() => {
-        if (!current) {
-          throw new Error("retired credential operation");
-        }
-      });
-      try {
-        const mutation = tokens.storeDeviceAuthToken({
-          ...lookup,
-          token: "replacement",
-          assertCurrent,
+  it.each(["transaction", "commit"] as const)(
+    "preserves the stored token when mutation authority ends before worker %s admission",
+    async (stage) => {
+      await withOpenClawTestState({ label: "credential-token-authority" }, async ({ env }) => {
+        const lookup = { env, deviceId: "device", role: "operator" };
+        const original = await tokens.storeDeviceAuthToken({ ...lookup, token: "original" });
+        let retired = false;
+        using admission = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === stage) {
+            retired = true;
+          }
+          admit(request, grant);
         });
-        const rejected = expect(mutation).rejects.toThrow("retired credential operation");
-        await vi.waitFor(() => expect(assertCurrent).toHaveBeenCalled());
-        await delay(20);
-        current = false;
-        await release();
-        await rejected;
+        await expect(
+          tokens.storeDeviceAuthToken({
+            ...lookup,
+            token: "replacement",
+            assertCurrent: () => {
+              if (retired) {
+                throw new Error("retired credential operation");
+              }
+            },
+          }),
+        ).rejects.toThrow("retired credential operation");
+        expect(retired).toBe(true);
+        admission.mockRestore();
         expect(await tokens.loadDeviceAuthToken(lookup)).toEqual(original);
-      } finally {
-        await release();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("does not publish a token snapshot after caller cancellation", async () => {
     await withOpenClawTestState({ label: "credential-token-cancel" }, async ({ env }) => {

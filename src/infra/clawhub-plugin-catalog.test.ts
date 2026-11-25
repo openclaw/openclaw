@@ -157,13 +157,15 @@ it.each([
 
 it("reads ranked plugins and categories from the overview", async () => {
   const ranking = { featured: true, trending: true, featuredRank: 1, trendingRank: 0 };
+  const category = { ...remoteCategory, previewCursor: "opaque-english-preview" };
   const fetchImpl = mockResponse({
-    categories: [remoteCategory],
+    categories: [category],
     items: [{ ...remotePlugin, ...ranking }],
   });
   const result = await fetchClawHubPluginOverview(registry);
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
-  expect(result.categories).toEqual([remoteCategory]);
+  expect(Object.fromEntries(fetchImpl.url().searchParams)).toEqual({ previewCursors: "true" });
+  expect(result.categories).toEqual([category]);
   expect(result.items).toMatchObject([
     {
       packageName: "memory-plus",
@@ -563,3 +565,39 @@ it.each([
     ),
   ).rejects.toThrow(/identity|requested plugin release/);
 });
+
+it.each([
+  [undefined, undefined],
+  [[], []],
+  [
+    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "😀".repeat(128)],
+    ["Plan my week. Prioritize commitments.", "Compare options.", "😀".repeat(128)],
+  ],
+  [["one", "two", "three", "four"], undefined],
+  [["valid", " "], undefined],
+  [["valid", false], undefined],
+  [["valid", "😀".repeat(129)], undefined],
+])(
+  "transports third-party not-installed manifest recommendations without installation: %j",
+  async (recommendedPrompts, expected) => {
+    const remote = await readDetail({
+      version: {
+        version: "1.2.3",
+        pluginManifestSummary: {
+          configFields: [],
+          mcpServers: [],
+          bundledSkills: [],
+          recommendedPrompts,
+        },
+      },
+    });
+    const result = joinClawHubPluginDetail({
+      remote,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
+    expect(result.plugin.catalog.official).toBe(false);
+    expect(result.plugin.local.installed).toBe(false);
+    expect(result.detail.recommendedPrompts).toEqual(expected);
+    expect(Value.Check(PluginDiscoveryDetailSchema, result.detail)).toBe(true);
+  },
+);

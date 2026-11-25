@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Page, WebSocketRoute } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
@@ -141,16 +141,17 @@ suite.define(() => {
   it("keeps reduced-motion voice activity readable in a narrow viewport", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"), {
-        deferredMethods: ["talk.client.create"],
+        // A held consult keeps Talk thinking while the still meter is read.
+        deferredMethods: ["talk.client.create", "talk.client.toolCall"],
         webSocketPassthroughPrefixes: ["wss://generativelanguage.googleapis.com/"],
       });
       await installTalkBrowserFixtures(page);
-      const providerSetup = Promise.withResolvers<() => void>();
+      const provider = Promise.withResolvers<WebSocketRoute>();
       await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (socket) => {
         socket.onMessage((message) => {
           const frame = JSON.parse(message.toString()) as { setup?: unknown };
           if (frame.setup) {
-            providerSetup.resolve(() => socket.send(JSON.stringify({ setupComplete: {} })));
+            provider.resolve(socket);
           }
         });
       });
@@ -158,9 +159,12 @@ suite.define(() => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
       const activity = page.locator(".agent-chat__voice-activity");
-      const firstBar = page.locator(".agent-chat__voice-activity-bar").first();
-      const barTransform = () =>
-        firstBar.evaluate((element) => getComputedStyle(element).transform);
+      // At rest and in reduced motion CSS draws the meter; its shape shows the phase.
+      const stillShape = () =>
+        activity.evaluate((element) => {
+          const before = getComputedStyle(element, "::before");
+          return `${before.opacity} ${before.backgroundSize} ${getComputedStyle(element, "::after").content}`;
+        });
       await openTalk(page, 320, 720);
       await tapToTalk.click();
 
@@ -175,25 +179,39 @@ suite.define(() => {
       const pillBox = await page.getByRole("button", { name: "Stop voice input" }).boundingBox();
       expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
-        .poll(() => firstBar.evaluate((element) => getComputedStyle(element).animationName))
+        .poll(() =>
+          activity.evaluate((element) => getComputedStyle(element, "::after").animationName),
+        )
         .toBe("none");
-      const connectingReducedMotionTransform = await barTransform();
+      const connectingShape = await stillShape();
 
       await gateway.waitForRequest("talk.client.create");
       await gateway.resolveDeferred("talk.client.create");
-      const completeProviderSetup = await providerSetup.promise;
-      completeProviderSetup();
+      const providerSocket = await provider.promise;
+      providerSocket.send(JSON.stringify({ setupComplete: {} }));
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      const reducedMotionTransform = await barTransform();
-      expect(reducedMotionTransform).not.toBe(connectingReducedMotionTransform);
+      const listeningShape = await stillShape();
+      expect(listeningShape).not.toBe(connectingShape);
 
       await feedAudio(page);
       await expect
         .poll(async () => Number(await activity.getAttribute("data-level")))
         .toBeGreaterThan(0);
-      await expect.poll(barTransform).toBe(reducedMotionTransform);
+      await expect.poll(stillShape).toBe(listeningShape);
+      // Asking the agent switches Talk to thinking; the held consult keeps it there.
+      providerSocket.send(
+        JSON.stringify({
+          toolCall: {
+            functionCalls: [
+              { id: "consult", name: "openclaw_agent_consult", args: { question: "?" } },
+            ],
+          },
+        }),
+      );
+      await expect.poll(() => activity.getAttribute("data-status")).toBe("thinking");
+      expect(await stillShape()).not.toBe(listeningShape);
 
       await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect.poll(() => tapToTalk.isVisible()).toBe(true);
@@ -229,7 +247,7 @@ suite.define(() => {
       expect(voiceAppearance.width).toBeGreaterThanOrEqual(64);
       expect(voiceAppearance.background).toBe("rgba(0, 0, 0, 0)");
       expect(voiceAppearance.meterContained).toBe(true);
-      const stopRun = page.getByRole("button", { name: "Stop generating" });
+      const stopRun = page.getByRole("button", { name: "Stop", exact: true });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
 
@@ -405,7 +423,7 @@ suite.define(() => {
     });
   });
 
-  it("renders streamed relay assistant transcript deltas as readable text", async () => {
+  it.each(["Istanbul", "İstanbul"])("renders relay transcripts with %s overlap", async (place) => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installTalkGateway(page, relaySession(relaySessionId), {
@@ -426,18 +444,28 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      await gateway.emitGatewayEvent("talk.event", {
-        relaySessionId,
-        type: "transcript",
-        role: "user",
-        text: "Hey, what model are you using?",
-        final: true,
-      });
+      const userText = `Meet in ${place} tomorrow`;
+      for (const text of [`Meet in ${place}`, `${place} tomorrow`]) {
+        await gateway.emitGatewayEvent("talk.event", {
+          relaySessionId,
+          type: "transcript",
+          role: "user",
+          text,
+          final: false,
+        });
+      }
       await expect
         .poll(() =>
           page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
         )
-        .toBe("Hey, what model are you using?");
+        .toBe(userText);
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId,
+        type: "transcript",
+        role: "user",
+        text: userText,
+        final: true,
+      });
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.
@@ -596,7 +624,7 @@ suite.define(() => {
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
-        .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())
+        .poll(() => page.locator(".agent-chat__composer-alert[role=status]").textContent())
         .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);

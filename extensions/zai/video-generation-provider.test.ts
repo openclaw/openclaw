@@ -118,7 +118,12 @@ it.each<[string, Partial<Video.VideoGenerationRequest>]>([
 });
 
 it.each<[string, Record<string, unknown>]>([
-  ["Generation rejected", { task_status: "FAIL", error: { message: "Generation rejected" } }],
+  ["Generation rejected", { task_status: "FAIL", error: { message: "  Generation rejected  " } }],
+  [
+    "Z.AI video generation failed",
+    { task_status: "FAIL", error: {}, message: "do not use the outer message" },
+  ],
+  ["outer failure", { task_status: "FAIL", error: "malformed", message: "  outer failure  " }],
   ["completed without a video URL", { task_status: "SUCCESS", video_result: [] }],
   ["missing or unknown task_status", {}],
 ])("Z.AI reports unusable task results: %s", async (error, payload) => {

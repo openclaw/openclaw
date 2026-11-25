@@ -354,7 +354,7 @@ for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
         auth: { mode: "token", token: "survivor-sibling-token" },
         controlUi: { enabled: false },
       },
-      agents: { defaults: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+      agents: { defaults: { workspace: path.join(root, "workspace") } },
       plugins: {
         allow: [pluginId],
         load: { paths: [pluginRoot] },

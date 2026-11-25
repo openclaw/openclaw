@@ -16,7 +16,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { cliRecoveryEntrypoints, doctorOutputEntrypoints } from "./cli-entrypoint.test-support.js";
 import { getCliProcessTestTimeout } from "./cli-process-child.test-helpers.js";
 import { cliChildEnv, cliOutputScript } from "./cli-process-fixture.test-support.js";
@@ -263,7 +263,7 @@ it.each([
   });
   const result = spawnNodeEvalSync(script, {
     env: cliChildEnv(root, {
-      PATH: path.dirname(process.execPath),
+      PATH: path.dirname(resolveTestNodeExecPath()),
       NO_COLOR: "1",
     }),
     maxBuffer: 2 * 1024 * 1024,

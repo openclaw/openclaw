@@ -154,6 +154,7 @@ suite.define(() => {
         await page.emulateMedia({ colorScheme: theme });
         await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
         if (testCase.id === "user-video" || testCase.id === "user-mixed") {
+          await activePane.locator(".chat-video-preview").scrollIntoViewIfNeeded();
           const poster = activePane.locator(".chat-video-preview img");
           await expectBrowser(poster).toBeVisible();
           await expect

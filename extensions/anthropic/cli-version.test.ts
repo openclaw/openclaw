@@ -1,8 +1,20 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { runCommandWithTimeout as runFixtureCommand } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { commandResult } from "../test-support/command-result.test-support.js";
 import { makeModel } from "./model-contract-cases.test-support.js";
@@ -28,6 +40,13 @@ const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Parameters<StreamFn>[1];
 const oauthOptions = { apiKey: "sk-ant-oat01-synthetic", headers: { "x-test": "preserved" } };
+let cliDirectory: string;
+let cliPath: string;
+
+function writeCli(version: string, target = cliPath) {
+  writeFileSync(target, `process.stdout.write(${JSON.stringify(version)});\n`, { mode: 0o700 });
+}
+
 const executionContext = { workspaceDir: "/synthetic", provider: "claude-cli", modelId: model.id };
 
 function register(
@@ -95,13 +114,18 @@ function capture(
 }
 
 beforeEach(() => {
-  vi.mocked(resolveClaudeTerminalExecutable)
-    .mockReset()
-    .mockReturnValue({ executable: "/synthetic/claude" });
+  const tmp = path.join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  cliDirectory = mkdtempSync(path.join(tmp, "anthropic-cli-version-"));
+  cliPath = path.join(cliDirectory, "claude.cjs");
+  writeCli("2.1.400 (Claude Code)");
+  utimesSync(cliPath, 1_000_000, 1_000_000);
+  vi.mocked(resolveClaudeTerminalExecutable).mockReset().mockReturnValue({ executable: cliPath });
   vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
   vi.stubEnv("ANTHROPIC_API_KEY", "");
 });
 afterEach(() => {
+  rmSync(cliDirectory, { recursive: true, force: true });
   vi.useRealTimers();
   vi.unstubAllEnvs();
   subsystemLogMock.warn.mockClear();
@@ -132,7 +156,6 @@ it.each([
   expect(request.headers()).toEqual(oauthOptions.headers);
   expect(request.headers(1)).toEqual(oauthOptions.headers);
   expect(runner).toHaveBeenCalledTimes(mode === "missing" ? 0 : 1);
-  expect(resolveClaudeTerminalExecutable).toHaveBeenCalledOnce();
   await fixture.prepare();
   expect(fixture.args()).not.toContain("--exclude-dynamic-system-prompt-sections");
   if (warning) {
@@ -161,7 +184,13 @@ it("does not probe or alter another provider's identity", async () => {
 
 it("shares lazy CLI discovery across native execution and both OAuth wrappers", async () => {
   const pending = createDeferred<CommandResult>();
-  const fixture = register(vi.fn<CommandRunner>(() => pending.promise));
+  const started = createDeferred<void>();
+  const fixture = register(
+    vi.fn<CommandRunner>(() => {
+      started.resolve();
+      return pending.promise;
+    }),
+  );
   await fixture.provider.staticCatalog?.run({
     config: {},
     env: {},
@@ -179,7 +208,7 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
       Promise.resolve(result).then(prepared),
     ),
   ];
-  await Promise.resolve();
+  await started.promise;
   expect(fixture.runCommandWithTimeout).toHaveBeenCalledOnce();
   expect(normal.base).not.toHaveBeenCalled();
   expect(simple.base).not.toHaveBeenCalled();
@@ -198,10 +227,15 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
 it("bounds requests even while process cleanup is pending and caches the fallback", async () => {
   vi.useFakeTimers();
   const pending = createDeferred<CommandResult>();
-  const runner = vi.fn<CommandRunner>(() => pending.promise);
+  const started = createDeferred<void>();
+  const runner = vi.fn<CommandRunner>(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const fixture = register(runner);
   const request = capture(fixture.provider);
   const response = request.run();
+  await started.promise;
   await vi.advanceTimersByTimeAsync(1_499);
   expect(request.base).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
@@ -222,4 +256,68 @@ it("recognizes environment OAuth credentials while an explicit API key wins", as
   expect(fixture.runCommandWithTimeout).not.toHaveBeenCalled();
   await request.wrapper(model, context);
   expect(request.headers(1)?.["user-agent"]).toBe("claude-cli/2.1.400");
+});
+
+// Windows file symlinks require privileges unavailable on some CI runners.
+it.each(process.platform === "win32" ? ["mtime", "size"] : ["mtime", "size", "realpath"])(
+  "refreshes OAuth identity after a CLI %s change without restarting",
+  async (change) => {
+    if (change === "realpath") {
+      const original = path.join(cliDirectory, "original.cjs");
+      writeCli("2.1.400 (Claude Code)", original);
+      utimesSync(original, 1_000_000, 1_000_000);
+      unlinkSync(cliPath);
+      symlinkSync(original, cliPath);
+    }
+    const runner = vi.fn<CommandRunner>((argv, options) =>
+      runFixtureCommand([process.execPath, ...argv], options),
+    );
+    const fixture = register(runner);
+    const normal = capture(fixture.provider);
+    const simple = capture(fixture.provider, "wrapSimpleCompletionStreamFn");
+    await normal.run();
+    await simple.run();
+    expect(normal.headers()?.["user-agent"]).toBe("claude-cli/2.1.400");
+    expect(runner).toHaveBeenCalledOnce();
+    const originalStat = statSync(cliPath);
+    if (change === "realpath") {
+      const replacement = path.join(cliDirectory, "replacement.cjs");
+      writeCli("2.1.401 (Claude Code)", replacement);
+      utimesSync(replacement, originalStat.atime, originalStat.mtime);
+      unlinkSync(cliPath);
+      symlinkSync(replacement, cliPath);
+    } else {
+      writeCli(change === "size" ? "2.1.401 (Claude Code)\n" : "2.1.401 (Claude Code)");
+      utimesSync(
+        cliPath,
+        originalStat.atime,
+        change === "size" ? originalStat.mtime : new Date(originalStat.mtimeMs + 2_000),
+      );
+    }
+    await simple.run();
+    await normal.run();
+    expect(simple.headers(1)?.["user-agent"]).toBe("claude-cli/2.1.401");
+    expect(normal.headers(1)?.["user-agent"]).toBe("claude-cli/2.1.401");
+    expect(runner).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("uses the transport floor after a failed replacement and recovers when the CLI changes again", async () => {
+  const runner = vi.fn<CommandRunner>((argv, options) =>
+    runFixtureCommand([process.execPath, ...argv], options),
+  );
+  const fixture = register(runner);
+  const request = capture(fixture.provider);
+  await request.run();
+  expect(request.headers()?.["user-agent"]).toBe("claude-cli/2.1.400");
+  writeCli("unrecognized replacement output");
+  await request.run();
+  await fixture.prepare();
+  expect(request.headers(1)).toEqual(oauthOptions.headers);
+  expect(fixture.args()).not.toContain("--exclude-dynamic-system-prompt-sections");
+  expect(runner).toHaveBeenCalledTimes(2);
+  writeCli("2.1.402 (Claude Code)");
+  await request.run();
+  expect(request.headers(2)?.["user-agent"]).toBe("claude-cli/2.1.402");
+  expect(runner).toHaveBeenCalledTimes(3);
 });

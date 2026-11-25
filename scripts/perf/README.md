@@ -1,5 +1,77 @@
 # Team-shaped synthetic state
 
+## Audit retention page reads
+
+`audit-retention-fixture.mjs` expands a small database created by the real audit
+writer into a roughly 4.6 GB synthetic fixture: 100k activity events, 100k identity
+contexts, 250k decision facts and 200k delivery progress rows. Its payload filler
+models storage size only; measured new writes use valid writer inputs. Never pass
+a production database. The fixture exceeds SQLite's default private page cache;
+it does not reproduce an OS-cold 27 GB database or btrfs stalls.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audit-batch-write-measure.ts \
+  --output .local/audit-seed --iterations 1
+node scripts/perf/audit-retention-fixture.mjs \
+  .local/audit-seed/state/openclaw.sqlite .local/audit-fixture.sqlite
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audit-batch-write-measure.ts \
+  --fixture .local/audit-fixture.sqlite --output .local/audit-candidate --iterations 1000
+```
+
+Each invocation needs a new output directory and copies the closed fixture. Run
+five serial A1/A2/B groups, loading saved baseline audit owners with `--source-dir`
+for both controls. Compare writer CPU, elapsed time and batch p50/p99; repeat with
+`--allocation` separately. Require identical persisted-row digests and counts.
+Setup, warmup and verification are excluded from measurement.
+
+For page-read regression proof, compile `transcript-active-facts-vfs.c` using the
+instructions in its header and pass `--pager-extension /path/to/bufprobe.dylib`
+(`.so` on Linux). With this fixture and 1,200 turns, add
+`--max-main-page-reads 3000000`: the retained-row OFFSET baseline exceeds five
+million reads and fails; the bounded oldest-row candidate stays below 2.4 million
+and passes. These are SQLite VFS reads, not physical disk reads. Measure timing
+without the probe; require B to beat both controls on reads and writer CPU/time
+without a material batch-latency or allocation regression.
+
+## Cold archive eligibility (counts only)
+
+Run the same real-worker full/mixed maintenance fixture used by the integration
+suite, with native statement/row observation enabled only for this workload:
+
+```sh
+node scripts/perf/session-cold-storage-eligibility.mjs \
+  --expect-head "$(git rev-parse HEAD)" \
+  --output .openclaw/tmp/cold-eligibility-candidate
+```
+
+Use a new output directory and a reviewed, isolated checkout; pass the recorded
+full HEAD explicitly when comparing revisions. The runner never switches source.
+It records HEAD and SHA256 of the two owners, shared fixture, runner and preload,
+and refuses changed inputs after execution. It runs only the focused file through
+the canonical package test entrypoint (`pnpm test ... --maxWorkers=1`) under Node. Output includes the real test log,
+source guard, native counts, summary, and whole-command cost (not product latency).
+
+Acceptance, declared before measurement: one deterministic counts sample per arm,
+fresh wrapper/isolated synthetic database and files, fixture setup excluded. The
+public maintenance batch limit is fixed at 128: the full fixture must externalize
+128, archive 0, preserve every archive byte and hot-history snapshot. Eligibility
+SQL and metadata materialization must be zero in selection and mutation, while
+four admission/ownership reads remain. Mixed control must archive 1/externalize 1,
+retain explicitly referenced hot history, execute two eligibility reads in each
+consumer, and retain four admission reads. Setup/mixed positive controls reject
+an absent observer. Call-stack attribution is observation only, not product policy.
+
+Both baseline and candidate use these same fixture/observer/checker bytes against
+their respective production owners. The original base exits 1 at the zero-work
+assertion with selection=2/mutation=2 after both preservation tests pass; the
+candidate exits 0 with 0/0. To replay a base revision, apply only the workload/test
+files there, leaving its production owners unchanged. Do not point a current
+worker build at an older owner. Keep sources frozen for each invocation.
+
+This is opt-in counts proof, not a new normal-CI performance threshold or a
+Gateway/model, latency, CPU, allocation or incident-cause claim. No ABAB timing
+claim is made. Normal test execution does not install the native preload.
+
 ## Slack shutdown retirement
 
 `slack-shutdown-retirement-measure.ts` runs a real Slack SDK startup with a synthetic
@@ -445,38 +517,6 @@ full byte-buffer allocation saved by avoiding reassembly. The reported payload
 size identifies the copy size for a single-frame record. This is receiver-owner
 proof, excluding producer serialization, IPC, SQL, and whole-Gateway latency.
 
-## Session-fork snapshots
-
-`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <source-root>
---mode timing --output /path/to/result.json` measures
-ordinary turns through the actual stream-selection, historical fork-capture, and
-request-encoding owners. The source root needs only the five files listed in the
-script; no build or install is needed. Provider transport and unrelated host
-services use synthetic adapters. Current sources do no fork capture; historical
-sources retain their original capture and publication behavior.
-
-The default fixed workload is 27,000 requests across 200 sessions, with 256 KiB
-prepared inputs and 75% HTTP continuation suffixes. That represents one hour of
-traffic at 450 requests/minute, compressed into a fixed-work pass. It is not an
-elapsed-hour Gateway soak. Fixture strings remain reachable equally on both sides.
-`--operations`, `--sessions`, `--payload-bytes`, and `--warmup` select the workload.
-
-Run separate modes for untraced CPU/latency/GC/event-loop timing, collected-object
-allocation sampling, JSON/Blob/timer counts, and forced-GC retention. Retention
-reports heapUsed, external, ArrayBuffers, and RSS separately; the external and
-ArrayBuffer counters overlap and must not be summed as exact retained storage.
-Timing never forces collections. There is no promotion or provider-cache claim.
-
-Use concurrent guarded pairs on the benchmark host, counterbalance launch order,
-and swap the slot's interleaved CPUs. `--warm-ready-file`/`--warm-start-file` and
-`--ready-file`/`--start-file` provide separate warmup and measurement barriers;
-atomically publish a future Unix epoch in milliseconds after both sides are ready. A missed
-start rejects the run. Acceptance is zero fork-specific capture/publication/expiry
-work on ordinary candidate turns, identical parent request counts and encoded
-bytes, reduced allocation/CPU, and removal of the retained snapshot data. Apply
-the campaign's absolute GC/loop materiality, sample-count, and matched-control
-rules; do not use profiled runs as timing gates.
-
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
@@ -559,6 +599,24 @@ Acceptance is zero denied calls for unavailable surfaces, with allowed chat read
 still succeeding. Inspect screenshots for usable chat and absent unavailable
 controls. This is a request-count measurement, not a CPU or latency benchmark.
 
+`control-ui-forbidden-diff-measure.ts` separately measures the client diff owner:
+5,000 repeated activations of one denied host session in a 5,000-row synthetic
+roster. Both versions select the row through the existing pane owner before
+resolving a diff. The transport fixture rejects every issued request. This
+includes client error handling, but excludes Gateway authorization, SQLite,
+workspace files, and network latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/control-ui-forbidden-diff-measure.ts
+```
+
+Use `--module <baseline-owner.ts>` with the owner's relative imports intact.
+Run at least five interleaved baseline/candidate pairs and repeated baseline A/A
+controls. `--allocations` samples a separate pass; do not compare its timings.
+Acceptance is zero denied requests, an explanatory unavailable result for every
+activation, and lower CPU and allocation. The roster cardinality is configurable
+with `--rows`; `--activations` controls repeated demand within the same dashboard.
+
 ## Main-thread filesystem durability
 
 Use `fsync-gateway-entry.ts` as the `--entry` for
@@ -603,9 +661,14 @@ absolute-delta rules before treating any percentile as a gate.
 ## Owned directory events
 
 `owned-directory-events-measure.ts` opens real shared directory subscriptions and
-replays fixed native callbacks. Setup checks a missing descendant's event filter;
-the measured pass delivers 65 direct-root events per batch, with a one-millisecond
-yield between batches. It measures observer work, not filesystem or Gateway throughput.
+replays fixed native callbacks through a synthetic in-process host adapter. Setup
+checks a missing descendant's event filter; the measured pass delivers 65 events
+per batch. `--missing` retains that descendant during measurement, exercising
+sibling filtering. `--batch-delay-ms` controls pacing (default 1; 0 yields with
+setImmediate). `--watch-dir` reuses an existing synthetic directory, allowing a
+large surrounding fixture without rebuilding it for each sample. Contents are
+not scanned. This measures observer delivery, not subprocess transport, filesystem,
+or Gateway throughput.
 
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
@@ -615,8 +678,8 @@ node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
 ```
 
 Use `--owner /absolute/path/to/owned-directory-observation.baseline.ts` to load a
-baseline saved beside the current owner. Add `--allocations` for a separate paired
-pass including collected objects. Reports include bytes per event, batch latency,
+baseline saved beside the current owner (or a frozen copy with absolute imports).
+Add `--allocations` for a separate paired pass including collected objects. Reports include bytes per event, batch latency,
 CPU, GC counts/tails/maxima, promotion, and event-loop tails with sample counts.
 Compare concurrent pairs under one quiet lock and the production guard, swapping
 interleaved CPU sets for the second pair. Apply the campaign's paired-delta,
@@ -919,6 +982,31 @@ pacing are excluded from list latency but included in aggregate measurements.
 Apply the campaign's paired-delta, sample-count, and absolute pause rules.
 
 ## Gateway startup and restart acceptance
+
+`restart-lane-flood-measure.ts` starts 40 synthetic dashboard turns, gracefully
+stops a real Gateway, verifies all shutdown markers, then restarts at width eight
+while submitting 12 new cron runs at 100 ms intervals. A deterministic local
+Responses service holds resumed turns for one second. Every resume must finish
+once and every cron run must record a successful outcome.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/restart-lane-flood-measure.ts \
+  --checkout /path/to/built-checkout --output /path/to/new-result.json \
+  --fixture /path/to/session-read-transactions-fixture --profile
+```
+
+The optional fixture is copied into isolated state; its workspace is read by the
+synthetic agent. The public usage RPC waits for its cold projection to become fresh
+before starting the interrupted turns; `fixtureWarmupMs` records that setup cost.
+Use independent baseline and candidate builds, run serial A/A
+controls and counterbalanced A/B pairs, and keep host load comparable. Output
+separates restart startup, resume dispatch from first resume, and new cron
+request-to-model latency. `--profile` adds per-process queue-owner wait samples,
+process CPU (including workers), main-thread CPU and sampled allocations including
+collected objects. On POSIX hosts, the harness captures profiles through an explicit
+`SIGWINCH` checkpoint before shutdown, after all recovery turns settle; match the
+second process in each pair for recovery. Main-isolate allocation samples do not
+include worker heaps. Report filesystem and profiling overhead explicitly.
 
 `post-restart-burst-measure.ts --cold-row-reads` measures cold session pages after
 a clean restart. Seed two independent, compact team-shaped fixtures sequentially:
@@ -1829,7 +1917,7 @@ equivalence from the supplied revision label.
 ## Measure idle Gateway allocation and timer work
 
 `idle-gateway-measure.ts` connects one real Control UI client to an owned Gateway,
-then sends no application requests during the measured window. Use a freshly
+then sends no application requests during the measured window by default. Use a freshly
 generated, offline team-shape fixture for each side; omitting `--state-dir`
 retains the small empty-state workload. `--output` must name a new artifact
 directory. The fixture config is preserved and an isolated measurement config
@@ -1850,7 +1938,14 @@ and the host's interleaved CPU sets, swapped for the second pair. The start barr
 follows readiness and settling; a missed barrier fails the run. Actual capture
 timestamps are recorded so placement and start skew remain visible.
 
-`result.json` records main-isolate CPU, GC durations and counts, event-loop p99 and
+`--write-interval-ms 500` instead exercises real shared-state commits through
+`voicewake.set`, verifies replies and final readback, and records each request's
+scheduled, actual start/end timestamps and latency. `--host-samples` records Linux
+VM and mapped-cgroup counters once per second in the benchmark parent, outside
+the Gateway process; unavailable counters remain explicit. Enable it identically
+on both sides when attributing host interference.
+
+`result.json` records Gateway-process/main-thread CPU, main-isolate GC durations and counts, event-loop p99 and
 sample count, and V8 promoted bytes for the capture only. `--allocations` uses the
 shared private IPC profiler to include objects collected by minor and major GC;
 the saved heap profile and summary include the top allocation sites and estimated
@@ -1859,6 +1954,11 @@ a main-isolate CPU profile and its diagnostics over the measured window; promoti
 accounting requires a run without `--profile`. Run CPU and allocation profiling
 separately. Neither profiling mode exposes an inspector listener or copies operator
 credentials.
+
+Main-isolate diagnostics also retain up to 10,000 individual GC events with epoch
+timestamps, duration and kind, plus a dropped-event count. Correlate actual request
+intervals with those events and raw V8 pause traces; a slow sample or a GC event
+alone does not establish causality or justify excluding a paired result.
 
 Use `--timers` in a separate attribution run to collect per-timer callback counts,
 CPU and worker snapshots. It instruments timer creation and adds periodic IPC
@@ -3097,6 +3197,31 @@ their returned roots for the foreground and diff sessions. This mode requires
 fresh foreground sessions (`--history-turns` is unsupported); the fixture's
 retained session histories remain part of the dashboard load.
 
+Add `--github-volume-observe --entry src/entry.ts` to use a recording loopback HTTP
+server and the actual Control UI PR subscription store over each benchmark
+WebSocket client. The fixture blocks external fetches, records request method
+ancestry across async work, endpoint, response body bytes, and status in
+`dashboardRpc.githubOptionsConnected.upstreamRequests`. Its ETags are stable for
+unchanged representations; `/user` still changes once after 60 seconds. Select the
+`measurementStartedAt`–`measurementEndedAt` interval and divide counts/bytes by its
+minutes, including requests between rounds; startup and preflight are separate
+populations. Async timer ancestry identifies
+the initiating RPC, not a newly received call. Allocation profiles from a separate
+`--allocations` pass are sampled allocation evidence, not response-byte counts.
+
+`--github-volume-forks` adds two synthetic tracking remotes for the same head
+owner but different repository names. Only the second repository matches the
+returned PR. This exercises duplicate owner/branch discovery through real Git
+context resolution. `--github-volume-no-etags` measures GitHub-compatible
+responses without validators; report it separately from normal conditional
+responses. `--github-volume-owner <adjacent-source.ts>` pins a baseline PR owner
+while other source and fixture inputs stay identical. Acceptance is one request
+per distinct head owner per discovery, equal visible PR facts, and no regression
+in unaffected RPC latency. Use A/A controls before interleaved baseline/candidate
+runs. The synthetic workspace can match 62,000 files and 1.1 GB. Report actual
+agent database size separately from logical transcript bytes; an APFS run does
+not establish btrfs I/O behavior.
+
 For either account mode, add `--entry src/entry.ts --github-options-observe` to
 record handler, admission, shared identity, native token lookup, credential
 verification, target discovery, receipt-read, and response-serialization durations in
@@ -3796,82 +3921,11 @@ production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
 
-## Operator authority allocations
+## Operator authority measurements
 
-`operator-authority-measure.ts` isolates six real synchronous authority owners:
-`auth-policy`, `retained-grant`, `recovery-source`, `model-execution`,
-`admitted-run`, and `transcript-guard`. Its synthetic non-owner operator has an explicitly required
-access-policy plugin, registered
-through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
-instance invocation wrappers. Setup authorizes and resumes the grant once;
-rechecks use the retained authority, as the recovery owner does. The fixture
-exposes no other plugin runtime capabilities and starts no Gateway or services.
-`recovery-source` creates one synthetic profile in a private temporary SQLite
-store, decodes the persisted source shape, and calls `restoreGatewayOperatorSource`.
-Its measured check is the restored authority's `assertCurrent`, including the real
-profile, source-auth policy, and retained plugin-grant owners. Setup creates and
-warms the profile; teardown releases it and removes only the generated state directory.
-Set `TMPDIR` to the approved sandbox before running this scenario or `all`.
-
-```sh
-node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
-  --scenario model-execution --iterations 20000 --warmup 5000 \
-  --revision <commit-sha> --output /path/to/authority.json
-```
-
-The JSON records estimated allocated bytes per check, elapsed and main-thread CPU
-nanoseconds per check, and auth-policy, resume-owner, plugin-authorize,
-plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocation
-uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
-is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
-and the report includes the fifteen largest allocation sites with eight-frame
-stacks. `estimatedAuthPolicyStringifyBytesPerCheck` separately totals sampled
-allocations beneath `captureGatewayAuthPolicy` → the stable-stringify serializer,
-including recursive serializer frames when V8 inlines the public wrapper and
-collected objects; zero samples are an estimate, not an exact invocation count. A post-capture positive control requires grant revocation to fail the
-very next retained-authority check. The recovery scenario also removes its
-allowed browser origin on a fresh config and requires the next source check to
-reject, outside the measured window.
-
-Use at least five simultaneous baseline/candidate pairs on the approved
-benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
-per pair. Alternate the assigned interleaved even/odd CPU sets under the exclusive
-measurement lock. Compare the mean paired differences with spread; warm both sides identically.
-Builds belong outside the measurement window. The source can also be bundled
-with esbuild for the host, preserving Node built-ins and installed dependencies;
-use the same bundler options and dependency tree for both revisions.
-
-These are owner-check denominators. `model-execution` calls the real bound model
-assertion; `admitted-run` uses `prepareSystemAgentRunAdmission`, admission, and the
-real admitted-run active assertion. `transcript-guard` captures the real owned
-transcript assertion with that admitted run as its commit guard, without writing
-storage. None is a model turn, tool step, transcript append, or measured production
-frequency. Derive those counts from an instrumented
-Gateway turn separately. The recovery scenario prepares profile-database access
-outside capture and measures only the warm resident owner. This probe does not
-include other access policies, contextual-ingress callbacks, or transport allocation.
-
-Use `--timing-only` for an untraced CPU/time pass without allocation sampling.
-Keep its CPU results separate from the default allocation pass. Timing mode
-reports observed GC count, total, maximum, and p95/p99 per kind, filtered to the
-synchronous workload window; every percentile includes its collection count.
-It does not report promotion or event-loop delay. Allocation mode does not
-report GC acceptance statistics.
-
-For a separate recovery owner count pass, generate the same source observer used
-by the Gateway driver and load it before the probe. The output reports exact
-`assertPolicy`, `readCurrentFacts`, profile-owner `assertCurrent` (including
-revision reads), and GitHub fact projections under `host.counts`, with instrumented
-sites under `host.installed`.
-These counts exclude warmup and do not provide timing or allocation evidence.
-
-```sh
-node --import ./scripts/tsx.mjs --input-type=module -e \
-  'import { writeGatewayAuthorityCountsPreload } from "./scripts/lib/gateway-bench-runtime.ts"; writeGatewayAuthorityCountsPreload("/path/to/authority-counts-preload.mjs");'
-node --import /path/to/authority-counts-preload.mjs --import ./scripts/tsx.mjs \
-  scripts/perf/operator-authority-measure.ts --scenario recovery-source \
-  --counts-only --iterations 20000 --warmup 5000 --output /path/to/counts.json
-```
+Operator authority is decided once at run start. The retired synchronous
+authority-check allocation probe measured midflight permission checks that no
+longer exist; use real Gateway start and recovery workloads instead.
 
 To count actual restarted operator runs, use the existing crash/restart workload:
 
@@ -5100,7 +5154,7 @@ sides between pairs. Run at least five pairs using the host production guard.
 The append-normalized case should eliminate repeated nested-argument hashing;
 sealed history should remain at zero warm hash bytes, and mutable SDK content
 must still be inspected. Diagnostic output and in-place mutation coverage live
-in `prompt-cache-observability.history.test.ts`.
+in `prompt-cache-observability.test.ts`.
 
 `prompt-cache-observation-measure.ts` measures the complete observation boundary:
 append-shaped frozen messages → `cloneTranscriptView` → `convertToLlm` →
@@ -5621,6 +5675,21 @@ include source reads and bytes per turn, retained payload characters, JSON bytes
 and post-GC retained heap. The transfer readback is performed by the verifier,
 not a model.
 
+For aggregate overflow, prepare with `--large-catalog --background-files 61700`
+in a separate directory. This creates 150 synthetic skills (300 files, about
+12 MB) beside 61,700 unrelated project files (about 1.1 GB). Repeat those flags
+with `--existing --operations 5 --concurrency 1`. A frozen sibling source module
+can be selected with `--source-module <path>` to compare the baseline resource
+owner with identical dependencies. Baseline delivery-limit failures are counted;
+other failures remain fatal. Use four baseline A/A controls, five interleaved
+baseline/candidate pairs, and separate allocation runs. Acceptance is successful
+bounded delivery on overflow, unchanged reads/payloads for the ordinary fixture,
+and explicit reporting of the cost of processing the remaining skills. These are
+preparation measurements, not full turn latency: baseline failed work and
+candidate successful work have different outcomes. This owner does not read a
+session database or traverse unrelated project files; no database-size or btrfs
+performance claim follows from this fixture.
+
 Measure promotion in a separate pass with `--trace-gc-nvp --gc-log /path/to/run.log`
 and redirect stdout to that log. The existing warmup collection identifies the
 main isolate; capture markers exclude warmup and post-capture collections. The
@@ -5909,6 +5978,20 @@ measures the common all-local inventory. `--captures` selects the count establis
 by the Gateway probe. `--owner-source /absolute/path/placement-read-authority.base.ts`
 selects a preserved source beside the original module so relative imports resolve.
 
+`--local-publication` advances the local publication sequence after each preparation,
+without changing preservation membership. This reproduces maintenance guards that
+overlap unrelated local turns. Compare both unchanged controls before claiming a win.
+For the complete scheduled worktree cleanup, use `worktree-cleanup-pacing-measure.ts`
+with `--registry-worktrees 800 --placement-replicas 10000 --worktrees 2` and the
+62,000-file source fixture. This adds preserved nested repositories, active owners,
+a live lease, foreign locks, and 64 remote placements. A real unrelated local claim
+and release follows each maintenance-inventory preparation. `maxCallbackMs` measures
+the longest synchronous async callback; CPU and allocation cover the complete pass.
+Pass `--agent-db-fixture` only a closed synthetic database. Independent periodic Git
+maintenance is parked while cleanup pacing is virtualized. Checkouts in the protected
+cohort have Git registrations but omit the large tracked-file inventory. Both eligible
+checkouts have the complete inventory and must preserve identical recovery snapshots.
+
 Run concurrent baseline/candidate pairs under the campaign quiet lock and guard,
 pass the same future `--start-at` epoch milliseconds, and swap the interleaved CPU
 sets in pair two. The output reports input/output hashes, visited entries, CPU per
@@ -6032,3 +6115,130 @@ owner latency, CPU, and allocations, with no user-facing metric regressing by
 20% or more. Record cold catch-up and warm-report results separately, including
 partial counts so a faster incomplete response cannot masquerade as a complete
 report speedup.
+
+## Package-store workspace capture and staging
+
+`workspace-store-staging-measure.ts` uses the real workspace capture and Git
+fast-import preparation owners with 62,000 synthetic files totaling 1.1811 GB.
+Of those, 60,000 are pnpm store files at the observed task-environment root and
+2,000 are authored source files. No database padding or live service is involved.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  prepare .local/store-proof
+OPENCLAW_BENCH_BASELINE_DIR=/absolute/original-source-overlay \
+  node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  run .local/store-proof baseline-1
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  run .local/store-proof candidate-1
+```
+
+The sparse baseline overlay contains original repository-relative owner files,
+using the existing `worker-retained-heap-preload.ts` loader. Repeat same-source
+A/A controls and five interleaved baseline/candidate pairs on an otherwise idle
+host; append `allocation` or `cpu` for separate profiling passes. Retain the
+baseline revision and source diff with the results. Each process starts with a
+fresh hash memo; the shared fixture remains immutable and OS cache is not evicted.
+
+The ordinary delta contains one authored file and 1,000 store downloads. The
+threshold case stages the entire captured snapshot: baseline must fail the real
+768 MiB aggregate cap and candidate must preserve all authored files. Acceptance
+requires zero captured/staged store bytes, equal authored digests, fewer hashes
+and fast-import bytes, and no timing, CPU, or allocation regression. Existing
+generated-path tests cover nearby reports, nested fixtures, and staged inputs.
+Reports distinguish logical payload and emitted fast-import bytes; physical
+device writes are unavailable. These measurements do not qualify btrfs, Podman,
+full Gateway preparation, or the unrelated agent database.
+
+## Command lane wait attribution
+
+`command-lane-wait-measure.ts` queues 4,096 synthetic session identities in 32
+waves, each with 32 admitted holders and 96 waiting turns. It verifies settlement
+and records queue entries available for deferred attribution, owner wall time, CPU, and optional collected
+allocation/CPU profiles. The owner is entirely in memory; database and workspace
+size are outside this measurement. It does not qualify whole-Gateway latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/command-lane-wait-measure.ts \
+  --output .local/queue-measure.json
+```
+
+Run five A/A pairs and five AB/BA blocks (ten samples per arm); add
+`--allocations` for separate profile runs. All 4,096 tasks must settle and all
+3,072 candidate waits must expose their existing queue record. Admission must
+build no holder arrays, serialized diagnostics, or extra task closures. Target
+median wall, CPU, and allocation within 5% of the base and within A/A noise.
+The controller regression separately checks live-holder and completed-wait
+reporting, including writer and placement transitions.
+
+For an immutable original-source comparison, put the base queue files in a
+sparse repository-relative overlay and use the existing loader:
+
+```sh
+OPENCLAW_BENCH_BASELINE_DIR=/absolute/original-source-overlay \
+  node --expose-gc --import ./scripts/tsx.mjs \
+  --import ./scripts/perf/worker-retained-heap-preload.ts \
+  scripts/perf/command-lane-wait-measure.ts --output .local/queue-base.json
+```
+
+Use the same A/A and AB/BA order for ordinary `skill-resource-delivery-measure.ts`
+preparation, with `--operations 50 --concurrency 1 --existing` against one prepared
+32-file fixture. Time and profile separately; retain the baseline SHA and raw
+results. These owner measurements do not qualify storage or whole-Gateway latency.
+
+## Talk transcription catalog discovery
+
+`talk-catalog-transcription-measure.ts` compares the actual file resolver and
+unscoped operator-read catalog handler against four frozen owner modules from a
+base commit, sharing unchanged dependencies and one prepared plugin generation.
+It uses generated state only: `agent-startup-inspection.ts seed --gib 35` for the
+agent database and `team-shape-fixture.ts --sessions 5000 --agents 32 --runs 0
+--projects 1 --worktree-files 62000 --worktree-file-bytes 19000` for workspaces.
+Both generators also require a new `--state-dir`.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/talk-catalog-transcription-measure.ts \
+  --baseline <base-commit> --state-dir <database-fixture> \
+  --workspace-fixture <workspace-fixture> --output <new-results-directory>
+```
+
+Run `--allocations` separately for sampled allocations, and `--profile` separately
+for owner CPU profiles. Five serial A1/A2/B groups each measure 200 warm handler
+reads, 20 refresh completions, and 1,000 direct resolver calls. Cold imports and
+preparation are excluded; the injected clock advances the existing refresh timer.
+Results include source hashes, fixture sizes, host load, CPU, and latency spread.
+Require reduced discovery work and owner CPU/allocations without a material
+handler regression beyond A/A variability. Returned catalog bytes must stay
+identical within each arm. This is owner-boundary evidence, not WebSocket,
+provider-network, filesystem cold-cache, or production incident attribution.
+
+## Directory watch stream
+
+`directory-watch-stream-measure.mjs` measures the complete directory-watch host
+parser and worker bridge using a real subprocess stdout pipe, MessagePort, and
+800 owned-directory subscribers in a worker. It freezes the baseline and candidate
+sources, replays 260,000 ordered native-protocol events in 65-event bursts, and
+checks each owner's sequence against an independently computed digest. It does
+not measure model-catalog refresh work or whole-Gateway latency.
+
+```sh
+node --expose-gc scripts/perf/directory-watch-stream-measure.mjs \
+  --base <baseline-commit> --output /path/to/new-proof-directory
+```
+
+Five counterbalanced A1/A2/B samples run serially in fresh processes with equal
+warmup. Separate timing and allocation passes record main-thread/process/producer
+CPU, collected-object-inclusive heap samples, CPU profiles, stream chunks, worker
+messages, monotonic-clock delivery tails, and host load. The private `--arm` and
+`--allocations` flags select one subprocess sample. Compare both A controls and
+report spread; a faster stream bridge must preserve every owner event and order.
+
+`--events 26000 --batch-events 5` checks smaller bursts resembling the native
+fixture’s typical chunk size; defaults retain the heavier burst workload.
+
+`--native` first characterizes the real watch helper on 800 synthetic roots with
+62,400 files (1.1 GB), then creates/renames/deletes 8,000 build artifacts. It records
+native events, notified roots, bytes and chunks over the churn plus a fixed drain
+window. Native operating-system notifications can coalesce transient files, so
+this rate is platform-specific, not a prediction of production traffic. No agent
+database is read by this transport; database size does not affect this workload.

@@ -1,15 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import { describe, expect, it } from "vitest";
+import { createBaselineFixture, reuseBaselineFixture } from "./pr-baseline-native.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function fixture() {
-  const f = createBaselineFixture(dirs.make("openclaw-pr-baseline-publication-"), 1);
+const fixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 1);
   // Reproduce a correction rebased onto main, then reconciled with the original
   // hosted head as second parent. The inherited main commit is deliberately unsigned.
   f.git(f.repo, "commit", "--allow-empty", "--no-gpg-sign", "-qm", "test: inherited main");
@@ -28,7 +26,7 @@ function fixture() {
   f.pass("prepare-baseline-refresh", ["--expected-head", reconciled, "--baseline", baseline]);
   f.approve();
   return { ...f, baseline };
-}
+});
 
 function expectRefused(f: ReturnType<typeof fixture>) {
   const source = f.prepGit("rev-parse", "HEAD");

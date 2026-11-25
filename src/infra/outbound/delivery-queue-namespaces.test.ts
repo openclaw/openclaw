@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -67,13 +68,11 @@ describe("outbound delivery namespace ownership", () => {
   it.each([false, true])(
     "preserves first stable custody across executable formats (bound first: %s)",
     async (boundFirst) => {
-      const generation = {
+      const generation = chatRef({
         agentId: "main",
         storePath: path.join(stateDir, "agent.sqlite"),
         sessionKey: "agent:main:test",
-        sessionId: "test",
-        lifecycleRevision: null,
-      };
+      });
       const payload = {
         channel: "matrix" as const,
         to: "!first:example",

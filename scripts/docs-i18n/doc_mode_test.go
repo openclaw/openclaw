@@ -543,15 +543,18 @@ func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.
 	t.Parallel()
 
 	source := "Before.\n\n```ts\nconst value = \"<user-id>\";\n```\n\nAfter.\n"
-	translated := "До.\n\n__OC_I18N_900014__\n\nПосле.\n"
+	translated := "До.\n\n```ts\nconst value = \"<user-id>\";\n```\n\n__OC_I18N_900014__\n\nПосле.\n"
 
 	err := validateDocBodyFencedLiterals(source, translated)
 	if err == nil {
 		t.Fatal("expected restored placeholder leak to be rejected")
 	}
+	if !strings.Contains(err.Error(), "i18n placeholder mismatch") {
+		t.Fatalf("expected placeholder mismatch, got %v", err)
+	}
 }
 
-func TestFinalDocOutputRejectsI18NPlaceholderLeak(t *testing.T) {
+func TestSameI18NProtocolMarkersRejectsInventedMarkers(t *testing.T) {
 	t.Parallel()
 
 	if sameI18NProtocolMarkers("Regular prose.\n", "Обычный текст.\n__OC_I18N_900014__\n") {
@@ -1274,7 +1277,7 @@ func TestValidateDocChunkTranslationRejectsTranslatedFencedProtocolMarkers(t *te
 		"",
 		"    ```text",
 		"    [<sender>에게 답장 중 id:<stanzaId>]",
-		"    <인용된 본문 또는 미디어 자리표시자>",
+		"    <quoted body or media placeholder>",
 		"    [/답장 중]",
 		"    ```",
 		"",
@@ -1285,8 +1288,8 @@ func TestValidateDocChunkTranslationRejectsTranslatedFencedProtocolMarkers(t *te
 	if err == nil {
 		t.Fatal("expected translated fenced protocol markers to be rejected")
 	}
-	if !strings.Contains(err.Error(), "fenced placeholder mismatch") && !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
-		t.Fatalf("expected fenced literal mismatch, got %v", err)
+	if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
 	}
 }
 
@@ -1856,7 +1859,7 @@ func TestValidateDocChunkTranslationStopsFencedLiteralsAtContainerBoundary(t *te
 func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	body := strings.Join([]string{
 		"```text",
-		"Line 01",
+		"Human prose.",
 		"Line 02",
 		"Line 03",
 		"Line 04",
@@ -1872,7 +1875,13 @@ func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected split translation to preserve masked protocol markers, got %v", err)
 	}
-	if !strings.Contains(translated, "[Notice kind=system]") || !strings.Contains(translated, "[/Notice]") {
+	if len(translator.rawInputs) < 2 {
+		t.Fatalf("expected multiple split translation calls, got %d", len(translator.rawInputs))
+	}
+	if !strings.Contains(translated, "Prosa humana.") {
+		t.Fatalf("expected translated prose after splitting:\n%s", translated)
+	}
+	if strings.Count(translated, "[Notice kind=system]") != 1 || strings.Count(translated, "[/Notice]") != 1 {
 		t.Fatalf("expected original protocol markers after split translation:\n%s", translated)
 	}
 	if strings.Contains(translated, "[Aviso kind=system]") {
@@ -2288,8 +2297,8 @@ func TestTranslateDocBodyChunkedSplitsOversizedSingletonBlock(t *testing.T) {
 }
 
 func TestTranslateDocBodyChunkedSplitsSingletonBlockWhenPromptBudgetExceeded(t *testing.T) {
-	lineA := "Alpha chunk with { braces }\n"
-	lineB := "Beta chunk with | pipes |\n"
+	lineA := "Line Alpha chunk with { braces }\n"
+	lineB := "Line Beta chunk with | pipes |\n"
 	body := lineA + lineB + "\n"
 	budget := max(estimateDocPromptCost(lineA), estimateDocPromptCost(lineB)) + 1
 	if estimateDocPromptCost(body) <= budget {
@@ -2311,8 +2320,9 @@ func TestTranslateDocBodyChunkedSplitsSingletonBlockWhenPromptBudgetExceeded(t *
 			t.Fatalf("expected split chunk under prompt budget, got cost=%d budget=%d:\n%s", estimateDocPromptCost(input), budget, input)
 		}
 	}
-	if !strings.Contains(translated, "Alpha chunk") || !strings.Contains(translated, "Beta chunk") {
-		t.Fatalf("expected translated singleton parts to be reassembled:\n%s", translated)
+	want := "Translated line Alpha chunk with { braces }\nTranslated line Beta chunk with | pipes |\n\n"
+	if translated != want {
+		t.Fatalf("expected translated singleton parts to be reassembled\nwant:\n%s\ngot:\n%s", want, translated)
 	}
 }
 
@@ -2339,13 +2349,14 @@ func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testi
 	}
 	for _, input := range translator.rawInputs {
 		if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
-			if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
+			if !strings.HasPrefix(input, "```md\n") || !strings.HasSuffix(strings.TrimSpace(input), "\n```") {
 				t.Fatalf("expected fenced split input to keep matched fence wrappers:\n%s", input)
 			}
 		}
 	}
-	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Trailing paragraph after the fence.") {
-		t.Fatalf("expected fence content and trailing prose to survive split:\n%s", translated)
+	want := "```md\nTranslated line 01\nTranslated line 02\nTranslated line 03\nTranslated line 04\n```\nTrailing paragraph after the fence.\n"
+	if translated != want {
+		t.Fatalf("expected fence content and trailing prose to survive split\nwant:\n%s\ngot:\n%s", want, translated)
 	}
 }
 

@@ -2523,15 +2523,15 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
     gateway: { port: 18789 },
   });
   const io = fastIO(home);
-  const snapshot = await io.readConfigFileSnapshot();
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
   const nextConfig = structuredClone(snapshot.config);
   nextConfig.env = { ...nextConfig.env, vars: nextVars };
   const result = await withActiveConfig(
     configPath,
     () =>
       writeConfigFile(nextConfig, {
+        ...writeOptions,
         baseSnapshot: snapshot,
-        expectedConfigPath: configPath,
         auditOrigin: "doctor",
         afterWrite: { mode: "none", reason: "automatic migration" },
         skipOutputLogs: true,
@@ -2548,8 +2548,7 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
     result: "rename",
     previousHash: snapshot.hash,
     nextHash: result.persistedHash,
-    // The runtime writer also records its managed plugins.installs removal.
-    changedPathCount: 71,
+    changedPathCount: 70,
   });
   if (!record || record.event !== "config.write") {
     throw new Error("expected config write audit record");
@@ -2557,7 +2556,7 @@ itWithHome("audits Doctor paths and snapshot fingerprints", async (home) => {
   expect(record.origin).toBe("doctor");
   expect((await io.readConfigFileSnapshot()).hash).toBe(result.persistedHash);
   expect(record.changedPaths).toHaveLength(64);
-  expect(record.changedPaths?.at(-1)).toBe("…+8 more");
+  expect(record.changedPaths?.at(-1)).toBe("…+7 more");
   expect(record.changedPaths?.slice(0, 2)).toEqual(["env.vars.SETTING_00", "env.vars.SETTING_01"]);
   const slot = await readLatestConfigSnapshotAuditRecordAsync({
     env: { OPENCLAW_TEST_FAST: "1" },

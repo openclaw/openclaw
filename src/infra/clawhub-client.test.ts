@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
 import { captureClawHubResponse } from "./clawhub.test-support.js";
+import { formatErrorMessage } from "./errors.js";
 import { makeStallingStream } from "./http-body.test-support.js";
 
 const search = (options: ClawHubFetchOptions) =>
@@ -31,6 +33,7 @@ describe("clawhub client", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetSecretRedactionRegistryForTest();
     delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
@@ -40,6 +43,47 @@ describe("clawhub client", () => {
     delete process.env.CLAWDHUB_DISABLE_TELEMETRY;
     originalEnv.restore();
   });
+
+  it.each(["explicit", "env", "legacy-env", "config", "anonymous"])(
+    "protects only the selected %s credential in error diagnostics",
+    async (source) => {
+      const token = "ordinary-material-5830";
+      const unused = "unused-material-9402";
+      expect(formatErrorMessage(token)).toBe(token);
+      await withTestDir({ prefix: "openclaw-clawhub-redaction-" }, async (root) => {
+        process.env.CLAWHUB_CONFIG_PATH = path.join(root, "config.json");
+        await writeConfigFile(
+          process.env.CLAWHUB_CONFIG_PATH,
+          JSON.stringify({ token: source === "config" ? token : unused }),
+        );
+        if (source === "config") {
+          delete process.env.CLAWHUB_TOKEN;
+          delete process.env.CLAWHUB_AUTH_TOKEN;
+        } else {
+          process.env.CLAWHUB_TOKEN =
+            source === "env" ? token : source === "legacy-env" ? " " : unused;
+          process.env.CLAWHUB_AUTH_TOKEN = source === "legacy-env" ? token : unused;
+        }
+        const request = respond(`Safe refusal for ${token}`, { status: 400 });
+        const error = await fetchClawHubJson({
+          path: "/auth",
+          token: source === "explicit" || source === "anonymous" ? token : undefined,
+          skipAuth: source === "anonymous",
+        }).catch((caught: unknown) => caught);
+        expect(new Headers(request.init()?.headers).get("Authorization")).toBe(
+          source === "anonymous" ? null : `Bearer ${token}`,
+        );
+        const diagnostic = formatErrorMessage(error);
+        expect(diagnostic).toContain("ClawHub /auth failed (400): Safe refusal for ");
+        if (source === "anonymous") {
+          expect(diagnostic).toContain(token);
+        } else {
+          expect(diagnostic).not.toContain(token);
+        }
+        expect(formatErrorMessage(unused)).toBe(unused);
+      });
+    },
+  );
 
   it.each([
     ["without a token", JSON.stringify({})],
@@ -249,4 +293,28 @@ it("does not retry 429 unless the caller enables rate-limit retries", async () =
   const optedIn = retryResponse(new Response("limited", { status: 429 }), true);
   expect(await (await optedIn.result).response.text()).toBe("ok");
   expect(optedIn.request).toHaveBeenCalledTimes(2);
+});
+
+it("keeps one long-backoff retry for extended ClawHub outages", async () => {
+  const delays: number[] = [];
+  const request = vi
+    .fn<() => Promise<{ response: Response }>>()
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("unavailable", { status: 500 }) })
+    .mockResolvedValueOnce({ response: new Response("ok") });
+
+  const result = await retryClawHubRead(request, {
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel();
+    },
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  expect(await result.response.text()).toBe("ok");
+  expect(request).toHaveBeenCalledTimes(5);
+  expect(delays).toEqual([1_000, 3_000, 10_000, 30_000]);
 });

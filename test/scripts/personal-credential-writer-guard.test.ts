@@ -313,6 +313,21 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
+it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
+  "inspects a raw write whose verb is spelled next to an escape: %s",
+  (verb) => {
+    // Only the escape locates this nested statement; its raw text holds no DELETE token.
+    expectDenied(
+      {
+        "src/escaped-writer.ts": `export function run(ready: boolean) {
+          if (ready) { db.exec('${verb} FROM auth_profile_store'); }
+        }`,
+      },
+      "raw authority-table write",
+    );
+  },
+);
+
 it.each([
   ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
   ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
@@ -470,6 +485,45 @@ it("guards publication mutation entry paths and the existing repeated factory ca
     (original) =>
       original.replace(`function sharedMutation() {`, `function sharedMutation() { ${factory}();`),
     `from ${publicationWorker}:sharedMutation`,
+  );
+});
+
+it("admits only the personal restart owner and its selected registry export", () => {
+  const personal = "src/gateway/github-personal-publication-store.worker.ts";
+  const registry = "src/state/openclaw-state-worker-registry.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const message = "unreviewed GitHub publication writer reference";
+  const reject = allowedGraph({
+    [personal]: `
+      export function ${writer}() {}
+      export const personalPublicationRestartOperations = {
+        'githubPublications.personalRestart': () => ${writer}(),
+      };
+    `,
+    [registry]: `
+      export const loaders = {
+        'githubPublications.personalRestart': () =>
+          import('../gateway/github-personal-publication-store.worker.js').then(
+            ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+          ),
+      };
+    `,
+  });
+  reject(
+    personal,
+    (source) => source.replace("githubPublications.personalRestart", "githubPublications.bypass"),
+    message,
+  );
+  reject(
+    publicationWorker,
+    `import { ${writer} } from '../gateway/github-personal-publication-store.worker.js';
+     function personalMutation() { ${writer}(); }`,
+    message,
+  );
+  reject(
+    registry,
+    (source) => source.replaceAll("personalPublicationRestartOperations", writer),
+    message,
   );
 });
 
@@ -815,6 +869,11 @@ it("permits the audited telemetry count operation without admitting an unreviewe
 
 it.each([
   [
+    "src/secrets/store/secret-store-clawhub-template.ts",
+    "savePersonalTemplateClawHubToken",
+    "templateClawHub.write",
+  ],
+  [
     "src/agents/auth-profiles/store-update.ts",
     "runPreparedAuthProfileStoreUpdate",
     "authProfiles.update",
@@ -942,16 +1001,31 @@ it("permits supplied-database SDK save custody without granting sibling factory 
 });
 
 const authStorageSources = {
-  "src/agents/sessions/auth-storage.ts": `
+  "src/agents/sessions/auth-storage.core.ts": `
     export class AuthStorage {
       static forAgent() { return new AuthStorage(); }
-      static create() { return AuthStorage.forAgent(); }
       static forAgentAsync() { return new AuthStorage(); }
       static fromStorage() { return new AuthStorage(); }
       static inMemory() { return new AuthStorage(); }
       set() {}
       remove() {}
     }
+  `,
+  "src/agents/sessions/auth-storage.ts": `
+    import { AuthStorage as CoreAuthStorage } from './auth-storage.core.js';
+    declare const Object: {
+      assign<T, U>(target: T, source: U): T & U;
+      defineProperty(target: unknown, property: string, descriptor: unknown): void;
+    };
+    export type AuthStorage = CoreAuthStorage;
+    const forAgent = CoreAuthStorage.forAgent;
+    const forAgentAsync = CoreAuthStorage.forAgentAsync;
+    export const AuthStorage = Object.assign(CoreAuthStorage, {
+      forAgent() { return forAgent(); },
+      async forAgentAsync() { return forAgentAsync(); },
+      create() { return AuthStorage.forAgent(); },
+    });
+    Object.defineProperty(AuthStorage, 'create', { enumerable: false });
   `,
   "src/agents/sessions/index.ts": `export * from './auth-storage.js';`,
   "src/plugin-sdk/agent-sessions.ts": `export { AuthStorage } from '../agents/sessions/index.js';`,
@@ -974,6 +1048,9 @@ it("preserves the released AuthStorage barrel and nonnative constructors", () =>
 
 it.each([
   "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; export const Storage = AuthStorage;",
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; new AuthStorage();",
   "import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js'; Storage.create().remove();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage.forAgent().set();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage['create']().remove();",
@@ -990,13 +1067,53 @@ it.each([
   );
 });
 
+it.each([
+  "Object.defineProperty(AuthStorage, 'create', { value: () => undefined });",
+  "Object.defineProperty(AuthStorage, 'forAgent', { enumerable: false });",
+  "export const escaped = forAgent;",
+  "{ const forAgent = CoreAuthStorage.forAgent; }",
+  "export function escapeNestedFactory() { const forAgent = CoreAuthStorage.forAgent; return forAgent; }",
+  "export function escapeNestedConstructor() { const AuthStorage = Object.assign(CoreAuthStorage, { forAgent() {}, async forAgentAsync() {}, create() {} }); return AuthStorage; }",
+])("rejects AuthStorage facade escapes beyond its descriptor adapter: %s", (extra) => {
+  expectDenied({
+    ...authStorageSources,
+    "src/agents/sessions/auth-storage.ts":
+      authStorageSources["src/agents/sessions/auth-storage.ts"] + extra,
+  });
+});
+
+it("rejects exporting the captured synchronous AuthStorage factory", () => {
+  expectDenied(
+    {
+      ...authStorageSources,
+      "src/agents/sessions/auth-storage.ts": authStorageSources[
+        "src/agents/sessions/auth-storage.ts"
+      ].replace("const forAgent =", "export const forAgent ="),
+    },
+    [
+      "auth-storage.core.ts:AuthStorage/forAgent",
+      "auth-storage.ts:forAgent from src/agents/sessions/index.ts",
+    ],
+  );
+});
+
 it("keeps session membership writes with the worker and canonical entry owners", () => {
   const members = "src/config/sessions/session-sharing-store.native.ts";
   const reject = allowedGraph({
-    [members]: `export function addSessionMember() { db.insertInto('session_members'); }`,
+    [members]: `
+      export function addSessionMember() { addSessionMemberInTransaction(); }
+      export function addSessionMemberInTransaction() { db.insertInto('session_members'); }
+      export function setSessionMemberAccess() { db.updateTable('session_members'); }
+    `,
     "src/config/sessions/session-sharing-store.worker.ts": `
-      import { addSessionMember } from './session-sharing-store.native.js';
-      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); } }; }
+      import { addSessionMember, setSessionMemberAccess } from './session-sharing-store.native.js';
+      function bindSqliteWorkerBackend() { return { execute() { addSessionMember(); setSessionMemberAccess(); } }; }
+    `,
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts": `
+      import { addSessionMemberInTransaction } from './session-sharing-store.native.js';
+      export function updateSessionProfileInvolvementInTransaction() {
+        addSessionMemberInTransaction();
+      }
     `,
     "src/config/sessions/session-accessor.sqlite-node-artifacts.ts": `
       export function clearSessionCollaborationForKey() {
@@ -1013,14 +1130,25 @@ it("keeps session membership writes with the worker and canonical entry owners",
     `,
   });
 
-  reject(
-    "src/new-writer.ts",
-    `
-        import { addSessionMember } from './config/sessions/session-sharing-store.native.js';
-        addSessionMember();
+  for (const writer of [
+    "addSessionMember",
+    "addSessionMemberInTransaction",
+    "setSessionMemberAccess",
+  ]) {
+    reject(
+      "src/new-writer.ts",
+      `
+        import { ${writer} } from './config/sessions/session-sharing-store.native.js';
+        ${writer}();
         db.exec('DELETE FROM session_members');
       `,
-    ["unreviewed session membership writer reference", "raw authority-table write"],
+      ["unreviewed session membership writer reference", "raw authority-table write"],
+    );
+  }
+  reject(
+    "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+    (source) => source.replace("updateSessionProfileInvolvementInTransaction", "unreviewedWriter"),
+    "unreviewed session membership writer reference",
   );
 });
 
@@ -1041,5 +1169,20 @@ it.each([
       "export function connectUserModelAccount",
       "export default function connectUserModelAccount",
     ),
+  );
+});
+
+it("permits repository reopening only through the current publication authority owner", () => {
+  const repository = "src/gateway/github-repository-publication-store.worker.ts";
+  const reject = allowedGraph({
+    [repository]:
+      "export function reopenRepositoryGitHubPublicationInDatabase() { db.updateTable('github_repository_publication_requests'); }",
+    [publicationWorker]:
+      "import { reopenRepositoryGitHubPublicationInDatabase } from '../gateway/github-repository-publication-store.worker.js'; function repositoryMutation() { reopenRepositoryGitHubPublicationInDatabase(); }",
+  });
+  reject(
+    publicationWorker,
+    (original) => original.replace("function repositoryMutation", "function bypass"),
+    "unreviewed GitHub publication writer reference",
   );
 });

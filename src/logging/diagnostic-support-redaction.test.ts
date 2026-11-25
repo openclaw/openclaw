@@ -79,6 +79,9 @@ describe("diagnostic support redaction", () => {
     "native module missing",
     "native module ABI mismatch",
     "startup ran out of memory",
+    "Package rollback stat changed: fields=size,mtimeNs,ctimeNs",
+    "Package rollback stat changed: fields=dev,ino,mode,uid,gid,nlink,size,mtimeNs,ctimeNs",
+    "Package rollback original inode unavailable",
   ])("admits only the exact public diagnostic template %s", (message) => {
     const context = { env: {}, stateDir: tempDir };
     expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
@@ -120,6 +123,18 @@ describe("diagnostic support redaction", () => {
       allowed ? line : "[redacted-diagnostic]",
     );
   });
+
+  it.each(["size,private-customer", "size; before=private-value"])(
+    "rejects private values in package stat classifications: %s",
+    (fields) => {
+      expect(
+        redactPublicSupportDiagnosticLine(`Package rollback stat changed: fields=${fields}`, {
+          env: {},
+          stateDir: tempDir,
+        }),
+      ).toBe("[redacted-diagnostic]");
+    },
+  );
 
   it.each([
     [
@@ -190,6 +205,21 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["Invalid package dist content inventory", " at /private/example/inventory.json"],
+    ["Invalid package dist content inventory", ": private-reason token=synthetic-private-token"],
+    [
+      "Invalid package dist content inventory: malformed metadata",
+      " at /private/example/inventory.json",
+    ],
+    ["Invalid package dist content inventory entry: malformed metadata", " for private-tenant"],
+    [
+      "Invalid package dist content inventory: content mismatch",
+      ` at /private/example/index.js: ${"a".repeat(64)}`,
+    ],
+    [
+      "Invalid package dist content inventory: executable permission mismatch",
+      " on private-host.example token=synthetic-private-token",
+    ],
     ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
     ["sentinel transaction refused", " on private-host.example"],
     ["sentinel transaction unavailable", " for token=synthetic-private-token"],
