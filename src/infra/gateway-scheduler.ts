@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithSessionControllerCleanup } from "../sessions/session-controller.cleanup-context.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
@@ -57,6 +58,12 @@ type ScheduledWork = {
 };
 
 const log = createSubsystemLogger("gateway/scheduler");
+
+function reportJobFailure(id: string, error: unknown): void {
+  const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
+  log.error(`${id} failed: ${detail}`);
+}
+
 const hostClock: GatewaySchedulerClock = {
   now: () => Date.now(),
   monotonicNow: () => performance.now(),
@@ -359,19 +366,21 @@ export class GatewayScheduler {
         runWithMainThreadTask(job.diagnosticName, () => work.run(job.run)),
       );
     } catch (error) {
-      log.error(`${job.id} failed: ${String(error)}`);
+      reportJobFailure(job.id, error);
     }
     if (!result && !work.hasPendingWork) {
       finish();
       return;
     }
     void Promise.resolve(result)
-      .catch((error: unknown) => log.error(`${job.id} failed: ${String(error)}`))
+      .catch((error: unknown) => reportJobFailure(job.id, error))
       .then(() =>
-        AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => work.drain(),
-        ),
+        work.hasPendingWork
+          ? AsyncWorkScope.runWhenAllIdle(
+              () => [work],
+              () => work.drain(),
+            )
+          : work.drain(),
       )
       .finally(finish);
     return done.promise;

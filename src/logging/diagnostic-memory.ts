@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import { totalmem } from "node:os";
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
+import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-event-snapshot.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
@@ -110,9 +111,12 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
 function publishMemorySample(memory: DiagnosticMemoryUsage, uptimeMs: number): void {
   emitDiagnosticEvent({
     type: "diagnostic.memory.sample",
-    memory: {
-      ...memory,
-      heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+    // The dispatcher reads payload fields only after finding an interested listener.
+    get memory() {
+      return freezeOwnedDiagnosticSnapshot({
+        ...memory,
+        heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+      });
     },
     uptimeMs,
   });

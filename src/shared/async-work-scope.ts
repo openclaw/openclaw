@@ -34,12 +34,19 @@ export const AsyncWorkScopeClosedError = resolveGlobalSingleton(
 /** Joins cooperating descendants even when their caller returns a cached value first. */
 export class AsyncWorkScope {
   private readonly pending = new Set<Promise<unknown>>();
-  private readonly controller = new AbortController();
+  private controller?: AbortController;
   private phase: "open" | "closing" | "closed" = "open";
 
   constructor(private readonly failures?: Set<unknown>) {}
 
   get signal(): AbortSignal {
+    if (!this.controller) {
+      this.controller = new AbortController();
+      if (this.isClosing) {
+        this.controller.abort();
+        materializeErrorStack(this.controller.signal.reason);
+      }
+    }
     return this.controller.signal;
   }
 
@@ -115,8 +122,13 @@ export class AsyncWorkScope {
       return;
     }
     this.phase = "closing";
-    this.controller.abort(reason);
-    materializeErrorStack(this.controller.signal.reason);
+    // A default abort reason is only needed once the cancellation signal escapes.
+    const controller =
+      reason === undefined ? this.controller : (this.controller ??= new AbortController());
+    if (controller) {
+      controller.abort(reason);
+      materializeErrorStack(controller.signal.reason);
+    }
   }
 
   /** Starts the next phase in the same continuation that observes settled pending work. */

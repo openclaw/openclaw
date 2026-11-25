@@ -36,7 +36,11 @@ export function cloneDiagnosticValueForListener<T extends object>(value: T, owne
     immutableSnapshots.add(value);
     return Object.freeze(value);
   }
-  const snapshot = structuredClone(value);
+  return freezeOwnedDiagnosticSnapshot(structuredClone(value));
+}
+
+/** Takes ownership of a data graph assembled by core telemetry producers. */
+export function freezeOwnedDiagnosticSnapshot<T extends object>(snapshot: T): T {
   if (freezeDiagnosticValue(snapshot, new WeakSet())) {
     immutableSnapshots.add(snapshot);
   }
@@ -90,7 +94,7 @@ function isImmutableDiagnosticValue(value: unknown, seen?: WeakSet<object>): boo
 }
 
 function freezeDiagnosticValue(value: unknown, seen: WeakSet<object>): boolean {
-  if (!value || typeof value !== "object" || seen.has(value)) {
+  if (!value || typeof value !== "object" || immutableSnapshots.has(value) || seen.has(value)) {
     return true;
   }
   // Nonempty typed arrays cannot be frozen; keep buffer views listener-local.
