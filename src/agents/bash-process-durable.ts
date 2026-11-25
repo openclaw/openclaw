@@ -9,6 +9,7 @@ import { readCgroupMemoryUsage, watchHostExecMemory } from "../process/child-mem
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type {
   ManagedRun,
+  ReleasedProcess,
   RunExit,
   SpawnInput,
   TerminationReason,
@@ -34,6 +35,7 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { systemdDurableSupervisor } from "./bash-process-systemd.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
 import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
 import {
   buildExecExitOutcome,
@@ -232,8 +234,15 @@ export async function initializeDurableProcesses(
       record.endedAt !== undefined &&
       record.endedAt + record.cleanupMs <= Date.now()
     ) {
-      await current.remove(record.id);
-      await forgetLog(record.logPath);
+      // Release a job retained for what its command left running; keep the row if that fails.
+      // Unit queries stay off the startup path.
+      void supervisor()
+        .cleanup(record.unitName, { assertCurrent: current.assertCurrent })
+        .then(async () => {
+          await current.remove(record.id);
+          await forgetLog(record.logPath);
+        })
+        .catch(warn);
       continue;
     }
     const session = createProcessSession({
@@ -260,15 +269,17 @@ export async function initializeDurableProcesses(
       .then(async (exit) => {
         session.finalizing = true;
         await prepareNotification();
+        const outcome = buildExecExitOutcome({
+          exit,
+          aggregated: session.aggregated,
+          durationMs: exit.durationMs,
+          timeoutSec: null,
+          processContinuationAvailable: true,
+        });
         await settleExecProcessExit({
           session,
-          outcome: buildExecExitOutcome({
-            exit,
-            aggregated: session.aggregated,
-            durationMs: exit.durationMs,
-            timeoutSec: null,
-            processContinuationAvailable: true,
-          }),
+          // What the command left running becomes ordinary background sessions, named here.
+          outcome: await settleHostExecDescendants(session, run, outcome, []),
           notifyOnExit: (target, status) => maybeNotifyOnExit(target, status, false),
           failureOutcome: (error) =>
             buildExecRuntimeErrorOutcome({
@@ -380,6 +391,9 @@ function bind(
     terminal = false,
     stopReason: TerminationReason | undefined;
   let cgroupDirectory: string | undefined;
+  // Processes the command left running when it exited; they become ordinary background
+  // sessions (process list, kill, session reset and Gateway stop end them).
+  let survivors: ReleasedProcess[] = [];
   const decoder = new StringDecoder("utf8"),
     sanitize = createStreamingBinaryOutputSanitizer();
   // Observation timers detach request context; retain only the process transport owner.
@@ -427,6 +441,8 @@ function bind(
       if (observed.state === "exited" && observed.note) {
         appendOutput(session, "stderr", observed.note);
       }
+      // Accepted edge case: when they cannot be listed, they keep running untracked.
+      survivors = (observed.state === "exited" && observed.survivors) || [];
       const result = {
         reason:
           stopReason ?? (observed.state === "exited" ? observed.reason : ("spawn-error" as const)),
@@ -442,10 +458,6 @@ function bind(
       record.result = result;
       record.endedAt = endedAt;
     }
-    // Record the real status before releasing the supervisor's retained job.
-    await supervisor().cleanup(record.unitName, {
-      assertCurrent: persistence.assertCurrent,
-    });
     session.endedAt = record.endedAt;
     appendOutput(session, "stdout", sanitize(decoder.end()));
     terminal = true;
@@ -457,7 +469,12 @@ function bind(
       timedOut: record.result.reason === "overall-timeout",
       noOutputTimedOut: false,
     });
+    // The recorded result comes first; release never waits for what the command left
+    // running, and a job that still holds it is released at retention end or restart.
+    await release();
   };
+  const release = () =>
+    supervisor().cleanup(record.unitName, { assertCurrent: persistence.assertCurrent });
   const cancel = (reason: TerminationReason, assertSource?: () => void) => {
     const assertCurrent = () => {
       persistence.assertCurrent();
@@ -513,6 +530,7 @@ function bind(
     },
     remove: () => {
       void enqueue(async () => {
+        await release();
         await persistence.remove(record.id);
         await forgetLog(record.logPath);
       }).catch(warn);
@@ -539,6 +557,12 @@ function bind(
     startedAtMs: record.startedAt,
     activity,
     wait: () => exit.promise,
+    releasesOnRootExit: true,
+    // Exec settlement hands these to the leftover-session owner, as for ordinary exec.
+    waitForExtinction: async () => {
+      await exit.promise;
+      return { status: "released", survivors };
+    },
     cancel: (reason = "manual-cancel") => {
       void cancel(reason).catch(warn);
     },

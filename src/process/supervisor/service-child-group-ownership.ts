@@ -536,9 +536,28 @@ function describeReleasedProcesses(
   return rows
     .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
     .toSorted((left, right) => left.pid - right.pid)
-    .map(({ pid, command }) =>
-      command === undefined ? { pid } : { pid, command: truncateCommand(command) },
-    );
+    .map(describeRow);
+}
+
+function describeRow({ pid, command }: ProcessRow): ReleasedProcess {
+  return command === undefined ? { pid } : { pid, command: truncateCommand(command) };
+}
+
+/**
+ * Name the live processes `include` selects, such as a durable command's leftovers.
+ * Undefined when the process table cannot be read.
+ */
+export function describeLiveProcesses(
+  include: (row: { pid: number; pgid: number }) => boolean,
+): ReleasedProcess[] | undefined {
+  try {
+    return readProcessRows()
+      .filter((row) => row.live && include(row))
+      .toSorted((left, right) => left.pid - right.pid)
+      .map(describeRow);
+  } catch {
+    return undefined;
+  }
 }
 
 function truncateCommand(command: string | undefined): string | undefined {
