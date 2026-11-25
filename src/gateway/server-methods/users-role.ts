@@ -14,8 +14,8 @@ import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
+  resolveOperatorRoleSelfLockout,
 } from "../operator-role-policy.js";
-import { resolveOperatorRoleSelfLockout } from "../operator-role-policy.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { respondError } from "./response.js";
 import { recordRoleAssignmentChange } from "./system-changes.js";
