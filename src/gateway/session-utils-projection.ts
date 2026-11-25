@@ -20,7 +20,10 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
-import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
+import {
+  resolveSessionProjectedAutoRuntime,
+  type SessionRuntimeResolution,
+} from "./session-runtime-resolution.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -285,15 +288,17 @@ export function resolveGatewaySessionRuntimeProjection(params: {
       acpRuntime: acpMeta != null,
       acpBackend: acpMeta?.backend,
     });
-  if (agentRuntime.id === "auto" && entry) {
+  const configuredRuntime = agentRuntime.id;
+  let embeddedAutoRuntime: string | undefined;
+  if (configuredRuntime === "auto" && entry) {
     agentRuntime = {
       ...agentRuntime,
       id: resolveWorkerPlacementModelRuntime({
         ...params,
         entry,
-        resolveEmbeddedRuntime: runtimeResolution
-          ? () => runtimeResolution.effective(params)
-          : undefined,
+        resolveEmbeddedRuntime: () =>
+          (embeddedAutoRuntime =
+            runtimeResolution?.effective(params) ?? resolveSessionProjectedAutoRuntime(params)),
         preparedEnvironment: params.rowContext
           ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
           : undefined,
@@ -303,6 +308,8 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   return {
     acpMeta,
     agentRuntime,
+    configuredRuntime,
+    embeddedAutoRuntime,
     runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
   };
 }

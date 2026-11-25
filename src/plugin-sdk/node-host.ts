@@ -21,6 +21,8 @@ export function resolveNodeHostExecutable(
     env?: NodeJS.ProcessEnv;
     pathEnv?: string;
     includeExtensionless?: boolean;
+    /** Direct lifecycle probes can bypass the request-time PATH cache. */
+    useCache?: false;
     strategy: "direct" | "fallback" | "prefer";
   },
 ): { executable: string; pathEnv?: string } | undefined {
@@ -31,7 +33,7 @@ export function resolveNodeHostExecutable(
         executable,
         options.pathEnv ?? env.PATH ?? env.Path ?? "",
         env,
-        { includeExtensionless },
+        { includeExtensionless, useCache: options.useCache },
       );
       return resolved ? { executable: resolved } : undefined;
     }
