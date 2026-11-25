@@ -4334,8 +4334,16 @@ extension NodeAppModel {
             guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
                   await self.operatorGateway.currentRoute(ifGatewayID: stableID) == admittedRoute
             else { return false }
-            self.setOperatorConnected(false)
-            self.operatorStatusText = "Personal sign-in unavailable"
+            self.applyOperatorGatewayConnectionProblem(
+                GatewayConnectionProblem(
+                    kind: .unknown,
+                    owner: .network,
+                    title: "Personal sign-in unavailable",
+                    message: "The Gateway did not verify the selected personal sign-in",
+                    actionLabel: "Retry",
+                    retryable: true,
+                    pauseReconnect: false),
+                route: (routeGeneration, stableID))
             await self.operatorGateway.disconnect()
             return false
         }

@@ -349,7 +349,9 @@ private func pendingHandoffDiagnostic(
             model.setScenePhase(.active)
             for index in 0..<2 {
                 model.applyGatewayConnectConfig(config, forceReconnect: true)
-                try await waitForDashboardCondition { model.gatewayPairingPaused }
+                try await waitForDashboardCondition {
+                    model.connection.node.pausedProblem?.needsPairingApproval == true
+                }
                 let request = try #require(fixture.capturedAuth(at: index))
                 try #require(request.role == "node")
                 #expect(request.token == "synthetic-shared-token")

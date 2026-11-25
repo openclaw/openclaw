@@ -47,8 +47,8 @@ struct PersonalGatewayAuthenticationTests {
                 token: config.token, bootstrapToken: config.bootstrapToken, password: config.password)),
             connectOptions: config.operatorOptions(from: config.nodeOptions),
             sessionBox: nil,
-            onConnected: { await model.setOperatorConnected(true) },
-            onDisconnected: { _ in await model.setOperatorConnected(false) },
+            onConnected: { _ = await model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil) },
+            onDisconnected: { _ in _ = await model.apply(.dropped, to: .operator, route: nil) },
             onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
     }
 
@@ -123,7 +123,7 @@ struct PersonalGatewayAuthenticationTests {
         #expect(model.makeChatOfflineStore() == nil)
         model.adoptPersonalChatOwner(scope: "synthetic-person-a", stableID: "manual|gateway.example.ts.net|443")
         let owner = model.chatViewModelOwnerID
-        model.setOperatorConnected(false)
+        model.apply(.dropped, to: .operator, route: nil)
         #expect(model.chatViewModelOwnerID == owner)
         model.adoptPersonalChatOwner(scope: "synthetic-person-a", stableID: "manual|gateway.example.ts.net|443")
         #expect(model.chatViewModelOwnerID == owner)
@@ -142,7 +142,7 @@ struct PersonalGatewayAuthenticationTests {
             DashboardDocumentFixture(url: foreignOrigin ? URL(string: "https://foreign.example/settings")! : url)
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         model.activeGatewayConnectConfig = config
-        model.setOperatorConnected(true)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         let bridge = IOSPersonalGatewayAuthBridge(appModel: model, config: config, url: url)
         let controller = fixture.webView.configuration.userContentController
         controller.addScriptMessageHandler(bridge, contentWorld: .page, name: IOSPersonalGatewayAuthBridge.name)
@@ -170,7 +170,7 @@ struct PersonalGatewayAuthenticationTests {
         } else {
             #expect(reply["error"] as? String == "Personal sign-in is unavailable. Reconnect in the app.")
         }
-        model.setOperatorConnected(false)
+        model.apply(.dropped, to: .operator, route: nil)
         try await waitForDashboardCondition { !fixture.webView.isLoading && fixture.webView.url?.host == nil }
         let body = try await fixture.webView.evaluateJavaScript("document.body.textContent") as? String
         #expect(body?.contains("Personal sign-in changed") == true)
@@ -330,7 +330,7 @@ struct PersonalGatewayAuthenticationTests {
                 let rpc = try await fixture.waitForRPC(method: "users.self")
                 #expect(rpc.params?.isEmpty == true)
 
-                model.setOperatorConnected(false)
+                model.apply(.dropped, to: .operator, route: nil)
                 try await waitForDashboardCondition {
                     !document.webView.isLoading && document.webView.url?.host == nil
                 }
@@ -560,7 +560,7 @@ struct PersonalGatewayAuthenticationTests {
         let attachment = OpenClawPendingAttachment(
             url: nil, data: Data("fixture".utf8), fileName: "fixture.txt", mimeType: "text/plain", preview: nil)
         original.attachments = [attachment]
-        model.setOperatorConnected(false)
+        model.apply(.dropped, to: .operator, route: nil)
         model.adoptPersonalChatOwner(
             scope: changesPerson ? "synthetic-person-b" : "synthetic-person-a", stableID: config.effectiveStableID)
         owner.sync(appModel: model)
