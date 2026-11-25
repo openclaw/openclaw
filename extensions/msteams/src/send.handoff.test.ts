@@ -12,11 +12,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 import { sendMSTeamsMessages } from "./messenger.js";
+import { msteamsOutbound } from "./outbound.js";
+import * as polls from "./polls.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
+import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsPersonalConversation } from "./sdk-proactive.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { sendPollMSTeams } from "./send.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
+const tempDirs = useMSTeamsStateTempDirs();
 const { resolveMSTeamsSendContext } = vi.hoisted(() => ({
   resolveMSTeamsSendContext: vi.fn(),
 }));
@@ -183,6 +189,8 @@ async function createConnectorFixture() {
 }
 
 beforeEach(async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("msteams-handoff-"));
+  setMSTeamsRuntime(msteamsRuntimeStub);
   fixture = await createConnectorFixture();
 });
 
@@ -193,6 +201,7 @@ afterEach(async () => {
     effectInput.current = undefined;
     resolveMSTeamsSendContext.mockReset();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   }
 });
 
@@ -317,6 +326,98 @@ describe("registered Teams delivery handoff", () => {
       releaseToken.resolve();
     }
   });
+  function postedFirstChoice() {
+    const [attachment] = fixture.requests[0]!.activity.attachments as Array<{
+      content: {
+        body: Array<{ type: string; id: string; choices: Array<{ value: string }> }>;
+        actions: Array<{ type: string; verb: string; data: { openclawPollId: string } }>;
+      };
+    }>;
+    const [action] = attachment.content.actions;
+    const input = attachment.content.body.find((item) => item.type === "Input.ChoiceSet")!;
+    expect(action).toMatchObject({ type: "Action.Execute", verb: "openclaw.poll.vote" });
+    const selection = input.choices[0].value;
+    expect(selection).toBe("0");
+    const vote = polls.extractMSTeamsPollVote({
+      value: { action: { ...action, data: { ...action.data, [input.id]: selection } } },
+    });
+    expect(vote).toEqual({ pollId: action.data.openclawPollId, selections: ["0"] });
+    return vote!;
+  }
+
+  it.each([false, true])(
+    "accepts the first card vote before metadata settles (failure=%s)",
+    async (fail) => {
+      const accountId = "support";
+      resolveMSTeamsSendContext.mockResolvedValue({ ...fixture.context, accountId });
+      const store = polls.createMSTeamsPollStoreState({ accountId });
+      const defaultStore = polls.createMSTeamsPollStoreState();
+      const settling = createDeferred<void>();
+      const release = createDeferred<void>();
+      const createStore = polls.createMSTeamsPollStoreState;
+      vi.spyOn(polls, "createMSTeamsPollStoreState").mockImplementation((params) => ({
+        ...createStore(params),
+        async setPollMessageId(id, messageId) {
+          settling.resolve();
+          await release.promise;
+          if (fail) {
+            throw new Error("fixture metadata failure");
+          }
+          await createStore(params).setPollMessageId(id, messageId);
+        },
+      }));
+
+      const sending = msteamsOutbound.sendPoll!({
+        ...destination,
+        accountId,
+        poll: { question: "Ship?", options: ["Yes", "No"] },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          settling.promise,
+          sending,
+          "Connector did not accept the poll",
+        );
+        const vote = postedFirstChoice();
+        expect(await defaultStore.getPoll(vote.pollId)).toBeNull();
+        expect(await store.getPoll(vote.pollId)).toMatchObject({ conversationId });
+        expect(await store.recordVote({ ...vote, voterId: "first" })).toBe(true);
+        release.resolve();
+        if (fail) {
+          await expect(sending).rejects.toMatchObject({
+            deliveryResult: { visibleReplySent: true, messageIds: ["accepted-1"] },
+          });
+        } else {
+          await expect(sending).resolves.toMatchObject({
+            messageId: "accepted-1",
+            pollId: vote.pollId,
+          });
+        }
+        const saved = await store.getPoll(vote.pollId);
+        expect(saved).toMatchObject({ conversationId, updatedAt: expect.any(String) });
+        expect(saved?.messageId).toBe(fail ? undefined : "accepted-1");
+      } finally {
+        release.resolve();
+        await sending.catch(() => {});
+      }
+    },
+  );
+
+  it.each([400, 503])("handles the provisional poll after Connector HTTP %i", async (status) => {
+    fixture.setResponder((response) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "fixture rejection" } }));
+    });
+    await expect(sendPoll()).rejects.toThrow();
+    const { pollId } = postedFirstChoice();
+    const saved = await polls.createMSTeamsPollStoreState().getPoll(pollId);
+    if (status === 400) {
+      expect(saved).toBeNull();
+    } else {
+      expect(saved).toMatchObject({ conversationId });
+    }
+  });
+
   it("checks poll authority again after dispatch recording waits", async () => {
     const { state, handoff } = createAuthority();
     const dispatchStarted = createDeferred<void>();
