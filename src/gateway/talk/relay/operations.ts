@@ -109,6 +109,22 @@ export function closeRelaySession(
     if (reason === "error") {
       session.closing.reason = reason;
     }
+    // A close that failed settlement admission drained the accepted transcript
+    // but never ran the durable voice close, and the session stays in the
+    // draining set for exactly this retry. Re-attempt the real close through
+    // the voice owner once settlement authority is available (#204615).
+    if (session.closing.voiceCloseRetryable && !session.voiceSessionClose) {
+      const disposition =
+        options?.disposition ??
+        (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
+          ? "detach"
+          : "abort");
+      void closeRelayVoiceSession(session, disposition).catch((error: unknown) => {
+        session.context.logGateway.warn(
+          `retried realtime relay voice session close failed: ${formatError(error)}`,
+        );
+      });
+    }
     return session.closing.completion;
   }
   const completion = createDeferredCore();
@@ -166,6 +182,8 @@ async function rejectRelaySessionClose(
 ): Promise<never> {
   closing.reason = "error";
   closing.runTranscript = () => false;
+  // The durable close never ran; a later close attempt is the recovery owner.
+  closing.voiceCloseRetryable = true;
   session.voiceTranscriptQueue.seal();
   // The flush below is local to this failure branch. Do NOT latch it into
   // `session.voiceSessionClose`: the durable voice-session record is still
@@ -214,10 +232,18 @@ function finishRelaySessionClose(
   );
   const finish = (close = closeVoice) => {
     const voiceClose = close(disposition).finally(() => session.runAuthority?.release());
-    void voiceClose.then(
-      () => drainingRelaySessions.delete(session),
-      () => drainingRelaySessions.delete(session),
-    );
+    // Remove the session from the draining set only when the durable voice
+    // close settles. An admission-failure close settles the transcript flush
+    // without ever running closeRelayVoiceSession; the session must stay
+    // discoverable by connection cleanup so a later attempt can settle the
+    // durable record (#204615).
+    const durableClose = session.voiceSessionClose;
+    if (durableClose) {
+      void durableClose.then(
+        () => drainingRelaySessions.delete(session),
+        () => drainingRelaySessions.delete(session),
+      );
+    }
     broadcastRelaySessionClosed(session, closing.reason, options?.eventReason);
     return voiceClose;
   };

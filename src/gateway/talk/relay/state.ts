@@ -322,6 +322,8 @@ export type RelaySession = {
     reason: "completed" | "error";
     completion?: Promise<void>;
     runTranscript?: (run: () => boolean) => boolean;
+    /** Set when close admission failed: a later close attempt may retry the durable voice close. */
+    voiceCloseRetryable?: boolean;
   };
   failSession: (message: string) => void;
 };
