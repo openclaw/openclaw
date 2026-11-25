@@ -10,6 +10,12 @@ enum ChatModelPickerRoute: Hashable {
     case account(String)
 }
 
+enum ChatModelAccountsPolicy {
+    /// Sign out removes saved provider credentials and is proven only on the fixture, so it stays hidden
+    /// until Victor decides to offer it. The code and its unit tests stay in place.
+    static let offersSignOut = false
+}
+
 /// The sign-in flow of one model sheet. It takes the connection the first time the accounts page opens and
 /// keeps it, with any sign-in in progress, while the person moves between the accounts and a provider.
 @MainActor
@@ -235,7 +241,7 @@ private struct ChatModelAccountSections: View {
         } else if !self.account.isSignedIn {
             ChatModelAccountsMessageSection(text: ChatModelAccountsCopy.noOptions(self.account.name))
         }
-        if self.account.isSignedIn, !self.account.removableProfileIDs.isEmpty {
+        if ChatModelAccountsPolicy.offersSignOut, self.account.isSignedIn, !self.account.removableProfileIDs.isEmpty {
             self.signOut
         }
     }

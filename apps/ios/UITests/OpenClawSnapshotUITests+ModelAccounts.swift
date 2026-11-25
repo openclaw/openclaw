@@ -13,7 +13,8 @@ extension OpenClawSnapshotUITests {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sign-in expires"))
                 .firstMatch.waitForExistence(timeout: 5),
             app.debugDescription)
-        XCTAssertTrue(app.buttons["model-auth-sign-out"].exists)
+        // Sign out is hidden until Victor decides to offer it (ChatModelAccountsPolicy.offersSignOut).
+        XCTAssertFalse(app.buttons["model-auth-sign-out"].exists)
         self.attachScreenshot(named: "provider-account-expiring")
         // The system back button returns to the accounts page, then to the models.
         app.buttons["BackButton"].tap()
@@ -23,9 +24,8 @@ extension OpenClawSnapshotUITests {
     func testProviderAccountSignInFinishes() throws {
         let app = try self.openProviderAccounts()
         try self.enterXAIKey("fixture-key", in: app)
-        // Signed in: the page shows the account and Sign out, with no banner; the options stay reachable.
-        XCTAssertTrue(app.buttons["model-auth-sign-out"].waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Other ways to sign in"].exists, app.debugDescription)
+        // Signed in: the page shows the account with no banner; the options stay reachable.
+        XCTAssertTrue(app.staticTexts["Other ways to sign in"].waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(app.descendants(matching: .any)["model-auth-problem"].exists)
         self.attachScreenshot(named: "provider-account-signed-in")
     }
