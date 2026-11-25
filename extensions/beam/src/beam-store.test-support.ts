@@ -2,8 +2,13 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   PluginStateEntry,
   PluginStateOperationCommand,
+  PluginStateOperationTransaction,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
+import {
+  executeBeamPublication,
+  type BeamPublicationOperations,
+} from "../publication-operation-api.js";
 import { executeBeamUpload, type BeamUploadOperations } from "../upload-operation-api.js";
 import { createBeamStore } from "./store.js";
 import type { BeamStoredSession } from "./types.js";
@@ -45,15 +50,22 @@ export function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploa
 export function memoryStore() {
   const values = new Map<string, BeamStoredSession>();
   const handoffValues = new Map<string, BeamStoredSession>();
-  const namespaces = [values, handoffValues];
+  const namespaceRows = new Map<object, Map<string, unknown>>();
   const createNamespace = (rows: Map<string, BeamStoredSession>) => {
     const keyed = {
       createOperation: vi.fn(
-        (_stores: unknown, _handler: unknown, authority: { assertCurrent(): void }) => ({
-          async execute(command: PluginStateOperationCommand<BeamUploadOperations>) {
+        (
+          stores: readonly object[],
+          handler: { exportName: string },
+          authority: { assertCurrent(): void },
+        ) => ({
+          async execute(
+            command: PluginStateOperationCommand<BeamUploadOperations & BeamPublicationOperations>,
+          ) {
             authority.assertCurrent();
+            const namespaces = stores.map((store) => namespaceRows.get(store)!);
             const pending = namespaces.map((namespace) => new Map(namespace));
-            const result = executeBeamUpload(command, {
+            const tx: PluginStateOperationTransaction = {
               lookup: (store, key) => pending[store]!.get(key),
               lookupMany: <T>(keys: readonly { store: number; key: string }[]) =>
                 keys.map(({ store, key }) => pending[store]!.get(key)) as Array<T | undefined>,
@@ -64,9 +76,19 @@ export function memoryStore() {
                   createdAt: 0,
                 }));
               },
-              set: (store, key, value) => pending[store]!.set(key, value as BeamStoredSession),
+              set: (store, key, value) => pending[store]!.set(key, value),
               delete: (store, key) => pending[store]!.delete(key),
-            });
+            };
+            const result =
+              handler.exportName === "executeBeamUpload"
+                ? executeBeamUpload(
+                    command as PluginStateOperationCommand<BeamUploadOperations>,
+                    tx,
+                  )
+                : executeBeamPublication(
+                    command as PluginStateOperationCommand<BeamPublicationOperations>,
+                    tx,
+                  );
             authority.assertCurrent();
             namespaces.forEach((namespace, index) => {
               namespace.clear();
@@ -89,6 +111,7 @@ export function memoryStore() {
           .slice(0, range.limit)
           .map(([key, value]) => ({ key, value, createdAt: 0 })),
     };
+    namespaceRows.set(keyed, rows);
     guardFixtures.set(keyed, (key, predicate) => ({
       assertCurrent: () => predicate(rows.get(key)),
       release() {},
@@ -97,11 +120,16 @@ export function memoryStore() {
   };
   const keyedStore = createNamespace(values);
   const handoffStore = createNamespace(handoffValues);
+  const stores = new Map([
+    ["sessions", keyedStore],
+    ["handoffs", handoffStore],
+    ["publication-images", createNamespace(new Map())],
+    ["publication-requests", createNamespace(new Map())],
+  ]);
   return {
     ...createBeamStore({
       state: {
-        openKeyedStoreV2: ({ namespace }: { namespace: string }) =>
-          namespace === "handoffs" ? handoffStore : keyedStore,
+        openKeyedStoreV2: ({ namespace }: { namespace: string }) => stores.get(namespace),
       },
     } as unknown as PluginRuntime),
     values,

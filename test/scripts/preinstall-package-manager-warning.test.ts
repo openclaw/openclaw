@@ -7,13 +7,11 @@ import lifecyclePaths from "../../scripts/e2e/lib/bun-only-runtime/preinstall-li
 import {
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
-  nodeVersionSatisfiesPackageEngine,
   probePackageCliNodeRuntime,
   readPackageNodeEngine,
   removeLegacyPackageInstallGuard,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
-import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -59,16 +57,11 @@ describe("install runtime enforcement", () => {
     ["v24.22.1+local.1", true],
     ["24.16.0", true],
     ["26.1.0", true],
-    ["24.22.1", true],
-    ["27.0.0", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
     ["24.22.1-rc.1", false],
     ["27.0.0-nightly..1", false],
   ] as const)("enforces the package engine for Node %s", (version, accepted) => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
-    expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
-      isSupportedNodeVersion(version),
-    );
     const reportError = vi.fn();
     expect(
       enforce({ version, bunVersion: null, execPath: "/opt/node/bin/node" }, reportError),

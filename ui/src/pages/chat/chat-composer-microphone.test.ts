@@ -18,6 +18,11 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discover = vi.fn();
+const { navigateToModelProvider } = vi.hoisted(() => ({ navigateToModelProvider: vi.fn() }));
+vi.mock(import("../model-providers/navigation.ts"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  navigateToModelProvider,
+}));
 const copy = (key: string) => t(`chat.composer.${key}`);
 const emptyDevices = { devices: [], issue: "none-found" };
 const studio = { deviceId: "studio-mic", label: "Studio microphone" };
@@ -271,6 +276,55 @@ it.each([
     expect(v.dropdown.hasAttribute("open")).toBe(true);
   },
 );
+
+it("points a sign-in without voice to its provider's API key", async () => {
+  discover.mockResolvedValue(emptyDevices);
+  const openai = { id: "openai", label: "OpenAI", configured: false, apiKeyRequired: true };
+  const request = vi.fn(async (method: string) => {
+    if (method === "talk.config") {
+      return { config: {} };
+    }
+    if (method === "talk.catalog") {
+      return {
+        speech: { providers: [] },
+        realtime: { ready: false, activeProvider: "openai", providers: [openai] },
+        transcription: { ready: false, activeProvider: "openai", providers: [openai] },
+      };
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const onToggleRealtimeTalk = vi.fn();
+  const onOpenModelProvider = navigateToModelProvider.mockReset();
+  const v = await mountPicker({
+    gatewayClient: { request } as unknown as GatewayBrowserClient,
+    onToggleRealtimeTalk,
+    onOpenTalkSettings: vi.fn(),
+    onOpenDictationSettings: vi.fn(),
+  });
+  const voice = "Talk and Dictation need an OpenAI API key.";
+  const talk = "Talk needs an OpenAI API key.";
+  // Tapping Talk explains the missing key in place instead of opening the picker.
+  await waitForSolid(() => {
+    button(v.root, copy("startVoiceInput")).click();
+    expect(v.root.querySelector(".agent-chat__composer-alert")?.textContent ?? "").toContain(talk);
+  });
+  expect(v.dropdown.hasAttribute("open")).toBe(false);
+  v.root.querySelector<HTMLButtonElement>(".agent-chat__composer-alert .btn")!.click();
+  expect(onOpenModelProvider).toHaveBeenLastCalledWith(expect.anything(), "main", "openai");
+  // Talk and dictation miss the same key, so the picker names one fix.
+  onOpenModelProvider.mockClear();
+  await v.open();
+  const rows = await waitForSolid(() => {
+    const found = v.all("[data-chat-talk-capability]");
+    expect(found.map((row) => row.textContent)).toEqual([expect.stringContaining(voice)]);
+    return found;
+  });
+  rows[0]!.click();
+  await waitForSolid(() =>
+    expect(onOpenModelProvider).toHaveBeenCalledWith(expect.anything(), "main", "openai"),
+  );
+  expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+});
 
 it.each([
   ["none-found", "microphoneNoneFound", false, false],

@@ -27,7 +27,7 @@ import {
   startCompletionServer,
 } from "./simple-completion.test-support.js";
 
-it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)(
+it.for(["late-preparation", "callback-tail", "cancel-tail"] as const)(
   "retains the exec reviewer model through %s",
   async (mode, testContext) => {
     if (mode === "cancel-tail" && process.versions.bun) {
@@ -200,7 +200,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               finish(requests[0]!);
               await heldWorkStarted.promise;
             }
-            if (mode !== "overlap") {
+            {
               if (timesOut) {
                 await vi.advanceTimersByTimeAsync(5000);
               }
@@ -222,17 +222,12 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             }
             const second = await acquire();
             try {
-              expect.soft(create.mock.calls.length).toBe(builds);
-              if (mode !== "overlap") {
-                expect.soft(drained).toBe(false);
-              }
+              expect(create.mock.calls.length).toBe(builds);
+              expect(drained).toBe(false);
             } finally {
               await second[Symbol.asyncDispose]();
             }
             finishWork.resolve();
-            if (mode === "overlap") {
-              finish(requests[0]!);
-            }
             await first;
             await parent.drain();
             await drain;

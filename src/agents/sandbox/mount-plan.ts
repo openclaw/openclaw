@@ -8,6 +8,7 @@ import {
   parseInspectedSandboxMounts,
   resolveDockerSourceNamespace,
   translateSandboxMountSources,
+  type InspectedSandboxMount,
 } from "./docker-mount-source.js";
 import { getSandboxHostPathPolicyKey } from "./host-paths.js";
 import type { SandboxMountPlan, SandboxMountPlanInput } from "./mount-plan.prepare.js";
@@ -65,9 +66,10 @@ export async function resolveSandboxContainerOnlyMounts(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   assertCurrent?: () => void;
+  mounts?: readonly InspectedSandboxMount[];
 }): Promise<string[]> {
   params.assertCurrent?.();
-  const inspected = await inspectSandboxMounts(params);
+  const inspected = params.mounts ?? (await inspectSandboxMounts(params));
   params.assertCurrent?.();
   const { stdout } = await execContainer(
     params.engine,
@@ -167,8 +169,9 @@ export async function compareSandboxMountPlan(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   plan: SandboxMountPlan;
+  mounts?: readonly InspectedSandboxMount[];
 }): Promise<"match" | "protected-mounts-added" | "changed"> {
-  const actual = await inspectSandboxMounts(params);
+  const actual = params.mounts ?? (await inspectSandboxMounts(params));
   const expected = new Map(
     params.plan.binds.flatMap((bind) => {
       const parsed = splitSandboxBindSpec(bind);

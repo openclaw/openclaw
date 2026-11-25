@@ -171,6 +171,21 @@ describe("offerLiveModelVerification", () => {
     expectNotCalled(vi.mocked(prompter.note), mocks.repair);
   });
 
+  it("shows a chosen model's context warning in the Test & use note", async () => {
+    const warning = "local/nemo has an effective context window of 8192 tokens.";
+    mocks.verify.mockResolvedValue({ ok: true, modelRef: "local/nemo", latencyMs: 10, warning });
+    const { run, prompter } = verificationFixture(
+      { agents: { defaults: { model: { primary: "local/nemo" } } } },
+      { opts: { nonInteractive: true }, required: true },
+    );
+    await expect(run()).resolves.toMatchObject({ verified: true, modelRef: "local/nemo" });
+    expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ candidateSetup: true }));
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(warning),
+      expect.any(String),
+    );
+  });
+
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
       agents: { entries: { main: {} } },

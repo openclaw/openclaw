@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -24,6 +25,7 @@ import {
 } from "./session-row-reconcile.ts";
 import type {
   SessionGateway,
+  SessionConnectionScope,
   SessionListOptions,
   SessionListScope,
   SessionListSnapshot,
@@ -457,6 +459,36 @@ export type ManagedSessionListRefresh = {
   background?: true;
 };
 
+export type PrimarySessionListPresentation = {
+  isCurrent: () => boolean;
+  accept: (
+    read: SessionListRead,
+    result: SessionsListResult | null,
+    failure?: { error: unknown },
+  ) => SessionRefreshAttempt | null;
+};
+export type PrimarySessionListRead = {
+  options: SessionRefreshOptions;
+  completion: ReturnType<typeof createDeferredCore<SessionRefreshAttempt | null>>;
+  queued: QueuedSessionRefresh | null;
+  snapshot: SessionGateway["snapshot"];
+  presentation?: PrimarySessionListPresentation;
+};
+type ManagedRead = {
+  refresh: ManagedSessionListRefresh;
+  completion: ReturnType<typeof createDeferredCore<void>>;
+};
+/** One admitted transport attempt, independent of either consumer's publication lifetime. */
+export type SessionListRead = {
+  entry: ManagedSessionList;
+  params: Readonly<ReturnType<typeof buildSessionListParams> & { pageSize?: number }>;
+  scope: SessionConnectionScope;
+  revision: number;
+  generation: number;
+  managed?: ManagedRead;
+  primary: Set<PrimarySessionListRead>;
+};
+
 export type ObservedSessionList = {
   scope: SessionListScope;
   connectionEpoch: number | null;
@@ -465,6 +497,8 @@ export type ObservedSessionList = {
 };
 
 export type ManagedSessionList = ObservedSessionList & {
+  /** Managed refreshes retain their snapshot until a subscriber or warm lease retires it. */
+  retainSnapshot: boolean;
   /** A live primary window may be reused for selection until its next invalidation. */
   warmPrimary?: boolean;
   key: string;
@@ -479,6 +513,8 @@ export type ManagedSessionList = ObservedSessionList & {
   readRevision: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
+  /** Admitted reads may serve primary presentation and observed membership independently. */
+  reads: Set<SessionListRead>;
   queued: ManagedSessionListRefresh | null;
 };
 

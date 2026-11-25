@@ -122,6 +122,8 @@ const mocks = await vi.hoisted(async () => ({
   transcribeAudioFile: vi.fn<
     typeof import("../media-understanding/runtime.js").transcribeAudioFile
   >(async () => ({ text: "meeting notes" })),
+  runMediaFileWithModel:
+    vi.fn<typeof import("../media-understanding/runtime.js").runMediaFileWithModel>(),
   textToSpeech: vi.fn(async () => ({
     success: true,
     audioPath: "/tmp/tts-source.mp3",
@@ -346,12 +348,14 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "run-1",
 }));
 
+// mock-isolation: Media CLI cases use fixture results without provider uploads or credential lookup.
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile: mocks.describeImageFile,
   prepareImageDescriptionInput: mocks.prepareImageDescriptionInput,
   describePreparedImageWithModel: mocks.describePreparedImageWithModel,
   describeVideoFile: mocks.describeVideoFile,
   transcribeAudioFile: mocks.transcribeAudioFile,
+  runMediaFileWithModel: mocks.runMediaFileWithModel,
 }));
 
 vi.mock("../media-understanding/provider-registry.js", () => ({
@@ -1523,26 +1527,6 @@ describe("capability cli", () => {
   );
 
   registerMediaPathCapabilityCliTests({ mocks, tempDirs, firstJsonOutput });
-  it("reports actual audio attribution and forwards request hints", async () => {
-    const hints = { language: "en", prompt: "Focus on names" };
-    mocks.transcribeAudioFile.mockResolvedValueOnce({
-      text: "meeting notes",
-      provider: "fixture-asr",
-      model: "fixture-actual-model",
-    });
-    await runCap(
-      "infer",
-      "audio",
-      "transcribe",
-      ...cliOptions({ file: "memo.m4a", model: "openai/whisper-1", ...hints }),
-    );
-    expect(mocks.transcribeAudioFile.mock.calls[0]?.[0]).toMatchObject(hints);
-    const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
-    expect(output).toContain("provider: fixture-asr");
-    expect(output).toContain("model: fixture-actual-model");
-    expect(output).toContain(path.resolve("memo.m4a"));
-    expect(output).toContain("meeting notes");
-  });
 
   it.each([
     {

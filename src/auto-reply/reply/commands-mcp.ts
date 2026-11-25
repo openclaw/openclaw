@@ -123,7 +123,6 @@ export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const mutation = {
       name: mcpCommand.path,
-      assertCurrent: params.command.assertOwnerCurrent,
     };
     const result =
       mcpCommand.action === "set"

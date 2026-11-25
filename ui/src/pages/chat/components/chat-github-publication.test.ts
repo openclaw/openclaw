@@ -26,12 +26,14 @@ import {
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
 const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
-const waitForPublication = () =>
-  waitForSolid(() => {
+const waitForPublication = async () => {
+  await vi.dynamicImportSettled();
+  return waitForSolid(() => {
     const button = publish();
     expect(button).not.toBeNull();
     return button!;
   });
+};
 let environmentView:
   | {
       update: (work: ChatPullRequestsProps) => void;

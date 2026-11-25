@@ -453,6 +453,11 @@ built-in `legacy` engine. The error is logged with the failed operation so the
 operator can repair, update, or disable the plugin without the agent going
 silent.
 
+Subagent hook failures do not quarantine the engine. When
+`prepareSubagentSpawn` throws, the subagent spawn fails with that error. When
+`onSubagentEnded` throws, OpenClaw logs the failure and continues subagent
+cleanup. Later turns and hooks keep using the selected engine.
+
 Host admission and resource-ownership failures before factory entry propagate
 without quarantining the engine. Factory rejections caused by cancellation of
 the caller's work also propagate without quarantine or fallback. Completion

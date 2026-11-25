@@ -19,6 +19,7 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
@@ -69,10 +70,6 @@ const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-r
 const ExecApproval = lazy(() => import("../components/exec-approval-solid.tsx"), {
   export: "ExecApproval",
 });
-const OnboardingMemoryImport = lazy(
-  () => import("../components/onboarding-memory-import-solid.tsx"),
-  { export: "OnboardingMemoryImport" },
-);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -83,7 +80,6 @@ declare module "@solidjs/web" {
       "openclaw-exec-approval": ShellElementAttributes<
         NonNullable<ShellOwnedElements["approvalOverlay"]>
       >;
-      "openclaw-onboarding-memory-import": ShellElementAttributes;
     }
   }
 }
@@ -136,7 +132,9 @@ export function ApplicationShell(props: {
   );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
-    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
+    view().chromeGatewayStatus.kind && (shellConnectionStatus() || view().connectionRecovery)
+      ? view().chromeGatewayStatus
+      : null,
   );
   function NavigationFallback() {
     return (
@@ -153,6 +151,9 @@ export function ApplicationShell(props: {
     );
   }
   const connectionAnnouncement = createMemo(() => {
+    if (view().floatingUpdateCard.refreshRequired) {
+      return "";
+    }
     const kind = shellConnectionStatus();
     return kind
       ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
@@ -175,6 +176,20 @@ export function ApplicationShell(props: {
       />
       <div
         ref={(element) => (props.host.shellElement = element)}
+        onClick={(event) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          const anchor = anchorFromNavigationEvent(event);
+          if (
+            anchor?.hasAttribute("data-app-route") &&
+            !anchor.target &&
+            !anchor.hasAttribute("download") &&
+            props.host.runtime?.navigateAppLink(new URL(anchor.href))
+          ) {
+            event.preventDefault();
+          }
+        }}
         onMouseDown={beginNativeWindowDragFromTitlebar}
         class={[
           "shell",
@@ -199,9 +214,6 @@ export function ApplicationShell(props: {
             "shell--nav-resizing": navResizing(),
           },
         ]}
-        data-background-managed={
-          !view().backgroundReady || view().uiSettings.background !== undefined ? "" : undefined
-        }
         style={{
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
@@ -446,6 +458,7 @@ export function ApplicationShell(props: {
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
+              "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
           ]}
           ref={(element) => {
@@ -550,6 +563,7 @@ export function ApplicationShell(props: {
           prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
+          prop:firstUse={view().firstUse}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
           prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
@@ -610,11 +624,6 @@ export function ApplicationShell(props: {
             },
           }}
         />
-        <Show when={view().memoryImportActive}>
-          <ShellComponentBoundary label={t("onboarding.memoryImport.title")} showLoading>
-            <OnboardingMemoryImport active={true} context={view().context} />
-          </ShellComponentBoundary>
-        </Show>
         <openclaw-toast-host ref={(element) => (props.host.toastElement = element)} />
       </div>
     </div>

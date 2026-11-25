@@ -1681,7 +1681,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@76a48a68607d8cb7cc0ae607dbc46c920f07495a
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@3ca6ac4b313cc4f8bf600f8f5466ccb11ce431d2
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1689,7 +1689,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: main
       windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
-      windows_node_workflow_sha: 76a48a68607d8cb7cc0ae607dbc46c920f07495a
+      windows_node_workflow_sha: 3ca6ac4b313cc4f8bf600f8f5466ccb11ce431d2
       allow_protocol_mismatch: false
 
   live_repo_e2e_release_checks:
@@ -1775,6 +1775,7 @@ jobs:
       VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
@@ -1909,6 +1910,7 @@ jobs:
       VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
       BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
       BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}

@@ -1,4 +1,7 @@
-import { isSystemCreatedSessionRow } from "../../../src/shared/session-list-visibility.ts";
+import {
+  isReservedGitHubPublicationSessionKey,
+  isSystemCreatedSessionRow,
+} from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -58,16 +61,19 @@ export function projectSidebarArchiveVisibility(input: {
     if (
       known
         ? isSessionHidden(known)
-        : input.statusFilter === "snoozed" || isLifecycleHidden(childKey)
+        : input.statusFilter === "snoozed" ||
+          isLifecycleHidden(childKey) ||
+          // Child windows omit publication custody rows, so their reserved key is the only evidence.
+          (!input.showSystem && isReservedGitHubPublicationSessionKey(childKey))
     ) {
       return false;
     }
     // Raw lineage includes archives. Only a complete active child window can
-    // establish absence; pending/failed reads must retain discovery links.
+    // establish absence; unread and failed windows retain discovery links. A
+    // refresh keeps the settled window's answer until its replacement lands.
     return (
       (input.statusFilter !== "active" && input.statusFilter !== "snoozed") ||
       !input.sessionData.loadedChildSessionKeys.has(parentKey) ||
-      input.sessionData.loadingChildSessionKeys.has(parentKey) ||
       input.sessionData.childSessionErrorsByParent.has(parentKey) ||
       input.sessionData.childSessionRowsByParent[parentKey]?.some(
         (child) => child.key === childKey,

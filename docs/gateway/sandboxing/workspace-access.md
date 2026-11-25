@@ -386,6 +386,11 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+GitHub publication resumes the guest after its changes settle into the canonical
+worktree. Git staging and snapshot verification then read that accepted host view
+under the same reconciliation lease. Background guest edits made during staging
+remain in the private checkout for the next checkpoint; they cannot mix into the
+snapshot being published. Source admission and Git safety checks remain unchanged.
 Ordinary reconciliation uses btrfs capture for guest exports from private
 checkouts provisioned as subvolumes. A snapshot that omits nested subvolumes is
 discarded and captured again under pause, preserving their contents. Once an
@@ -407,6 +412,13 @@ fails with a retry message and preserves the workspace. Immutable object downloa
 do not hold the guest frozen; capture, file application, and pending-transfer
 recovery still require consistency pauses.
 
+On a first PR import, canonical Git snapshot and manifest checks run under the
+host lease while the guest continues running. OpenClaw then observes the guest's
+Git state and pauses it to capture its manifest. An intervening checkpoint
+invalidates the prepared canonical view and asks for a retry. Both manifests remain necessary
+to preserve authored empty directories and other differences outside Git trees.
+Dirty files, staged-only edits, and mismatched source heads still reject the import.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
@@ -416,9 +428,16 @@ Release records `Local workspace unpause` with the same `reason`, elapsed
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
 shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
 verification, pristine source checks, canonical snapshot preparation, and commit
-bookkeeping during base refresh. These use the same exclusive timing field;
-they include awaited worker and Git work, not
-just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+bookkeeping during base refresh. These use the same exclusive timing field and
+include awaited worker and Git work, not just Gateway CPU time.
+Publication also reports reconciliation phases (`scan`, `staging`, `materialization`,
+`preflight`, `patch`, `apply`, `acceptance`, and `cleanup`). Its fixed `operation.*`
+sub-phases separate source admission, Git policy preparation, snapshot safety checks,
+index copying, Git staging, admitted-path pruning, attribute verification, and
+temporary-index cleanup. The diagnostics timeline observes these same structural
+phases without file paths or content. Timings preserve the existing consistency pause;
+they do not establish that a long operation waited for a fixed timeout.
+Initial workspace-lease acquisition precedes the pause.
 Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine

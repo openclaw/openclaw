@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ARTIFACT_CACHE_VERSION } from "../../scripts/lib/build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -88,6 +89,28 @@ it("reports the first invalid cache boundary without repeating snapshot reads", 
     reads.mockRestore();
   }
   expect(reasons).toHaveBeenCalledTimes(3);
+});
+
+it("retains captured bytes while a fresh snapshot rejects an external replacement", () => {
+  const root = fs.realpathSync.native(roots.make("captured-compiler-input-"));
+  const external = path.join(roots.make("external-compiler-input-"), "input.ts");
+  const file = path.join(root, "input.ts");
+  fs.writeFileSync(file, "export const value = 1;\n");
+  fs.writeFileSync(external, "export const value = 2;\n");
+  const snapshot = () => {
+    const boundary = createDeclarationInputBoundary(root);
+    return new CompilerInputSnapshot(boundary.root, {
+      toolchainFiles: [],
+      generatorInputs: [],
+      assertInput: (input) => boundary.assert(input),
+    });
+  };
+  const captured = snapshot();
+  expect(captured.readText("input.ts")).toBe("export const value = 1;\n");
+  fs.unlinkSync(file);
+  fs.symlinkSync(external, file, "file");
+  expect(captured.readText(file)).toBe("export const value = 1;\n");
+  expect(() => snapshot().readText(file)).toThrow("Declaration input escapes checkout");
 });
 
 it.each([

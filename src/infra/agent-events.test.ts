@@ -121,6 +121,7 @@ test("publishes only projection-relevant run context changes", () => {
       sessionKey: "agent:main:projected",
       agentId: undefined,
       scope: "runtime",
+      runtimeSession: { sessionId: "session-id", agentId: undefined },
     });
     changed.mockClear();
     registerRun("run", update);

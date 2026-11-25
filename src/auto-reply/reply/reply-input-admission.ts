@@ -3,9 +3,13 @@ import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
+import { derivePersistedSessionLifecyclePatch } from "../../config/sessions/session-run-lifecycle-projection.js";
 import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
-import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import {
   bindSessionControllerSourceTurnId,
   type ReplyOperation,
@@ -26,10 +30,11 @@ export type PendingReplyDelivery = {
   text: string;
 };
 
-/** Transfers ordinary accepted input into its admitted session, without restart checkpoints. */
+/** Transfers accepted input and its running identity in one transcript transaction. */
 export function createReplyInputAdmission(params: {
   followupRun: RunReplyAgentParams["followupRun"];
   replyOperation: ReplyOperation;
+  runId: string;
   sessionKey?: string;
   storePath?: string;
   sourceTurnId?: string;
@@ -42,7 +47,6 @@ export function createReplyInputAdmission(params: {
     if (replyOperation.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(replyOperation.lifecycleGeneration);
     }
-    followupRun.operatorAuthority?.assertCurrent();
   };
   const bindSource = () => {
     assertCurrent();
@@ -121,6 +125,25 @@ export function createReplyInputAdmission(params: {
           },
           expectedSessionId: entry.sessionId,
           expectedSessionState: buildSessionTranscriptTurnExpectedState(entry),
+          // Consuming queued custody must not precede the durable run fact used
+          // by restart recovery, even if execution dies before source adoption.
+          // Like fresh chat input, this run also takes the writer claim here:
+          // runtimes that do not claim it themselves (such as Claude CLI) would
+          // otherwise leave the previous run's claim in place, and Stop would
+          // refuse to save this run's partial reply.
+          sessionLifecyclePatch: {
+            ...derivePersistedSessionLifecyclePatch({
+              entry,
+              currentLifecycleGeneration:
+                replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+              event: {
+                runId: params.runId,
+                ts: Date.now(),
+                data: { phase: "start", startedAt: replyOperation.startedAtMs },
+              },
+            }),
+            activeWriterRunId: params.runId,
+          },
         });
         if (persisted?.sessionEntry) {
           params.setEntry(persisted.sessionEntry);

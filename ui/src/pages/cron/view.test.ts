@@ -10,7 +10,7 @@ import {
   findToggleByLabel,
   getButtonByText,
   getElement,
-  selectSegmented,
+  chooseSchedule,
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
@@ -23,11 +23,11 @@ function picker(container: Element, id: string) {
 }
 
 function selectSchedule(container: Element, kind: string) {
-  selectSegmented(getElement(container, testId(`cron-schedule-kind-${kind}`), HTMLElement));
+  chooseSchedule(container, kind);
 }
 
 function expectInvalidField(container: Element, id: string, errorId: string, message: string) {
-  const field = getElement(container, `#cron-${id}`, HTMLInputElement);
+  const field = getElement(container, `#cron-${id}`, HTMLElement);
   expect(field.getAttribute("aria-invalid")).toBe("true");
   expect(field.getAttribute("aria-describedby")).toBe(`cron-error-${errorId}`);
   expect(text(container, `#cron-error-${errorId}`)).toContain(message);
@@ -60,7 +60,7 @@ describe("cron view editor", () => {
       editingJob: job,
       form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText },
     });
-    const preview = getElement(container, ".cron-editor .chat-text", HTMLDivElement);
+    const preview = getElement(container, ".cron-prompt-preview .chat-text", HTMLDivElement);
     expect(preview.querySelector("h1")?.textContent).toBe("Weekly digest");
     expect(preview.querySelector("li strong")?.textContent).toBe("Garden");
     expect(preview.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
@@ -73,7 +73,9 @@ describe("cron view editor", () => {
       { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
       { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
     ]) {
-      expect((await renderEditor(form)).querySelector(".cron-editor .chat-text")).toBeNull();
+      expect(
+        (await renderEditor(form)).querySelector(".cron-prompt-preview .chat-text"),
+      ).toBeNull();
     }
   });
 
@@ -101,12 +103,10 @@ describe("cron view editor", () => {
     const everyContainer = await renderEditor({ scheduleKind: "every" }, { onFormChange });
     expect(everyContainer.querySelector("#cron-every-amount")).not.toBeNull();
     expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
-    const activeEvery = getElement(
-      everyContainer,
-      '[data-test-id="cron-schedule-kind-every"] input',
-      HTMLInputElement,
-    );
-    expect(activeEvery.checked).toBe(true);
+    expect(
+      getElement(everyContainer, '[data-test-id="cron-schedule-frequency"]', HTMLElement)
+        .textContent,
+    ).toBe("Every");
     selectSchedule(everyContainer, "cron");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
     selectSchedule(everyContainer, "at");
@@ -115,11 +115,11 @@ describe("cron view editor", () => {
       (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
     ).not.toBeNull();
     const cronContainer = await renderEditor(
-      { scheduleKind: "cron", deleteAfterRun: true },
+      { scheduleKind: "cron", cronExpr: "*/15 * * * *", deleteAfterRun: true },
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
-    expect(findToggleByLabel(cronContainer, "Delete after run")).toBeNull();
+    expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
     const onExitFormChange = vi.fn();
@@ -127,11 +127,28 @@ describe("cron view editor", () => {
       { scheduleKind: "on-exit" },
       { onFormChange: onExitFormChange },
     );
-    expect(onExitContainer.querySelector(testId("cron-schedule-kind-on-exit"))).not.toBeNull();
-    expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
-    expect(everyContainer.querySelector(testId("cron-schedule-kind-on-exit"))).toBeNull();
+    expect(text(onExitContainer, testId("cron-schedule-frequency"))).toBe("On exit");
+    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
+
     selectSchedule(onExitContainer, "at");
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
+  });
+
+  it("adds to the schedule controls only the time zone they cannot show", async () => {
+    const note = (container: Element) => text(container, testId("cron-schedule-note"));
+    expect(note(await renderEditor({ scheduleKind: "every", everyAmount: "30" }))).toBeUndefined();
+    expect(
+      note(await renderEditor({ scheduleKind: "cron", cronExpr: "0 9 * * *" })),
+    ).toBeUndefined();
+    expect(
+      note(
+        await renderEditor({
+          scheduleKind: "cron",
+          cronExpr: "0 6,18 * * *",
+          cronTz: "America/Los_Angeles",
+        }),
+      ),
+    ).toBe("Time zone: America/Los_Angeles");
   });
 
   it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {
@@ -148,10 +165,10 @@ describe("cron view editor", () => {
 
   it("announces field validation errors as alerts", async () => {
     const container = await renderEditor(
-      { name: "", everyAmount: "0" },
+      { payloadText: "", everyAmount: "0" },
       {
         fieldErrors: {
-          name: "cron.errors.nameRequired",
+          payloadText: "cron.errors.agentMessageRequired",
           everyAmount: "cron.errors.everyAmountInvalid",
         },
         canSubmit: false,
@@ -160,14 +177,18 @@ describe("cron view editor", () => {
     const alerts = Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
       alert.textContent?.trim(),
     );
-    expect(alerts).toEqual(["Name is required.", "Interval must be greater than 0."]);
-    expectInvalidField(container, "name", "name", "Name is required.");
+    expect(alerts).toEqual(["Agent message is required.", "Interval must be greater than 0."]);
+    const prompt = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
+    expect(prompt.getAttribute("aria-invalid")).toBe("true");
+    expect(prompt.getAttribute("aria-describedby")).toContain("cron-error-payloadText");
   });
 
   it("waits for scheduler status before presenting trigger capability", async () => {
     const pending = await renderEditor({}, { status: null });
-    expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
-    expect(pending.textContent).not.toContain("disabled by cron.triggers.enabled");
+    expect(findToggleByLabel(pending, "Check a condition first")).toBeNull();
+    expect(pending.textContent).not.toContain(
+      "turned off for this Gateway (cron.triggers.enabled)",
+    );
   });
 
   it("keeps an existing trigger clearable when the operator disabled triggers", async () => {
@@ -177,7 +198,7 @@ describe("cron view editor", () => {
       { triggerEnabled: true, triggerScript: "json({ fire: true })" },
       { status, onFormChange },
     );
-    getButtonByText(configured, "Clear trigger").click();
+    getButtonByText(configured, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 
@@ -204,7 +225,7 @@ describe("cron view editor", () => {
       fieldErrors: { triggerScript: "cron.errors.triggerScriptPayloadUnsupported" },
       canSubmit: false,
     });
-    expect(findToggleByLabel(container, "Condition trigger")).toBeNull();
+    expect(findToggleByLabel(container, "Check a condition first")).toBeNull();
     expect(container.querySelector("#cron-trigger-script")).toBeNull();
     expect(container.textContent).toContain("Script payloads cannot use condition triggers");
     const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
@@ -212,7 +233,7 @@ describe("cron view editor", () => {
     await waitForSolid(() => expect(text(payload, ".hljs-keyword")).toBe("const"));
     expect(text(payload, ".hljs-string")).toBe("'check status'");
     expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
-    getButtonByText(container, "Clear trigger").click();
+    getButtonByText(container, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 });

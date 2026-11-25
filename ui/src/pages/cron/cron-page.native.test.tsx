@@ -103,7 +103,7 @@ it("loads history and delivery accounts only for their visible automation surfac
     { ...createContext(gateway), acquireChannels: () => channels },
     { render: true },
   );
-  const clickTab = (id: string) => page.querySelector<HTMLButtonElement>(testId(id))!.click();
+  const clickButton = (id: string) => page.querySelector<HTMLButtonElement>(testId(id))!.click();
   try {
     await heldJob(page, job.id);
     expectCalls(request, ["cron.runs", "channels.status"], 0);
@@ -135,14 +135,6 @@ it("loads history and delivery accounts only for their visible automation surfac
 
     await openJob(page, job.id);
     await waitForSolid(() =>
-      expect(
-        page.querySelector('#cron-delivery-account-suggestions option[value="garden"]'),
-      ).not.toBeNull(),
-    );
-    expectCalls(request, ["channels.status"], 1);
-    expectCalls(request, ["cron.runs"], 0);
-    clickTab("cron-detail-tab-history");
-    await waitForSolid(() =>
       expect(page.querySelector(".cron-run-entry")?.textContent).toContain(
         "Garden review complete",
       ),
@@ -152,8 +144,14 @@ it("loads history and delivery accounts only for their visible automation surfac
       "cron.runs",
       expect.objectContaining({ scope: "job", id: job.id }),
     );
-    clickTab("cron-detail-tab-settings");
-    await waitForSolid(() => expectCalls(request, ["channels.status"], 2));
+    expectCalls(request, ["channels.status"], 0);
+    clickButton("cron-edit");
+    await waitForSolid(() =>
+      expect(
+        page.querySelector('#cron-delivery-account-suggestions option[value="garden"]'),
+      ).not.toBeNull(),
+    );
+    expectCalls(request, ["channels.status"], 1);
     expectCalls(request, ["cron.runs"], 1);
   } finally {
     held.resolve(result);

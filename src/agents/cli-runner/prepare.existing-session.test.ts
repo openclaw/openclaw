@@ -107,7 +107,6 @@ beforeEach(() => {
     getActiveMcpLoopbackRuntime: () => ({
       port: 31783,
       ownerToken: "fixture-owner",
-      nonOwnerToken: "fixture-reader",
     }),
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,
@@ -398,9 +397,12 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     expect(turn.prompt).not.toContain("OpenClaw resumed this CLI session");
   }
   expect(nativeSkillsPlugin).not.toHaveBeenCalled();
-  // A fresh session learns the chat has history without taking another account's text.
-  expect(sent[0]?.promptContext?.prependContext).toContain("2 earlier messages in this chat");
-  expect(sent[0]?.prompt).toBe("What did I ask you to remember?");
+  // No other account ran this chat, so the fresh session receives its saved history.
+  expect(sent[0]?.prompt).toContain("<conversation_history>");
+  expect(sent[0]?.prompt).toContain("User: Remember UPGRADE-HISTORY-42.");
+  expect(sent[0]?.prompt).toContain(
+    "<next_user_message>\nWhat did I ask you to remember?\n</next_user_message>",
+  );
   expect(sent[2]?.promptContext?.prependContext).toContain(
     "OpenClaw resumed this CLI session after prompt content changed.",
   );

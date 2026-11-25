@@ -58,7 +58,7 @@ it.each(["transcript-only write", "permission narrowing", "owner retirement"] as
         throw new Error("Expected admitted media policy");
       }
       try {
-        assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth);
+        assertAssistantMediaPolicyCurrent(params, policy, false);
         if (change === "transcript-only write") {
           expect(
             await appendPreparedTranscriptEvent(
@@ -67,9 +67,7 @@ it.each(["transcript-only write", "permission narrowing", "owner retirement"] as
               () => {},
             ),
           ).toBe(true);
-          expect(() =>
-            assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth),
-          ).not.toThrow();
+          expect(() => assertAssistantMediaPolicyCurrent(params, policy, false)).not.toThrow();
         } else {
           if (change === "permission narrowing") {
             await patchSessionEntryCore(scope, () => ({ permissionMode: "workspace" }), {
@@ -78,9 +76,9 @@ it.each(["transcript-only write", "permission narrowing", "owner retirement"] as
           } else {
             await closeOpenClawAgentDatabaseByPathAsync(database.path);
           }
-          expect(() =>
-            assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth),
-          ).toThrow("Media access changed");
+          expect(() => assertAssistantMediaPolicyCurrent(params, policy, false)).toThrow(
+            "Media access changed",
+          );
         }
       } finally {
         policy.release();

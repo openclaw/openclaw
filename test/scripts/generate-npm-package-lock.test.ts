@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,

@@ -92,6 +92,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     cronReadOnly: runtimeProcessEntrypoint("cron/store/read-only.worker"),
     stateRead: runtimeProcessEntrypoint("state/openclaw-state-read.worker"),
     workerNativeLifecycle: runtimeProcessEntrypoint("infra/worker-native-lifecycle.worker"),
+    sharedWorkerHost: runtimeProcessEntrypoint("infra/shared-worker-host.worker"),
     spawnBroker: runtimeProcessEntrypoint("process/spawn-broker/worker"),
     cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
     controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
@@ -291,6 +292,17 @@ export const pluginRuntimeProcessManifest = {
     package: {
       name: "@openclaw/document-extract-plugin",
       distWorkerPath: "document-extractor.worker.js",
+    },
+  },
+  webReadability: {
+    ...pluginRuntimeProcess(
+      "web-readability",
+      "web-content-extractor-worker.runtime",
+      "web-content-extractor.worker",
+    ),
+    package: {
+      name: "@openclaw/web-readability-plugin",
+      distWorkerPath: "web-content-extractor.worker.js",
     },
   },
   fileTransferDirFetch: {

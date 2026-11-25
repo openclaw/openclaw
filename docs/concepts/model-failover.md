@@ -315,6 +315,8 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
+With multiple Codex subscriptions, **Settings → Models → Provider access → OpenAI** shows one bar per quota window. Each segment shows what is left on that account, not a share of a combined allowance. The Credits row shows each account’s reported balance separately: zero is a reported balance; a dash means no balance was reported. Select an account name for its plan and account actions, or a quota segment for its reset time. When the order is editable, drag a segment left or right (or focus it and use the arrow keys) to change the selected agent’s stored priority. This does not change a session’s explicitly selected account.
+
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).

@@ -29,7 +29,9 @@ are prepared and cached with the managed plugin catalog, not fetched per tool.
 
 Bundled and OpenClaw-published plugins retain separate
 [inline activity icons](#inline-activity-icons), so improving a chat glyph does
-not change the plugin's branding elsewhere.
+not change the plugin's branding elsewhere. For an MCP tool attributed to an
+installed, non-bundled plugin, chat can use its plugin icon when no activity
+artwork applies, without changing publisher eligibility for other tool previews.
 
 OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
 Agent Plugins spec proposal [agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
@@ -621,15 +623,17 @@ The manifest ids are plugin-local. Widget grants use `<plugin-id>.<id>`, such as
 {
   "catalog": {
     "featured": true,
-    "order": 10
+    "order": 10,
+    "sidebar": true
   }
 }
 ```
 
-| Field      | Type      | What it means                                                              |
-| ---------- | --------- | -------------------------------------------------------------------------- |
-| `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                       |
-| `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier. |
+| Field      | Type      | What it means                                                                                                                                       |
+| ---------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                                                                                                |
+| `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier.                                                                          |
+| `sidebar`  | `boolean` | For a bundled plugin, whether the Control UI Customize sidebar lists it while it is enabled. Plugins installed from outside OpenClaw always appear. |
 
 ## cliCommands reference
 

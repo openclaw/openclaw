@@ -54,6 +54,7 @@ if (profileDirectory) {
 }
 const active = new WeakMap();
 const statements = new WeakMap();
+const restoreStarted = new WeakSet();
 for (const method of ["run", "get", "all", "iterate"]) {
   const descriptor = Object.getOwnPropertyDescriptor(StatementSync.prototype, method);
   assert(descriptor && typeof descriptor.value === "function");
@@ -61,19 +62,27 @@ for (const method of ["run", "get", "all", "iterate"]) {
     const statement = statements.get(this);
     const connection = statement?.connection;
     const timed = (run) => {
+      if (
+        connection &&
+        active.has(connection) &&
+        args.includes("synthetic-0") &&
+        /^(?:insert into|update|delete from) /i.test(statement.sql)
+      ) {
+        active.get(connection).cold = true;
+        if (
+          !restoreStarted.has(connection) &&
+          /^delete from "(?:transcript_events|session_transcript_fts_rows)"/i.test(statement.sql)
+        ) {
+          restoreStarted.add(connection);
+          publish({ type: "restoring", threadId });
+        }
+      }
       const started = performance.now();
       try {
         return run();
       } finally {
         const transaction = connection && active.get(connection);
         if (transaction) {
-          if (
-            /^(?:insert into|update|delete from) "(?:session_transcript_cold_archive|session_transcript_fts|session_transcript_active_event_facts|transcript_events".* set)/i.test(
-              statement.sql,
-            )
-          ) {
-            transaction.cold = true;
-          }
           transaction.statementExecutionMs += performance.now() - started;
         }
       }

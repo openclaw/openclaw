@@ -211,7 +211,11 @@ export type SessionExactEntriesWorkerResult = {
   sharing?: {
     source: { agentId: string; path: string };
     databaseIdentity: string;
-    members: Array<{ sessionKey: string; identityIds: string[] }>;
+    members: Array<{
+      sessionKey: string;
+      identityIds: string[];
+      memberAccess?: Record<string, NonNullable<SessionMember["access"]>>;
+    }>;
     placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
   transcript?: SessionTranscriptAnchorFacts;

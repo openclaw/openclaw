@@ -160,6 +160,7 @@ function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
           <div class="settings-row__control">
             <CopyButton
               text={report()}
+              iconFeedback
               idleLabel={t(
                 props.build.version && props.build.commit
                   ? "aboutPage.copyBuild"

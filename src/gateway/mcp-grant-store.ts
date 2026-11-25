@@ -127,6 +127,7 @@ export type McpLoopbackRequestContext = {
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
+  sessionProjectMoveEligible?: boolean;
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
@@ -194,8 +195,6 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
     signal?: AbortSignal,
     isCurrent?: () => boolean,
   ) => CronCreatorAuthorityGrant;
-  /** Retained Cron permission, independent of this grant's other tool authority. */
-  cronAuthorityCheck?: () => boolean;
   /** Exact Cron management scope for construction after native CLI admission. */
   withCronManagementToolConstruction?: <T>(run: () => T) => T;
   abortSignal?: AbortSignal;
@@ -336,7 +335,6 @@ export function mintMcpLoopbackClientGrant(
     messageActionTurnCapability: params.messageActionTurnCapability || undefined,
     memoryAudience: params.memoryAudience,
     cronRequesterGrantIssuer: params.cronRequesterGrantIssuer,
-    cronAuthorityCheck: params.cronAuthorityCheck,
     withCronManagementToolConstruction: params.withCronManagementToolConstruction,
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
@@ -539,7 +537,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       messageActionTurnCapability?: string;
       memoryAudience?: MemoryAudience;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
-      cronAuthorityCheck?: () => boolean;
+      abortSignal?: AbortSignal;
       withCronManagementToolConstruction?: <T>(run: () => T) => T;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
@@ -587,7 +585,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     requestScope: grant.requestScope,
     messageActionTurnCapability: grant.messageActionTurnCapability || undefined,
     memoryAudience: grant.memoryAudience,
-    cronAuthorityCheck: grant.cronAuthorityCheck,
+    abortSignal: grant.abortSignal,
     withCronManagementToolConstruction: withCronManagementToolConstruction
       ? <T>(run: () => T): T => {
           if (!isCurrent()) {

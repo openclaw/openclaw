@@ -1,6 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  nextPromptCacheKeepWarmDueAtMs,
+  notePromptCacheKeepWarmChange,
+  promptCacheKeepWarmState,
+} from "../agents/prompt-cache-keep-warm-candidates.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -25,13 +31,60 @@ let scope: GatewaySchedulerScope | undefined;
 let scheduledSweep: Promise<void> | undefined;
 let nextHistorySweepAtMs = Infinity;
 let nextRegistrySweepAtMs = Infinity;
+let nextPromptCacheSweepAtMs = Infinity;
+let promptCacheKeepWarmPass: Promise<void> | undefined;
+let scheduleMaintenance: (() => void) | undefined;
 let lastRegistrySuccessAtMs: number | null = null;
 let unsubscribeSessionChanges: (() => void) | undefined;
 let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
 
+/**
+ * Keep-warm pings run beside retention, never inside its single-flight sweep: one pass at a
+ * time, which reports its own next wake.
+ */
+function startPromptCacheKeepWarm(signal: AbortSignal) {
+  const now = scope?.now() ?? Date.now();
+  if (promptCacheKeepWarmPass || nextPromptCacheSweepAtMs > now) {
+    return;
+  }
+  nextPromptCacheSweepAtMs = Infinity;
+  // Admit before importing the agent runtime. The pass rechecks after the asynchronous
+  // import because config and available memory can change while it is loading.
+  if (getRuntimeConfig().agents?.defaults?.promptCacheKeepWarm === false) {
+    promptCacheKeepWarmState.candidates.clear();
+    return;
+  }
+  if (isMemoryPressureHigh()) {
+    nextPromptCacheSweepAtMs = now + 60_000;
+    return;
+  }
+  promptCacheKeepWarmPass = import("../agents/prompt-cache-keep-warm.js")
+    .then(({ runPromptCacheKeepWarm }) => runPromptCacheKeepWarm(signal))
+    .then(
+      (next) => {
+        nextPromptCacheSweepAtMs = Math.min(nextPromptCacheSweepAtMs, next);
+      },
+      (error: unknown) => {
+        nextPromptCacheSweepAtMs = Math.min(
+          nextPromptCacheSweepAtMs,
+          nextPromptCacheKeepWarmDueAtMs(),
+          (scope?.now() ?? Date.now()) + 60_000,
+        );
+        if (!signal.aborted) {
+          log.warn("Prompt cache keep-warm pass failed", { error });
+        }
+      },
+    )
+    .finally(() => {
+      promptCacheKeepWarmPass = undefined;
+      scheduleMaintenance?.();
+    });
+}
+
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
-  if (isConstrainedProcessLowOnMemory()) {
+  startPromptCacheKeepWarm(signal);
+  if (isMemoryPressureHigh()) {
     // Retention is best effort; leave scarce memory to requests before opening its workers.
     const now = scope?.now() ?? Date.now();
     if (nextHistorySweepAtMs <= now) {
@@ -137,7 +190,13 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
     if (!scope || scope.signal.aborted || scheduledSweep) {
       return;
     }
-    const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
+    // The in-flight pass rearms its own wake; due receipts must not spin the scheduler
+    // while the lazy import or a ping is still settling.
+    const atMs = Math.min(
+      nextHistorySweepAtMs,
+      nextRegistrySweepAtMs,
+      promptCacheKeepWarmPass ? Infinity : nextPromptCacheSweepAtMs,
+    );
     if (!Number.isFinite(atMs)) {
       return;
     }
@@ -152,8 +211,10 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
         })),
     });
   });
+  scheduleMaintenance = scheduleSweep;
   lastRegistrySuccessAtMs = null;
-  nextHistorySweepAtMs = nextRegistrySweepAtMs = scope.now() + 5_000;
+  // The first keep-warm pass recovers sessions whose cache a restart left warm.
+  nextHistorySweepAtMs = nextRegistrySweepAtMs = nextPromptCacheSweepAtMs = scope.now() + 5_000;
   const invalidateHistory = () => {
     if (scope) {
       nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, scope.now() + 60_000);
@@ -171,6 +232,16 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
     }
   });
   unsubscribeSessionChanges = sessionChanges.subscribeFacts((change) => {
+    // An opt-out parks keep-warm at Infinity; enabling after a disabled startup must
+    // rearm the initial recovery without waiting for another transcript change.
+    if ("all" in change && change.scope === "config" && scope) {
+      nextPromptCacheSweepAtMs = Math.min(nextPromptCacheSweepAtMs, scope.now() + 5_000);
+    }
+    const keepWarmDueAtMs = scope ? notePromptCacheKeepWarmChange(change, scope.now()) : undefined;
+    if (keepWarmDueAtMs !== undefined && keepWarmDueAtMs < nextPromptCacheSweepAtMs) {
+      nextPromptCacheSweepAtMs = keepWarmDueAtMs;
+      scheduleSweep();
+    }
     const registryChanged =
       "all" in change
         ? change.scope === "config" || sessionChangeScopeAffectsStoredRows(change)
@@ -198,5 +269,6 @@ export async function stopCronMaintenance(): Promise<void> {
   unsubscribeHistoryChanges = undefined;
   unsubscribeDatabaseLifecycle?.();
   unsubscribeDatabaseLifecycle = undefined;
-  await Promise.all([scope?.stop(), scheduledSweep]);
+  scheduleMaintenance = undefined;
+  await Promise.all([scope?.stop(), scheduledSweep, promptCacheKeepWarmPass]);
 }

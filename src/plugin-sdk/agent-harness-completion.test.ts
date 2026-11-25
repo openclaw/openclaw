@@ -121,7 +121,7 @@ it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
     "steer evidence does not prove direct delivery",
     direct([
       { phase: "steer-primary", delivered: true, path: "steered" },
-      { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
+      { phase: "steer-fallback", delivered: false, path: "none" },
     ]),
     false,
   ],

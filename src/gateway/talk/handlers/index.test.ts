@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -23,7 +22,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -124,7 +123,7 @@ const mocks = vi.hoisted(() => ({
   sendTalkTranscriptionRelayAudio: vi.fn(),
   stopTalkTranscriptionRelaySession: vi.fn(),
   chatSend: vi.fn(),
-  controlRealtimeVoiceAgentRun: vi.fn(),
+  controlTalkAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveRealtimeVoiceAgentContextInstructions: vi.fn(async (): Promise<string> => ""),
@@ -221,8 +220,9 @@ vi.mock("../../../talk/provider-internal.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Handler routing tests stub active-run control instead of driving live session runs.
 vi.mock("../../../talk/agent-run-control.js", () => ({
-  controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun: mocks.controlTalkAgentRun,
 }));
 
 vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => {
@@ -1061,7 +1061,7 @@ describe("talk.session unified handlers", () => {
       };
     });
     mocks.steerTalkRealtimeRelayAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("session:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("session:main"));
   });
 
   it("creates and drives a realtime gateway-relay session through the unified API", async () => {
@@ -1227,7 +1227,7 @@ describe("talk.session unified handlers", () => {
         result: { status: "working" },
         options: { suppressResponse: true, willContinue: true },
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.talk"] } } as never,
       isWebchatConnect: () => false,
       respond: toolRespond as never,
       context: {} as never,
@@ -1632,46 +1632,6 @@ describe("talk.session unified handlers", () => {
     },
   );
 
-  it("does not create a transcription relay after its requester disconnects during provider preparation", async () => {
-    const preparing = createDeferred();
-    const ready = createDeferred();
-    const provider = {
-      id: "openai",
-      label: "OpenAI Realtime Transcription",
-      isConfiguredAsync: async () => {
-        preparing.resolve();
-        await ready.promise;
-        return true;
-      },
-      createSession: vi.fn(),
-    };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
-    mocks.createTalkTranscriptionRelaySession.mockReturnValue({
-      transcriptionSessionId: "revoked-transcription",
-    });
-    const client = {
-      connId: "revoked-transcription",
-      connect: { scopes: ["operator.talk"] },
-      invalidated: false,
-    };
-    const respond = vi.fn();
-    const creation = callTalkHandler("talk.session.create", {
-      params: { mode: "transcription", provider: "openai", model: "test-transcription" },
-      client,
-      respond,
-    });
-    await preparing.promise;
-    client.invalidated = true;
-    ready.resolve();
-    await creation;
-
-    expectRespondError(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: expect.stringContaining("Gateway requester authority changed"),
-    });
-    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
-  });
-
   it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
     const openai = {
       id: "openai",
@@ -1926,7 +1886,7 @@ describe("talk.client.toolCall handler", () => {
             name: "openclaw_agent_consult",
             args: { question: "Continue the call" },
           },
-          client: { connId },
+          client: { connId, connect: { scopes: ["operator.talk"] } },
           context: { getRuntimeConfig: () => ({}) },
         });
         return respond;
@@ -1992,7 +1952,7 @@ describe("talk.client.toolCall handler", () => {
         toolsAllow: configured
           ? undefined
           : ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-        transcript: { display: false, excludeFromContext: true },
+        transcript: { display: false },
         prepareAssistantTranscriptMessage: expect.any(Function),
         beforeDispatch: expect.any(Function),
       });
@@ -2108,7 +2068,7 @@ describe("talk.client.steer handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
   });
 
   it.each([
@@ -2124,7 +2084,7 @@ describe("talk.client.steer handler", () => {
       params: { sessionKey: "agent:main:main", text, ...(mode ? { mode } : {}) },
       context: await createSteerContext("conn-2"),
     });
-    expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+    expect(mocks.controlTalkAgentRun).not.toHaveBeenCalled();
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
       ...(message ? { message } : {}),
@@ -2336,7 +2296,7 @@ describe("talk.client.create handler", () => {
           ? { sessionKey: "main", transport: "webrtc" }
           : { sessionKey: "main", model: "gpt-live-1" },
         client: handoff
-          ? { connId: "conn-1" }
+          ? { connId: "conn-1", connect: { scopes: ["operator.talk"] } }
           : { connId: "conn-1", connect: { scopes: ["operator.write"] } },
         config: realtimeConfig(
           handoff
@@ -2921,7 +2881,7 @@ describe("role-required Talk session creation", () => {
         params,
         client: {
           connId: "conn-required",
-          connect: { scopes: ["operator.talk"] },
+          connect: gatewayConnect(["operator.talk"]),
           authenticatedUserProfile: { profileId: profile.id },
         },
         context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },

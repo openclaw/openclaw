@@ -1,7 +1,6 @@
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
+import type { AssistantHistoryMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
@@ -100,7 +99,6 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
-  private readonly cleanupProviderSessionResourcesOnDispose: boolean;
   protected abstract readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
@@ -127,8 +125,6 @@ export abstract class AgentSessionBase {
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
-    this.cleanupProviderSessionResourcesOnDispose =
-      config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
   get modelRegistry(): ModelRegistry {
@@ -294,7 +290,7 @@ export abstract class AgentSessionBase {
   }
 
   // Track last assistant message for auto-compaction check
-  protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  protected lastAssistantMessage: AssistantHistoryMessage | undefined = undefined;
   private lastAssistantEntryId: string | undefined;
   protected lastRunEndedForTurnHandoff = false;
 
@@ -452,7 +448,7 @@ export abstract class AgentSessionBase {
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
-  protected findLastAssistantMessage(): AssistantMessage | undefined {
+  protected findLastAssistantMessage(): AssistantHistoryMessage | undefined {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
@@ -562,9 +558,6 @@ export abstract class AgentSessionBase {
     this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
-    if (this.cleanupProviderSessionResourcesOnDispose) {
-      cleanupSessionResources(this.sessionId);
-    }
   }
 
   get state(): AgentState {
@@ -719,10 +712,10 @@ export abstract class AgentSessionBase {
     };
   }
 
-  protected abstract isRetryableError(message: AssistantMessage): boolean;
-  protected abstract prepareRetry(message: AssistantMessage): Promise<boolean>;
+  protected abstract isRetryableError(message: AssistantHistoryMessage): boolean;
+  protected abstract prepareRetry(message: AssistantHistoryMessage): Promise<boolean>;
   protected abstract checkCompaction(
-    assistantMessage: AssistantMessage,
+    assistantMessage: AssistantHistoryMessage,
     skipAbortedCheck?: boolean,
     requestBudget?: CompactionRequestBudget,
   ): Promise<boolean>;

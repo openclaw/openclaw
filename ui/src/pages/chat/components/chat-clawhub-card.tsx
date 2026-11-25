@@ -1,6 +1,6 @@
 import { lazy, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
-import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
+import { pathForClawHubSkill, pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -29,11 +29,11 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
         search: install ? "?action=install" : "",
       });
     } else {
-      const search = new URLSearchParams({ clawhub: card.id });
-      if (props.agentId) {
-        search.set("agent", props.agentId);
-      }
-      context.navigate("skills", { search: `?${search}` });
+      const search = props.agentId ? `?${new URLSearchParams({ agent: props.agentId })}` : "";
+      context.navigate("skills", {
+        pathname: pathForClawHubSkill(card.id, context.basePath),
+        search,
+      });
     }
   }
   return (

@@ -160,7 +160,7 @@ async function fixture(kind: "gateway" | "node" | "user") {
     envFilePath: path.join(stateDir, "gateway.systemd.env"),
     nodeEnvFilePath: path.join(stateDir, "node.systemd.env"),
     stage: (overrides: ServiceOverrides) => {
-      queueUserCommands(["status"]);
+      queueUserCommands(["status"], ["daemon-reload"]);
       return stageSystemdService(serviceArgs(env, kind === "node" ? kind : "gateway", overrides));
     },
     install: (overrides: ServiceOverrides = {}) =>
@@ -1346,21 +1346,19 @@ describe("stageSystemdService", () => {
     expect(command?.managedDefinition?.environment?.OPERATOR).toBeUndefined();
   });
 
-  it("preserves the gateway environment while clearing node-managed values", async () => {
+  it("stages node values and reloads metadata without activating the unit", async () => {
     const { env, unitPath, envFilePath, nodeEnvFilePath } = await fixture("gateway");
     const legacyGatewayEnvFile = "OPENCLAW_GATEWAY_TOKEN=stale-token\n";
     await fs.writeFile(envFilePath, legacyGatewayEnvFile, { encoding: "utf8", mode: 0o600 });
     await writeUnit(nodeEnvFilePath, "OPENCLAW_GATEWAY_TOKEN=stale-node-token\n", 0o600);
-    queueUserCommands(["status"]);
+    queueUserCommands(["status"], ["daemon-reload"]);
     await stageSystemdService(
       serviceArgs(env, "node", {
-        environment: {
-          OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_SERVICE_KIND: "node",
-        },
+        environment: { OPENCLAW_GATEWAY_PORT: "18789", OPENCLAW_SERVICE_KIND: "node" },
         environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: "file" },
       }),
     );
+    expectActions("status", "daemon-reload");
     const unit = await fs.readFile(unitPath, "utf8");
     expect(unit).not.toContain("EnvironmentFile=");
     await expectFiles({ [nodeEnvFilePath]: "", [envFilePath]: legacyGatewayEnvFile });

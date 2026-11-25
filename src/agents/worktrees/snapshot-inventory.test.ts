@@ -6,6 +6,14 @@ import { repository } from "../../infra/git-worker-lifecycle.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { inspectNestedRepository } from "./snapshot-inventory.js";
 
+it("ignores owned scratch clones while protecting user repositories beside scratch", async () => {
+  const repo = await repository(tempDirs.make("openclaw-scratch-nested-"));
+  await fs.mkdir(path.join(repo, ".openclaw/tmp/landing/native/.git"), { recursive: true });
+  expect(await inspectNestedRepository(repo)).toBe(false);
+  await fs.mkdir(path.join(repo, ".openclaw/tmp-user/native/.git"), { recursive: true });
+  expect(await inspectNestedRepository(repo)).toBe(true);
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();

@@ -4,7 +4,7 @@ import { waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
-it("opens a job-only failure link on Settings and reviews the failed run on request", async () => {
+it("opens a job-only failure link on its history and reviews the failed run on request", async () => {
   const job = createCronViewJob("failed-once", {
     schedule: { kind: "at", at: "2026-11-01T10:00:00.000Z" },
     state: {
@@ -36,15 +36,15 @@ it("opens a job-only failure link on Settings and reviews the failed run on requ
   );
   try {
     page.routeSearch = `?job=${job.id}`;
-    // An automation opens on its settings; the failure stays visible above them.
+    // An automation opens on its prompt and history; the failure sits under the prompt.
     await waitForCronPage(() =>
       expect(
-        page
-          .querySelector('[data-test-id="cron-detail-tab-settings"]')
-          ?.getAttribute("aria-selected"),
-      ).toBe("true"),
+        page.querySelector('.cron-page[data-view="detail"] .cron-failure-details'),
+      ).not.toBeNull(),
     );
     const warning = () => page.querySelector<HTMLElement>(".cron-failure-details");
+    page.querySelector<HTMLButtonElement>('[data-test-id="cron-failure-details-toggle"]')!.click();
+    await page.settle();
     expect(warning()?.textContent).toContain(job.state.lastError);
     expect(warning()?.textContent).toContain("No further run is scheduled");
     expect(page.querySelector(".cron-run-entry--highlighted")).toBeNull();
@@ -84,6 +84,11 @@ it("keeps an explicit older run link instead of replacing it with the latest fai
           ),
       ).toBe(true),
     );
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-failure-details-toggle"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>('[data-test-id="cron-failure-details-toggle"]')!.click();
+    await page.settle();
     expect(page.querySelector(".cron-failure-details")?.textContent).toContain("Latest failure");
     expect(
       vi
@@ -98,7 +103,7 @@ it("keeps an explicit older run link instead of replacing it with the latest fai
   }
 });
 
-it("opens an attention job without a recorded run id on Settings, leaving it unrun", async () => {
+it("opens an attention job without a recorded run id on its history, leaving it unrun", async () => {
   const job = createCronViewJob("missing-run-id", {
     state: { lastRunStatus: "error", lastError: "Run failed" },
   });
@@ -107,11 +112,7 @@ it("opens an attention job without a recorded run id on Settings, leaving it unr
     await page.settle();
     page.routeSearch = `?job=${job.id}`;
     await waitForCronPage(() =>
-      expect(
-        page
-          .querySelector('[data-test-id="cron-detail-tab-settings"]')
-          ?.getAttribute("aria-selected"),
-      ).toBe("true"),
+      expect(page.querySelector('.cron-page[data-view="detail"]')).not.toBeNull(),
     );
     expect(
       vi
@@ -125,11 +126,7 @@ it("opens an attention job without a recorded run id on Settings, leaving it unr
     });
     page.selectJob(paused);
     await page.settle();
-    expect(
-      page
-        .querySelector('[data-test-id="cron-detail-tab-settings"]')
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(page.querySelector('.cron-page[data-view="detail"]')).not.toBeNull();
     expect(page.querySelector(".cron-failure-details")).toBeNull();
   } finally {
     page.remove();

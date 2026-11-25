@@ -98,6 +98,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "plugins-mutations": () =>
     import("./plugins-mutations.js").then((module) => module.pluginMutationHandlers),
   projects: () => import("./projects.js").then((module) => module.projectsHandlers),
+  "projects-session-move": () =>
+    import("./projects-session-move.js").then((module) => module.projectsSessionMoveHandlers),
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
@@ -180,7 +182,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./mcp-app-extensions.js").then((module) => module.mcpAppExtensionHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
-  update: () => import("./update.js").then((module) => module.updateHandlers),
+  update: () => import("./update-run.js").then((module) => module.routedUpdateHandlers),
   "update-handoff-sentinel": () =>
     import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),

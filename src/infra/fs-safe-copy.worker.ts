@@ -1,6 +1,7 @@
 import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
@@ -88,6 +89,19 @@ function failure(error: unknown): FsSafeCopyReply {
       ? { code: error.code }
       : {}),
   };
+}
+
+function readCloneWriteBytes(): number | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    const value = readFileSync("/proc/self/io", "utf8").match(/^write_bytes: (\d+)$/m)?.[1];
+    return value === undefined ? undefined : Number(value);
+  } catch {
+    // IO accounting is optional; missing procfs must not disable native cloning.
+    return undefined;
+  }
 }
 
 function prepareOwnedDirectoryRemoval(directory: string): void {
@@ -294,7 +308,7 @@ if (parentPort) {
   let reply: FsSafeCopyReply = { type: "written" };
   try {
     // SAFETY: This private process receives only the host's typed filesystem commands.
-    const command = JSON.parse(readFileSync(0, "utf8")) as FsSafeCopyWrite;
+    const command = JSON.parse(await text(process.stdin)) as FsSafeCopyWrite;
     switch (command.type) {
       case "reclaim-plugin-captures": {
         const { reclaimPluginCaptureBatch } =
@@ -324,12 +338,19 @@ if (parentPort) {
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });
         break;
-      case "copy":
+      case "copy": {
+        const before = readCloneWriteBytes();
         await copyTree(command.source, command.destination, {
           clone: "always",
           signal: controller.signal,
         });
+        const after = readCloneWriteBytes();
+        reply = {
+          type: "written",
+          cloneWriteBytes: before === undefined || after === undefined ? undefined : after - before,
+        };
         break;
+      }
       default:
         throw new Error("Unknown native worktree operation");
     }

@@ -148,6 +148,7 @@ export async function prepareSessionColdBatchInWorker(
   }
   result.freePages = selection.value.freePages;
   result.cleanupSessionIds = selection.value.cleanupSessionIds;
+  result.cleanupCursor = selection.value.cleanupCursor;
   result.needsReconcile = selection.value.needsReconcile;
   if (result.needsReconcile) {
     return result;

@@ -59,7 +59,8 @@ describe("cron form validation", () => {
       activeHoursEnd: "25:00",
       activeHoursTimezone: "Invalid/Timezone",
     });
-    expect(errors.name).toBe("cron.errors.nameRequired");
+    // Unnamed automations are named by the Gateway from their prompt.
+    expect(errors.name).toBeUndefined();
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
     expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");

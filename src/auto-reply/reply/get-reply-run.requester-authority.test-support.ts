@@ -34,6 +34,7 @@ import {
 import { runReplyAgent } from "./agent-runner-run.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { registerTelegramRequesterAuthorityCases } from "./get-reply-run.telegram-requester.test-support.js";
 import {
   baseParams,
   createProviderSurface,
@@ -53,6 +54,7 @@ export function registerPendingRequesterAuthorityCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: typeof createPreparedReplyTurn;
 }): void {
+  registerTelegramRequesterAuthorityCases(runPrepared);
   it.each([
     { internal: false, revokeSource: false },
     { internal: false, revokeSource: true },
@@ -222,7 +224,7 @@ export function registerPendingRequesterAuthorityCases({
       const scope = createCronCreatorAuthorityCapability(
         originalRunId,
         { kind: "external", channel: "discord" },
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       )!;
       const params = baseParams();
       setRuntimeConfigSnapshot(params.cfg);

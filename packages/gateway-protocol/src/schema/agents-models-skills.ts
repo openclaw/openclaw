@@ -14,6 +14,7 @@ import {
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
 import { NonEmptyString, Sha256String } from "./primitives.js";
+import { RecommendedPromptsSchema } from "./recommended-prompts.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
@@ -37,8 +38,7 @@ export {
 } from "./agents-create.js";
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
-export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
-export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
+export * from "./skills-search.js";
 export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
@@ -80,6 +80,8 @@ export const AgentSummarySchema = closedObject({
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
+  description: Type.Optional(NonEmptyString),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   identity: Type.Optional(
     closedObject({
       name: Type.Optional(NonEmptyString),

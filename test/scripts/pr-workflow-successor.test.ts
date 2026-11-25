@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -122,10 +129,14 @@ function expectExit(result: ReturnType<typeof spawnSync>, status: number) {
   expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(status);
 }
 
-function verifyPublishedMerge(f: ReturnType<typeof fixture>) {
+function verifyPublishedMerge(
+  f: ReturnType<typeof createBaselineFixture>,
+  hosted: string,
+  checkBucket = "pass",
+) {
   const observation = {
     ...JSON.parse(f.readLocal("pr-meta.json").toString()),
-    headRefOid: f.hosted,
+    headRefOid: hosted,
     isDraft: false,
   };
   return spawnSync(
@@ -138,6 +149,9 @@ for owner in worktree common gates push review prepare-core merge; do
   source "$script_parent_dir/pr-lib/$owner.sh"
 done
 PR_MAIN_SHA="$2"
+PR_WORKFLOW_BINDING_OID=$(git rev-parse refs/openclaw/pr-workflow-bindings/42)
+PR_WORKFLOW_SOURCE_REVISION=$(git show "$PR_WORKFLOW_BINDING_OID:binding.json" | jq -er .source)
+check_bucket="$4"
 # Reuse the already entered native checkout. Only external observations are
 # fixture responses; merge's review, alias, gate and source guards stay real.
 enter_worktree() { :; }
@@ -151,7 +165,7 @@ fetch_pr_head() {
 merge_read() {
   test "$1" = checks && test "$PREP_HEAD_SHA" = "$(git -C "$FIXTURE_REPO" rev-parse topic)" || return 1
   printf '%s\\n' "$PREP_HEAD_SHA" >.local/merge-check-target
-  printf '%s\\n' '{"transport":"graphql","payload":[{"name":"openclaw/ci-gate","bucket":"pass","state":"SUCCESS"}]}'
+  jq -cn --arg bucket "$check_bucket" '{transport:"graphql",payload:[{name:"openclaw/ci-gate",bucket:$bucket,state:(if $bucket == "pass" then "SUCCESS" else "FAILURE" end)}]}'
 }
 merge_verify 42 "$3"
 `,
@@ -164,6 +178,7 @@ merge_verify 42 "$3"
         qualifiedRefusal: false,
         observation,
       }),
+      checkBucket,
     ],
     { cwd: f.worktree, env: f.env, encoding: "utf8" },
   );
@@ -272,7 +287,7 @@ describePosix("correction-only workflow succession", () => {
       expect(f.readLocal("prep.env").toString()).toContain(`LOCAL_PREP_HEAD_SHA=${f.head}\n`);
       expect(f.readLocal("prep.env").toString()).toContain(`PREP_HEAD_SHA=${f.hosted}\n`);
       expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(next);
-      expectExit(verifyPublishedMerge(f), 0);
+      expectExit(verifyPublishedMerge(f, f.hosted), 0);
       expect(f.readLocal("merge-check-target").toString()).toBe(`${f.hosted}\n`);
       console.info("successor authority proof", {
         outcome: "allowed",
@@ -514,6 +529,75 @@ function proofFixture(successor = false, baseline = false, resolvedBlocker = fal
     args,
   };
 }
+
+describePosix("maintainer acceptance of pending proof", () => {
+  it("admits an exact published correction without recording pending proof as passed", () => {
+    const f = proofFixture();
+    expectExit(f.run("prepare-publish-for-proof"), 0);
+    f.git(f.repo, "commit", "--allow-empty", "-qm", "test: newer canonical workflow");
+    expect(f.git(f.repo, "rev-parse", "main")).not.toBe(f.source);
+    const original = f.snapshot(["correction-review.json", "prepare-push-result.env"]);
+    const acceptance = {
+      version: 1,
+      kind: "maintainer-accepted-pending-proof",
+      headSha: f.head,
+      treeOid: f.tree,
+      reviewOid: f.reviewOid(),
+      findings: [
+        { id: "I1", reason: "The maintainer accepted the risk of unavailable Mac capacity." },
+      ],
+    };
+    const name = "pending-proof-acceptance.json";
+    const accept = (value: typeof acceptance) => f.writeLocal(name, JSON.stringify(value));
+    const gates = () => f.run("prepare-gates", [], { OPENCLAW_PR_GATES_REMOTE: "github" });
+
+    accept(acceptance);
+    expectExit(gates(), 0);
+    const stamp = f.readLocal("gates.env").toString();
+    expect(stamp).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`);
+    expect(stamp).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/u);
+    expectExit(f.run("prepare-push"), 0);
+    expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
+    expect(f.readLocal("prep.env").toString()).toContain(`PREP_HEAD_SHA=${f.head}\n`);
+    const failedCi = verifyPublishedMerge(f, f.head, "fail");
+    expectExit(failedCi, 1);
+    expect(failedCi.stdout + failedCi.stderr).toMatch(/required.*check.*fail|failed.*required/iu);
+    const admitted = verifyPublishedMerge(f, f.head);
+    expectExit(admitted, 0);
+    expect(admitted.stdout).toContain("merge-verify passed");
+    expect(f.readLocal("merge-check-target").toString()).toBe(`${f.head}\n`);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.head);
+    f.expectSnapshot(original);
+    for (const invalid of [
+      { ...acceptance, headSha: f.incoming },
+      { ...acceptance, treeOid: f.incoming },
+      { ...acceptance, reviewOid: f.incoming },
+      { ...acceptance, findings: [] },
+      {
+        ...acceptance,
+        findings: [...acceptance.findings, { id: "extra", reason: "Not in review." }],
+      },
+      { ...acceptance, findings: [{ id: "I1", reason: "  " }] },
+    ]) {
+      accept(invalid);
+      const refused = verifyPublishedMerge(f, f.head);
+      expectExit(refused, 1);
+      expect(refused.stderr).toContain("Pending proof acceptance");
+    }
+    unlinkSync(f.local(name));
+    const missing = verifyPublishedMerge(f, f.head);
+    expectExit(missing, 1);
+    expect(missing.stderr).toContain("needs an independent READY review");
+
+    f.review.findings[0].severity = "BLOCKER";
+    f.writeReview();
+    accept({ ...acceptance, reviewOid: f.reviewOid() });
+    const blocker = verifyPublishedMerge(f, f.head);
+    expectExit(blocker, 1);
+    expect(blocker.stderr).toContain("BLOCKER findings remain blocking");
+    expect(f.readLocal("gates.env").toString()).toBe(stamp);
+  });
+});
 
 describePosix("pending-proof correction publication", () => {
   it("permits a resolved historical BLOCKER while preserving the current proof finding", () => {
