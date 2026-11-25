@@ -8,6 +8,7 @@ export type RunFailureCause = {
   provider: string;
   failoverReason?: string;
   code?: typeof HARNESS_UPDATE_REQUIRED_CODE;
+  showSummary?: true;
 };
 
 /** A diagnostic-only display row owned by the settled run, not a model attempt. */
@@ -18,8 +19,7 @@ const readCauseField = (value: unknown) =>
   typeof value === "string" && value.length <= 120 ? value.trim() || undefined : undefined;
 
 /**
- * Keeps only a bounded provider id and failover reason from an error observation, plus the
- * host-authored update code (observation `providerErrorCode`, recorded cause `code`).
+ * Keeps bounded provider identifiers and explicit host display hints from an error observation.
  */
 export function readRunFailureCause(value: unknown): RunFailureCause | undefined {
   const source = asOptionalRecord(value);
@@ -33,6 +33,7 @@ export function readRunFailureCause(value: unknown): RunFailureCause | undefined
         provider,
         ...(failoverReason && { failoverReason }),
         ...(updateRequired && { code: HARNESS_UPDATE_REQUIRED_CODE }),
+        ...(source?.showSummary === true && { showSummary: true as const }),
       }
     : undefined;
 }

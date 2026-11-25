@@ -437,6 +437,11 @@ export type ProviderPlugin = {
    */
   classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
   /**
+   * Return safe, user-facing copy for a recognized provider error.
+   * Return undefined to use OpenClaw's default copy. Never return a raw error body.
+   */
+  formatUserFacingError?: (ctx: ProviderFailoverErrorContext) => string | undefined;
+  /**
    * Provider-owned cache TTL eligibility.
    *
    * Use this when a proxy provider supports Anthropic-style prompt caching for

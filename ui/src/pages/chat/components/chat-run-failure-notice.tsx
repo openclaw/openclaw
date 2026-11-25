@@ -61,10 +61,6 @@ export function ChatRunFailureNotice(props: {
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
-  const title = () =>
-    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
-      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
-    });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const startNewSession = () =>
@@ -74,6 +70,11 @@ export function ChatRunFailureNotice(props: {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
     return firstLine.length <= 240 ? firstLine : undefined;
   });
+  const title = () =>
+    (props.cause?.showSummary ? concise() : undefined) ||
+    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
+    });
   // The well always holds the full error, so a one-line error is not repeated above it.
   const lead = createMemo(() => (concise() === detail() ? undefined : concise()));
   const logRef = createScrollStateRef(

@@ -18,6 +18,7 @@ import {
   isRateLimitAssistantError,
 } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
+  formatProviderAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "../../embedded-agent-helpers/error-text.js";
@@ -498,18 +499,26 @@ export async function handleEmbeddedAssistantFailure(input: {
       !timedOut &&
       (failoverFailure || listedModelRejection))
   ) {
+    const providerMessage =
+      !listedModelRejection && failedAssistant
+        ? formatProviderAssistantErrorText(failedAssistant, input.providerOwner)
+        : undefined;
     const message =
       (listedModelRejection ? MODEL_CHAT_REJECTED_TEXT : undefined) ||
       (failedAssistant
-        ? formatUserFacingAssistantErrorText(failedAssistant, {
-            cfg: runInput.runParams.config,
-            sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
-            agentId: runInput.runParams.agentId,
-            provider: activeErrorContext.provider,
-            providerOwner: input.providerOwner,
-            model: activeErrorContext.model,
-            authMode,
-          })
+        ? formatUserFacingAssistantErrorText(
+            failedAssistant,
+            {
+              cfg: runInput.runParams.config,
+              sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
+              agentId: runInput.runParams.agentId,
+              provider: activeErrorContext.provider,
+              providerOwner: input.providerOwner,
+              model: activeErrorContext.model,
+              authMode,
+            },
+            providerMessage ?? null,
+          )
         : undefined) ||
       failedAssistant?.errorMessage?.trim() ||
       (timedOut
@@ -558,6 +567,7 @@ export async function handleEmbeddedAssistantFailure(input: {
           status,
           code: listedModelRejection ? MODEL_CHAT_REJECTED_CODE : failedAssistant?.errorCode,
           rawError: failedAssistant?.errorMessage?.trim(),
+          userMessage: providerMessage,
           // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
           timeout:
             terminalOutcome.status === "timeout"

@@ -1,9 +1,12 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
 import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantHistoryMessage } from "../../llm/types.js";
+import { isTerminalAssistantError } from "../../llm/utils/retry.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -97,6 +100,32 @@ type AssistantErrorTextOptions = {
   sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
+
+export function formatProviderAssistantErrorText(
+  msg: AssistantHistoryMessage,
+  owner: PreparedProviderFailoverOwner | undefined,
+): string | undefined {
+  const errorMessage = msg.errorMessage?.trim();
+  if (
+    !owner?.formatUserFacingError ||
+    !errorMessage ||
+    msg.stopReason !== "error" ||
+    isTerminalAssistantError(msg)
+  ) {
+    return undefined;
+  }
+  const message = normalizeOptionalString(
+    owner.formatUserFacingError({
+      provider: owner.id,
+      modelId: msg.model,
+      errorMessage,
+      status: extractErrorHttpStatus(errorMessage)?.code,
+      code: msg.errorCode,
+      errorType: msg.errorType,
+    }),
+  );
+  return message ? redactSensitiveText(message, { mode: "tools" }) : undefined;
+}
 function classifyAssistantErrorFacts(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
@@ -323,6 +352,10 @@ function isRawAssistantErrorPassthrough(params: {
 export function formatUserFacingAssistantErrorText(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
+  providerMessage: string | null | undefined = formatProviderAssistantErrorText(
+    msg,
+    opts?.providerOwner,
+  ),
 ): string {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
@@ -348,6 +381,9 @@ export function formatUserFacingAssistantErrorText(
   const facts = classifyAssistantErrorFacts(msg, opts);
   if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
     return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
+  if (!facts.storageFailure && providerMessage) {
+    return providerMessage;
   }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });

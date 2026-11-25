@@ -650,6 +650,7 @@ export function coerceToFailoverError(
           authMode: err.authMode ?? context?.authMode,
           status,
           code: err.code,
+          userMessage: err.userMessage,
           rawError:
             err.rawError ??
             (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),

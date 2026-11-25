@@ -5,7 +5,7 @@ import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
-import { getFailoverErrorCode } from "../../agents/failover/error.js";
+import { FailoverError, getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import {
   AgentHarnessModelRequestPolicyError,
@@ -54,6 +54,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "errorNotice",
   "suppressErrorNotice",
   "assistantTranscriptIdempotencyKey",
 ] as const;
@@ -155,6 +156,14 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
+      if (
+        isRecord(data.errorObservation) &&
+        data.errorObservation.showSummary === true &&
+        !(terminalValue instanceof FailoverError && terminalValue.userMessage)
+      ) {
+        const { showSummary: _showSummary, ...observation } = data.errorObservation;
+        data.errorObservation = observation;
+      }
       data.error =
         renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??

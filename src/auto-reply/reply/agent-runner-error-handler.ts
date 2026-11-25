@@ -4,7 +4,11 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/context-overflow-observation.js";
-import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import {
+  FailoverError,
+  findCliTimeoutError,
+  isFailoverError,
+} from "../../agents/failover-error.js";
 import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
@@ -281,6 +285,9 @@ export async function handleAgentExecutionError(params: {
       stopReason: "restart",
     });
     return { kind: "aborted", reason: "restart" };
+  }
+  if (err instanceof FailoverError && err.userMessage) {
+    return await settleFailure({ text: err.userMessage });
   }
   if (isCompactionFailure) {
     takePendingLifecycleTerminal().emit("error", err);
