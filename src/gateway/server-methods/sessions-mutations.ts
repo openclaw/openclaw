@@ -162,6 +162,7 @@ function createSessionPatchHandler(
         signal,
         diagnostics,
         archiveUndo: archive.caller,
+        participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,

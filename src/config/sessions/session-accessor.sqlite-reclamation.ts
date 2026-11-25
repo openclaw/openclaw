@@ -375,6 +375,7 @@ export function createSessionMaintenanceStatisticsOperation(
 
 export function createSessionMaintenanceFinalizationOperation(params: {
   agentId: string;
+  retainedMcpSessionIds?: readonly string[];
   databaseOptions: OpenClawAgentDatabaseOptions;
   entries: SessionEntryRemovalPlan[];
   materializedPlans: MaterializedSessionStateDeletePlan[];

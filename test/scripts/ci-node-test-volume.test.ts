@@ -14,6 +14,7 @@ import {
   type NodeTestVolumeContext,
   type NodeTestShardGroup,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import { createAgentsCoreVitestConfig } from "../vitest/vitest.agents-core.config.ts";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
@@ -133,7 +134,14 @@ it.each(["node", "bun-all", "dual-all"] as const)(
     const describe = prepareNodeTestVolumes(volumeContextFor([boundary, mixed], policy));
     for (const group of [boundary, mixed]) {
       const entries = describe(group).entries;
-      expect(entries.length).toBe(group.configs.length * (policy === "dual-all" ? 2 : 1));
+      const executionProfiles = group.configs.flatMap((config) =>
+        resolveCiTestRuntimeSelections({ configs: [config] }, policy).map(
+          ({ runtime }) => `${config}:${runtime}`,
+        ),
+      );
+      expect(entries.map(({ config, runtime }) => `${config}:${runtime}`).toSorted()).toEqual(
+        executionProfiles.toSorted(),
+      );
       for (const entry of entries) {
         expect(entry.full).not.toBeNull();
         expect(entry.full?.count).toBe(entry.selected?.count);

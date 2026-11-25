@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
 import { personalSessionPinRank } from "../config/sessions/session-pin-policy.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -56,7 +57,6 @@ import {
 } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -68,7 +68,6 @@ import {
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PersonalPinOrder = ReadonlyMap<string, number> | null;
 
@@ -198,14 +197,10 @@ function prepareSessionRowRecipient(
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client: client ?? null,
-    isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
+    memberAccess: (value, id) => projection.memberAccess(value.storePath, value.storeKey, id),
+    isMember: ({ agentId, storePath, storeKey }, identityId) =>
+      projection.describe({ agentId, storePath, key: storeKey })?.membership.has(identityId) ??
+      false,
   });
   return {
     cfg,
@@ -319,25 +314,32 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    const access = sharing.accessForTarget(value);
+    viewerFacts.invitedAccess =
+      access.invitedAccessCeiling &&
+      (access.access === "read" || access.access === "suggest" || access.access === "send")
+        ? access.access
+        : undefined;
+    viewerFacts.invitedPermission =
+      viewerFacts.invitedAccess === "send"
+        ? intersectSessionPermissionModes(
+            sharing.invitedPermission,
+            value.entry.permissionMode ?? "full",
+          )
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionAgentRun(
-            { cfg: policyConfig, client: client ?? null, target: value },
-            { policy: sharing.policy },
-          )?.message ??
-          sharing.authorizeTarget(value, sharingRole)?.message ??
+        : (sharing.authorizeRun(value, true)?.message ??
+          sharing.authorizeTarget(value, sharingRole, true)?.message ??
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
             : null));
     viewerFacts.workspaceReadDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionWorkspaceRead(
-            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
-            { policy: sharing.policy },
-          )?.message ?? null);
+        : (sharing.authorizeWorkspaceRead(value, unscopedHostRoot)?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -519,7 +521,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
+          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole, true)
         : undefined;
     const signature = views && optionKey(options);
     recipientFacts[0] = recipientView?.visibility;
@@ -539,8 +541,10 @@ export function prepareProjectedSessionPresentation(
       : recipient.omitSharedPins || options.personalPins === null
         ? null
         : undefined;
-    recipientFacts[8] = personalPin;
-    recipientFacts.length = 9;
+    recipientFacts[8] = recipientView?.invitedAccess;
+    recipientFacts[9] = recipientView?.invitedPermission;
+    recipientFacts[10] = personalPin;
+    recipientFacts.length = 11;
     const variants = signature === undefined ? undefined : views?.get(signature);
     const current = variants?.find((cached) => sameSessionRowFacts(cached.facts, recipientFacts));
     if (current) {

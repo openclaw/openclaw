@@ -20,9 +20,10 @@ export function AgentPanelAction(props: { label: string; disabled: boolean; onCl
 
 export function renderAgentPanelFacts(
   facts: ReadonlyArray<readonly [string, string | JSX.Element] | null>,
+  className?: string,
 ) {
   return (
-    <dl class="settings-kv">
+    <dl class={["settings-kv", className]}>
       <For each={facts}>
         {(fact) =>
           fact ? (

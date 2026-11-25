@@ -428,6 +428,7 @@ export function createChatSendReplyDispatch(params: {
         // identity so media materialization cannot append a parallel reply.
         rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           idempotencyKey: ownedTranscriptIdempotencyKey,
           managedMediaUrls: sourceMediaUrls,
@@ -446,6 +447,7 @@ export function createChatSendReplyDispatch(params: {
           messageId: assistantTranscriptMessageId,
           runId: agentRunId,
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           mediaUrls: sourceMediaUrls,
           expectedLifecycleRevision: assistantTranscriptRewriteState?.lifecycleRevision ?? null,
@@ -473,6 +475,7 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: assistantTranscriptRewriteState.afterSeq,
           assistantMessageIndex,
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           expectedGeneration: assistantTranscriptRewriteState.generation,
           mediaUrls: sourceMediaUrls,

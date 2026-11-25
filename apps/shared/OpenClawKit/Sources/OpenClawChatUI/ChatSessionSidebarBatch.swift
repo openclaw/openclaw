@@ -163,24 +163,9 @@ final class ChatSessionSidebarBatch {
         }, uniquingKeysWith: min)
     }
 
-    static func movingPin(
-        _ entries: [AnyCodable],
-        key: String,
-        target: String?,
-        after: Bool,
-        insert: Bool = false) throws -> [AnyCodable]
-    {
+    static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) throws -> [AnyCodable] {
         func pinKey(_ entry: AnyCodable) -> String? {
             Self.sessionPinKey(entry.value as? String)
-        }
-        if insert, !entries.contains(where: { pinKey($0) == key }) {
-            // ui/src/components/session-organizer.ts writeSidebarEntryAt: one guarded layout write beside the target.
-            guard let target, let anchor = entries.firstIndex(where: { pinKey($0) == target }) else {
-                throw OpenClawPersonalPinError.placementChanged
-            }
-            var result = entries
-            result.insert(.init("session:\(key)"), at: anchor + (after ? 1 : 0))
-            return result
         }
         // Move only existing pin slots. The original JSON, including unknown future values, is the CAS base.
         let slots = entries.indices.filter { pinKey(entries[$0]) != nil }
@@ -205,7 +190,6 @@ final class ChatSessionSidebarBatch {
         key: String,
         target: String?,
         after: Bool,
-        insert: Bool = false,
         connection: OpenClawSessionMenuConnection) async throws
     {
         guard connection.supportsPersonalPins else { throw OpenClawPersonalPinError.unsupportedGateway }
@@ -224,7 +208,7 @@ final class ChatSessionSidebarBatch {
                 let previous = try await connection.pinProfile.read(connection)
                 guard self.scope == scope else { return }
                 do {
-                    let next = try Self.movingPin(previous, key: key, target: target, after: after, insert: insert)
+                    let next = try Self.movingPin(previous, key: key, target: target, after: after)
                     self.sidebarEntries = next.compactMap { $0.value as? String }
                     guard next != previous else { return }
                     let result: PinWrite = try await connection.read("users.prefs.set", [
@@ -462,7 +446,7 @@ final class ChatSessionSidebarBatch {
     enum Drop {
         case selfDrop
         case mutation([String: AnyCodable]?)
-        /// A new personal pin placed beside a saved one, using the same layout writer as reordering.
+        /// Pin through the Gateway's session checks, then place the new pin beside a saved one.
         case insert(key: String, target: String)
     }
 
@@ -488,7 +472,6 @@ final class ChatSessionSidebarBatch {
                 OpenClawChatSessionTarget.resolve(
                     row.key, selectedAgentID: row.agentId, policy: .scopeBareKeysToSelectedAgent).sessionKey
             }
-            // A named insert is one guarded layout write, never an append followed by a best-effort move.
             return .insert(key: canonical(row), target: canonical(target))
         }
         // Category patches: ui/src/components/session-organizer-operations.runtime.ts assignSessionCategory.

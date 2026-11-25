@@ -178,7 +178,7 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
 
 it("defers automatic update and catalog checks until constrained memory recovers", async () => {
   vi.mocked(checkUpdateStatus).mockClear();
-  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(true);
+  const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(true);
   const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
   check = createGatewayUpdateCheck({
     lifecycle,

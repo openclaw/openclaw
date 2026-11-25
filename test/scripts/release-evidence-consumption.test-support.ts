@@ -43,6 +43,7 @@ export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
   fixtureOptions: {
     waivedFailure?: boolean;
+    normalCiReceiptAndroid?: "true" | "false";
     omittedPluginJob?: boolean;
     waiverPolicySha?: string;
   } = {},
@@ -212,7 +213,11 @@ export function recoveryConsumptionFixture(
       direct.admission.receipt,
       binding,
       sourceFile(q, ".github/workflows/" + spec.workflow),
+      sourceFile(q),
     );
+    if (role === "normalCi" && fixtureOptions.normalCiReceiptAndroid !== undefined) {
+      inputs.include_android = fixtureOptions.normalCiReceiptAndroid;
+    }
     const current = {
       ...run(id, ".github/workflows/" + spec.workflow),
       display_title: displayTitle,

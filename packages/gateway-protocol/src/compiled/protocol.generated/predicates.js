@@ -1372,7 +1372,7 @@ var External = [
     /(^type$|^id$)/u,
     /(^routeSegment$)/u,
     /(^catalogId$)/u,
-    /(^profileRelation$|^catalogId$|^hostId$|^threadId$|^agentId$|^sourceHomeId$|^limit$|^cursor$)/u,
+    /(^includePreviewImage$|^profileRelation$|^catalogId$|^hostId$|^threadId$|^agentId$|^sourceHomeId$|^limit$|^cursor$)/u,
     /(^catalogId$|^hostId$|^threadId$|^agentId$|^sourceHomeId$)/u,
     /(^profileRelation$|^catalogId$|^hostId$|^threadId$|^agentId$|^sourceHomeId$|^displayName$)/u,
     /(^catalogId$|^hostId$|^threadId$|^agentId$|^sourceHomeId$|^confirmNoOtherRunner$)/u,
@@ -14972,6 +14972,9 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1475, unique_1476) => External[749].test(unique_1475) || check_2(value[unique_1475]),
     ) &&
+    (value.includePreviewImage === void 0 ||
+      !("includePreviewImage" in value) ||
+      check_331(value.includePreviewImage)) &&
     (value.profileRelation === void 0 ||
       !("profileRelation" in value) ||
       check_2234(value.profileRelation)) &&

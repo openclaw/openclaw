@@ -20,20 +20,6 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-export type SessionPatchExecutionParams = {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  signal?: AbortSignal;
-  archiveUndo?: ArchiveUndoCaller;
-  diagnostics?: SessionPatchDiagnostics;
-  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
-  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
-  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
-  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
-  patch: Omit<SessionsPatchParams, keyof SessionPatchTargetIdentity>;
-  targets: readonly MutationTarget[];
-};
-
 export type MutationTarget = SessionPatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
 };
@@ -68,3 +54,18 @@ type GroupMutationResult =
 export type GroupAdmissionResult =
   | GroupMutationResult
   | { kind: "detached"; snapshot: SqliteLifecycleTargetSnapshot };
+
+export type ExecuteSessionPatchMutationsParams = {
+  client: GatewayClient | null;
+  participationOnly?: boolean;
+  context: GatewayRequestContext;
+  signal?: AbortSignal;
+  archiveUndo?: ArchiveUndoCaller;
+  diagnostics?: SessionPatchDiagnostics;
+  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
+  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
+  patch: Omit<SessionsPatchParams, keyof SessionPatchTargetIdentity>;
+  targets: readonly MutationTarget[];
+};

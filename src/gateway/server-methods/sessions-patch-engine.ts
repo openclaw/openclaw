@@ -50,15 +50,16 @@ import {
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
 import * as patchGroups from "./sessions-patch-groups.js";
 import * as modelSelection from "./sessions-patch-model-selection.js";
+import { isParticipationPermissionTightening } from "./sessions-patch-participation.js";
 import {
   prepareSessionPatchReplacement,
   createSessionPatchGroupWriter,
 } from "./sessions-patch-replacement.js";
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
+  ExecuteSessionPatchMutationsParams,
   GroupMutationOperation,
   MutationOutcome,
-  SessionPatchExecutionParams,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
@@ -69,7 +70,7 @@ const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
 
-export async function executeSessionPatchMutations(params: SessionPatchExecutionParams) {
+export async function executeSessionPatchMutations(params: ExecuteSessionPatchMutationsParams) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
@@ -471,6 +472,23 @@ export async function executeSessionPatchMutations(params: SessionPatchExecution
                         continue;
                       }
                       runtimeSelections.push(runtimeSelection);
+                      if (
+                        params.participationOnly &&
+                        !(await isParticipationPermissionTightening({
+                          cfg: getCurrentConfig(),
+                          agentId: target.targetAgentId,
+                          sessionKey: primaryKey,
+                          before: existingEntry,
+                          after: projected.entry,
+                        }))
+                      ) {
+                        projectedOutcomes.push(
+                          invalidSessionRequest(
+                            "Participants may only tighten the current effective permission policy.",
+                          ),
+                        );
+                        continue;
+                      }
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;
                       const sandboxChanged =

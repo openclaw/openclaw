@@ -53,7 +53,7 @@ export function readPublishedSidebarOrder(
   if (existing) {
     return existing.order;
   }
-  const order = load().catch((error) => {
+  const order = load().catch((error: unknown) => {
     if (entries.get(profileId)?.order === order) {
       entries.delete(profileId);
     }

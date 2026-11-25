@@ -11,7 +11,6 @@ import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
 import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
-import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
   renderPersonalSessionEmpty,
@@ -25,6 +24,7 @@ import type {
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import { sidebarPinnedSessionRows } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -177,7 +177,9 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
     () => void params.host.sessionData.refreshSidebarSessions(),
     () => {
       const { result, at } = sampled();
-      if (!result) return undefined;
+      if (!result) {
+        return undefined;
+      }
       const zone = params.host.reconciledSidebarZone();
       const listed = new Set(result.sessions.map((row) => row.key));
       const outside = zone.entries.flatMap((entry) => {
@@ -192,8 +194,9 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
       if (
         wake === null ||
         (result.activityExpiresAt !== undefined && result.activityExpiresAt + 1 <= wake)
-      )
+      ) {
         return undefined;
+      }
       return Math.min(2_147_483_647, Math.max(0, wake - result.ts - (performance.now() - at)));
     },
   );

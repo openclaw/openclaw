@@ -317,7 +317,8 @@ extension ChatSessionSidebar {
         {
         case .selfDrop?: return true
         case let .insert(key, target)? where self.menuActions.canEditPins:
-            patch = nil
+            // The Gateway refuses a thread snoozed, archived or replaced elsewhere before any layout write.
+            patch = ["pinned": .init(true)]
             insert = (key, target)
         case .insert?: return false
         case let .mutation(fields)? where self.menuActions.canEditPins: patch = fields
@@ -329,9 +330,10 @@ extension ChatSessionSidebar {
             patch = ["category": category]
         case nil: return false
         }
-        guard connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch") else { return false }
+        guard connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch"),
+              insert == nil || connection.allows("users.prefs.set") else { return false }
         let owner = self.viewModel.sidebarData
-        self.interact(refresh: patch != nil || insert != nil) { connection in
+        self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
             // Shared category and personal pin edits have separate transaction owners.
             let patches: [[String: AnyCodable]] = patch.map { fields in
@@ -359,12 +361,12 @@ extension ChatSessionSidebar {
                     .filter { patch[$0.rawValue] != nil }
                 owner?.confirmFields(receipt, target: row, fields: fields)
             }
-            if section == "pinned", patch == nil {
+            // A failed placement leaves the committed pin last, with the move error visible.
+            if section == "pinned", patch == nil || insert != nil {
                 try await self.batch.movePin(
                     key: insert?.key ?? row.key,
                     target: insert?.target ?? pinTarget?.key,
                     after: after,
-                    insert: insert != nil,
                     connection: connection)
             }
         } apply: { _ in }

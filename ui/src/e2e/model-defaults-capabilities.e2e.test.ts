@@ -62,7 +62,7 @@ suite.define(() => {
             return { left: box.left, width: box.width, height: box.height };
           }),
         );
-        expect(boxes).toHaveLength(5);
+        expect(boxes).toHaveLength(6);
         for (const box of boxes) {
           expect(Math.abs(box.left - boxes[0]!.left)).toBeLessThan(1);
           expect(Math.abs(box.width - boxes[0]!.width)).toBeLessThan(1);

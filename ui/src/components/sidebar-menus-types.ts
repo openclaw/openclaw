@@ -74,7 +74,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
-  hideSessionCatalog(catalogId: string): void;
+  readonly ownerDocument: Document;
   readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void;
   effectiveSessionSortMode(): SidebarSessionSortMode;

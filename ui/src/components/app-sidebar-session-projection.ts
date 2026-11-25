@@ -13,7 +13,6 @@ import {
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarChildExpansion } from "./app-sidebar-child-expansion.ts";
-import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogErrorMessages,
@@ -21,6 +20,7 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
+  sidebarPinnedSessionRows,
   sidebarSessionPagination,
   isListedInPinnedSection,
   type SidebarPinZone,

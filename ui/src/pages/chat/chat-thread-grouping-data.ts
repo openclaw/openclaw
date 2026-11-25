@@ -343,6 +343,24 @@ export function groupPreparedChatMessages(
   }
   let activityBoundary = false;
   return result.flatMap((item) => {
+    if (item.kind === "compaction") {
+      const startsActivityGroup = activityBoundary;
+      activityBoundary = false;
+      return [
+        {
+          kind: "group" as const,
+          key: `group:${item.key}`,
+          role: "tool",
+          messages: [],
+          compaction: item,
+          timestamp: item.timestamp,
+          visibleContent: "none" as const,
+          isStreaming: false,
+          ...(item.runId ? { runId: item.runId } : {}),
+          ...(startsActivityGroup ? { startsActivityGroup: true as const } : {}),
+        },
+      ];
+    }
     if (item.kind === "notice" && item.activityBoundary) {
       activityBoundary = true;
       return [];

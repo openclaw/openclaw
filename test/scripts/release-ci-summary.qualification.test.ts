@@ -277,6 +277,9 @@ describe("candidate-owned publish consumer chain", () => {
     "beta promotion waived descendant",
     "beta promotion execution-plan descendant",
     "same qualification",
+    "preflight-first current same qualification",
+    "preflight-first root same qualification",
+    "beta promotion preflight-first descendant",
     "candidate-bound same qualification",
     "candidate-bound changelog descendant",
     "candidate-bound execution-plan descendant",
@@ -297,6 +300,7 @@ describe("candidate-owned publish consumer chain", () => {
       : [`CHANGELOG/${version.split("-")[0]}.md`, `CHANGELOG/records/${version.split("-")[0]}.md`];
     const root = candidatePublicationFixture({
       candidateVersion: version,
+      preflightFirst: scenario.includes("preflight-first root"),
       ...(promotion ? { releaseProfile: "stable", reuseEvidence: false } : {}),
       ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
     });
@@ -368,6 +372,11 @@ describe("candidate-owned publish consumer chain", () => {
     }
     assert(inputs.trusted_workflow_json);
     const envelope = JSON.parse(inputs.trusted_workflow_json);
+    if (scenario.includes("preflight-first root")) {
+      delete envelope.laneInputs.preflight_first;
+    } else if (scenario.includes("preflight-first")) {
+      envelope.laneInputs.preflight_first = "true";
+    }
     envelope.trustedWorkflow = {
       ref: workflowRef,
       fullRef: "refs/heads/" + workflowRef,

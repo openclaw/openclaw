@@ -70,6 +70,17 @@ export type AgentHarnessSupport =
       fallbackRuntime?: "openclaw";
     };
 
+/** Activation facts and model-route rules for read-only selection without a plugin call. */
+export type AgentHarnessRouteSupport = {
+  runtimeId: string;
+  runtimeName: string;
+  providerIds: readonly string[];
+  routeOptionalProviderIds?: readonly string[];
+  unobservedModelProvider?: string;
+  acceptsNativeCommand?: boolean;
+  availability: AgentHarnessSupport;
+};
+
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 /** @deprecated Read `terminal` instead. Remove no earlier than the 2026.9 stable release. */
@@ -544,6 +555,8 @@ type AgentHarnessContract<
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
   contextManagement?: "native";
+  /** Optional prepared facts for projections that carry no execution auth. */
+  routeSupport?: AgentHarnessRouteSupport;
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";

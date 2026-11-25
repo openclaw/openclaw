@@ -15,6 +15,7 @@ struct ChatSessionSidebarBatchTests {
             "type": "hello-ok", "protocol": 3, "server": [:],
             "features": ["capabilities": personal ? ["personal-session-pins"] : [], "methods": [
                 "config.get",
+                "sessions.patch",
                 "sessions.patchMany",
                 "sessions.delete",
                 "sessions.groups.list",
@@ -803,33 +804,65 @@ struct ChatSessionSidebarBatchTests {
         }
     }
 
-    @Test(arguments: [
-        (false, ["route:usage", "session:new", "session:a", "future:x"]),
-        (true, ["route:usage", "session:a", "session:new", "future:x"]),
-    ])
-    func `a named insert is one guarded layout write beside its target`(after: Bool, expected: [String]) async throws {
-        let original = ["route:usage", "session:a", "future:x"]
-        var server = original
-        var writes: [[String: [String]]] = []
+    @Test(arguments: [false, true])
+    func `a named drop pins through the Gateway before placing the new pin`(snoozedElsewhere: Bool) async throws {
+        let target = try self.row(0, fields: ["pinned": true, "agentId": "bulk"])
+        let source = try self.row(1, fields: ["agentId": "bulk"])
+        let suite = "NamedPinDrop.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let model = OpenClawChatViewModel(
+            sessionKey: target.key,
+            transport: TestChatTransport(historyResponses: []),
+            activeAgentId: "bulk",
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer {
+            model.detachTransport()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        model.sessions = [target, source]
+        var layout = ["route:usage", "session:\(target.key)"]
+        var methods: [String] = []
         let connection = try self.connection(scopes: ["operator.write"]) { request in
-            if request.method == "users.prefs.get" { return try self.pinSnapshot(server) }
-            try writes.append(#require(self.params(request)["expectedEntries"] as? [String: [String]]))
-            server = try self.pinPatch(request)
-            return Data(#"{"status":"ok"}"#.utf8)
+            methods.append(request.method)
+            switch request.method {
+            case "users.prefs.get":
+                return try self.pinSnapshot(layout)
+            case "users.prefs.set":
+                layout = try self.pinPatch(request)
+                return Data(#"{"status":"ok"}"#.utf8)
+            default:
+                #expect(try self.params(request)["expectedSessionId"] as? String == "id-1")
+                // The Gateway owns snooze, archive and incarnation checks for a new pin.
+                if snoozedElsewhere {
+                    throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "Snoozed"])
+                }
+                layout.append("session:\(source.key)")
+                return Data(
+                    #"{"ok":true,"key":"agent:bulk:thread-1","entry":{"sessionId":"id-1","updatedAt":2,"pinned":true}}"#
+                        .utf8)
+            }
         }
+        _ = try await connection.pinProfile.read(connection)
+        methods = []
         let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(key: "new", target: "a", after: after, insert: true, connection: connection)
-        #expect(writes == [["ui.railShortcuts": original]])
-        #expect(server == expected)
-        #expect(batch.sidebarEntries == expected)
-
-        // A missing target refuses the insert instead of appending it elsewhere.
-        server = original
-        await #expect(throws: OpenClawPersonalPinError.placementChanged) {
-            try await batch.movePin(key: "other", target: "gone", after: after, insert: true, connection: connection)
+        let sidebar = ChatSessionSidebar(
+            viewModel: model,
+            query: .constant(""),
+            groups: .constant([]),
+            previews: .init(),
+            menuActions: .init(connection: connection),
+            batch: batch)
+        let drag = ChatSidebarDrag(scope: batch.scope, key: sidebar.interactionIdentity(source), sessionID: "id-1")
+        try #require(sidebar.dropInteraction(drag, section: "pinned", after: false, pinTarget: target))
+        await waitForObservedState { !batch.running && !batch.busy }
+        #expect(methods.first == "sessions.patch")
+        if snoozedElsewhere {
+            #expect(methods == ["sessions.patch"])
+            #expect(layout == ["route:usage", "session:\(target.key)"])
+        } else {
+            #expect(methods.contains("users.prefs.set"))
+            #expect(layout == ["route:usage", "session:\(source.key)", "session:\(target.key)"])
         }
-        #expect(server == original)
-        #expect(writes.count == 1)
     }
 }
 #endif

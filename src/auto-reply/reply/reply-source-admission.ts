@@ -3,7 +3,7 @@ import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "../../gateway/session-sharing-authorization-async.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -192,7 +192,7 @@ export async function prepareReplySystemPrincipalAuthority(params: {
   if (principal) {
     const { authority } = principal;
     const run = followupRun.run;
-    run.senderIsOwner = authority.scopes.includes("operator.admin");
+    run.senderIsOwner = authority.grant.owner;
     run.traceAuthorized = run.senderIsOwner;
     run.senderId = undefined;
     run.senderName = undefined;

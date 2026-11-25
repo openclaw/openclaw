@@ -163,6 +163,11 @@ inventory, or historical cleanup. Use `doctor --lint --all` when you want the
 full registered lint audit, including those opt-in checks, or `--only <id>` for
 a targeted check.
 
+Doctor reads shared SQLite state directly when it verifies that a running
+Gateway owns the database. Offline reads preserve SQLite recovery files using
+private snapshots. Checks that initialize plugin runtime state still use a
+private copy so they can write safely during inspection.
+
 Heartbeat migration checks use the configured heartbeat agents and their real
 workspaces, including with `--all`. A `heartbeat-file-migration-blocked` error
 identifies the same unsafe `HEARTBEAT.md` source that blocks repair and update

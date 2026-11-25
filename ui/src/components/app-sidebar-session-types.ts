@@ -604,16 +604,35 @@ export type SidebarSavedPinTime = (
   row: Pick<GatewaySessionRow, "key" | "snoozedUntil">,
 ) => number | undefined;
 
-/** Hidden pins remain discoverable in their lifecycle views without a duplicate in Pinned. */
+function isVisibleSavedPin(row: SidebarRecentSession, now: number): boolean {
+  // Snapshots preserve display eligibility but never restore mutation authority.
+  const pinnable = row.snapshot ? row.snapshot.pinnable !== false : row.pinnable;
+  return pinnable && row.archived !== true && !isSessionSnoozed(row, now);
+}
+
+/** Suppress the ordinary row only while its saved pin is visible. */
 export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived" | "snoozedUntil">,
+  row: SidebarRecentSession,
   pinnedKeys: ReadonlySet<string>,
   now: number,
 ): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true && !isSessionSnoozed(row, now);
+  return pinnedKeys.has(row.key) && isVisibleSavedPin(row, now);
 }
 
 export type SidebarPinZone = {
   entries: readonly SidebarZoneEntry[];
   sessionRows: ReadonlyMap<string, SidebarRecentSession>;
 };
+
+/** Rendering and selection share visibility for saved personal references. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  now = Date.now(),
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && isVisibleSavedPin(row, now) && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}

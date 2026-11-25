@@ -124,6 +124,13 @@ export async function resolveStoredModelOverrideAsync(
     ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   },
 ): Promise<StoredModelOverride | null> {
+  return resolveStoredModelOverrideCoreAsync(params);
+}
+
+/** Async resolver for internal callers that carry prepared manifest metadata. */
+export async function resolveStoredModelOverrideCoreAsync(
+  params: Parameters<typeof resolveStoredModelOverrideAsync>[0] & ModelManifestNormalizationContext,
+): Promise<StoredModelOverride | null> {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;
   }

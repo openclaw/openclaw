@@ -123,6 +123,11 @@ const enSettings = {
     },
     overview: {
       modelSelection: "Model selection",
+      modelSelectionHelp: "Choose overrides for this agent, or inherit the defaults from Models.",
+      inheritBehaviorHelp:
+        "Inherit default: use the shared setting, or the model’s own policy when no shared preference is set.",
+      editFallbackChain: "Edit fallback chain",
+      automaticFallbacks: "Default ({models})",
       primaryModel: "Primary model",
       primaryModelDefault: "Primary model (default)",
       notSet: "Not set",
@@ -134,6 +139,11 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      subagentModel: "Subagent model",
+      subagentWithoutDefault:
+        "If neither this agent nor Models sets a subagent model, a child of the same agent keeps its starting session’s model. A child started under another agent uses that agent’s own model.",
+      subagentModelHelp:
+        "Runs subagents and agent-started sessions that run as this agent. Inherit the Models page default or choose one for this agent only.",
       inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
@@ -1330,6 +1340,13 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
+      subagent: "Subagent model",
+      subagentHelpLabel: "About the subagent model",
+      subagentHelpPurpose:
+        "Runs subagents and the sessions agents start. An agent’s own subagent model, or a model named in the request, takes priority.",
+      subagentHelpInherit:
+        "Not set: a child of the same agent keeps the model of the session that started it. A child started under another agent uses that agent’s own model.",
+      subagentInherit: "Not set",
       utilityFallback: "Utility fallback model",
       utilityOverridesTitle: "Agents with their own utility settings:",
       utilityOverridesOthers: "Other agents use this default.",

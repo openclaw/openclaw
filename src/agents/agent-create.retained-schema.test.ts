@@ -8,9 +8,9 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { readAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-journal.read.js";
 import { completeDeletion } from "../state/agent-deletion-journal.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-schema-versions.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {

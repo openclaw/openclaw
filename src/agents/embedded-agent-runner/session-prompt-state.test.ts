@@ -235,6 +235,40 @@ describe("system prompt series", () => {
     expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
+  it.each([
+    {
+      name: "distinct headings",
+      before:
+        "## Lake depot\nDispatch card: LINE-ALDER.\n\n## Hill depot\nDispatch card: LINE-BIRCH.\n\n",
+      after:
+        "## Hill depot\nDispatch card: LINE-BIRCH.\n\n## Lake depot\nDispatch card: LINE-ALDER.\n\n",
+    },
+    {
+      name: "interleaved duplicate headings",
+      before: "## Lake depot\nFirst.\n\n## Hill depot\nSecond.\n\n## Lake depot\nThird.\n\n",
+      after: "## Lake depot\nFirst.\n\n## Lake depot\nThird.\n\n## Hill depot\nSecond.\n\n",
+    },
+  ])("appends reordered $name while retaining the saved prefix", async ({ before, after }) => {
+    const opening = "# Runbook\nThe section order is the priority order.\n\n";
+    const ending = "## End of queue\nCheck the departure board.";
+    const entries: SessionEntry[] = [];
+    const first = project(opening + before + ending);
+    await persist(entries);
+    fixture.reload();
+
+    const current = opening + after + ending;
+    const next = project(current, entries);
+    expect(next.systemPrompt).toBe(first.systemPrompt);
+    expect(next.restart).toBe(false);
+    expect(next.update?.content).toContain(current);
+    appendUpdate(entries, next.update!, "reordered");
+    await persist(entries);
+    fixture.reload();
+    const unchanged = project(current, entries);
+    expect(unchanged.systemPrompt).toBe(first.systemPrompt);
+    expect(unchanged.update).toBeUndefined();
+  });
+
   it("preserves large prompt revisions, including distinct lone surrogates", () => {
     const stable = "## Stable\n" + "Keep these instructions.\n".repeat(100);
     const first = `${stable}## Changed\n\ud800`;
@@ -807,6 +841,54 @@ describe("session tool surface", () => {
       surface([tool("read")], entries, routeKey, postUpgrade).map((entry) => entry.name),
     ).toEqual(["message", "read"]);
   });
+
+  it.each([false, true])(
+    "separates participation pins across warm and restored turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const ceiling = {
+        kind: "send" as const,
+        profileId: "guest",
+        sessionKey: "agent:main:shared",
+        tools: ["read", "ls"],
+      };
+      const creatorPolicy = resolveSessionToolPolicyDigest({}, "main");
+      const participantPolicy = resolveSessionToolPolicyDigest({}, "main", ceiling);
+      expect(participantPolicy).not.toBe(creatorPolicy);
+      expect(
+        resolveSessionToolPolicyDigest({}, "main", {
+          ...ceiling,
+          profileId: "other",
+          tools: ["ls", "read", "read"],
+        }),
+      ).toBe(participantPolicy);
+      const defaultPolicy = resolveSessionToolPolicyDigest({}, "main", {
+        ...ceiling,
+        tools: undefined,
+      });
+      expect(defaultPolicy).not.toBe(participantPolicy);
+      expect(defaultPolicy).not.toBe(creatorPolicy);
+      for (const [policy, offered] of [
+        [participantPolicy, ["ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+        [participantPolicy, ["ls", "read"]],
+        [defaultPolicy, ["exec", "ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+      ] as const) {
+        const tools = surface(
+          offered.map((name) => tool(name)),
+          entries,
+          routeKey,
+          policy,
+        );
+        expect(names(tools)).toEqual(offered);
+        await persist(entries);
+        if (restored) {
+          fixture.reload();
+        }
+      }
+    },
+  );
 
   it("drops pinned tools when the tool policy changes", () => {
     surface([tool("read"), tool("exec")]);
