@@ -16,6 +16,7 @@ import {
   MessageInjectionAuthorityError,
 } from "../auto-reply/reply/message-injection-authority.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
+import { recordRunInjectedInputDevice } from "../plugins/hook-requester-device.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   replyMessageInjectionTargetOwner,
@@ -41,6 +42,7 @@ import {
 } from "./session-controller.state.js";
 import { messageAdmissionsByAttachment } from "./session-controller.storage.js";
 import { bindCapturedReplyToolAuthorityCallerRead } from "./session-controller.tool-authority.js";
+import type { NativeSteerInputIdentity } from "./user-turn-transcript.types.js";
 
 export { canInjectReplyMessageTarget } from "./session-controller.message-injection-backend.js";
 
@@ -334,6 +336,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     requesterToolAuthority,
     toolAuthorityPreparation,
     personalToolParticipant,
+    inputRequesterDeviceId,
     assertCurrent,
     allowPendingUserInputAnswer: requestedPendingUserInputAnswer,
     inboundAudio,
@@ -489,6 +492,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     const immediateRejection = {
       status: "rejected" as const,
       reason: resolved.reason,
+      ...(resolved.runtimeReason ? { runtimeReason: resolved.runtimeReason } : {}),
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =
@@ -560,6 +564,8 @@ async function beginPreparedReplyMessageInjectionTarget(
     if (participantRecorded || !queueOptions?.isInboundUserMessage) {
       return;
     }
+    // Hooks keep reporting this run's device only while all human input came from it.
+    recordRunInjectedInputDevice(targetRunId, inputRequesterDeviceId);
     const participant = incomingOverlay
       ? {
           ...incomingOverlay,
@@ -583,6 +589,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     acceptance.resolve(accepted);
     queueOptions?.onQueueAccepted?.(accepted);
   };
+  let nativeInputIdentity: NativeSteerInputIdentity | undefined;
   const runtimeQueueOptions: ReplyBackendQueueMessageOptions = {
     ...queueOptions,
     // Preserve the admitted human reply even when it cannot answer the incumbent's question.
@@ -604,6 +611,10 @@ async function beginPreparedReplyMessageInjectionTarget(
         recordParticipant();
         settleAcceptance(true);
       }
+    },
+    onNativeInputCommitted: (identity) => {
+      nativeInputIdentity = identity;
+      queueOptions?.onNativeInputCommitted?.(identity);
     },
   };
   const failed = (error: unknown): ReplyMessageInjectionOutcome => {
@@ -629,8 +640,11 @@ async function beginPreparedReplyMessageInjectionTarget(
         if (result?.transcriptCommit === "unconfirmed") {
           return { status: "indeterminate", errorMessage: result.errorMessage };
         }
-        if (targetRunId && queueOptions?.waitForTranscriptCommit === true) {
-          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
+        if (targetRunId) {
+          await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(
+            targetRunId,
+            nativeInputIdentity,
+          );
         }
         return { status: "accepted" };
       })

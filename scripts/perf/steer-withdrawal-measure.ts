@@ -8,6 +8,7 @@
  * a real Agent's held-tool boundary through the controller's indexed RPC source.
  * --scenario send-now-fallback uses the real timeout/withdrawal and follow-up queue owners.
  * Its 1ms delivery deadline accelerates the 120s default; --hold-ms bounds remaining work.
+ * --non-interruptible exercises the same boundary with tool interruption unavailable.
  * Use wait/wait unchanged runs as A/A controls, then interleave wait/send-now.
  * This owner workload has resident session shape, not a large physical database,
  * filesystem stress, WebSocket authorization, or an external provider.
@@ -33,6 +34,7 @@ const { values } = parseArgs({
     action: { type: "string", default: "wait" },
     iterations: { type: "string", default: "100" },
     "hold-ms": { type: "string", default: "50" },
+    "non-interruptible": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
   },
 });
@@ -287,6 +289,7 @@ async function measureSendNow() {
     continued: 0,
     fallbackQueued: 0,
     followupTurns: 0,
+    refusalReasons: {} as Record<string, number>,
   };
   async function run(index: number, measured: boolean) {
     const started = createDeferredCore();
@@ -305,7 +308,7 @@ async function measureSendNow() {
             label: "held_tool",
             description: "Synthetic abort-aware tool with bounded cleanup",
             parameters: Type.Object({}),
-            interruptible: true,
+            interruptible: values["non-interruptible"] ? undefined : true,
             execute: async (_id, _args, signal) => {
               await new Promise<void>((resolve) => {
                 const timer = setTimeout(() => {
@@ -468,11 +471,19 @@ async function measureSendNow() {
           retryWithdrawnSteer: assertCurrent !== undefined,
           options: { waitForTranscriptCommit: true, assertCurrent },
         });
+      const admissionStart = performance.now();
       const attempt = await start();
       assert(attempt);
       assert(await attempt.acceptance);
+      let refusalMs = 0;
       if (fallback) {
-        assert.equal((await attempt.outcome).status, "rejected");
+        const outcome = await attempt.outcome;
+        refusalMs = performance.now() - admissionStart;
+        assert.equal(outcome.status, "rejected");
+        if (measured && outcome.status === "rejected") {
+          const reason = outcome.runtimeReason ?? outcome.reason;
+          counts.refusalReasons[reason] = (counts.refusalReasons[reason] ?? 0) + 1;
+        }
         assert(!agent.hasPendingSteeringMessage((pending) => pending === message));
         const followup = {
           prompt: message.content,
@@ -560,6 +571,7 @@ async function measureSendNow() {
       }
       return {
         effectMs,
+        refusalMs,
         settlementMs,
         cpuMs: (iterationUsage.user + iterationUsage.system) / 1000,
       };
@@ -623,6 +635,7 @@ async function measureSendNow() {
     residentSessions: sessions,
     iterations,
     holdMs,
+    nonInterruptible: values["non-interruptible"],
     sourceHashes,
     allocation: values.allocation,
     cpuProfile: values["cpu-profile"],
@@ -632,6 +645,7 @@ async function measureSendNow() {
     counts,
     samples,
     effectMs: distribution("effectMs"),
+    refusalMs: distribution("refusalMs"),
     settlementMs: distribution("settlementMs"),
     actionThroughContinuationCpuMs: distribution("cpuMs"),
     hostLoad,

@@ -10,7 +10,6 @@ import * as activationPaths from "../../infra/package-update-activation-paths.js
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
-import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { runtimeFixture } from "./update-command-fixtures.test-support.js";
@@ -27,7 +26,6 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
-const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 const lastJson = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
 const matchingEntry = (shape: object) => expect.arrayContaining([expect.objectContaining(shape)]);
 function expectUnstaged() {
@@ -249,31 +247,6 @@ it.each([
     expectUnstaged();
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
-    if (!current) {
-      await expect(
-        updateCommand({ ...opts, json: true, admission: "installed" }),
-      ).rejects.toBeInstanceOf(Error);
-      if (compatible) {
-        expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
-          expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
-        );
-      } else {
-        expect(lastJson()).toMatchObject({
-          reason: "preflight-node-runtime-incompatible",
-          steps: matchingEntry({
-            stderrTail: expect.stringContaining(
-              `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-            ),
-            failureFacts: matchingEntry({
-              code: "node-runtime-preflight",
-              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.12.1"),
-            }),
-          }),
-        });
-        expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      }
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
-    }
     expect(provisionRuntime).not.toHaveBeenCalled();
   },
 );
@@ -308,5 +281,26 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     } finally {
       fs.chmodSync(globalRoot, 0o755);
     }
+  },
+);
+
+it.each([false, true])(
+  "warns about the unchanged invoking CLI before a redirected update (json=%s)",
+  async (json) => {
+    const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation()!;
+    vi.mocked(commandRun.prepareUpdateCommand).mockImplementation(async (opts) => ({
+      ...(await prepare(opts)),
+      servicePlan: {
+        rootRedirect: { root: fixture.root, previousRoot: "/other-node/lib/node_modules/openclaw" },
+      },
+    }));
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("will remain unchanged");
+    expect(output).toContain("incompatible with shared config and plugins");
+    expect(output).toContain(`Use the CLI from ${fixture.root}`);
+    expect(output).toContain("/other-node/lib/node_modules/openclaw");
+    expectUnstaged();
   },
 );

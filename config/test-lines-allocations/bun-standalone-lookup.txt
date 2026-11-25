@@ -1,2 +1,0 @@
-18
-# Keep embedded routing lookup bounded by keys while preserving lazy decoding and identity.

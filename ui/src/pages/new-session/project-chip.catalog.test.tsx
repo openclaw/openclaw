@@ -117,6 +117,10 @@ it("keeps project search live through catalog reads and retires invalidated rows
   await waitForSolid(() => expect(rows()).toHaveLength(1));
   const alphaRow = rows()[0];
   expect(alphaRow?.textContent).toContain("Alpha project");
+  // Rows request the project's own icon by id and keep folder-git-2 until it loads.
+  const alphaIcon = alphaRow?.querySelector("openclaw-workspace-icon");
+  expect(alphaIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
+  expect(alphaIcon?.querySelector(".workspace-icon-fallback svg")).not.toBeNull();
   expect(view.container.querySelector('input[type="search"]')).toBe(input);
   expect(document.activeElement).toBe(input);
   type("");
@@ -134,7 +138,8 @@ it("keeps project search live through catalog reads and retires invalidated rows
   type("worksp");
   expect(view.container.querySelector('[data-value="workspace"]')).not.toBeNull();
   type("alpha");
-  expect(rows()).toEqual([alphaRow]);
+  // Filtering to zero rows retired the original row; its replacement names the same project.
+  expect(rows().map((row) => row.dataset.value)).toEqual(["project:alpha"]);
   const refresh = browser.refreshProjects();
   nativeTerminal = true;
   changed();
@@ -187,7 +192,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(request).toHaveBeenCalledTimes(5);
 });
 
-it("keeps automatic search on reopening, respects explicit collapse, and matches Unicode", async () => {
+it("keeps search visible across reopening, routes row typing to it, and matches Unicode", async () => {
   // The real composer registers its document capture before the lazy picker does.
   const composer = document.body.appendChild(document.createElement("textarea"));
   const redirectToComposer = (event: KeyboardEvent) =>
@@ -237,15 +242,7 @@ it("keeps automatic search on reopening, respects explicit collapse, and matches
     ],
   });
   await waitForSolid(() => expect(rows()).toHaveLength(6));
-  const toggle = () => view.container.querySelector<HTMLButtonElement>(".header-search__toggle")!;
-  toggle().click();
-  flush();
-  expect(view.container.querySelector('input[type="search"]')).toBeNull();
-  changed();
-  flush();
-  expect(view.container.querySelector('input[type="search"]')).toBeNull();
-  toggle().click();
-  flush();
+  expect(view.container.querySelector('input[type="search"]')).not.toBeNull();
   popoverOpen.mockReturnValue(false);
   changed();
   await waitForSolid(() =>
@@ -264,16 +261,62 @@ it("keeps automatic search on reopening, respects explicit collapse, and matches
   expect(input).not.toBeNull();
   const projectRow = rows()[0]!;
   projectRow.focus();
-  projectRow.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "C", bubbles: true, composed: true, cancelable: true }),
-  );
+  const typed = new KeyboardEvent("keydown", {
+    key: "C",
+    bubbles: true,
+    composed: true,
+    cancelable: true,
+  });
+  projectRow.dispatchEvent(typed);
   flush();
-  expect(input.value).toBe("C");
+  // The key moves focus into the field and stays uncancelled, so the browser types it there.
   expect(document.activeElement).toBe(input);
+  expect(typed.defaultPrevented).toBe(false);
   input.value = nfcQuery;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(rows()).toHaveLength(1);
   expect(rows()[0]?.textContent).toContain("Cafe");
   view.unmount();
+});
+
+it.each([
+  { connection: "restricted", admin: false, write: false },
+  { connection: "admin", admin: true, write: true },
+])("explains an empty project catalog: $connection", async ({ admin, write }) => {
+  const fixture = createRepositoryFixture();
+  const { browser, state: place, request, context } = fixture;
+  request.mockResolvedValue({ projects: [] });
+  prepareCatalog(fixture, true);
+  vi.spyOn(place, "isAdmin").mockReturnValue(admin);
+  vi.spyOn(place, "canWrite").mockReturnValue(write);
+  const navigate = vi.fn();
+  Object.assign(context, { basePath: "", navigate });
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/home/openclaw/.openclaw/workspace",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects: browser.projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await openProjectSearch(view.container);
+  const shared = "No projects are shared with your role. Ask an admin to share one.";
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain(admin ? "No local projects registered" : shared),
+  );
+  expect(view.container.textContent?.includes(shared)).toBe(!admin);
+  const manage = view.container.querySelector<HTMLAnchorElement>(
+    ".new-session-page__manage-projects",
+  );
+  // Gateway folder browsing needs operator.write, so restricted roles never see it.
+  expect(view.container.querySelector('[data-value="browse"]') === null).toBe(!write);
+  if (!admin) {
+    expect(manage).toBeNull();
+    return;
+  }
+  expect(manage?.getAttribute("href")).toBe("/projects");
+  manage!.click();
+  expect(navigate).toHaveBeenCalledWith("projects");
 });

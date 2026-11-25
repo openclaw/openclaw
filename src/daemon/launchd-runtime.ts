@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
@@ -42,6 +44,7 @@ import {
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -63,6 +66,42 @@ export type LoadedLaunchAgentState = GatewayServiceState & {
     readonly environment: Readonly<Record<string, string>>;
   };
 };
+
+/** kickstart retains the loaded command, so staged plists need a bootstrap on restart. */
+export function launchAgentNeedsReloadSync(env: GatewayServiceEnv, timeoutMs = 2_000): boolean {
+  const target = `${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`;
+  const options = {
+    env: resolveServiceManagerEnv(),
+    encoding: "utf8" as const,
+    timeout: Math.max(1, Math.min(timeoutMs, 2_000)),
+  };
+  const loaded = spawnSync("launchctl", ["print", target], options);
+  const plist =
+    loaded.status === 0 && !loaded.error
+      ? spawnSync(
+          "/usr/bin/plutil",
+          ["-convert", "json", "-o", "-", "--", resolveLaunchAgentPlistPath(env)],
+          options,
+        )
+      : undefined;
+  if (!plist || plist.error || plist.status !== 0) {
+    return false;
+  }
+  try {
+    const job = parseLaunchctlJob(loaded.stdout, target);
+    const args = safeParseJsonRecord(plist.stdout)?.ProgramArguments;
+    // Only a known difference reloads; otherwise kickstart, which needs no readable plist.
+    // Raw, operator-issued launchctl kickstart still uses launchd's cached definition.
+    return (
+      isStringArray(args) &&
+      args.length > 0 &&
+      Boolean(job.arguments?.length) &&
+      !isDeepStrictEqual(args, job.arguments)
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Observe the discovered job's loaded command and runtime without granting lifecycle authority. */
 export async function readLoadedLaunchAgentState(

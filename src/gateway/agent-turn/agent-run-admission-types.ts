@@ -15,7 +15,6 @@ import type { registerChatAbortController } from "../chat-abort.js";
 import type { OffloadedRef } from "../chat-attachments.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { PreparedAgentRunUserTurn, prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnIo } from "./types.js";
 
@@ -47,7 +46,6 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   effectiveThinking?: string;
   effectiveAllowModelOverride: boolean;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
-  restoredCronContinuationLifecycleRevision?: string;
   lifecycleStorePath?: string;
   resolvedThreadId?: string | number;
   reactivateSubagent: boolean;
@@ -67,6 +65,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "admittedSessionId"
   | "resolvedThreadId"
   | "freshChildStorePath"
+  | "senderIsOwner"
 > & {
   sourceWork: Promise<void>;
   needsImageUnderstanding?: boolean;
@@ -79,10 +78,6 @@ export type PrepareAgentRunDispatchParams = Omit<
   requestedSessionKey?: string;
   preAcceptedReservedSessionKey?: string;
   delivery: AgentDeliveryPhaseResult;
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
   providerOverride?: string;
   modelOverride?: string;
   allowModelOverride: boolean;

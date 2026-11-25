@@ -1,12 +1,12 @@
 import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
-  normalizeGitPathForFilesystem,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -17,7 +17,7 @@ import {
   CommandProcessCleanupError,
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
 import { fetchRemoteDefault } from "./base-fetch.js";
@@ -25,7 +25,7 @@ import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
@@ -39,6 +39,7 @@ type RemoteDefaultAttempt = {
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   localDefault?: "preserve" | "fast-forward";
@@ -49,6 +50,16 @@ const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
 const BASE_FRESHNESS_MS = 30_000;
+const baseObservers = resolveGlobalSet<(repoRoot: string, commit: string) => void>(
+  Symbol.for("openclaw.worktreeBaseObservers"),
+  "shared-state",
+);
+
+/** Background work may retire an obsolete base; accepted foreground requests keep theirs. */
+export function observeWorktreeBase(observer: (repoRoot: string, commit: string) => void) {
+  baseObservers.add(observer);
+  return { [Symbol.dispose]: () => baseObservers.delete(observer) };
+}
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -108,6 +119,7 @@ export async function resolveWorktreeBase(
   signal?: AbortSignal,
   assertCurrent?: () => void,
   localDefault: "preserve" | "fast-forward" = "preserve",
+  idleIoPriority?: boolean,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     const verified = await runGit(
@@ -144,24 +156,26 @@ export async function resolveWorktreeBase(
     return { commit, gitOperand, recordRef: baseRef };
   }
   const options = {
+    idleIoPriority,
     signal,
-    beforeRun: () => {
-      signal?.throwIfAborted();
-      assertCurrent?.();
-    },
+    beforeRun: composeSessionSourceAssertion(
+      assertCurrent ? [assertCurrent] : [],
+      (assertSource) => {
+        signal?.throwIfAborted();
+        assertSource();
+      },
+    ),
     env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   };
   const commonDir = await fs.realpath(
     path.resolve(
       repoRoot,
-      normalizeGitPathForFilesystem(
-        await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options),
-      ),
+      await requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options),
     ),
   );
   const checkout = await fs.realpath(repoRoot);
   return await withWorktreeBasePreparation({ repoRoot: checkout, commonDir }, (resolve) =>
-    resolve({ signal, assertCurrent, localDefault }),
+    resolve({ signal, assertCurrent, localDefault, idleIoPriority }),
   );
 }
 
@@ -192,23 +206,28 @@ export async function withWorktreeBasePreparation<T>(
     assertCurrent,
     localDefault = "preserve",
     waitBudget,
+    idleIoPriority,
   }) => {
     let retirement: { error: unknown } | undefined;
     let waiting: ReturnType<typeof startWorktreeWait> | undefined;
     const options = {
+      idleIoPriority,
       signal,
-      beforeRun: () => {
-        try {
-          if (!active) {
-            throw new Error("Worktree base preparation is closed");
+      beforeRun: composeSessionSourceAssertion(
+        assertCurrent ? [assertCurrent] : [],
+        (assertSource) => {
+          try {
+            if (!active) {
+              throw new Error("Worktree base preparation is closed");
+            }
+            options.signal?.throwIfAborted();
+            assertSource();
+          } catch (error) {
+            retirement = { error };
+            throw error;
           }
-          options.signal?.throwIfAborted();
-          assertCurrent?.();
-        } catch (error) {
-          retirement = { error };
-          throw error;
-        }
-      },
+        },
+      ),
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
     const settled = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
@@ -257,12 +276,16 @@ export async function withWorktreeBasePreparation<T>(
                   signal: options.signal,
                   assertCurrent: options.beforeRun,
                   preparationKey,
+                  idleIoPriority,
                 }),
               );
               base.preparationKey = preparationKey;
               options.beforeRun();
               if (base.fetchSucceeded) {
                 started.refreshedAt = Date.now();
+              }
+              for (const observer of baseObservers) {
+                observer(repository.repoRoot, base.commit);
               }
               return base;
             }),
@@ -603,11 +626,13 @@ export async function logWorktreeBase(
       },
     ),
   );
-  const ageDays = Math.max(0, (context.now / 1000 - committedAt) / 86_400);
-  const stale = ageDays > 7;
+  // Epoch-zero roots (including empty workspaces) do not carry a meaningful creation date.
+  const ageDays =
+    committedAt === 0 ? undefined : Math.max(0, (context.now / 1000 - committedAt) / 86_400);
+  const stale = ageDays !== undefined && ageDays > 7;
   const label = base.noOrigin ? "local HEAD (no origin remote)" : base.recordRef;
   const staleHint = `; base is older than 7 days. Check ${base.noOrigin ? "local HEAD" : "origin"} before starting work.`;
-  const message = `worktree base ${label} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
+  const message = `worktree base ${label} at ${commit} (commit age ${ageDays === undefined ? "unspecified" : `${ageDays.toFixed(1)} days`}; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
   const metadata = {
     worktreePath: context.worktreePath,
     ownerId: context.ownerId,

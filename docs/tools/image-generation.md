@@ -19,8 +19,15 @@ session is inactive or its active wake fails, OpenClaw sends a
 direct fallback with the generated images so the result is not lost. Retries do
 not post the same images again.
 
+Cron runs are already background work, so there the tool waits for the provider
+and returns the generated images as its result. The cron run then uses or sends
+them itself before it finishes.
+
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
+On an external channel, the generated files are sent once the turn that
+requested them has finished, even while later turns in that chat are still
+running.
 
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. An interactive
@@ -38,6 +45,71 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
 A key in `models.providers.<provider>.apiKey` also makes the tool available,
 including an env-backed SecretRef. Inline keys in an auth or billing cooldown
 remain unavailable.
+
+## Review before delivery
+
+Automatic preview delivery remains the default. For creative work that needs a
+quality check before the user sees an image, the agent can opt in per request:
+
+```text
+action=generate deliveryMode=review prompt="..."
+```
+
+The tool returns a task ID immediately. Once generation finishes, OpenClaw saves
+the candidate and its held disposition in the existing durable delivery queue
+**before** waiting for the originating turn or waking the agent to review it.
+The review completion provides private file references, not a visible image send.
+The agent inspects the candidate against the request and reference images, then
+chooses an exact-task action:
+
+- `action=review` lists at most eight saved candidate summaries in stable task
+  order in the current original session, including after a restart. Continue with
+  `cursor=nextCursor` until `nextCursor` is null; omit the cursor to refresh this
+  live list. Add `taskId` to prepare private `inspectionFiles` for one
+  candidate without widening filesystem access; original sandbox references
+  remain available in its `inspectionContext`.
+- `action=deliver taskId="<task-id>"` approves only that candidate for the existing
+  delivery queue. Approval is not delivery confirmation; the agent must not send
+  the same files independently.
+- `action=supersede taskId="<task-id>"` suppresses only that older task's automatic
+  delivery. Accepted generation continues and its paid output is retained. Other
+  concurrent jobs are unaffected. Generate a corrected candidate separately with
+  `deliveryMode=review`.
+
+Review mode requires a durable chat session. Cancelling the requesting turn does
+not cancel already accepted generation. A failed reviewer wake or Gateway restart
+leaves the candidate held; startup does not start a review or provider inference.
+Use `action=review` in a later turn to resume the decision. Files whose delivery has
+already started cannot be retracted. Ambiguous send evidence is reconciled from
+its original receipt, never by blindly sending again.
+
+Held candidates use an inert queue payload kind and candidate-specific names in
+the existing durable media spool. Rolling back does not approve a held candidate,
+but older releases may refuse state written with a newer database schema. Do not
+assume downgrade compatibility; keep a verified backup before changing versions.
+Return to a version supporting review mode to make a decision. This feature adds
+no database schema migration, configuration change, or global media-retention
+extension.
+
+## Creative projects
+
+The bundled `creative-project` skill guides branding, posters, illustrations,
+and related visual assets. With bundled skills enabled for the agent, ordinary
+requests such as “redesign these social assets using the posters in this repo”
+can select it through normal [skill discovery](/tools/skills). No special command
+or provider-specific generation script is required.
+
+The workflow inspects existing compositions before choosing a direction, selects
+references by purpose, and preserves the current candidate and revision
+constraints. It uses editable project sources for precise vector or typographic
+work and the available image tool for raster generation or editing. Looking at a
+reference does not automatically pass it to the generator: the generation request
+must include the selected inputs.
+
+The skill does not add providers or bypass file access. It can select a supported
+review-before-delivery mode for the current chat; otherwise background results
+follow the tool’s automatic delivery contract. Inspection after completion does
+not retract an attachment already sent.
 
 ## Quick start
 
@@ -114,7 +186,7 @@ does not force the legacy `response_format` parameter on custom endpoints.
 | OpenRouter image generation                      | `openrouter/google/gemini-3.1-flash-image-preview`                                                  | `OPENROUTER_API_KEY`                           |
 | LiteLLM image generation                         | `litellm/gpt-image-2`                                                                               | `LITELLM_API_KEY`                              |
 | Microsoft Foundry MAI image generation           | `microsoft-foundry/<deployment-name>`                                                               | `AZURE_OPENAI_API_KEY` or Entra ID             |
-| Google Gemini image generation                   | `google/gemini-3.1-flash-image`                                                                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`           |
+| Google Gemini image generation                   | `google/gemini-nano-banana-2.1`                                                                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`           |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -137,7 +209,7 @@ backend. For CLI requests, pass `--openai-moderation low|auto` to either
 | ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
 | fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google            | `gemini-3.1-flash-image`                | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| Google            | `gemini-nano-banana-2.1`                | Yes (up to 14 images)              | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
@@ -162,6 +234,12 @@ current session:
 Task status and duplicate detection are scoped to the requesting chat, even
 when direct chats share the main session transcript. Completion returns to
 the peer who requested the image.
+Exact retries reuse active or recently completed tasks. Keeping the same prompt while changing
+references, model, delivery mode, or options starts different work; image references are loaded
+before duplicate detection, so replacing a file at the same path also counts.
+Started and completed receipts include ordered `referenceInputs` facts (SHA-256,
+byte count, and MIME type) for the bytes loaded, not proof of what the provider
+visually preserved. Inline image payloads are omitted from printable receipts.
 
 ## Provider capabilities
 
@@ -391,6 +469,10 @@ and ComfyUI support 1.
     `aspectRatio` or `resolution` directly. When possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
+
+    OpenClaw also reports `size` in `ignoredOverrides` when it can read a
+    returned image's dimensions and they differ from the requested size.
+    The generated image is still returned.
 
     For direct OpenAI Images API requests, `gpt-image-2` and its
     `gpt-image-2-2026-04-21` snapshot preserve valid explicit

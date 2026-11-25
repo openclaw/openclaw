@@ -14,7 +14,7 @@ import {
   invokeConfigPatch,
   startConfigWrite,
 } from "./config-invocations.test-support.js";
-import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";

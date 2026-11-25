@@ -1,4 +1,5 @@
 import { isProxy } from "node:util/types";
+import { isOwnedTranscriptPayload } from "./transcript-payload-ownership.js";
 
 const MAX_FROZEN_PLAIN_DATA_ADMISSIONS = 256 * 1024;
 let deeplyFrozenPlainData = new WeakSet<object>();
@@ -135,7 +136,7 @@ export function memoizeFrozenPlainDataProjection<T extends object, R>(
     if (projections.has(source)) {
       return projections.get(source)!;
     }
-    if (!isDeeplyFrozenPlainData(source)) {
+    if (!isOwnedTranscriptPayload(source) && !isDeeplyFrozenPlainData(source)) {
       return project(source);
     }
     const projected = freezeJsonSnapshot(project(source));

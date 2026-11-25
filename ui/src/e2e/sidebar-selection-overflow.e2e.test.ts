@@ -3,7 +3,10 @@ import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-re
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
+import {
+  waitForMobileSidebarDrawerOpen,
+  waitForSessionRosterHydration,
+} from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar selection overflow",
@@ -22,7 +25,8 @@ suite.define(() => {
   ])("keeps sidebar insets symmetric with overflow=$overflow at $width px", ({ overflow, width }) =>
     suite.withPage({ viewport: { height: 500, width } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:active-session";
-      const sessions = Array.from({ length: overflow ? 40 : 3 }, (_, index) => ({
+      // One page is enough to overflow without changing the list as it scrolls.
+      const sessions = Array.from({ length: overflow ? 15 : 3 }, (_, index) => ({
         key: index === 0 ? sessionKey : `agent:main:dashboard:session-${index}`,
         kind: "direct",
         label: index === 0 ? "Plan the next interface update" : `Review session ${index}`,
@@ -40,25 +44,23 @@ suite.define(() => {
       });
       if (width === 390) {
         await navigationDrawerToggle(page).click();
+        // Toolbar geometry is measured below; let the drawer finish sliding in.
+        await waitForMobileSidebarDrawerOpen(page);
         // Navigation skips the closed drawer; geometry needs its full roster after opening.
         await waitForControlUiInitialRoster(page);
       }
       if (overflow) {
-        await page.getByRole("button", { name: "Show more", exact: true }).click();
         const body = page.locator(".sidebar-shell__body");
         const toolbar = page.locator(".sidebar-session-toolbar");
-        const toolbarBefore = await toolbar.boundingBox();
-        const last = page.locator(
-          '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
-        );
         await expect
-          .poll(async () => {
-            await body.evaluate((element) => {
-              element.scrollTop = element.scrollHeight;
-            });
-            return last.isVisible();
-          })
-          .toBe(true);
+          .poll(() => body.evaluate((element) => element.scrollHeight - element.clientHeight))
+          .toBeGreaterThan(0);
+        const toolbarBefore = await toolbar.boundingBox();
+        const scrollTop = await body.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          return element.scrollTop;
+        });
+        expect(scrollTop).toBeGreaterThan(0);
         // The session toolbar stays pinned and unobscured above the scrolled list.
         expect(await toolbar.boundingBox()).toEqual(toolbarBefore);
         expect(
@@ -98,7 +100,8 @@ suite.define(() => {
         const listRect = row.closest(".sidebar-recent-sessions__list")!.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
-          leftInset: rowRect.left - sidebarRect.left,
+          // The panel's 1px hairline sits on its rail side only; measure inside it.
+          leftInset: rowRect.left - sidebarRect.left - sidebar.clientLeft,
           rightInset: sidebarRect.right - rowRect.right - scrollbarWidth,
           listLeft: listRect.left,
           listRight: listRect.right,

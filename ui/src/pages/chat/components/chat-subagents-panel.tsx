@@ -74,6 +74,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const readiness = createSubagentsPresentation(data);
     const emptyLoading = createMemo(
       () =>
+        !data().hasResult &&
         !data().rows.length &&
         !data().nativeSnapshot &&
         !data().nativeError &&
@@ -140,7 +141,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const Empty = () => (
       <Show when={!data().nativeSnapshot && !data().nativeError}>
         <Show
-          when={isPending(readiness.read)}
+          when={!data().hasResult && isPending(readiness.read)}
           fallback={
             data().hasResult &&
             !data().stopError && (

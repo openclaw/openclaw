@@ -33,6 +33,7 @@ import {
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
 } from "./run-attempt-test-harness.js";
+import { createSteeringRecorder } from "./run-attempt.steering.test-support.js";
 
 type ReplyBackend = Parameters<
   Parameters<Parameters<typeof withAdmittedSessionTurnForTest>[1]>[0]["attachBackend"]
@@ -470,12 +471,13 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       prompt: "real user request",
       suppressNextUserMessagePersistence: true,
       userTurnTranscriptRecorder: {
-        message: persistedUser,
-        getAdmissionReceipt: () => undefined,
+        ...createSteeringRecorder(
+          persistedUser,
+          async () => undefined,
+          () => true,
+        ),
         getPersistedMessage: () => persistedUser,
-      } as unknown as NonNullable<
-        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
-      >,
+      },
     });
     await run.waitForTurnAccepted();
     await harness.notify(agentMessage("msg-final", "Done.", { status: "completed" }));
@@ -507,12 +509,13 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       suppressNextUserMessagePersistence: true,
       pluginRuntimeRefreshPending: () => pendingRefresh,
       userTurnTranscriptRecorder: {
-        message: persistedUser,
-        getAdmissionReceipt: () => undefined,
+        ...createSteeringRecorder(
+          persistedUser,
+          async () => undefined,
+          () => true,
+        ),
         getPersistedMessage: () => persistedUser,
-      } as unknown as NonNullable<
-        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
-      >,
+      },
     });
     await run.waitForTurnAccepted();
     expect(

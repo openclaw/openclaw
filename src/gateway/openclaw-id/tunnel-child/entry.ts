@@ -2,19 +2,24 @@
 // Owns the iroh endpoint key; the Gateway never reads it. Talks to the
 // Gateway over IPC for control and over the ingress socket for data. Logs
 // carry `fp:` labels only, never key material.
+import fs from "node:fs/promises";
 import {
   TUNNEL_EXIT_KEY_MISMATCH,
   TUNNEL_EXIT_KEY_MISSING,
   TUNNEL_EXIT_KEY_REFUSED,
   TUNNEL_EXIT_UNAVAILABLE,
+  TUNNEL_STAGE_ARG,
   type GatewayToTunnelMessage,
+  type TunnelStageMessage,
   type TunnelStartMessage,
   type TunnelToGatewayMessage,
 } from "../tunnel-ipc.js";
 import { loadIrohBinding, type IrohBinding, type IrohEndpoint } from "./addon.js";
 import {
+  ed25519PublicKeyHex,
   KeyFileRefusedError,
   loadBoundKey,
+  loadKeyFile,
   loadOrCreateEndpointKey,
   logFingerprint,
 } from "./keyfile.js";
@@ -55,11 +60,11 @@ async function stop(code: number): Promise<void> {
 }
 
 // Unlinked: load or create the key. Linked: load only the key the binding names.
-function loadEndpointKey(start: TunnelStartMessage) {
+async function loadEndpointKey(start: TunnelStartMessage) {
   if (!start.expectedEndpointKey) {
     return loadOrCreateEndpointKey(start.keyPath);
   }
-  const loaded = loadBoundKey(start.keyPath, start.expectedEndpointKey.replace(/^iroh:/, ""));
+  const loaded = await loadBoundKey(start.keyPath, start.expectedEndpointKey.replace(/^iroh:/, ""));
   if ("refused" in loaded) {
     return loaded;
   }
@@ -75,9 +80,9 @@ async function serve(
   start: TunnelStartMessage,
   takeOver: (handle: (message: GatewayToTunnelMessage) => void) => void,
 ) {
-  let loaded: ReturnType<typeof loadEndpointKey>;
+  let loaded: Awaited<ReturnType<typeof loadEndpointKey>>;
   try {
-    loaded = loadEndpointKey(start);
+    loaded = await loadEndpointKey(start);
   } catch (error) {
     // SAFETY: the key file helpers throw only Error instances (fs errors and KeyFileRefusedError).
     log(`key refused: ${(error as Error).message}`);
@@ -173,7 +178,38 @@ function followHomeRelay(endpoint: IrohEndpoint, onChange: (state: RelayState) =
   });
 }
 
+// One-shot staging for a re-bind: creates the next endpoint key (or reuses the staged one)
+// and reports its K_srv, or discards a staged key the binding does not name. Needs no iroh
+// binding and opens nothing.
+async function stage(message: TunnelStageMessage): Promise<void> {
+  try {
+    if (message.type === "discard") {
+      const key = await loadKeyFile(message.keyPath);
+      const held = key ? `iroh:${ed25519PublicKeyHex(key)}` : null;
+      key?.fill(0);
+      if (held && held !== message.keep) {
+        await fs.rm(message.keyPath, { force: true });
+      }
+      send({ type: "staged", endpointKey: held === message.keep ? held : null });
+    } else {
+      const { key } = await loadOrCreateEndpointKey(message.keyPath);
+      send({ type: "staged", endpointKey: `iroh:${ed25519PublicKeyHex(key)}` });
+      key.fill(0);
+    }
+  } catch (error) {
+    log(`stage refused: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1;
+  }
+  process.disconnect?.();
+}
+
 function main(): void {
+  if (process.argv.includes(TUNNEL_STAGE_ARG)) {
+    process.once("message", (message: TunnelStageMessage) => {
+      void stage(message);
+    });
+    return;
+  }
   let binding: IrohBinding;
   try {
     binding = loadIrohBinding();

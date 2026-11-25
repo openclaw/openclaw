@@ -4,20 +4,24 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
-import { sessionManagerOpenCompaction } from "../../agents/sessions/session-manager-core.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSessionModelRef } from "../session-utils.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { resolveSessionSelectedModelRefAsync } from "../session-utils-model-selection.js";
+import { prepareGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
 
 type GatewaySessionCompactionParams = {
   agentId: string;
@@ -31,7 +35,26 @@ type GatewaySessionCompactionParams = {
   storePath: string;
 };
 
-/** Prepare the legacy transcript once while the manual lifecycle owner is held. */
+/** Select the model ordinary turns use, including one inherited from a parent session. */
+async function resolveCompactionSessionModel(params: GatewaySessionCompactionParams) {
+  const readSourceEntry = await prepareGatewaySessionEntryReader({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    entry: params.entry,
+    store: {},
+  });
+  params.abortSignal?.throwIfAborted();
+  return await resolveSessionSelectedModelRefAsync({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    source: { entry: params.entry, readSourceEntry },
+    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
+  });
+}
+
+/** Prepare eligibility and owner metadata without materializing a host transcript. */
 export async function prepareGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
 ): Promise<{
@@ -45,10 +68,10 @@ export async function prepareGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
+  const resolvedModel = await resolveCompactionSessionModel(params);
   const usesLegacyRuntime = (entry: SessionEntry) => {
-    const resolvedModel = resolveSessionModelRef(params.cfg, entry, params.agentId);
     const persistedRuntime = resolveManualCompactionCliTarget({
-      provider: resolvedModel.provider,
+      provider: resolvedModel?.provider,
       entry,
       cfg: params.cfg,
     }).agentHarnessId;
@@ -63,33 +86,81 @@ export async function prepareGatewaySessionCompaction(
     const stats = await readTranscriptStatsAsync(transcriptTarget);
     return { entry, reason: stats.eventCount === 0 ? "no transcript" : undefined };
   }
-  const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
-    signal: params.abortSignal,
-  });
-  const { entry, runtimeEntry, sessionManager } = prepared;
+  const memory = captureSessionActorTranscriptRead(transcriptTarget, params.abortSignal);
+  if (memory) {
+    const sessionManager = await SessionManager.openAsync(
+      memory.target,
+      undefined,
+      undefined,
+      params.abortSignal,
+    );
+    const primaryConversation = await resolveCurrentSessionPrimaryConversation(memory.target);
+    memory.assertCurrent();
+    const entry = memory.currentEntry();
+    if (!entry) {
+      return { entry };
+    }
+    const preparedSession = usesLegacyRuntime(entry)
+      ? {
+          sessionTarget: memory.target,
+          entry,
+          primaryConversation,
+          memoryTranscript: {
+            sessionManager,
+            sessionTarget: memory.target,
+            assertActive: memory.assertCurrent,
+          },
+        }
+      : undefined;
+    let reason:
+      | "no transcript"
+      | "Already compacted"
+      | "Nothing to compact (session too small)"
+      | undefined;
+    if (sessionManager.getPersistedEntries().length === 0) {
+      reason = "no transcript";
+    } else if (preparedSession) {
+      try {
+        const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
+          enabled: true,
+          reserveTokens: 0,
+          keepRecentTokens: 0,
+        });
+        if (!preflight.compactable) {
+          reason = preflight.reason;
+        }
+      } catch {
+        // Malformed preparation reaches the normal execution error owner.
+      }
+    }
+    return { entry, preparedSession, reason };
+  }
+  const prepared = await readPreparedSessionCompactionInWorker(
+    transcriptTarget,
+    { kind: "preflight" },
+    params.abortSignal,
+  );
+  if (prepared.status !== "preflight") {
+    throw new Error("Expected compaction preflight facts");
+  }
+  const { entry, runtimeEntry, primaryConversation } = prepared;
   if (!entry || !runtimeEntry) {
     return { entry };
   }
   const preparedSession = usesLegacyRuntime(entry)
-    ? { ...prepared, entry: runtimeEntry }
+    ? {
+        sessionTarget: prepared.sessionTarget,
+        entry: runtimeEntry,
+        primaryConversation,
+        source: prepared.source,
+      }
     : undefined;
-  if (prepared.eventCount === 0) {
-    return { entry, preparedSession, reason: "no transcript" };
-  }
-  if (!preparedSession) {
-    return { entry };
-  }
-  try {
-    const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 0,
-    });
-    return { entry, preparedSession, reason: preflight.compactable ? undefined : preflight.reason };
-  } catch {
-    // Preserve the existing compaction error path for malformed transcripts.
-    return { entry, preparedSession };
-  }
+  return {
+    entry,
+    preparedSession,
+    reason:
+      prepared.eventCount === 0 ? "no transcript" : preparedSession ? prepared.reason : undefined,
+  };
 }
 
 export async function runGatewaySessionCompaction(
@@ -103,7 +174,10 @@ export async function runGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
-  const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const resolvedModel = await resolveCompactionSessionModel(params);
+  if (!resolvedModel) {
+    return { ok: false, compacted: false, reason: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   // Capture the foreground window before a separate compaction.model is selected.
   const configuredWindow = floorPositiveFiniteNumber(
     resolveContextTokensForModel({
@@ -155,6 +229,9 @@ export async function runGatewaySessionCompaction(
           : undefined,
       conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
       chatType: primaryConversation?.kind,
+      messageChannel: primaryConversation?.channel,
+      skillsSnapshot: params.entry.skillsSnapshot,
+      toolOverrides: params.entry.toolOverrides,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
       contextTokenBudget,

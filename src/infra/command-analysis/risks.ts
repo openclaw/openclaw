@@ -252,6 +252,50 @@ export function detectInlineEvalInSegments(
   return null;
 }
 
+/** What the command text shows about the programs that a script interpreter runs. */
+export type ExecProgramVisibility = { opaque: boolean };
+
+const PYTHON_EXECUTABLE = /^(?:python|pypy)(?:\d+(?:\.\d+)*)?$/u;
+const PYTHON_NON_PROGRAM_FLAGS = new Set(["-V", "--version", "-h", "--help"]);
+const NODE_NON_PROGRAM_FLAGS = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
+
+// The program comes from a file or stdin, not from the argv (inline eval) or an installed module.
+function runsProgramOutsideArgv(argv: string[]): boolean {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const args = argv.slice(1);
+  if (PYTHON_EXECUTABLE.test(executable)) {
+    if (args.some((arg) => PYTHON_NON_PROGRAM_FLAGS.has(arg) || arg.startsWith("-m"))) {
+      return false;
+    }
+  } else if (executable !== "node" || args.some((arg) => NODE_NON_PROGRAM_FLAGS.has(arg))) {
+    return false;
+  }
+  return detectInterpreterInlineEvalArgv(argv) === null;
+}
+
+/**
+ * A Python or Node program from a file or stdin is opaque when a shell chain, pipeline or
+ * wrapper starts it: the command text does not identify the program that runs. Approval
+ * policy treats an opaque command as an allowlist miss. This is a fact, never a refusal.
+ */
+export function detectOpaqueInterpreterProgram(
+  command: string,
+  segments: readonly ExecCommandSegment[],
+): ExecProgramVisibility {
+  const opaque = segments.some((segment) => {
+    const candidates = buildCommandPayloadArgvCandidates(segment.argv);
+    if (!candidates.some(runsProgramOutsideArgv)) {
+      return false;
+    }
+    return (
+      segments.length > 1 ||
+      segment.raw.trim() !== command.trim() ||
+      candidates.some((argv) => isShellWrapperExecutable(normalizeExecutableToken(argv[0] ?? "")))
+    );
+  });
+  return { opaque };
+}
+
 export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
   const executable = argv[0];
   if (!executable) {

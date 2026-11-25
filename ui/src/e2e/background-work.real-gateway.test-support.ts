@@ -307,7 +307,7 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
     "chat.send",
     "chat.steerNow",
     "chat.history",
-    "chat.startup",
+    "sessions.messages.subscribe",
     "sessions.list",
     "chat.abort",
     "sessions.abort",

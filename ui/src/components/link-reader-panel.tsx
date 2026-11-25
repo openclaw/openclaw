@@ -35,8 +35,6 @@ import { Menu } from "./solid/menu.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
-const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
 function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?: boolean }) {
   const label = () => t("linkReader.newTab");
   return (
@@ -48,7 +46,6 @@ function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?
       ]}
       type="button"
       aria-label={label()}
-      title={label()}
       disabled={
         props.view().state.tabs.length >= LINK_READER_TAB_LIMIT ||
         !props.view().props.available ||
@@ -180,14 +177,6 @@ function PanelView(
     hostedTabs: { configurable: true, get: () => owner.hostedTabs() },
     activeHostedTabId: { configurable: true, get: () => owner.state.activeId },
   });
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
-        host.isConnected ? owner.updateComplete : false,
-      ),
-  });
   onSettled(() => {
     let disposed = false;
     const connect = () => {
@@ -307,6 +296,7 @@ function PanelView(
     <PanelIconButton
       class={["rail-header__action bp-icon", { "session-panel-rail__button": !props.mobile }]}
       label={label}
+      title={false}
       icon={<Icon name={name} />}
       onClick={click}
       disabled={disabled}
@@ -314,7 +304,7 @@ function PanelView(
   );
   return (
     <>
-      <style>{panelStyles}</style>
+      <style>{linkReaderViewStyles}</style>
       {tab() && !props.suppressed && (props.embedded || view().dockLayout.open) ? (
         <section
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}
@@ -397,7 +387,6 @@ function PanelView(
                     ]}
                     type="submit"
                     disabled={!props.available || !props.client}
-                    title={t("linkReader.openUrl")}
                     aria-label={t("linkReader.openUrl")}
                   >
                     <Icon name="chevronRight" />
@@ -413,7 +402,7 @@ function PanelView(
                       { "session-panel-rail__button": !props.mobile },
                     ]}
                     label={t("linkReader.refresh")}
-                    title={refreshMessage() ?? t("linkReader.refresh")}
+                    title={refreshMessage() ?? false}
                     icon={<Icon name={loading() ? "loaderCircle" : "refresh"} />}
                     busy={loading()}
                     disabled={!target() || !props.available || !props.client || loading()}
@@ -580,6 +569,7 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
   PanelView,
   {
     propertyChanged: (host) => owners.get(host)?.inputsChanged(),
+    updateComplete: (host) => (host.isConnected ? owners.get(host)?.updateComplete : false),
     properties: {
       client: { default: null, attribute: false },
       available: { default: false },

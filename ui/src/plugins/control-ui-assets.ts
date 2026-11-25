@@ -39,7 +39,7 @@ export function controlUiPluginAssetGrantError(
   }
   // Secure asset cookies cannot authenticate requests from non-local HTTP.
   if (!window.isSecureContext) {
-    return "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard.";
+    return "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback address.";
   }
   return config.pluginFrameGrants.some(
     (grant) =>
@@ -60,7 +60,7 @@ export function controlUiPluginAssetUrls(descriptor: PluginControlUiModule, base
   const resolve = (path: string) => {
     const url = new URL(uiDevGatewayResourceUrl(path), window.location.href);
     if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
-      throw new Error("Native plugin assets must be served by this Control UI Gateway.");
+      throw new Error("Native plugin assets must be served by this web app’s Gateway.");
     }
     return url.href;
   };

@@ -25,6 +25,20 @@ import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
 export { ExpectedCliError } from "./expected-cli-error.js";
 
+/** A command already emitted its human diagnostic; retain its original JSON failure. */
+export class ReportedCliCommandError extends ExpectedCliError {
+  constructor(error: unknown) {
+    const message = formatCliOperatorError(error);
+    super({
+      message,
+      humanOutput: message,
+      humanOutputWritten: true,
+      machineOutput: message,
+      cause: error,
+    });
+  }
+}
+
 export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
   if (isUncaughtExceptionHandled(error)) {
     return;
@@ -182,6 +196,9 @@ export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
+  if (error instanceof ReportedCliCommandError) {
+    return formatCliJsonFailure(error.cause, options);
+  }
   const message = isExpectedCliError(error)
     ? formatErrorMessage(resolveExpectedCliOutput(error).machineOutput.trimEnd())
     : formatCliOperatorError(error, options);

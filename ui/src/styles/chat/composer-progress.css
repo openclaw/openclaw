@@ -45,7 +45,7 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.25;
 }
 
@@ -86,7 +86,7 @@
 .agent-chat__goal-label {
   flex: 0 0 auto;
   color: var(--chat-goal-status-color, var(--chat-text));
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
 }
@@ -120,7 +120,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {
@@ -284,7 +284,7 @@
     height: auto;
     gap: 4px;
     padding: 4px 8px;
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
     line-height: 1.2;
     color: var(--text);
     background: color-mix(in srgb, var(--text) 7%, transparent);
@@ -355,7 +355,7 @@
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-usage {
     color: color-mix(in srgb, var(--muted) 82%, transparent);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-separator {
@@ -403,7 +403,7 @@
 }
 
 .agent-chat__goal-detail-objective {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -413,7 +413,7 @@
 .agent-chat__goal-detail-note,
 .agent-chat__goal-detail-meta {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -449,17 +449,6 @@
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   backdrop-filter: blur(8px);
-}
-
-.agent-chat__goal-float
-  :is(
-    .agent-chat__goal--blocked,
-    .agent-chat__goal--budget_limited,
-    .agent-chat__goal--usage_limited
-  ) {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
 }
 
 .agent-chat__goal-float .agent-chat__goal-row,
@@ -541,8 +530,8 @@
 .session-progress-card__current {
   min-width: 0;
   overflow: hidden;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: color 140ms ease;
@@ -601,9 +590,9 @@
 .session-progress-card__summary-count {
   flex: none;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   transition: color 140ms ease;
 }
 
@@ -634,7 +623,7 @@
 .session-progress-card--composer .session-progress-card__heading {
   margin: 0;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -643,7 +632,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -663,7 +652,7 @@
 
 .session-progress-card--composer .session-progress-card__step,
 .session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .session-progress-card--composer .session-progress-card__steps {
@@ -695,18 +684,6 @@
   }
 }
 
-.agent-chat__goal-float .agent-chat__goal--blocked {
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--warn) 13%, transparent),
-      transparent 42%
-    ),
-    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
-  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .session-progress-card--composer,
   .session-progress-card__summary,
@@ -715,4 +692,31 @@
     animation: none;
     transition: none;
   }
+}
+
+/* Plugin composer tasks reuse the status band at one height, so every state swaps in place. */
+.agent-chat__composer-task {
+  block-size: 96px;
+}
+
+/* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
+.agent-chat__composer-task-meta {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__composer-task > :last-child {
+  margin: 0 14px;
+}
+
+/* Two rows of steps, newest first; long labels clip at the card edge. */
+.agent-chat__composer-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-block-size: 40px;
+  font-size: 12px;
+  white-space: nowrap;
 }

@@ -1,2 +1,0 @@
-# Exact 46-line net growth: readiness/access regression plus accessible-name lookups for intrinsic sizing labels.
-46

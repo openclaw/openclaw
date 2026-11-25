@@ -1,4 +1,3 @@
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneTranscriptEnvelope } from "../../config/sessions/transcript-json.js";
 import { LruCache } from "../../infra/lru-cache.js";
@@ -16,15 +15,15 @@ export function shareSystemPromptPrefix(text: string): string {
   if (text.length < 1024) {
     return text;
   }
-  const hash = sha256Hex(text);
-  const existing = prefixes.get(hash);
-  // UTF-8 hashing can map distinct lone surrogates to the same replacement character.
-  if (existing === text) {
+  const existing = prefixes.peek(text);
+  if (existing !== undefined) {
+    // Promote the owned key, not a caller slice that could retain a larger source.
+    prefixes.get(existing);
     return existing;
   }
   // Detach slices once, rather than retaining their potentially much larger source string.
   const owned = Buffer.from(text, "utf16le").toString("utf16le");
-  prefixes.set(hash, owned);
+  prefixes.set(owned, owned);
   return owned;
 }
 

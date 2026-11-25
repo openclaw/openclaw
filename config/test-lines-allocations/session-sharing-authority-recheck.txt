@@ -1,3 +1,0 @@
-# Retained profile-cell parity and real guarded-write replacement across awaited work.
-# Existing current-entry proof also rejects repeated warm filesystem work.
-74

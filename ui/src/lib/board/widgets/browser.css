@@ -41,7 +41,7 @@ openclaw-browser-dashboard-widget {
   border-top: 1px solid var(--border);
   color: var(--muted);
   background: var(--panel);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 
   > div {
     display: flex;

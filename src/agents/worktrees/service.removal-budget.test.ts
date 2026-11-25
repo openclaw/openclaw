@@ -16,6 +16,7 @@ import {
 } from "./eviction.test-support.js";
 import { requireGit } from "./git.js";
 import { deferWorktreeCleanup } from "./registry-retirement.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -26,6 +27,7 @@ import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import * as snapshotHost from "./snapshot-host.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -160,6 +162,16 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   expect(retryState(env, failed.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   const [healthy] = await materialize(["healthy"], { repoRoot: source });
   expect((await gc()).removed).toEqual([healthy!.id]);
+  await setRetryAt(env, failed.id, Date.now() - 1);
+  expect((await gc()).failedCount).toBe(1);
+  expect(retryState(env, failed.id)).toMatchObject({
+    stage: "repository-corrupt",
+    attempts: 3,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  expect((await gc()).failedCount).toBe(0);
+  expect(retryState(env, failed.id)?.attempts).toBe(3);
   await git(repo, "remote", "set-url", "origin", source);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
@@ -170,10 +182,144 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   }
 });
 
+it("records nested repositories as terminal preserved checkouts across restart", async () => {
+  const { root, env, materialize } = await fixture();
+  const [record] = await materialize(["nested-preserved"]);
+  const nested = path.join(record!.path, "nested");
+  await fs.mkdir(nested);
+  await git(nested, "init", "-b", "main");
+  await fs.writeFile(path.join(nested, "valuable.txt"), "uncommitted inner work\n");
+  await expect(makeService(env).remove({ id: record!.id, reason: "archive" })).rejects.toThrow(
+    "nested git repositories cannot be snapshotted losslessly",
+  );
+  expect(retryState(env, record!.id)).toMatchObject({
+    stage: "nested-repository",
+    attempts: 1,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const gc = await makeService(env).gc();
+  expect(gc.removed).toEqual([]);
+  expect(gc.failedCount).toBe(0);
+  expect(gc.issues.some((issue) => issue.reason.includes("automatic retries stopped"))).toBe(true);
+  expect(retryState(env, record!.id)?.attempts).toBe(1);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const snapshot = vi.spyOn(snapshotHost, "captureManagedWorktreeSnapshot");
+  const gitCommands = vi.spyOn(gitExec, "executeGitCommandBuffered");
+  const service = makeService(env);
+  const result = await service.remove({ id: record!.id, reason: "manual-delete" });
+  expect(result).toMatchObject({
+    removed: false,
+    preserved: {
+      state: "preserved",
+      reason: expect.stringContaining("nested-repository"),
+      attempts: 1,
+      nextAttemptAt: null,
+    },
+  });
+  expect(
+    await service.remove({ id: record!.id, reason: "manual-delete", allowSnapshotLoss: true }),
+  ).toEqual(result);
+  expect(snapshot).not.toHaveBeenCalled();
+  expect(gitCommands).not.toHaveBeenCalled();
+  expect((await service.list()).find((item) => item.id === record!.id)?.cleanup).toEqual(
+    result.preserved,
+  );
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
+  expect(snapshot).toHaveBeenCalledOnce();
+  expect(retryState(env, record!.id)?.attempts).toBe(2);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const rescued = path.join(root, "rescued");
+  await fs.rename(nested, rescued);
+  expect(await service.removeIfLossless(record!.id)).toBe(false);
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).resolves.toMatchObject({
+    removed: true,
+  });
+  expect(await read(rescued, "valuable.txt")).toBe("uncommitted inner work\n");
+});
+
+it("caps permission failures and preserves bytes until an explicit repaired retry", async () => {
+  const { env, materialize } = await fixture();
+  const [record] = await materialize(["permission-preserved"]);
+  await fs.writeFile(path.join(record!.path, "README.md"), "retained changes\n");
+  const execute = gitExec.executeGitCommandBytes;
+  let attempts = 0;
+  let fail = true;
+  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+    if (args.includes("write-tree")) {
+      attempts++;
+      if (fail) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+    }
+    return execute(cwd, args, options);
+  });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await makeService(env).gc();
+    expect(retryState(env, record!.id)).toMatchObject({
+      stage: "permission-denied",
+      attempts: attempt,
+      retryAt: attempt === 3 ? null : expect.any(Number),
+    });
+    if (attempt < 3) {
+      await setRetryAt(env, record!.id, Date.now() - 1);
+    }
+  }
+  await closeOpenClawStateDatabaseAsync();
+  await makeService(env).gc();
+  expect(attempts).toBe(3);
+  expect(await read(record!.path)).toBe("retained changes\n");
+  fail = false;
+  expect((await makeService(env).gc({ retryDeferred: true })).removed).toEqual([record!.id]);
+  expect(await read((await makeService(env).restore({ id: record!.id })).path)).toBe(
+    "retained changes\n",
+  );
+});
+
+it("re-arms stopped scratch clones without an explicit retry and preserves live work", async () => {
+  const { repo, env, materialize } = await fixture();
+  await git(repo, "repack", "-ad");
+  const directory = path.join(repo, ".git/objects/pack");
+  const pack = path.join(
+    directory,
+    (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!,
+  );
+  const records = await materialize(["scratch-idle", "scratch-live"], { ownerId: "fixture-owner" });
+  for (const record of records) {
+    const clone = path.join(record.path, ".openclaw/tmp/landing/native");
+    await fs.mkdir(path.dirname(clone), { recursive: true });
+    await git(repo, "clone", "--local", repo, clone);
+    await deferWorktreeCleanup(env, {
+      observed: getRegistryWorktree(env, record.id)!,
+      reason: "Checkout preserved: nested-repository; automatic retries stopped",
+      retry: { stage: "nested-repository", attempts: 3, elapsedMs: 0, retryAt: null },
+    });
+  }
+  expect((await fs.stat(pack)).nlink).toBe(3);
+  const lease = await acquireWorktreeRunLease(records[1]!.id, { env });
+  try {
+    const pace = vi.fn(async () => {});
+    expect((await makeService(env).gc({ beforeRemoval: pace })).removed).toEqual([records[0]!.id]);
+    expect(pace).toHaveBeenCalledOnce();
+    expect((await fs.stat(pack)).nlink).toBe(2);
+    await fs.access(records[1]!.path);
+  } finally {
+    await lease.release();
+  }
+  expect((await makeService(env).gc({ readOwnerState: () => "idle" })).removed).toEqual([]);
+  await updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 1 });
+  expect((await makeService(env).gc()).removed).toEqual([records[1]!.id]);
+  expect((await fs.stat(pack)).nlink).toBe(1);
+});
+
 it.each([
   ["promised", 1],
   ["promised-retry", 2],
-  ["unpromised", 0],
+  ["unpromised", 1],
   ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],
@@ -246,13 +392,15 @@ it.each([
         ? before.length - 11
         : damage === "index-limited"
           ? before.length - 3
-          : 1;
+          : 2; // The dominant history pack stays outside the small-pack batch.
     const missing = await git(repo, "rev-list", "--objects", "--all", "--missing=print");
     expect(missing).toContain("?");
     await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
     const trace = path.join(root, "partial-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const service = makeService(env);
+    // Retirement deadline behavior is covered separately in service.gc-performance.test.ts.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const result = await service.gc({ retryDeferred: damage === "promised-retry" });
     const suspended = damage === "checksum" || damage === "promised-retry";
     const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
@@ -375,8 +523,14 @@ it.each(["idle", "retired"] as const)(
     expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
     expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
     expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
+    const observed = getRegistryWorktree(env, record.id)!;
+    await deferWorktreeCleanup(env, {
+      observed,
+      reason: observed.gcProtection!,
+      retry: { ...observed.gcRetry!, attempts: 5, retryAt: Date.now() - 6 * 7 * 24 * hour },
+    });
     fail = false;
-    const retried = await gc(true);
+    const retried = await gc();
     expect(retried.removed).toEqual([record.id]);
     expect(attempts).toBe(3);
     expect(retryState(env, record.id)).toBeUndefined();
@@ -666,9 +820,24 @@ describe("nested eviction", () => {
         "external checkout data",
       );
       config.worktreeMaxCount = 1;
-      await service.gc();
-      expect(registry(outer.id)?.removedAt).toEqual(expect.any(Number));
-      expect(await liveIds()).toEqual([replacement.id]);
+      const result = await service.gc();
+      expect(result).toMatchObject({
+        removed: [replacement.id],
+        outcome: "partial",
+        limitsSatisfied: true,
+        issues: [
+          { id: outer.id, reason: expect.stringContaining("cannot be snapshotted losslessly") },
+        ],
+      });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(registry(outer.id)?.gcRetry).toMatchObject({
+        stage: "nested-repository",
+        retryAt: null,
+      });
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
     },
   );
 

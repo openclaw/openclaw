@@ -1,2 +1,0 @@
-# Real pnpm regression through sandbox context and dependency installation, plus explicit store override coverage.
-176

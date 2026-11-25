@@ -85,7 +85,7 @@ process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: main
         TARGET_SHA: "a".repeat(40),
         RELEASE_NPM_DIST_TAG: "extended-stable",
         PUBLISH_OPENCLAW_NPM: "true",
-        WAIT_FOR_CLAWHUB: "false",
+        CLAWHUB_ONLY: "false",
         RUNNER_TEMP: root,
         BYPASS_EXTENDED_STABLE_GUARD: "true",
       },

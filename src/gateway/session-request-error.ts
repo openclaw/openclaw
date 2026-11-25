@@ -10,10 +10,7 @@ export function sessionCreationFailure(
     ok: false,
     error:
       failure.phase === "transcript"
-        ? errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `failed to create session transcript: ${failure.error}`,
-          )
+        ? errorShape(ErrorCodes.UNAVAILABLE, `failed to create chat history: ${failure.error}`)
         : failure.error,
   };
 }

@@ -36,34 +36,18 @@
   flex-direction: column;
   overflow: hidden;
   max-width: calc(100vw - 16px);
-  max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
 }
 
-/* Select keeps its own slower presentation; the wrapper alone animates, never its list. */
-:is(.picker-select__menu, .multi-select__menu).oc-overlay {
-  opacity: 0;
-  scale: 0.95;
-  transition:
-    opacity var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    scale var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    display var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete;
+/* Select keeps its own slower presentation; the wrapper alone animates, never its list.
+   The shared overlay keyframes, not transitions (see overlay.css). */
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="opening"] {
+  animation: oc-overlay-enter var(--oc-overlay-show-duration, var(--select-enter-duration))
+    var(--overlay-ease-enter);
 }
 
-:is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open:where(
-    :not([data-phase="closing"])
-  ) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(--oc-overlay-show-duration, var(--select-enter-duration));
-  transition-timing-function: var(--overlay-ease-enter);
-}
-
-@starting-style {
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open {
-    opacity: 0;
-    scale: 0.95;
-  }
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="closing"] {
+  animation: oc-overlay-exit var(--oc-overlay-hide-duration, var(--select-exit-duration))
+    var(--overlay-ease-exit) forwards;
 }
 
 .picker-select__option,
@@ -147,13 +131,23 @@
   color: var(--accent);
 }
 
+/* The flat list shares the icon and 8px gap (20px artwork, 24px for channels).
+   A window sizer contains the leading icons even when their rows are offscreen. */
+.picker-select__menu:not(.picker-select__menu--grouped):has(.picker-select__leading)
+  .picker-select__copy:first-child {
+  margin-inline-start: var(--picker-icon-inset, 28px);
+}
+
+.channel-picker {
+  --picker-icon-inset: 32px;
+}
+
 .picker-select__leading {
   display: inline-flex;
   align-items: center;
 }
 
 .picker-select__label {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -171,10 +165,9 @@
 }
 
 .picker-select__description {
-  min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 80%, var(--text));
-  font-size: calc(0.75rem * var(--control-ui-text-scale));
+  font-size: 0.75rem;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
@@ -259,7 +252,6 @@ openclaw-select-picker {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
-  width: max-content;
 }
 
 @media (max-width: 640px) {
@@ -312,7 +304,7 @@ openclaw-select-picker {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: var(--control-ui-font-weight-semibold);
   font-variant-numeric: tabular-nums;
   text-align: start;
@@ -408,12 +400,14 @@ openclaw-select-picker {
   animation: picker-sheet-page-in var(--motion-sheet);
 }
 
-.picker-select--sheet .picker-select__options {
+.picker-select--sheet .picker-select__options,
+.picker-select__menu--phone-sheet .picker-select__options {
   flex: 1 1 auto;
   overscroll-behavior: contain;
 }
 
-.picker-select--sheet .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
+:is(.picker-select--sheet, .picker-select__menu--phone-sheet)
+  .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
   flex: none;
 }
 
@@ -465,11 +459,11 @@ openclaw-select-picker {
 
 @media (prefers-reduced-motion: reduce) {
   .picker-select--sheet .picker-select__menu,
-  .picker-select--sheet:dir(rtl) .picker-select__menu {
+  .picker-select--sheet:dir(rtl) .picker-select__menu,
+  :is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase] {
     animation: none;
   }
 
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay,
   :is(.picker-select__option, .multi-select__option)::before {
     transition: none;
   }
@@ -493,11 +487,6 @@ openclaw-select-picker {
   box-shadow: var(--overlay-shadow);
   backdrop-filter: none;
   animation: picker-sheet-in var(--motion-sheet);
-}
-
-.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay:popover-open {
-  opacity: 1;
-  scale: 1;
 }
 
 .picker-select__menu--phone-sheet::backdrop {
@@ -551,20 +540,11 @@ openclaw-select-picker {
   height: 16px;
 }
 
-/* The title keeps clear of the close button, and the search toggle sits beside it. */
-.picker-select__menu--phone-sheet > :is(.picker-select__page-header, .header-search) {
+/* The title keeps clear of the close button. */
+.picker-select__menu--phone-sheet > .picker-select__page-header {
   min-height: 44px;
   padding-inline-end: 36px;
   font-weight: var(--control-ui-font-weight-semibold);
-}
-
-.picker-select__menu--phone-sheet > .header-search {
-  padding-inline-start: 0;
-  border-block-end: 0;
-}
-
-.picker-select__menu--phone-sheet > .header-search[data-searching] {
-  padding-inline-end: 0;
 }
 
 /* Filtering shouldn't resize the sheet under the keyboard. */
@@ -572,11 +552,6 @@ openclaw-select-picker {
     .header-search[data-searching]
   ) {
   height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
-}
-
-.picker-select__menu--phone-sheet .picker-select__options {
-  flex: 1 1 auto;
-  overscroll-behavior: contain;
 }
 
 @keyframes picker-sheet-in {
@@ -609,8 +584,4 @@ openclaw-select-picker {
   position: absolute;
   inset-inline: 0;
   top: 0;
-}
-
-.picker-select__menu > .header-search:has(> .picker-select__back) {
-  padding-inline-start: 0;
 }

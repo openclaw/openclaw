@@ -104,7 +104,6 @@ export function registerCodexSideQuestionRelay(
     | "requirePreToolUse"
     | "ttlMs"
     | "command"
-    | "preToolUseLoopDetection"
     | "agentId"
     | "sessionId"
     | "sessionKey"
@@ -130,7 +129,6 @@ export function registerCodexSideQuestionRelay(
     ...(sideParams.sessionKey ? { sessionKey: sideParams.sessionKey } : {}),
     ...(sideParams.cfg ? { config: sideParams.cfg } : {}),
     ...(channelId ? { channelId } : {}),
-    preToolUseLoopDetection: params.appServer.loopDetectionPreToolUseRelay,
     requirePreToolUse: params.denyToolCalls,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,

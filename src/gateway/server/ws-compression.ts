@@ -69,7 +69,7 @@ function sharedZlib(open: () => NativeZlibStream, reuseOutput = false) {
   let stream: NativeZlibStream | undefined;
   // Calls are synchronous; only exact owned copies escape into queued socket writes.
   const workspace = reuseOutput ? Buffer.allocUnsafe(MAX_OUTPUT_CHUNK_BYTES) : undefined;
-  return (input: Uint8Array, maxOutputLength: number): Buffer | null => {
+  return (input: Uint8Array, maxOutputLength: number): Buffer[] | null => {
     if (!stream) {
       stream = open();
       // Failures surface through `destroyed`; the deferred error event needs a listener.
@@ -111,13 +111,13 @@ function sharedZlib(open: () => NativeZlibStream, reuseOutput = false) {
       stream = undefined;
       throw error;
     }
-    return parts.length === 1 ? parts[0]! : Buffer.concat(parts, total);
+    return parts;
   };
 }
 
 const inflateShared = sharedZlib(() => createInflateRaw());
 const deflateShared = new Map<string, ReturnType<typeof sharedZlib>>();
-const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer>>();
+const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer[]>>();
 // Immutable frame identity owns the result; negotiated windows cannot share back-references.
 const deflatedFrames = new WeakMap<
   SerializedGatewayFrame,
@@ -130,7 +130,7 @@ export function registerDeflatedSegment(bytes: Uint8Array, deflated: Uint8Array)
     return;
   }
   const windows = getOrCreateWeakOwnerMap(deflatedSegments, bytes);
-  windows.set(15, Buffer.from(deflated.buffer, deflated.byteOffset, deflated.byteLength));
+  windows.set(15, [Buffer.from(deflated.buffer, deflated.byteOffset, deflated.byteLength)]);
 }
 
 function isPerMessageDeflateCodec(value: unknown): value is PerMessageDeflateCodec {
@@ -211,9 +211,12 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     const maxOutputLength = receiver["_maxPayload"] || kMaxLength;
     let output: Buffer;
     try {
-      output =
-        inflateShared(input, maxOutputLength) ??
-        inflateRawSync(input, { finishFlush: Z_SYNC_FLUSH, maxOutputLength });
+      const parts = inflateShared(input, maxOutputLength);
+      output = parts
+        ? parts.length === 1
+          ? parts[0]!
+          : Buffer.concat(parts)
+        : inflateRawSync(input, { finishFlush: Z_SYNC_FLUSH, maxOutputLength });
     } catch {
       // ws's own path reproduces its canonical error and close code (1007/1009).
       streamDecompress(input.subarray(0, -TRAILER.length), true, callback);
@@ -236,13 +239,13 @@ export function installGatewayDeflateCodec(socket: WebSocket):
       deflate = sharedZlib(() => createDeflateRaw(options), memLevel === 8);
       deflateShared.set(key, deflate);
     }
-    return (input: Uint8Array): Buffer =>
-      deflate(input, kMaxLength) ?? copyOwnedBuffer(deflateRawSync(input, options));
+    return (input: Uint8Array): Buffer[] =>
+      deflate(input, kMaxLength) ?? [deflateRawSync(input, options)];
   };
   // Small envelopes need less hash-table clearing; large payloads retain zlib's default tables.
   const compressSmall = compressorFor(5);
   const compressLarge = compressorFor(8);
-  const compressPiece = (input: Uint8Array): Buffer =>
+  const compressPiece = (input: Uint8Array): Buffer[] =>
     (input.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold ? compressSmall : compressLarge)(
       input,
     );
@@ -261,13 +264,13 @@ export function installGatewayDeflateCodec(socket: WebSocket):
       return cached;
     }
     const segments = frame instanceof SerializedGatewayFrame ? frame.segments : undefined;
+    const pieces: Buffer[] = [];
     if (segments?.some((bytes) => bytes.byteLength >= GATEWAY_PER_MESSAGE_DEFLATE.threshold)) {
-      const pieces: Buffer[] = [];
       let small: Uint8Array[] = [];
       const flushSmall = () => {
         if (small.length > 0) {
           const input = small.length === 1 ? small[0]! : Buffer.concat(small);
-          pieces.push(compressPiece(input));
+          pieces.push(...compressPiece(input));
           small = [];
         }
       };
@@ -283,20 +286,25 @@ export function installGatewayDeflateCodec(socket: WebSocket):
           piece = compressPiece(bytes);
           windows.set(windowBits, piece);
         }
-        pieces.push(piece);
+        pieces.push(...piece);
       }
       flushSmall();
-      // Independent raw streams concatenate at sync-flush boundaries; keep interior trailers.
-      const last = pieces.length - 1;
-      pieces[last] = pieces[last]!.subarray(0, -TRAILER.length);
-      const result = new SerializedGatewayFrame(pieces);
-      frames?.set(windowBits, result);
-      return result;
+    } else {
+      pieces.push(
+        ...compressPiece(frame instanceof SerializedGatewayFrame ? frame.toBuffer() : frame),
+      );
     }
-    // Z_SYNC_FLUSH ends with the empty block that permessage-deflate strips.
-    const result = compressPiece(
-      frame instanceof SerializedGatewayFrame ? frame.toBuffer() : frame,
-    ).subarray(0, -TRAILER.length);
+    // Keep interior flush boundaries; the final trailer can span output chunks.
+    let trailer = TRAILER.length;
+    while (trailer > 0) {
+      const last = pieces.pop()!;
+      const retained = Math.max(0, last.length - trailer);
+      trailer -= last.length - retained;
+      if (retained > 0) {
+        pieces.push(last.subarray(0, retained));
+      }
+    }
+    const result = pieces.length === 1 ? pieces[0]! : new SerializedGatewayFrame(pieces);
     frames?.set(windowBits, result);
     return result;
   };

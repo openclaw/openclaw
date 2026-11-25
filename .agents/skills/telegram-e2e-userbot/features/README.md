@@ -129,6 +129,31 @@ show that no call reached Telegram inside a flood window.
 }
 ```
 
+For an ambiguous network failure, add `reset`. `"before-forward"` resets the
+Gateway's connection without forwarding the request, so Telegram never sees it.
+`"after-forward"` forwards the request, waits for Telegram's response, then
+resets the connection, so Telegram accepted the send but the Gateway sees
+`read ECONNRESET`. The rejection event records `reset: true` and
+`upstreamForwarded`. `reset` cannot be combined with `retryAfter`.
+
+```json
+{
+  "type": "telegramApiReject",
+  "method": "sendMessage",
+  "bodyIncludes": "FINAL_MARKER",
+  "reset": "after-forward"
+}
+```
+
+For a server that accepts a request and never answers, use `reset: "hang"`. The
+proxy keeps the connection open without forwarding until the Gateway's own
+timeout gives up; `times` hangs that many consecutive matching requests, so a
+call that retries keeps hanging. The rejection event records `hang: true`.
+
+```json
+{ "type": "telegramApiReject", "method": "getFile", "reset": "hang", "times": 12 }
+```
+
 Select `deleteMessage` without a body filter to reject the next cleanup deletion.
 Use the existing hold/release controls for accepted-but-unacknowledged delivery;
 a pre-upstream rejection does not model uncertainty.

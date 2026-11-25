@@ -8,7 +8,7 @@ import type { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 
 /** Resolve existing namespace policy without creating a workspace or a runtime. */
 export async function resolveSandboxSession(params: {
-  skillsSnapshot?: SkillSnapshot;
+  skillsSnapshot?: Pick<SkillSnapshot, "librarySelections">;
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;

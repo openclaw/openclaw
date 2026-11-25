@@ -109,6 +109,9 @@ The Wear OS companion uses the paired Android phone's authenticated Gateway conn
 
 ## Install outside Google Play
 
+Current Android releases are independent of Gateway releases. Historical
+GitHub releases may include APKs; check the listed assets before downloading.
+
 Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Android assets may be attached after a release becomes public. Select a release by its listed assets, not by the latest Gateway release tag.
 
 List published releases that contain both required assets:
@@ -494,6 +497,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Thread activity: search results and sidebar rows use each thread's own reported activity. An inactive run does not keep a working or queued indicator solely because its last status was running or queued.
 - Session selection: while the app is running, each Gateway and agent remembers the last chat you explicitly selected. Returning to an agent checks an older chat directly if it is outside the recent page; temporary lookup failures show an error without forgetting that choice.
 - Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection. A successful archive also retires the archived chat's remembered selection even if its push notification is missed.
+- To delete a chat, archive it first, open **Threads → Archived**, long-press it, and choose **Delete…**. The chat is removed from the list; a copy of its messages is kept. **Cancel** leaves the chat unchanged.
 - **New chat** on Overview and **New** in the sidebar create and select an independent chat for the selected agent without clearing the previous session. An in-progress response does not block that New chat, and the original response keeps running. It preserves the existing model/provider, thinking, and Fast Mode inheritance behavior while appearing separately in Threads instead of beneath the previous chat or Home. Existing ordinary New chats also appear independently even when an older app recorded the previous chat as their parent; their history and stored settings are not changed. Forks, subagents, explicit worktree starts, and sessions without creation metadata keep their nesting. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
 - Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
 - **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. Chat readiness is separate from the Gateway connection: an empty connected thread shows **Chat not ready** while health is unconfirmed or a check has failed. Use **Refresh chat** to check again; **Gateway offline** indicates a disconnected Gateway. History failures do not stop subsequent health checks. Once Android observes a recovered run finish, a delayed history response does not bring back that run's Stop button or partial reply.

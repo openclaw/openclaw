@@ -1,5 +1,4 @@
 import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { ConversationAuthority } from "./conversation-authority.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
@@ -29,11 +28,6 @@ export type SessionEntryPatchGuard = {
   assertMutationAllowed?: () => void;
   /** Same-store route authority is reread inside the worker's write transaction. */
   conversation?: ConversationAuthority;
-  cliHistory?: {
-    sessionId: string;
-    admission?: UserTurnTranscriptAdmissionReceipt;
-    watermark: SessionTranscriptWatermark;
-  };
   shouldCommitIf?: {
     kind: "transcript";
     sessionId: string;
@@ -58,7 +52,6 @@ export type SessionEntryPatchCommit = {
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
-  cliHistory?: SessionEntryPatchGuard["cliHistory"];
   conversation?: SessionEntryPatchGuard["conversation"];
   sources?: SessionSourcePredicate[];
   ensureIdentitySource?: Omit<SessionSourceTransactionGrant, "assertCurrent">;

@@ -1,18 +1,13 @@
-import type { HumanMention } from "@openclaw/gateway-protocol";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import type { ChatAppContextAttachment } from "../../packages/gateway-protocol/src/chat-app-context.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
-import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type { MessageClientSource } from "../chat/message-client-source.js";
-import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
-import type { AttachedChatWorkContext } from "../chat/work-context.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionInputLifecycleAdmission } from "../config/sessions/session-input-lifecycle.js";
 import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
+import type { PreparedSessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -24,104 +19,14 @@ import type {
 } from "../config/sessions/transcript-entry-anchor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MediaFactInput } from "../media/media-facts.js";
-import type { InputProvenance } from "./input-provenance.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 
-export type PersistedUserTurnMediaInput = Pick<
-  MediaFactInput,
-  | "contentType"
-  | "durationMs"
-  | "fileName"
-  | "origin"
-  | "height"
-  | "hydrationSuppressed"
-  | "messageId"
-  | "path"
-  | "sizeBytes"
-  | "transcribed"
-  | "url"
-  | "width"
-> & {
-  kind?: string | null;
-  workspaceDir?: string | null;
-};
-
-export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
-  display?: false;
-  excludeFromContext?: true;
-  /** Private transcript correlation; never authorizes an execution. */
-  idempotencyKey?: string;
-  provenance?: InputProvenance;
-  __openclaw?: Record<string, unknown> & {
-    humanMentions?: readonly HumanMention[];
-    /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
-    humanAddressed?: true;
-    /** Accepted delivery intent; readmission still checks the sender's current authority. */
-    chatSendDelivery?: {
-      deliver?: boolean;
-      originatingChannel?: string;
-      originatingTo?: string;
-      originatingAccountId?: string;
-      originatingThreadId?: string;
-    };
-    chatSendRuntime?: {
-      thinking?: string;
-      fastMode?: FastMode;
-      fastAutoOnSeconds?: number;
-      timeoutMs?: number;
-    };
-    requesterOrigin?: RequesterOrigin;
-    pendingInputCancelledByUser?: true;
-  };
-};
-
-export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
-  text?: string | null;
-  /** Display receipt of shared App references; never added to model text. */
-  appContext?: ChatAppContextAttachment[];
-  /** Authored text and its captured reference; model content stays unchanged. */
-  workContext?: AttachedChatWorkContext;
-  /** Explicit human selections bound to UTF-16 offsets in text. */
-  mentions?: readonly HumanMention[];
-  /** The selected people are the recipients; no agent turn runs for this input. */
-  humanAddressed?: true;
-  media?: readonly PersistedUserTurnMediaInput[] | null;
-  /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
-  mediaImageLayout?: {
-    slots: readonly {
-      kind: "inline" | "offloaded";
-      factIndex?: number;
-    }[];
-    suppressedFactIndexes?: readonly number[];
-  } | null;
-  timestamp?: number;
-  idempotencyKey?: string;
-  /** Durable transcript message reference used to render and hydrate replies. */
-  replyToId?: string;
-  /** Bounded display fallback for replies whose target is outside loaded history. */
-  replyToPreview?: { text: string; senderLabel?: string | null } | null;
-  senderIsOwner?: boolean;
-  /** Host-captured requester facts; recovery still requires exact accepted-input custody. */
-  requesterOrigin?: RequesterOrigin;
-  provenance?: InputProvenance;
-  /** Identity is producer-owned attribution; labels remain editable display metadata. */
-  sender?: {
-    id?: string | null;
-    name?: string | null;
-    username?: string | null;
-    identity?: TranscriptSenderIdentity;
-  } | null;
-  /** Durable transport correlation; stored privately and never rendered into model input. */
-  transport?: {
-    /** Reported client sources retained through collection; never sender authority. */
-    clients?: readonly MessageClientSource[];
-    channel?: string;
-    conversationRef?: string;
-    messageId?: string;
-    replyToId?: string;
-    threadId?: string;
-  };
-};
+/** Native transcript identity of one accepted input, not an authority or replacement message. */
+export type NativeSteerInputIdentity = Readonly<{
+  importedFrom: string;
+  externalId: string;
+  cliSessionId: string;
+}>;
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
 
@@ -190,6 +95,9 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  prepareMentionInvitation?: (
+    message: PersistedUserTurnMessage,
+  ) => PreparedSessionMentionInvitation | undefined;
   beforeFreshMessageCommit?: SessionSourceAssertion;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
@@ -204,6 +112,9 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  prepareMentionInvitation?: (
+    message: PersistedUserTurnMessage,
+  ) => PreparedSessionMentionInvitation | undefined;
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
   /** Durable channel source turns may reopen their own cancelled, unconsumed attempt. */
@@ -225,6 +136,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  /** First foreground submission, after the input and runtime-context persistence settle. */
+  onInputSubmitted?: () => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
@@ -249,6 +162,10 @@ export type PreparedModelPromptProjection = {
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
+  /** Records observed audio authorization failures against their original attachment references. */
+  recordAudioApiKeyFailures?: (
+    failures: readonly { reference: string; provider: string }[],
+  ) => Promise<void>;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Committed or delivered input, accepted pending custody, and blocked notices are exempt. */
   assertOriginalInputCommit?: SessionSourceAssertion;
@@ -276,13 +193,23 @@ export type UserTurnTranscriptRecorder = {
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;
-  finishPendingInput?: (disposition: "cancelled" | "interrupted", userInitiated?: true) => void;
+  finishPendingInput?: (
+    disposition: "cancelled" | "interrupted",
+    endCause: SessionPendingInputEndCause,
+  ) => void;
+  /** Drop process custody after consumption without inventing a terminal cause. */
+  releasePendingInput?: () => void;
+  /** Drop live custody on a transient outage while retaining the queued durable input. */
+  relinquishPendingInput?: () => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
-  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
+  confirmSteerTargetRunIdForPersistence?: (
+    targetRunId: string,
+    nativeInputIdentity?: NativeSteerInputIdentity,
+  ) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   /** Freeze model-facing text on the canonical user record before its first provider dispatch. */
   captureModelPromptProjection?: (

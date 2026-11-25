@@ -42,8 +42,11 @@ import { tryRouteCli } from "./route.js";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-models-status-route-"));
 
 afterAll(() => {
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-  vi.unstubAllEnvs();
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("does not execute an unrelated provider plugin", async () => {

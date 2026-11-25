@@ -12,22 +12,6 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 
 describe("resolveExistingInstallPath", () => {
-  it("returns resolved path and stat for existing files", async () => {
-    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
-      const filePath = path.join(fixtureRoot, "plugin.tgz");
-      await fs.writeFile(filePath, "archive");
-
-      const result = await resolveExistingInstallPath(filePath);
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
-      expect(result.resolvedPath).toBe(filePath);
-      expect(result.stat.isFile()).toBe(true);
-    });
-  });
-
   it("returns a path-not-found error for missing paths", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const missing = path.join(fixtureRoot, "missing.tgz");

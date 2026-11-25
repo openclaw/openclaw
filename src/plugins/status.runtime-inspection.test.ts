@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
@@ -124,160 +125,240 @@ describe("plugin runtime inspection", () => {
     cleanupPluginLoaderFixturesForTest();
   });
 
-  it("awaits doctor inspection disposal while the active native registration stays usable", async () => {
-    const stateDir = makePluginLoaderTempDir();
-    const previousExitCode = process.exitCode;
-    const output: string[] = [];
-    const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => {
-      output.push(value);
-    });
-    const fixture = createInspectionFixture({ pauseDisposal: true });
-    const { connections, disposalStarted: started, finishDisposal: finish } = fixture.state;
-    let command: Promise<void> | undefined;
-    try {
-      await withEnvAsync(stateEnv(stateDir), async () => {
-        useNoBundledPlugins();
-        const config = {
-          agents: {
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: { workspace: stateDir } },
-          },
-          plugins: fixture.config.plugins,
-        };
-        // Preserve omitted catalog preferences on this existing config.
-        fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
-        await writeConfigFile(config);
-        const active = await loadAndActivateRootPluginRegistry({
-          config,
-          workspaceDir: stateDir,
-          cache: false,
-        });
-        const epoch = capturePluginRegistryLifecycleEpoch(active);
-        const signal = capturePluginRegistryLifecycleSignal(active, epoch);
-        expect(epoch).toBeDefined();
-        const activeConnection = connections[0];
-        const readActive = () => activeConnection?.database.prepare("SELECT 42 AS value").get();
-        const expectActive = () => {
-          expect(readActive()).toEqual({ value: 42 });
-          expect(getActivePluginRegistry()).toBe(active);
-          expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
-          expect(signal?.aborted).toBe(false);
-        };
-        expectActive();
-        let replied = false;
-        process.exitCode = 7;
-        command = withPluginRuntimeRegistryScope(active, () =>
-          runPluginsDoctorCommand({ json: true }),
-        ).then(() => {
-          replied = true;
-        });
-        await Promise.race([started.promise, command]);
-        expect(connections).toHaveLength(2);
-        const inspection = connections[1];
-        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: true } });
-        expect(replied).toBe(false);
-        expect(output).toEqual([]);
-        expect(process.exitCode).toBe(7);
-        expectActive();
-        finish.resolve();
-        await command;
-        expect(output).toHaveLength(1);
-        expect(process.exitCode, output.join("\n")).toBe(0);
-        expect(JSON.parse(output[0] ?? "")).toMatchObject({
-          ok: true,
-          pluginErrors: [],
-          diagnostics: [],
-          configurationWarnings: [],
-        });
-        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: false } });
-        expect(activeConnection?.disposals).toBe(0);
-        expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
-        expectActive();
-      });
-    } finally {
-      finish.resolve();
-      try {
-        await command;
-      } finally {
-        await fixture.cleanup();
-        writeStdout.mockRestore();
-        process.exitCode = previousExitCode;
-      }
-    }
-  });
-
-  it.each(["all", "projection-error", "serialization-and-disposal-error"] as const)(
-    "keeps native inspection custody through %s",
-    async (mode) => {
+  it.for([false, true])(
+    "awaits doctor inspection disposal while the active native registration stays usable (disposal failure: %s)",
+    async (disposalFailure, { signal: testSignal }) => {
       const stateDir = makePluginLoaderTempDir();
-      const fixture = createInspectionFixture({
-        contextEngine: true,
-        disposalFailure: mode === "serialization-and-disposal-error",
-      });
-      const { plugin, config } = fixture;
+      const previousExitCode = process.exitCode;
       const output: string[] = [];
       const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => {
-        expect(fixture.connection().database.isOpen).toBe(false);
         output.push(value);
       });
-      const projectionError = new Error("fixture report projection failed");
-      const projection = vi.spyOn(statusSnapshot, "projectPluginInstallHealth");
+      const fixture = createInspectionFixture({ pauseDisposal: true, disposalFailure });
+      const { connections, disposalStarted: started, finishDisposal: finish } = fixture.state;
+      let command: Promise<void> | undefined;
+      let settlement: Promise<void> | undefined;
       try {
         await withEnvAsync(stateEnv(stateDir), async () => {
           useNoBundledPlugins();
+          const config = {
+            agents: {
+              defaults: { systemAgent: { agentId: "main" } },
+              entries: { main: { workspace: stateDir } },
+            },
+            plugins: fixture.config.plugins,
+          };
+          // Preserve omitted catalog preferences on this existing config.
+          fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
           await writeConfigFile(config);
-          const active = getActivePluginRegistry();
-          if (mode.includes("error")) {
-            if (mode.startsWith("projection")) {
-              projection.mockImplementation(() => {
-                throw projectionError;
-              });
-            }
-            const inspection = withPluginDiagnosticsReportForInspection(
-              { config, runtimeInspection: true },
-              (report) => {
-                expect(report.plugins[0]?.id).toBe(plugin.id);
-                expect(fixture.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
-                  value: 42,
-                });
-                return JSON.stringify({
-                  toJSON() {
-                    throw projectionError;
-                  },
-                });
-              },
-            );
-            if (!mode.includes("and-disposal")) {
-              await expect(inspection).rejects.toBe(projectionError);
-            } else {
-              await expect(inspection).rejects.toMatchObject({
-                errors: [projectionError, expect.any(AggregateError)],
-              });
-            }
-          } else {
-            await runPluginsInspectCommand(undefined, {
-              all: true,
-              runtime: true,
-              json: true,
+          const active = await loadAndActivateRootPluginRegistry({
+            config,
+            workspaceDir: stateDir,
+            cache: false,
+          });
+          const epoch = capturePluginRegistryLifecycleEpoch(active);
+          const signal = capturePluginRegistryLifecycleSignal(active, epoch);
+          expect(epoch).toBeDefined();
+          const activeConnection = connections[0];
+          const readActive = () => activeConnection?.database.prepare("SELECT 42 AS value").get();
+          const expectActive = () => {
+            expect(readActive()).toEqual({ value: 42 });
+            expect(getActivePluginRegistry()).toBe(active);
+            expect(capturePluginRegistryLifecycleEpoch(active)).toBe(epoch);
+            expect(signal?.aborted).toBe(false);
+          };
+          expectActive();
+          let replied = false;
+          process.exitCode = 7;
+          command = withPluginRuntimeRegistryScope(active, () =>
+            runPluginsDoctorCommand({ json: true }),
+          );
+          settlement = command.then(
+            () => {
+              replied = true;
+            },
+            () => {
+              replied = true;
+            },
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              started.promise,
+              command,
+              "Doctor skipped inspection disposal",
+            ),
+            testSignal,
+          );
+          expect(connections).toHaveLength(2);
+          const inspection = connections[1];
+          expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: true } });
+          expect(inspection?.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+          expect(replied).toBe(false);
+          expect(output).toEqual([]);
+          expect(process.exitCode).toBe(7);
+          expectActive();
+          finish.resolve();
+          if (disposalFailure) {
+            await expect(command).rejects.toBeInstanceOf(AggregateError);
+            await expect(command).rejects.toMatchObject({
+              errors: [
+                expect.objectContaining({
+                  cause: expect.objectContaining({ message: "fixture disposal failed" }),
+                }),
+              ],
             });
+            expect(output).toEqual([]);
+            expect(process.exitCode).toBe(7);
+          } else {
+            await command;
             expect(output).toHaveLength(1);
-            const parsed = JSON.parse(output[0] ?? "");
-            expect(parsed[0]).toMatchObject({
-              plugin: { id: plugin.id, contextEngineIds: [plugin.id] },
+            expect(process.exitCode, output.join("\n")).toBe(0);
+            expect(JSON.parse(output[0] ?? "")).toMatchObject({
+              ok: true,
+              pluginErrors: [],
+              diagnostics: [],
+              configurationWarnings: [],
             });
           }
-          expect(getActivePluginRegistry()).toBe(active);
-          expect(fixture.connection()).toMatchObject({ disposals: 1, cleanups: 0 });
-          expect(fixture.connection().database.isOpen).toBe(false);
-          expect(fixture.state.factoryCalls).toBe(0);
+          expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: false } });
+          expect(activeConnection?.disposals).toBe(0);
+          expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
+          expectActive();
         });
       } finally {
-        projection.mockRestore();
-        writeStdout.mockRestore();
-        await fixture.cleanup();
+        finish.resolve();
+        try {
+          await settlement;
+        } finally {
+          await fixture.cleanup();
+          writeStdout.mockRestore();
+          process.exitCode = previousExitCode;
+        }
       }
     },
   );
+
+  it.for([
+    "all",
+    "single",
+    "disposal-error",
+    "projection-error",
+    "serialization-and-disposal-error",
+  ] as const)("keeps native inspection custody through %s", async (mode, { signal }) => {
+    const stateDir = makePluginLoaderTempDir();
+    const commandMode = mode === "all" || mode === "single" || mode === "disposal-error";
+    const fixture = createInspectionFixture({
+      contextEngine: true,
+      pauseDisposal: commandMode,
+      disposalFailure: mode === "disposal-error" || mode === "serialization-and-disposal-error",
+    });
+    let settlement: Promise<void> | undefined;
+    const { plugin, config } = fixture;
+    const output: string[] = [];
+    const writeStdout = vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => {
+      expect(fixture.connection().database.isOpen).toBe(false);
+      output.push(value);
+    });
+    const projectionError = new Error("fixture report projection failed");
+    const projection = vi.spyOn(statusSnapshot, "projectPluginInstallHealth");
+    try {
+      await withEnvAsync(stateEnv(stateDir), async () => {
+        useNoBundledPlugins();
+        await writeConfigFile(config);
+        const active = getActivePluginRegistry();
+        if (!commandMode) {
+          if (mode.startsWith("projection")) {
+            projection.mockImplementation(() => {
+              throw projectionError;
+            });
+          }
+          const inspection = withPluginDiagnosticsReportForInspection(
+            { config, runtimeInspection: true },
+            (report) => {
+              expect(report.plugins[0]?.id).toBe(plugin.id);
+              expect(fixture.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
+                value: 42,
+              });
+              return JSON.stringify({
+                toJSON() {
+                  throw projectionError;
+                },
+              });
+            },
+          );
+          if (!mode.includes("and-disposal")) {
+            await expect(inspection).rejects.toBe(projectionError);
+          } else {
+            await expect(inspection).rejects.toMatchObject({
+              errors: [projectionError, expect.any(AggregateError)],
+            });
+          }
+        } else {
+          let completed = false;
+          const command = runPluginsInspectCommand(mode === "single" ? plugin.id : undefined, {
+            all: mode !== "single",
+            runtime: true,
+            json: true,
+          });
+          settlement = command.then(
+            () => {
+              completed = true;
+            },
+            () => {
+              completed = true;
+            },
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              fixture.state.disposalStarted.promise,
+              command,
+              "Inspect skipped inspection disposal",
+            ),
+            signal,
+          );
+          expect(fixture.state.connections).toHaveLength(1);
+          expect(fixture.connection()).toMatchObject({ disposals: 1, database: { isOpen: true } });
+          expect(fixture.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
+            value: 42,
+          });
+          expect(completed).toBe(false);
+          expect(output).toEqual([]);
+          fixture.state.finishDisposal.resolve();
+          if (mode === "disposal-error") {
+            await expect(command).rejects.toBeInstanceOf(AggregateError);
+            await expect(command).rejects.toMatchObject({
+              errors: [
+                expect.objectContaining({
+                  cause: expect.objectContaining({ message: "fixture disposal failed" }),
+                }),
+              ],
+            });
+            expect(output).toEqual([]);
+          } else {
+            await command;
+            expect(output).toHaveLength(1);
+            const parsed = JSON.parse(output[0] ?? "");
+            if (mode === "all") {
+              expect(parsed).toHaveLength(1);
+            }
+            expect(mode === "all" ? parsed[0] : parsed).toMatchObject({
+              plugin: { id: plugin.id, contextEngineIds: [plugin.id] },
+            });
+          }
+        }
+        expect(getActivePluginRegistry()).toBe(active);
+        expect(fixture.connection()).toMatchObject({ disposals: 1, cleanups: 0 });
+        expect(fixture.connection().database.isOpen).toBe(false);
+        expect(fixture.state.factoryCalls).toBe(0);
+      });
+    } finally {
+      fixture.state.finishDisposal.resolve();
+      await settlement;
+      projection.mockRestore();
+      writeStdout.mockRestore();
+      await fixture.cleanup();
+    }
+  });
 
   it.each([
     { source: "bundled", runtimeKind: undefined },

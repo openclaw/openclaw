@@ -1,8 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { resolveLabFeatureState } from "../labs/labs-feature-state.ts";
-import { TEMPLATES_LAB_FEATURE } from "../labs/templates-lab-feature.ts";
+import { isTemplatesAvailable } from "./availability.ts";
 
 export type TemplateDraftTarget = {
   agentId: string;
@@ -14,10 +12,12 @@ export function canCreateTemplateDraft(context: ApplicationContext): boolean {
 }
 
 export function templateDraftUnavailableReason(context: ApplicationContext) {
-  if (
-    !resolveLabFeatureState(currentConfigObject(context.runtimeConfig.state), TEMPLATES_LAB_FEATURE)
-      .enabled
-  ) {
+  const state = context.runtimeConfig.state;
+  const available = isTemplatesAvailable(state);
+  if (available === null) {
+    return state.lastError ? "unavailable" : "loading";
+  }
+  if (!available) {
     return "disabled";
   }
   return canCallGatewayMethod(

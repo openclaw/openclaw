@@ -238,7 +238,7 @@ struct ChatSessionSidebar: View {
                     self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
                 }
             } message: {
-                Text("The threads and their transcripts are removed from the gateway.")
+                Text("The chats are removed from the gateway.")
             }
             .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
                 .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
@@ -254,7 +254,7 @@ struct ChatSessionSidebar: View {
                 .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
                         self.deleteAction
                     } message: {
-                        Text(String(localized: "The thread and its transcript are removed from the gateway."))
+                        Text(String(localized: "The chat is removed from the gateway."))
                             .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
                     }
     }

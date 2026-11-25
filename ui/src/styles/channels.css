@@ -92,7 +92,7 @@
 .channels-detail .oc-dialog__title {
   align-items: flex-start;
   padding-block: calc((var(--overlay-modal-close-size) - 24px) / 2);
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
   overflow-wrap: anywhere;
 }
 
@@ -119,6 +119,11 @@
 /* The dialog is the surface: what sits in it is rows, not a card in a card. */
 .channels-detail__body {
   align-content: start;
+}
+
+/* Connection errors and suggested fixes can contain unbroken account or destination IDs. */
+.channels-detail__body > .callout {
+  overflow-wrap: anywhere;
 }
 
 .channels-detail__issue + .channels-detail__issue {
@@ -322,11 +327,6 @@
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
-}
-
-.channels-wizard__options {
-  display: grid;
-  gap: var(--space-2);
 }
 
 .channels-wizard__option {

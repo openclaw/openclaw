@@ -83,6 +83,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
     .strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */
       decisionAssistance: z.boolean().optional(),
+      usageRankedToolIndex: z.boolean().optional(),
       localModelLean: z.boolean().optional(),
     })
     .optional(),
@@ -132,6 +133,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
         .optional(),
     })
     .optional(),
+  /**
+   * Keep an idle interactive session's prompt cache warm with read-only prewarm requests sent
+   * shortly before the provider's known cache lifetime ends. Default: true.
+   */
+  promptCacheKeepWarm: z.boolean().optional(),
   compaction: z
     .strictObject({
       /** Enable embedded proactive auto-compaction. Default: true. */

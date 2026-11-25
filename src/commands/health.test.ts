@@ -88,7 +88,7 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 
 // mock-isolation: Use the scenario's plugin list rather than the host plugin registry.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigMock,
 }));
 
 const requireFirstRuntimeLog = () => String(runtime.log.mock.calls[0]?.[0]);
@@ -474,6 +474,30 @@ describe("healthCommand", () => {
       }
     },
   );
+
+  it("reports a connected scope denial without calling it startup or timeout", async () => {
+    const warning =
+      "Gateway connected, but this CLI lacks operator.read. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "connected-no-operator-scope",
+      operatorScopeWarning: warning,
+      runtime: { status: "running", pid: 42 },
+      portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+      staleGatewayPids: [],
+    });
+    await expect(runHealth()).rejects.toMatchObject({
+      gatewayCode: "FORBIDDEN",
+      message: warning,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+    expect(rpc.callGateway).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 
   it("keeps readiness exhaustion machine-readable without a second network probe", async () => {
     vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({

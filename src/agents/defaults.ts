@@ -2,9 +2,11 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 // Defaults for agent metadata when upstream does not supply them.
-// Keep this aligned with the product-level latest-model baseline.
+/**
+ * Provider that qualifies a bare model id written without a provider (`gpt-6` → `openai/gpt-6`).
+ * Parsers take it as `defaultProvider`; it never selects a model. No configured model means none.
+ */
 export const DEFAULT_PROVIDER = "openai";
-export const DEFAULT_MODEL = "gpt-6-astra";
 // Conservative fallback used when model metadata is unavailable.
 export const DEFAULT_CONTEXT_TOKENS = 200_000;
 /** Output-token cap used when no authored, provider, or catalog limit exists. */

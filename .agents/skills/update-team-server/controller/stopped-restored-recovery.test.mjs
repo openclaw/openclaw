@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -17,16 +16,14 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixture.mjs";
+import { events, makeReleaseFixture, runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
 
 const candidateSha = "b".repeat(40);
 const previousSha = "c".repeat(40);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function proof(f, args, input) {
-  const result = spawnSync(process.execPath, ["--no-warnings", f.library, ...args.map(String)], {
-    cwd: f.root, env: f.env, input, encoding: "utf8", timeout: 30_000,
-  });
+  const result = runLibrary(f, args, { input });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
@@ -82,7 +79,7 @@ if (command === "recovery-finish") {
   fs.writeFileSync(${JSON.stringify(f.finishSnapshot)}, JSON.stringify(snapshot()));
   fs.writeFileSync(${JSON.stringify(f.finishArguments)}, JSON.stringify(args));
 }
-const result = spawnSync(process.execPath, ["--no-warnings", ${JSON.stringify(f.library)}, ...args], {stdio:"inherit"});
+const result = spawnSync(process.execPath, ["--no-warnings", ${JSON.stringify(f.library)}, ...args], {stdio:["inherit","inherit","inherit","ignore","ignore","ignore","ignore","ignore","ignore",9]});
 if (result.status === 0) event("proof." + command + ".ok");
 process.exit(result.status ?? 1);
 `);
@@ -124,7 +121,7 @@ function restoredFixture(t, { scenario = "success", groups = "absent" } = {}) {
     "system-control-group": f.systemGroup, "user-control-group": "", "system-slice": "system.slice",
   });
   rmSync(join(f.root, "proc", String(f.pid)), { recursive: true });
-  if (groups === "empty") {
+  if (["empty", "delegated"].includes(groups)) {
     mkdirSync(f.cgroup(f.systemGroup), { recursive: true, mode: 0o755 });
     chmodSync(f.cgroup(f.systemGroup), 0o755);
     for (const control of ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "cgroup.events"]) {
@@ -132,6 +129,14 @@ function restoredFixture(t, { scenario = "success", groups = "absent" } = {}) {
       writeFileSync(file, control === "cgroup.events" ? "populated 0\nfrozen 0\n" : "", { mode: 0o644 });
       chmodSync(file, 0o644);
     }
+  }
+  if (groups === "delegated") {
+    const unit = f.cgroup(f.systemGroup);
+    chownSync(unit, f.runtimeUid, f.runtimeGid);
+    for (const control of ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control"])
+      chownSync(join(unit, control), f.runtimeUid, f.runtimeGid);
+    for (const leaf of ["gateway", "agent-exec"])
+      mkdirSync(join(unit, leaf), { mode: 0o755 });
   }
   f.protectedFiles = [
     f.journal, f.originalWitness, f.configPath, f.databasePath, f.agentDatabasePath,
@@ -174,7 +179,7 @@ function assertFullVerification(f) {
   assert.equal(trace.filter((event) => event === "proof.recovery-finish.ok").length, 1);
 }
 
-for (const groups of ["absent", "empty"]) {
+for (const groups of ["absent", "empty", "delegated"]) {
   test(`stopped restored recovery starts current once with ${groups} system cgroup and completes full verification`, (t) => {
     const f = restoredFixture(t, { groups }), before = fileSnapshot(f.protectedFiles);
     t.diagnostic(`account routing=${f.accountMode}; lock=${f.lockMode}; proc/cgroups/systemd are synthetic`);
@@ -287,8 +292,11 @@ for (const [name, change] of [
     rmSync(file); symlinkSync(join(f.cgroup(f.systemGroup), "cgroup.procs"), file);
   }],
   ["writable populated evidence", (f) => chmodSync(join(f.cgroup(f.systemGroup), "cgroup.events"), 0o664)],
-  ["retained leaf subgroup", (f) => mkdirSync(join(f.cgroup(f.systemGroup), "delegated-child"))],
-  ["symlink leaf entry", (f) => symlinkSync(f.cgroup("system.slice"), join(f.cgroup(f.systemGroup), "delegated-alias"))],
+  ["runtime-owned population evidence", (f) => chownSync(join(f.cgroup(f.systemGroup), "cgroup.events"), f.runtimeUid, f.runtimeGid)],
+  ["symlink population evidence", (f) => {
+    const file = join(f.cgroup(f.systemGroup), "cgroup.events");
+    renameSync(file, file + ".original"); symlinkSync(file + ".original", file);
+  }],
 ]) test(`${name} refuses even when populated is zero`, (t) => {
   const f = restoredFixture(t, { groups: "empty" }); change(f);
   const before = fileSnapshot(f.protectedFiles);
@@ -297,6 +305,7 @@ for (const [name, change] of [
 
 for (const [name, uid, gid] of [
   ["foreign membership owner", 1000, 0], ["foreign membership group", 0, 1000],
+  ["third-party membership owner", 2000, 2000],
 ]) test(`${name} refuses recovery before start`, {
   skip: process.getuid() !== 0 ? "real ownership substitution requires isolated root fixture execution" : false,
 }, (t) => {

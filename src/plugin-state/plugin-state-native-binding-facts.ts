@@ -5,12 +5,17 @@ import { readCommittedPluginStateNamespace } from "./plugin-state-namespace-owne
 import {
   assertPluginStatePublicationSettled,
   assertPluginStatePublicationPreserves,
+  isPluginStatePublicationUnavailable,
   pluginStatePublication,
   pluginStatePublicationKey,
+  reconcilePluginStatePublication,
 } from "./plugin-state-publication.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
-import { observePluginStateRowInWorker } from "./plugin-state-worker-client.js";
+import {
+  confirmPluginStateCommittedInWorker,
+  observePluginStateRowInWorker,
+} from "./plugin-state-worker-client.js";
 
 export type PluginStatePinnedEntry = {
   read(): unknown;
@@ -87,6 +92,12 @@ export async function capturePluginStateNativeBindingFacts(
   };
   try {
     if (authority) {
+      // Re-validate committed truth after an indeterminate outcome instead of awaiting restart.
+      if (isPluginStatePublicationUnavailable(identity())) {
+        await reconcilePluginStatePublication(identity(), () =>
+          confirmPluginStateCommittedInWorker(context, scope),
+        );
+      }
       assertPublicationCurrent();
     }
     const cached = readCommittedPluginStateNamespace(identity(), scope);

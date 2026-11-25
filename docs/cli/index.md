@@ -30,7 +30,7 @@ Setup commands by intent:
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
-| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
+| Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker) · [`id`](/cli/id)                                                                                   |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
 | Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
 | Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                   |
@@ -431,6 +431,10 @@ openclaw [--dev] [--profile <name>] <command>
     list
     link-email <email> --to <profileId>
     merge <sourceProfileId> --into <targetProfileId>
+  id
+    status
+    rebind [--code <code>] [--kit-stdin] [--binding-seq <n>] [--yes] [--cancel]
+    publish [--code <code>]
   node
     run
     status

@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { emitToolResultMessage } from "../../../../packages/agent-core/src/agent-stream-response.js";
 import { createToolExecutionErrorResult } from "../../../../packages/agent-core/src/tool-call-outcome.js";
-import { validateScriptFileForShellBleed } from "../../bash-tools.exec-script-preflight.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { markToolExecutionNotStarted } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
@@ -57,10 +57,9 @@ function rejectedCallAfterSettledTool(
 }
 
 async function refusedExecResult(toolCallId = "call_exec") {
-  const result = await validateScriptFileForShellBleed({
-    command: "cat bad.py | python",
-    workdir: "/tmp",
-  }).then(() => expect.fail("Expected script-preflight refusal"), createToolExecutionErrorResult);
+  const result = createToolExecutionErrorResult(
+    markToolExecutionNotStarted(new Error("exec host not allowed (requested node)")),
+  );
   return emitToolResultMessage(
     {
       toolCall: { type: "toolCall", id: toolCallId, name: "exec", arguments: {} },
@@ -105,7 +104,7 @@ async function refusedExecThenRejectedCall() {
   return { ...turn, failure, failedTool, failedResult, modelApi: "anthropic-messages" };
 }
 
-function terminalCase(turn: Partial<TerminalInput>) {
+function terminalCase(turn: Parameters<typeof makeTerminalInput>[0]) {
   const activateInternalPrompt = vi.fn();
   const input = makeTerminalInput({
     ...turn,
@@ -192,7 +191,7 @@ it("continues once when the rejected call followed visible progress text", async
   );
 });
 
-it("continues after a consumed preflight refusal with visible progress text", async () => {
+it("continues after a consumed not-started refusal with visible progress text", async () => {
   const turn = await refusedExecThenRejectedCall();
   turn.attemptAssistant.content = [
     { type: "text", text: "Progress: retrying the inspection after the refusal." },
@@ -202,7 +201,7 @@ it("continues after a consumed preflight refusal with visible progress text", as
   expect(activateInternalPrompt).toHaveBeenCalledOnce();
 });
 
-it("continues after multiple consumed preflight refusals", async () => {
+it("continues after multiple consumed not-started refusals", async () => {
   const turn = await refusedExecThenRejectedCall();
   prependFailedExec(turn, await refusedExecResult("call_earlier"));
 
@@ -255,4 +254,16 @@ it("does not continue after an unrelated provider error", async () => {
 
   expect(result.action).toBe("complete");
   expect(activateInternalPrompt).not.toHaveBeenCalled();
+});
+
+it("continues a rejected call once in a scheduled run", async () => {
+  const turn = rejectedCallAfterSettledTool();
+  const { resolve, activateInternalPrompt } = terminalCase({
+    ...turn,
+    runParams: { trigger: "cron" },
+  });
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("rejected before it ran"),
+  );
 });

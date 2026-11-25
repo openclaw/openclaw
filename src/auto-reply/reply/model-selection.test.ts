@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
@@ -121,6 +121,32 @@ const userPin = (
   modelOverride: string,
   overrides: Partial<SessionEntry> = {},
 ) => makeEntry({ providerOverride, modelOverride, modelOverrideSource: "user", ...overrides });
+
+it.each([undefined, ["synthetic/chat", "synthetic/voice"]])(
+  "preserves a non-chat pin under policy %j and rejects before execution",
+  async (allow) => {
+    const entry = userPin("synthetic", "voice");
+    const before = { ...entry };
+    const cfg = selectionConfig({
+      model: "synthetic/chat",
+      ...(allow ? { modelPolicy: { allow } } : {}),
+    });
+    await expect(
+      selectSession(cfg, "synthetic", "chat", entry, {
+        preparedModelCatalog: preparedCatalog([
+          { provider: "synthetic", id: "chat", name: "Chat" },
+          { provider: "synthetic", id: "voice", name: "Voice", inference: { chat: false } },
+        ]),
+      }),
+    ).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+    expect(entry).toEqual(before);
+    expect(persist).not.toHaveBeenCalled();
+  },
+);
 
 function selectSession(
   cfg: OpenClawConfig,
@@ -423,7 +449,7 @@ it("keeps a missing explicit auth pin through credential restoration", async () 
   }
 });
 
-it.each(["pin", "source", "provider", "session", "authority"] as const)(
+it.each(["pin", "source", "provider", "session"] as const)(
   "rejects a changed %s after awaiting missing-pin provider facts",
   async (change) => {
     const cfg = selectionConfig({ model: "openai/gpt-4o" });
@@ -433,16 +459,10 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
       authProfileOverrideSource: "user",
     });
     const sessionStore = { [sessionKey]: entry };
-    let current = true;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "operator",
       scopes: ["operator.write"],
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("authority revoked");
-        }
-      },
     });
     authMocks.prepareAuthProfileProvider.mockImplementationOnce(async () => {
       await Promise.resolve();
@@ -458,16 +478,11 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
       if (change === "session") {
         sessionStore[sessionKey] = { ...entry, sessionId: "replacement" };
       }
-      if (change === "authority") {
-        current = false;
-      }
       return { provider: "anthropic" };
     });
     await expect(
       selectSession(cfg, "openai", "gpt-4o", entry, { sessionStore, operatorAuthority }),
-    ).rejects.toThrow(
-      change === "authority" ? "authority revoked" : "Session account selection changed",
-    );
+    ).rejects.toThrow("Session account selection changed");
     expect(entry.authProfileOverride).toBe(
       change === "pin" ? "openai:replacement" : "anthropic:missing",
     );

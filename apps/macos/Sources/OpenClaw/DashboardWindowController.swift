@@ -13,29 +13,41 @@ private final class DashboardWindowContentView: NSView {
         // Command-translated characters preserve the shortcut on alternate layouts.
         guard event.type == .keyDown,
               event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
-              event.characters?.lowercased() == "w",
               let window, window.attachedSheet == nil,
               let controller = window.windowController as? DashboardWindowController
         else { return super.performKeyEquivalent(with: event) }
-        // Claim the key before AppKit's Close Window menu action. The web owner
-        // decides whether a focused side tab exists; the traffic light is unchanged.
-        controller.closeFocusedPanelOrWindow()
-        return true
+        switch event.characters?.lowercased() {
+        case "w":
+            // Claim the key before AppKit's Close Window menu action.
+            controller.closeFocusedPanelOrWindow()
+            return true
+        case "t" where controller.canDispatchNativeCommands:
+            if !event.isARepeat {
+                controller.dispatchNativeCommand(.newBrowserTab)
+            }
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
     }
 }
 
-/// The dashboard's empty unified toolbar exists only to grow the titlebar to
-/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// The empty compact toolbar keeps the traffic lights aligned with the
+/// hosted web chrome's 40pt row. `View > Hide
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
 /// Full screen hides this sizing toolbar so it cannot cover the web controls.
-private final class DashboardWindow: ExperienceWindow {
+class DashboardWindow: ExperienceWindow {
+    /// Hiding or minimizing changes visibility, not the lifetime of the hosted dashboard.
+    enum Lifetime {
+        case inactive, preloaded, opened
+    }
+
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
-    /// Set while a launch preload has never been shown; window counts skip it.
-    var isUnshownPreload = false
+    var lifetime = Lifetime.inactive
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
     var documentLoad: DashboardDocumentLoad?
 
@@ -76,6 +88,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let documentHost: ControlUIDocumentHost
     let nativeBrowser: DashboardNativeBrowserHost
     private let messageHandler: DashboardMessageHandler
+    private let openClawIDSignIn: DashboardOpenClawIDSignIn
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
     /// The canonical Dashboard mount URL supplied by the manager. WebKit route
     /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
@@ -109,6 +122,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    private var lastPublishedNativeTitlebarInset: CGFloat?
+    /// Native document retirement keeps the same WebView's origin-scoped storage for reopening.
+    private var retiredDocumentURL: URL?
     /// The document whose finish arrived while a newer load was pending.
     private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
@@ -136,6 +152,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         url: URL,
         auth: DashboardWindowAuth,
         websiteDataStore: WKWebsiteDataStore,
+        isolatesReadingTabs: Bool = false,
+        cookieRule: WKContentRuleList? = nil,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
@@ -156,6 +174,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         let messageHandler = DashboardMessageHandler()
         self.messageHandler = messageHandler
+        let openClawIDSignIn = DashboardOpenClawIDSignIn()
+        self.openClawIDSignIn = openClawIDSignIn
         let appLinkMessageHandler = DashboardAppLinkMessageHandler()
         let deviceSettingsMessageHandler = DashboardDeviceSettingsMessageHandler()
         self.deviceSettingsMessageHandler = deviceSettingsMessageHandler
@@ -167,6 +187,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             tlsParams: tlsParams,
             browserSessionLease: browserSessionLease)
         { controller in
+            if let cookieRule { controller.add(cookieRule) }
             for name in [
                 Self.linkMessageHandlerName,
                 Self.notificationsMessageHandlerName,
@@ -183,6 +204,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 deviceSettingsMessageHandler, contentWorld: .page, name: Self.deviceSettingsMessageHandlerName)
             controller.addScriptMessageHandler(
                 browserMessageHandler, contentWorld: .page, name: DashboardBrowserMessageHandler.name)
+            controller.addScriptMessageHandler(
+                openClawIDSignIn, contentWorld: .page, name: DashboardOpenClawIDSignIn.name)
             if shouldEnableUpdateBridge {
                 // Handler presence is the Control UI feature probe; unsigned builds
                 // and remote dashboards must not advertise a local app update.
@@ -195,8 +218,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.documentHost = documentHost
         self.webView = documentHost.webView
 
-        let readingDataStore = browserSessionLease?.session == nil ? websiteDataStore : WKWebsiteDataStore
-            .nonPersistent()
+        let readingDataStore = browserSessionLease?.session == nil && !isolatesReadingTabs
+            ? websiteDataStore : WKWebsiteDataStore.nonPersistent()
         let dashboardPane = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         self.nativeBrowser = DashboardNativeBrowserHost(
             dashboardWebView: self.webView,
@@ -233,6 +256,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 preservingPendingCommands: true)
         }
         messageHandler.owner = self
+        openClawIDSignIn.owner = self
         appLinkMessageHandler.owner = self
         deviceSettingsMessageHandler.owner = self
         browserMessageHandler.owner = self
@@ -382,8 +406,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             newURL: url,
             currentAuth: self.auth,
             newAuth: auth,
-            hasUsableDocument: self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost
-                .pendingLoad != nil,
+            hasUsableDocument: self.retiredDocumentURL == nil &&
+                (self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost.pendingLoad != nil),
             isShowingFailurePage: self.isShowingFailurePage)
         self.currentURL = url
         self.auth = auth
@@ -392,7 +416,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         if shouldReload {
             self.refreshNativeScripts()
-            let route = restoringRoute
+            let route = (restoringRoute ?? self.retiredDocumentURL)
                 .flatMap { ControlUIDocumentHost.isTrustedLinkSource($0, dashboardURL: url) ? $0 : nil }
             self.load(route ?? url)
         }
@@ -411,21 +435,23 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     var hasRetainedWindow: Bool {
-        self.isWindowOpen || self.isHiddenForExperience
+        guard let window = self.window as? DashboardWindow else { return false }
+        return window.lifetime != .inactive
     }
 
     var isUnshownPreload: Bool {
-        (self.window as? DashboardWindow)?.isUnshownPreload == true
+        (self.window as? DashboardWindow)?.lifetime == .preloaded
     }
 
     /// A window that was never shown keeps the experience-hidden lifetime until `show()`.
     func retainHidden() {
         (self.window as? DashboardWindow)?.isHiddenForExperience = true
-        (self.window as? DashboardWindow)?.isUnshownPreload = true
+        (self.window as? DashboardWindow)?.lifetime = .preloaded
     }
 
     func hideForExperience() {
         guard let window else { return }
+        self.openClawIDSignIn.cancel()
         // Keep the document and drafts, but retire actions admitted by the
         // outgoing experience before a delayed lookup can show it again.
         (window as? DashboardWindow)?.isHiddenForExperience = self.hasRetainedWindow
@@ -444,8 +470,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func show() {
-        (self.window as? DashboardWindow)?.isHiddenForExperience = false
-        (self.window as? DashboardWindow)?.isUnshownPreload = false
+        (self.window as? DashboardWindow)?.lifetime = .opened
+        if let route = self.retiredDocumentURL { self.load(route) }
+        if let window = self.window as? DashboardWindow, window.isHiddenForExperience {
+            window.isHiddenForExperience = false
+            // The retained page missed browser state changes while it was hidden.
+            self.publishBrowserState(self.nativeBrowser.state)
+        }
         self.window?.isExcludedFromWindowsMenu = false
         self.deviceSettingsMessageHandler.startObserving()
         if let window {
@@ -479,7 +510,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.browserSignInRoute = nil
         self.documentHost.retirePendingLoad()
         self.deviceSettingsMessageHandler.stopObserving()
-        self.webView.stopLoading()
+        self.retireDashboardDocument()
         self.nativeBrowser.dispose()
         self.documentHost.hasLiveContent = false
         self.invalidateGatewayHealth()
@@ -492,7 +523,21 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window
     }
 
+    private func retireDashboardDocument() {
+        self.openClawIDSignIn.cancel()
+        guard self.retiredDocumentURL == nil else { return }
+        self.webView.stopLoading()
+        guard self.auth.usesNativeDevice, self.isTrustedDashboardDocument else { return }
+        self.retiredDocumentURL = self.webView.url ?? self.currentURL
+        // stopLoading only cancels navigation; a retained closed page otherwise keeps reconnecting
+        // even though its native auth owner has already withdrawn this window's authority.
+        self.documentHost.retireDocument()
+        self.webView.loadHTMLString("", baseURL: nil)
+    }
+
     private func load(_ url: URL) {
+        self.openClawIDSignIn.cancel()
+        self.retiredDocumentURL = nil
         self.invalidateGatewayHealth()
         self.nativeCommandsReady = false
         self.documentHost.load(url)
@@ -643,8 +688,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var activeNavigationWebView: WKWebView {
         var responderView = window?.firstResponder as? NSView
         while let view = responderView {
-            if let webView = view as? WKWebView, self.nativeBrowser.owns(webView) {
-                return webView
+            if let tab = view as? DashboardBrowserTab, self.nativeBrowser.owns(tab.webView) {
+                return tab.webView
             }
             responderView = view.superview
         }
@@ -693,11 +738,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // An empty unified toolbar grows the transparent titlebar to 52pt so the
-        // traffic lights sit vertically centered against the web titlebar row
-        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        // Keep AppKit's traffic lights and the web titlebar on the same centerline.
+        // DashboardWindowLayout supplies this style and the CSS row height.
         window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
-        window.toolbarStyle = .unified
+        window.toolbarStyle = DashboardWindowLayout.toolbarStyle
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
@@ -750,7 +794,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.showDashboardFailure(
             error,
             message: error.localizedDescription,
-            detail: String(localized: "Choose Reload to try loading the dashboard again."))
+            detail: String(localized: "Choose Reload to try again."))
     }
 
     private func showDashboardFailure(_ error: Error, message: String, detail: String) {
@@ -763,7 +807,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
-            title: String(localized: "Dashboard unavailable"),
+            title: String(localized: "OpenClaw unavailable"),
             message: message,
             detail: detail,
             url: self.currentURL)
@@ -773,6 +817,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.retiredDocumentURL = nil
         self.finishDocumentLoad(.failure(URLError(.cannotLoadFromNetwork)))
         self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
@@ -802,6 +847,11 @@ extension DashboardWindowController {
             DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
             present: present,
             preservingPendingCommands: preservingPendingCommands)
+    }
+
+    func showRemoval(_ removal: MacOpenClawIDRemoval, present: Bool = true) {
+        self.signedOut = nil
+        self.showFailureHTML(DashboardFailurePage.html(removal: removal), present: present)
     }
 
     func showSignedOut(_ page: DashboardFailurePage.SignedOut, present: Bool, autoStart: Bool) {
@@ -991,8 +1041,7 @@ extension DashboardWindowController {
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
-        !self
-            .isShowingFailurePage &&
+        self.retiredDocumentURL == nil && !self.isShowingFailurePage &&
             (self.documentHost.hasLiveContent || self.webView.isLoading || self.documentHost.pendingLoad != nil)
     }
 
@@ -1000,7 +1049,7 @@ extension DashboardWindowController {
         ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
-    private var canDispatchNativeCommands: Bool {
+    fileprivate var canDispatchNativeCommands: Bool {
         self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
             self.nativeCommandsReady
     }
@@ -1090,6 +1139,30 @@ extension DashboardWindowController {
         self.updateToolbarVisibility(isFullScreen: false)
     }
 
+    func windowDidUpdate(_: Notification) {
+        // Full-screen transitions can finish laying out AppKit's traffic lights
+        // after the web view's bounds have stopped changing.
+        self.publishNativeTitlebarInset()
+    }
+
+    private func publishNativeTitlebarInset() {
+        guard self.documentHost.hasLiveContent, self.isTrustedDashboardDocument,
+              let window = self.window else { return }
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        guard let trailingEdge = buttons.compactMap({ window.standardWindowButton($0) })
+            .map({ self.webView.convert($0.bounds, from: $0).maxX }).max() else { return }
+        // AppKit controls vary with toolbar style and OS. Their measured edge is
+        // in view points; the hosted controls use CSS pixels at the page's zoom.
+        let inset = (trailingEdge - self.webView.bounds.minX) / self.webView.pageZoom +
+            DashboardWindowLayout.titlebarControlsGap
+        guard self.lastPublishedNativeTitlebarInset != inset else { return }
+        self.lastPublishedNativeTitlebarInset = inset
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+            """
+            document.documentElement.style.setProperty('--openclaw-native-controls-inset', "\(inset)px");
+            """, url: self.currentURL))
+    }
+
     private func updateToolbarVisibility(isFullScreen: Bool) {
         // Apply completed transitions; failed transitions keep their previous chrome.
         // Reused windows also pass through this owner during initialization.
@@ -1097,6 +1170,8 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        (self.window as? DashboardWindow)?.lifetime = .inactive
+        self.openClawIDSignIn.cancel()
         self.finishDocumentLoad(.failure(CancellationError()))
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
@@ -1113,7 +1188,7 @@ extension DashboardWindowController {
         self.pendingNativeCommands = []
         self.pendingNativeNavigation = nil
         self.pendingGatewaySwitch = nil
-        self.webView.stopLoading()
+        self.retireDashboardDocument()
         self.nativeBrowser.dispose()
         self.onClosed?()
     }
@@ -1412,6 +1487,7 @@ extension DashboardWindowController {
             return
         }
         guard webView === self.webView else { return }
+        self.openClawIDSignIn.cancel()
         self.documentHost.committed()
         self.invalidateGatewayHealth()
         self.deviceSettingsMessageHandler.cancelRequests()
@@ -1462,12 +1538,15 @@ extension DashboardWindowController {
     }
 
     private func finishDocument() {
+        guard self.retiredDocumentURL == nil else { return }
         self.deferredFinishSourceID = nil
         // A finished sign-in document is usable but never receives native
         // commands. Keep pending intent until the verified dashboard returns.
         self.documentHost.hasLiveContent = true
         guard self.isTrustedDashboardDocument else { return }
         self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
+        self.lastPublishedNativeTitlebarInset = nil
+        self.publishNativeTitlebarInset()
         self.publishNativeHistoryState()
         self.nativeBrowser.scheduleStatePush()
         self.refreshNativeCommandReadiness()
@@ -1507,8 +1586,8 @@ extension DashboardWindowController {
             // A failure page instead of reload: a crash that recurs on load would loop.
             self.showDashboardFailure(
                 URLError(.networkConnectionLost),
-                message: String(localized: "The dashboard page stopped unexpectedly."),
-                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+                message: String(localized: "The page stopped unexpectedly."),
+                detail: String(localized: "Choose Reload to try again."))
         } else if self.nativeBrowser.owns(webView) {
             self.nativeBrowser.webContentProcessDidTerminate(webView)
         }
@@ -1551,7 +1630,7 @@ extension DashboardWindowController {
                     format: String(localized: "The Gateway returned HTTP %ld (%@)."),
                     response.statusCode,
                     HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized),
-                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+                detail: String(localized: "Choose Reload to try again."))
             return
         }
         guard let tab = self.nativeBrowser.browserTab(for: webView) else {

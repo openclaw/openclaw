@@ -10,6 +10,11 @@ import {
   type MenuEntry,
   type MenuItem,
 } from "../../components/solid/menu.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 
@@ -28,6 +33,8 @@ export type UsageValuePickerConfig = {
   /** Unique within one menu tree; prefixes every row id. */
   id: string;
   options: () => readonly UsageValueOption[];
+  /** Async inventories can withhold empty claims while keeping selected rows usable. */
+  optionsReady?: () => boolean;
   isSelected: (value: string) => boolean;
   multiple: boolean;
   searchLabel: () => string;
@@ -85,7 +92,14 @@ export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu
   const selectedCount = () =>
     config.options().filter((option) => config.isSelected(option.value)).length;
   const searchKeydown = nativeListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.isComposing || !query().trim()) {
+    if (event.key !== "Enter") {
+      return;
+    }
+    if (isComposingKeyboardEvent(event)) {
+      event.stopPropagation();
+      return;
+    }
+    if (!query().trim()) {
       return;
     }
     const first = rows().all[0];
@@ -117,6 +131,9 @@ export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu
           placeholder={config.searchLabel()}
           value={query()}
           onInput={(event) => setQuery(event.currentTarget.value)}
+          onBlur={clearCompositionEnd}
+          onCompositionEnd={recordCompositionEnd}
+          onKeyUp={clearCompositionEnd}
         />
         <Show
           when={selectedCount() > 0}
@@ -171,7 +188,7 @@ export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu
   const entries = createMemo((): MenuEntry[] => {
     const { pinned, rest, all } = rows();
     const list: MenuEntry[] =
-      all.length === 0
+      all.length === 0 && (config.optionsReady?.() ?? true)
         ? [
             {
               kind: "content",

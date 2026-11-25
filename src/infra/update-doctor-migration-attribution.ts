@@ -1,54 +1,37 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { formatErrorMessage } from "./errors.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
+import { readSqliteBusyTimeout, runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { parseSqliteFileGeneration } from "./sqlite-file-generation.js";
 import {
   createSqliteLifecycleAggregateError,
   SqliteCoordinatorError,
 } from "./sqlite-lifecycle-errors.js";
-import {
-  resolveSqliteInspectionSignal,
-  runSqliteReadOnlyWorker,
-  runSqliteReadOnlyWorkerSync,
-} from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
+import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 import { resolveUpdateSqlitePath } from "./update-database-path.js";
+import {
+  type DoctorMigrationBackup,
+  type DoctorMigrationFullBackup,
+  getUpdateDoctorMigrationSource,
+  type MigrationSource,
+  registerUpdateMigrationAttribution,
+  type UpdateSqliteMigrationOptions,
+  type UpdateDoctorMigrationCapture,
+  updateDoctorMigrationContext,
+} from "./update-doctor-migration-context.js";
 
-export type UpdateDoctorMigrationCapture = {
-  /** Captured SQLite sources admitted by this Doctor session. */
-  openedSqlitePaths?: Set<string>;
-  expected(pathname: string): string | null | undefined;
-  assertCurrent(): void;
-  accept(pathname: string, before: string | null, after: string | null): void;
-  refuse(message: string): void;
-};
-
-type MigrationSource = {
-  path: string;
-  generation: string;
-  assertCurrent(this: void): void;
-};
-type DoctorMigrationBackup = (
-  db: DatabaseSync,
-  options: { path: string; env: NodeJS.ProcessEnv; tables: readonly string[] },
-) => { capture: MigrationSource; backupPath: string };
-type DoctorMigrationFullBackup = { path: string; generation?: string };
-const captures = new AsyncLocalStorage<{
-  capture?: UpdateDoctorMigrationCapture;
-  source?: MigrationSource;
-  companions?: readonly MigrationSource[];
-  assertMigrationCurrent?: () => void;
-  backup?: DoctorMigrationBackup;
-  fullBackups?: Map<string, DoctorMigrationFullBackup>;
-}>();
+const captures = updateDoctorMigrationContext;
 
 /** Doctor's existing maintenance interval owns the publication receipt. */
 export function runWithUpdateDoctorMigrationCapture<T>(
@@ -57,6 +40,7 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 ): T {
   // A standalone Doctor backup must not replace its installed updater's inventory.
   const context = captures.getStore();
+  registerUpdateMigrationAttribution(attribution);
   return context?.capture
     ? operation()
     : captures.run({ ...context, capture }, () => withArtifactPreservingStateReads(operation));
@@ -66,8 +50,12 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
+  stateUpgradeLiveStateDir?: string,
 ): T {
-  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
+  return captures.run(
+    { ...captures.getStore(), backup, fullBackups: new Map(), stateUpgradeLiveStateDir },
+    operation,
+  );
 }
 
 /** Only the general Doctor backup owner admits full images for this maintenance run. */
@@ -82,25 +70,6 @@ export function getDoctorMigrationFullBackup(
   sourcePath: string,
 ): DoctorMigrationFullBackup | undefined {
   return captures.getStore()?.fullBackups?.get(realpathSync.native(sourcePath));
-}
-
-export function getDoctorMigrationBackup(
-  db: DatabaseSync,
-  options: Parameters<DoctorMigrationBackup>[1],
-) {
-  const context = captures.getStore();
-  if (context?.capture) {
-    if (context.capture.expected(resolveUpdateSqlitePath(options.path)) !== undefined) {
-      throw new Error("Updater migration requires its captured source generation.");
-    }
-    context.capture.refuse("The migration source path is outside the updater's captured paths.");
-    // Relocation cannot certify the installed driver's old path keys. A fresh Doctor
-    // backup may still preserve this source without becoming that updater's baseline.
-    return captures.run({ ...context, capture: undefined, source: undefined }, () =>
-      context.backup?.(db, options),
-    );
-  }
-  return context?.backup?.(db, options);
 }
 
 function migrationAuthority(
@@ -140,42 +109,13 @@ function readSqliteFiles(pathname: string) {
   );
 }
 
-/** A source proof exists only within its verified migration's lexical interval. */
-export function getUpdateDoctorMigrationSource(pathname: string) {
-  const context = captures.getStore();
-  const key = resolveUpdateSqlitePath(pathname);
-  const source =
-    context?.source?.path === key
-      ? context.source
-      : context?.companions?.find((entry) => entry.path === key);
-  if (!source) {
-    return undefined;
-  }
-  const { generation, assertCurrent } = source;
-  assertCurrent();
-  return { path: pathname, generation, assertCurrent };
-}
-
-export function hasUpdateDoctorMigrationCapture(): boolean {
-  return captures.getStore()?.capture !== undefined;
-}
-
-type SqliteMigrationOptions = {
-  /** Close a one-shot native owner before publishing its final generation. */
-  close?: () => void;
-  retainExclusive?: boolean;
-  created?: boolean;
-  /** Already-open companion custody stays held through this synchronous native phase. */
-  companions?: readonly { database: DatabaseSync; path: string; created?: boolean }[];
-};
-
 type MigrationObservationStep = {
   read(): void;
   readAsync(signal?: AbortSignal): Promise<void>;
 };
 
 /** Retain the source's native exclusion across its commits and isolated postimage read. */
-export function runUpdateSqliteMigration<T>(
+function runCapturedSqliteMigration<T>(
   ...args: Parameters<typeof updateSqliteMigrationSteps<T>>
 ): T {
   const operation = updateSqliteMigrationSteps(...args);
@@ -192,7 +132,7 @@ export function runUpdateSqliteMigration<T>(
 }
 
 /** Await observations outside transactions while the native migration owner stays held. */
-export async function runUpdateSqliteMigrationAsync<T>(
+async function runCapturedSqliteMigrationAsync<T>(
   ...args: Parameters<typeof updateSqliteMigrationSteps<T>>
 ): Promise<T> {
   const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
@@ -218,7 +158,7 @@ function* updateSqliteMigrationSteps<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: SqliteMigrationOptions,
+  options?: UpdateSqliteMigrationOptions,
 ): Generator<MigrationObservationStep, T, void> {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -272,6 +212,8 @@ function* updateSqliteMigrationSteps<T>(
       }
       // Empty-reader alternates preserve the shipped admission semantics. Native
       // descriptor closes belong to the isolated reader while this owner holds locks.
+      // An outside reader can rebuild a retained index over unchanged frames.
+      const rebuilt = capture.rebuiltIndex(key);
       let before: string | null | undefined = expected === null ? null : undefined;
       if (expected !== null) {
         yield {
@@ -279,7 +221,10 @@ function* updateSqliteMigrationSteps<T>(
             before =
               opened || mode === "exclusive"
                 ? readSqliteGeneration(pathname)
-                : readMatchingUpdateDatabaseGeneration(pathname, expected);
+                : readMatchingUpdateDatabaseGeneration(
+                    pathname,
+                    rebuilt === undefined ? [expected] : [expected, rebuilt],
+                  );
           },
           async readAsync(signal) {
             const { readUpdateSqliteDatabaseGenerationPairIsolated } =
@@ -291,25 +236,47 @@ function* updateSqliteMigrationSteps<T>(
             before =
               opened || mode === "exclusive"
                 ? observed
-                : observed === expected || pair.emptyReaderAlternates[pathname] === expected
+                : observed === expected ||
+                    pair.emptyReaderAlternates[pathname] === expected ||
+                    observed === rebuilt
                   ? (observed ?? undefined)
                   : undefined;
           },
         };
       }
       assertCurrent();
-      if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
+      if (
+        before === undefined ||
+        (!opened && mode === "exclusive" && before !== expected && before !== rebuilt)
+      ) {
         throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
       }
       capture.openedSqlitePaths?.add(key);
       if (before !== expected) {
         capture.accept(key, expected, before);
       }
+      options?.beforeExclusive?.();
       if (mode !== "exclusive") {
         // Start WAL in normal mode before retaining exclusion so it can be released.
         db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native WAL coordination before retaining exclusion.
       }
-      db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- Bound the migration's native exclusion.
+      // Exclusion needs every other connection closed. Wait out short-lived outside
+      // readers and probes instead of failing on the caller's zero busy timeout.
+      try {
+        runWithSqliteBusyTimeout(
+          db,
+          Math.max(readSqliteBusyTimeout(db), OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+          () => db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"), // sqlite-allow-raw -- Bound the migration's native exclusion.
+        );
+      } catch (error) {
+        if (!isSqliteLockError(error)) {
+          throw error;
+        }
+        throw new Error(
+          `Update migration could not take exclusive access to ${pathname}: another connection still has it open.`,
+          { cause: error },
+        );
+      }
       assertCurrent();
       const source: MigrationSource | undefined =
         before === null ? undefined : { path: key, generation: before, assertCurrent };
@@ -415,7 +382,7 @@ function* updateSqliteMigrationSteps<T>(
 }
 
 /** Unknown companions remain outside an older driver's inventory. Their caller retains custody. */
-export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, created: boolean) {
+function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, created: boolean) {
   const context = captures.getStore();
   const capture = context?.capture;
   if (!capture) {
@@ -451,7 +418,11 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
   // Session settlement owns the final postimage of paths this Doctor already opened.
-  if (!capture.openedSqlitePaths?.has(key) && before !== expected) {
+  if (
+    !capture.openedSqlitePaths?.has(key) &&
+    before !== expected &&
+    before !== capture.rebuiltIndex(key)
+  ) {
     capture.refuse("Migration companion changed after update capture.");
     throw new Error("Database migration companion no longer matches its capture.");
   }
@@ -469,8 +440,7 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   };
 }
 
-/** Called inside the engine's migration transaction, before its first mutation. */
-export function beginUpdatePostgresMigration(
+function beginUpdatePostgresMigration(
   db: PostgresSyncConnection,
   assertMigrationCurrent?: () => void,
 ) {
@@ -526,3 +496,10 @@ export function beginUpdatePostgresMigration(
     },
   };
 }
+
+const attribution = {
+  beginPostgres: beginUpdatePostgresMigration,
+  beginSqliteCompanion: beginUpdateSqliteCompanion,
+  runSqlite: runCapturedSqliteMigration,
+  runSqliteAsync: runCapturedSqliteMigrationAsync,
+};

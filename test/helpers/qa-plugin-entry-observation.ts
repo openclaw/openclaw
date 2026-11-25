@@ -13,13 +13,13 @@ export async function createQaPluginEntryObservation(params: { directory: string
     preload,
     `import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const directory = ${JSON.stringify(receipts)};
 const pluginDirectory = ${JSON.stringify(path.basename(path.dirname(params.entry)))};
 const entryName = ${JSON.stringify(path.basename(params.entry))};
-registerHooks({
+nodeModule.registerHooks({
   load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
     if (!url.startsWith("file:")) return loaded;

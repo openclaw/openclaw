@@ -21,9 +21,9 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/types.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { testApi as configGuardTestApi } from "./config-guard.js";
 import { registerPreActionHooks } from "./preaction.js";

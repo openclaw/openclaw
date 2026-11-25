@@ -37,6 +37,11 @@ const execute = () =>
         } finally {
           owner.release();
         }
+      } else if (workerData.operation === "create-quarantine") {
+        const { ensureOpenClawQuarantineStore } =
+          await import("../../state/openclaw-quarantine-store.ts");
+        ensureOpenClawQuarantineStore(options.env);
+        parentPort.postMessage("created", []);
       } else if (workerData.operation === "cold-quarantine") {
         const { openOpenClawStateDatabase, runOpenClawStateWriteTransaction } =
           await import("../../state/openclaw-state-db.ts");

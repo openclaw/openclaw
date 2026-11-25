@@ -56,12 +56,9 @@ type ChatPanePresentation = () => boolean;
 function refreshChatEventHistory(
   state: ChatPageHost,
   presented: boolean,
-  supersedeInFlight?: true,
+  supersedeInFlight?: true | "append",
 ): void {
-  void loadChatHistory(state, {
-    deferBranches: !presented,
-    ...(supersedeInFlight ? { supersedeInFlight } : {}),
-  });
+  void loadChatHistory(state, { deferBranches: !presented, supersedeInFlight });
 }
 
 function globalSessionEventMatchesChat(
@@ -132,7 +129,7 @@ function handleSessionMessageEvent(
     // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
     // Fence it before run settlement, while retaining the loader's single queued refresh.
     if (getChatHistoryLoadState(state).phase === "in-flight") {
-      refreshChatEventHistory(state, presentation(), true);
+      refreshChatEventHistory(state, presentation(), "append");
     }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
@@ -212,6 +209,16 @@ function handleSessionsChangedEvent(
     visibleSessionMatches(state, event.key, event.agentId ?? undefined),
   );
   const source = asNullableRecord(payload);
+  // Removed members receive the keyless sharing invalidation, not the private session row.
+  // Only a member or viewer can lose access through sharing; owners and admins keep it.
+  const sharingRole = selectedChatSessionRow(state)?.sharingRole;
+  if (
+    source?.reason === "sharing" &&
+    (sharingRole === "member" || sharingRole === "viewer") &&
+    (matchesChat || !source.sessionKey)
+  ) {
+    refreshChatEventHistory(state, presented, true);
+  }
   const resetsSession = source?.reason === "reset" || source?.phase === "reset";
   if (event && (resetsSession || source?.reason === "new")) {
     state.retireSessionCompanion?.(event.key, event.agentId);

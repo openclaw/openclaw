@@ -19,10 +19,10 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
   readSqliteInspectionBudget,
-  resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
@@ -91,7 +91,9 @@ export function createAgentSchemaInspectionWorker() {
     const closed = createDeferredCore();
     const started: ReaderProcess = {
       child,
-      closed: closed.promise,
+      closed: closed.promise.then(async () => {
+        started.runtimeFailure = await runtimeFailure().catch(toStringifiedError);
+      }),
       retired: false,
       closeBudgetMs: timeoutMs,
     };
@@ -100,7 +102,6 @@ export function createAgentSchemaInspectionWorker() {
       retireReader(started);
     });
     child.once("close", () => {
-      started.runtimeFailure = runtimeFailure();
       started.retired = true;
       closed.resolve();
     });
@@ -139,8 +140,10 @@ export function createAgentSchemaInspectionWorker() {
           if (!existsSync(snapshotPath ?? input.pathname)) {
             return null;
           }
-          const { readBackupEngine, readBackupEngineImage } =
-            await import("../infra/database-engine/physical-store.js");
+          const [{ readBackupEngine }, { readBackupEngineImage }] = await Promise.all([
+            import("../infra/database-engine/physical-store.js"),
+            import("../infra/database-engine/physical-store-inspection.js"),
+          ]);
           const physical = snapshotPath
             ? readBackupEngineImage(snapshotPath, input.pathname)
             : readBackupEngine(input.pathname);
@@ -162,8 +165,10 @@ export function createAgentSchemaInspectionWorker() {
                 if (metadata.store !== "agent") {
                   throw new Error("PostgreSQL agent inspection requires an agent store.");
                 }
+                const floor =
+                  metadata.minReader !== metadata.version ? { minReader: metadata.minReader } : {};
                 if (!input.inspectOwnership) {
-                  return { version: metadata.version };
+                  return { version: metadata.version, ...floor };
                 }
                 const { rows } = await client.query<{
                   agent_id: string | null;
@@ -174,11 +179,13 @@ export function createAgentSchemaInspectionWorker() {
                 const row = rows[0];
                 return {
                   version: metadata.version,
+                  ...floor,
                   agentSchemaMeta: row
                     ? {
                         agentId: normalizeNullableString(row.agent_id),
                         role: row.role,
                         schemaVersion: row.schema_version,
+                        ...floor,
                       }
                     : null,
                 };
@@ -254,10 +261,14 @@ export function createAgentSchemaInspectionWorker() {
             metadata?.agentId === validation.agentId &&
             (input.agentId === undefined || input.agentId === validation.agentId) &&
             metadata.role === "agent" &&
-            metadata.schemaVersion === input.supportedVersion
+            metadata.schemaVersion === input.supportedVersion &&
+            (metadata.minReader ?? metadata.schemaVersion) <= input.supportedVersion
           ) {
             return {
               version: input.supportedVersion,
+              ...(metadata.minReader !== undefined && metadata.minReader !== metadata.schemaVersion
+                ? { minReader: metadata.minReader }
+                : {}),
               integrityGateOutcome: "cached",
               agentSchemaMeta: metadata,
             };
@@ -337,7 +348,9 @@ export function createAgentSchemaInspectionWorker() {
             );
           }
         };
-        const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        const finishClose = async (code: number | null, exitSignal: NodeJS.Signals | null) => {
+          clearTimeout(timeout);
+          await active.closed;
           response.reject(
             signal?.aborted
               ? toStringifiedError(signal.reason)
@@ -355,6 +368,9 @@ export function createAgentSchemaInspectionWorker() {
                         `Agent schema inspection exited ${code} without a completed result`,
                       ))),
           );
+        };
+        const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+          void finishClose(code, exitSignal);
         };
         const timeout = isSqliteInspectionDeadlineOwnedByCaller()
           ? undefined

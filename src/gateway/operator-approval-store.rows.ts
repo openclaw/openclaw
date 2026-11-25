@@ -312,6 +312,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
     status,
     presentation,
     requester: {
+      ...(row.requested_by_profile_id ? { profileId: row.requested_by_profile_id } : {}),
       deviceId: row.requested_by_device_id,
       clientId: row.requested_by_client_id,
       deviceTokenAuth: row.requested_by_device_token_auth === 1,
@@ -378,6 +379,7 @@ export function inputMatchesExistingRow(
     row.status === "pending" &&
     row.kind === input.kind &&
     row.presentation_json === serialized.presentationJson &&
+    row.requested_by_profile_id === normalizeNullableString(input.requester?.profileId) &&
     row.requested_by_device_id === normalizeNullableString(input.requester?.deviceId) &&
     row.requested_by_client_id === normalizeNullableString(input.requester?.clientId) &&
     row.requested_by_device_token_auth === (input.requester?.deviceTokenAuth === true ? 1 : 0) &&

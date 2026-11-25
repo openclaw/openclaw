@@ -25,10 +25,7 @@ import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
 } from "../agents/auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabaseOwnerId,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/expected-cli-error.js";
@@ -54,6 +51,7 @@ import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice } from "./auth-choice.apply.js";
 import { warnIfModelConfigLooksOff } from "./auth-choice.model-check.js";
+import { storeChannelSetupCredentials } from "./channels/plugin-config-persistence.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
@@ -75,11 +73,12 @@ type AgentsAddOptions = {
 
 async function loadReadablePersistedAuthProfileStore(
   agentDir: string,
+  agentId: string,
 ): Promise<AuthProfileStore | null> {
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  const reader = prepareAgentAuthProfileRowsRead({
+  const reader = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+    agentId,
     env: process.env,
     source: "canonical",
   });
@@ -359,8 +358,8 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
       if (!sameAuthPath) {
         const sourceStore = sourceIsInheritedMain
           ? await loadAuthProfileStoreWithoutExternalProfilesAsync(sourceAgentDir)
-          : await loadReadablePersistedAuthProfileStore(sourceAgentDir);
-        const destStore = await loadReadablePersistedAuthProfileStore(agentDir);
+          : await loadReadablePersistedAuthProfileStore(sourceAgentDir, copySourceAgentId);
+        const destStore = await loadReadablePersistedAuthProfileStore(agentDir, agentId);
         const portable = sourceStore
           ? buildPortableAuthProfileStoreForAgentCopy(sourceStore)
           : undefined;
@@ -390,7 +389,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
             }
             stagedAuthOrder = portable.store.order;
             reportPortableAuthCopy = async () => {
-              const persisted = await loadReadablePersistedAuthProfileStore(agentDir);
+              const persisted = await loadReadablePersistedAuthProfileStore(agentDir, agentId);
               const persistedIds = new Set(Object.keys(persisted?.profiles ?? {}));
               const copiedCount = copiedProfileIds.filter((profileId) =>
                 persistedIds.has(profileId),
@@ -473,6 +472,7 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
     const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
+    const configBeforeChannels = nextConfig;
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
       workspaceDir,
       deferStatusUntilSelection: true,
@@ -524,6 +524,10 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
       }
     }
 
+    nextConfig = await storeChannelSetupCredentials({
+      cfg: nextConfig,
+      previousConfig: configBeforeChannels,
+    });
     const stagedEntry = existingAgent
       ? undefined
       : listAgentEntries(nextConfig).find(

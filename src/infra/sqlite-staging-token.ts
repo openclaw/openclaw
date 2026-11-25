@@ -3,9 +3,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission-record.js";
 import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
+import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -28,7 +30,11 @@ export class SqliteStagingRetiredError extends Error {
 export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean } = {},
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  } = {},
 ): SqliteStagingToken {
   // Cancelled work still reclaims, releases or retires private locks instead of
   // leaving copies behind, but it never mints a new staging owner.
@@ -50,7 +56,11 @@ export function acquireSqliteStagingToken(
 function acquireStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean },
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {
@@ -86,16 +96,24 @@ function acquireStagingToken(
   const tokenExists = existing !== undefined || mode === "create";
   // Legacy readers may supply a parent without a token; fresh owners never recreate a removed inode.
   const existingIdentity = tokenExists ? readIdentity(location, "file") : undefined;
+  if (options.expectedIdentity) {
+    if (!existingIdentity) {
+      throw new Error("SQLite staging ownership is unknown");
+    }
+    assertDatabaseFileIdentity(existingIdentity, options.expectedIdentity);
+  }
   const db = withSqliteNativeOpen(() =>
-    openNodeSqliteDatabase(tokenExists ? resolveExistingSqliteFileUri(location) : location, {
-      timeout: 0,
-    }),
+    openNodeSqliteDatabase(
+      tokenExists ? resolveExistingSqliteFileUri(location) : location,
+      { timeout: 0 },
+      existingIdentity && readSqliteDatabaseAdmissionIdentity(existingIdentity),
+    ),
   );
   let tokenIdentity: fs.BigIntStats;
   // This lock primitive needs fixed SQLite commands, not the query-builder graph.
   const read = (sql: string) =>
     executeWithCachedStatement(db, sql, [], (statement) => statement.get());
-  let exclusive = mode === "reclaim";
+  let exclusive = mode === "reclaim" || (mode === "create" && options.exclusiveCreate === true);
   let retired = false;
   const assertIdentity = () => {
     const currentDirectory = readIdentity(directory, "directory");
@@ -147,10 +165,10 @@ function acquireStagingToken(
   const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
-    if (mode === "create") {
-      db.exec("BEGIN IMMEDIATE");
-    } else if (mode === "reclaim") {
+    if (exclusive) {
       db.exec("BEGIN EXCLUSIVE");
+    } else if (mode === "create") {
+      db.exec("BEGIN IMMEDIATE");
     } else {
       db.exec("BEGIN");
     }

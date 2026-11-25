@@ -11,7 +11,7 @@ export async function finishAgentTurnPreparation(
 ) {
   try {
     if (!params.transferred) {
-      await cleanupAgentTurnAdmission(params);
+      cleanupAgentTurnAdmission(params);
     }
   } finally {
     try {
@@ -26,20 +26,14 @@ export async function finishAgentTurnPreparation(
   }
 }
 
-/** Release failed preparation after its accepted persistence has settled. */
-export async function cleanupAgentTurnAdmission({
+/** Release failed preparation. */
+export function cleanupAgentTurnAdmission({
   cleanupRunAbort,
   releaseGatewayAdmission,
-  releaseCronContinuation,
 }: {
   cleanupRunAbort?: () => void;
   releaseGatewayAdmission: () => void;
-  releaseCronContinuation: () => Promise<boolean>;
 }) {
-  try {
-    cleanupRunAbort?.();
-    releaseGatewayAdmission();
-  } finally {
-    await releaseCronContinuation();
-  }
+  cleanupRunAbort?.();
+  releaseGatewayAdmission();
 }

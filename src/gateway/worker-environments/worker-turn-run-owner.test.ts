@@ -215,6 +215,9 @@ describe("cloud worker run ownership", () => {
 
         expect(operation.abortSignal.aborted).toBe(false);
         expect(isReplyRunEvidenceStale(operation)).toBe(false);
+        expect(operation.watchdog.snapshot().tools).toMatchObject([
+          { toolName: "sessions_spawn", toolCallId: "child-provision" },
+        ]);
         expect(workerSignal?.aborted).toBe(false);
         expect(placements.validateTurnClaim(turnClaim)).toBe(true);
         expect(getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID })).toMatchObject({

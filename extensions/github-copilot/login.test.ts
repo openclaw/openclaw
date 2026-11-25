@@ -68,7 +68,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
     const showCode = vi.fn(async () => {});
     const result = await runDeviceFlowAfterFirstPoll({ showCode, signal: controller.signal });
 
-    expect(result).toEqual({ status: "authorized", accessToken: "ghu_tok_xyz" });
+    expect(result).toBe("ghu_tok_xyz");
     expect(showCode).toHaveBeenCalledWith({
       verificationUrl: "https://github.com/login/device",
       userCode: "ABCD-1234",
@@ -207,10 +207,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
       expect(pollTimes).toEqual(times.filter((time) => time <= elapsed));
     }
 
-    await expect(result).resolves.toEqual({
-      status: "authorized",
-      accessToken: "test-access-token",
-    });
+    await expect(result).resolves.toBe("test-access-token");
   });
 
   it.each([{ clockStepMs: -20 * 60_000 }, { clockStepMs: 20 * 60_000 }])(
@@ -254,7 +251,9 @@ describe("runGitHubCopilotDeviceFlow", () => {
 
         await vi.advanceTimersByTimeAsync(1);
         expect(settled).toBe(true);
-        await expect(observing).resolves.toEqual({ value: { status: "expired" } });
+        await expect(observing).resolves.toMatchObject({
+          error: { name: "ProviderAuthFailure", reason: "device_code_expired" },
+        });
 
         const completedRequests = polls;
         await vi.advanceTimersByTimeAsync(30_000);

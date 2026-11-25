@@ -1,4 +1,3 @@
-import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -168,11 +167,6 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Readiness owns process-stable request imports so the first turn and connection do not.
-    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-      await prewarmConfigDrivenReplyRuntime();
-    }),
     measureStartup(
       params.startupTrace,
       "sidecars.connection-runtime",
@@ -369,7 +363,7 @@ export async function startGatewaySidecars(params: {
       name: "sidecars.gmail-model",
       run: async (isStopped) => {
         const [
-          { DEFAULT_MODEL, DEFAULT_PROVIDER },
+          { DEFAULT_PROVIDER },
           { loadPreparedModelCatalogOwnerSnapshot },
           { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
         ] = await Promise.all([
@@ -385,12 +379,10 @@ export async function startGatewaySidecars(params: {
           defaultProvider: DEFAULT_PROVIDER,
         });
         if (hooksModelRef) {
-          const { provider: resolvedDefaultProvider, model: defaultModel } =
-            resolveConfiguredModelRef({
-              cfg: params.cfg,
-              defaultProvider: DEFAULT_PROVIDER,
-              defaultModel: DEFAULT_MODEL,
-            });
+          const defaultModel = resolveConfiguredModelRef({
+            cfg: params.cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+          });
           const catalog = (
             await loadPreparedModelCatalogOwnerSnapshot({ config: params.cfg, readOnly: true })
           ).modelCatalog.entries;
@@ -401,8 +393,8 @@ export async function startGatewaySidecars(params: {
             cfg: params.cfg,
             catalog,
             ref: hooksModelRef,
-            defaultProvider: resolvedDefaultProvider,
-            defaultModel: { provider: resolvedDefaultProvider, model: defaultModel },
+            defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
+            defaultModel,
           });
           if (!status.allowed) {
             params.logHooks.warn(

@@ -1,8 +1,9 @@
 # Knowledge workflow conventions
 
-Read this for all bundled workflows. For writes, also read
-[publication.md](publication.md). These are agent procedures over Knowledge's
-existing tools, not a separate ingestion engine.
+The complete conventions behind every bundled workflow. Skills link the
+sections they need; read a section when a skill sends you to it, not the whole
+file up front. These are agent procedures over Knowledge's existing tools, not a
+separate ingestion engine.
 
 ## Scope and vocabulary
 
@@ -97,7 +98,7 @@ existing tools, not a separate ingestion engine.
   path links when renaming; old UUID paths still resolve through frontmatter IDs.
 - Within an authorized ingestion, link the source to every identified entity
   with a page, and give each one it says something substantive about a source
-  note ([profiles](profiles.md#source-notes)). Actual identified
+  note ([source notes](source-notes.md)). Actual identified
   meeting attendees get substantive sourced profiles; other new pages use the
   notability gate. Do not create profiles for incidental names or do unsolicited
   broad web/API enrichment. Read existing context before asking about an identity;

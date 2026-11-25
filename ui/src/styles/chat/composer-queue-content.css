@@ -40,7 +40,7 @@
   padding: 4px 12px;
   border-bottom: 1px solid var(--chat-queue-divider);
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 500;
   line-height: 1.4;
 }
@@ -58,7 +58,7 @@
   padding-block: 4px;
   padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
   border-bottom: 1px solid var(--chat-queue-divider);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -257,6 +257,7 @@
 
 .chat-queue__leading svg,
 .chat-queue__remove svg,
+.chat-queue__remove .btn__spinner,
 .chat-queue__edit-submit svg,
 .chat-queue__edit-cancel svg {
   width: 14px;
@@ -281,7 +282,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -296,7 +297,7 @@
 
 .chat-queue__state {
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -322,11 +323,15 @@
   min-width: 0;
   overflow: hidden;
   color: var(--chat-text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.4;
   overflow-wrap: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  /* The waiting message keeps macOS stem darkening so it reads at the weight it
+     has once sent (.chat-text); queue chrome keeps the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .chat-queue__edit-input {
@@ -341,7 +346,7 @@
   background: var(--bg);
   color: var(--chat-text);
   font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
   overflow-y: hidden;
   resize: none;
@@ -361,7 +366,7 @@
   min-width: 0;
   padding: 0 0 2px;
   color: var(--danger);
-  font-size: calc(11.5px * var(--control-ui-text-scale));
+  font-size: 11.5px;
   line-height: 1.35;
 }
 
@@ -387,7 +392,7 @@
   border-radius: var(--radius-full);
   background: none;
   color: var(--accent);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
   cursor: var(--cursor-action);
@@ -437,7 +442,7 @@
 
 /* Inert instead of removed: an open edit keeps every action slot in place so the
    rows below it never shift while the operator retypes. */
-.chat-queue__remove:disabled,
+.chat-queue__remove:disabled:not([aria-busy="true"]),
 .chat-queue__more:disabled,
 .chat-queue__edit-submit:disabled,
 .chat-queue__edit-cancel:disabled {
@@ -446,6 +451,7 @@
 }
 
 .chat-queue__remove:hover:not(:disabled),
+.chat-queue__remove[aria-busy="true"]:hover,
 .chat-queue__more:hover:not(:disabled),
 .chat-queue__edit-submit:hover:not(:disabled),
 .chat-queue__edit-cancel:hover:not(:disabled) {
@@ -476,7 +482,7 @@
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .chat-queue__overflow .oc-menu-item svg {

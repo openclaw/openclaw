@@ -261,11 +261,6 @@ export function ensureOpenClawStatePermissions(
   if (isDefaultStateDatabase && dir !== defaultDir) {
     throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
   }
-  // A custom database path owns no sibling private stores, so only the default
-  // installation's own paths are restored.
-  if (isDefaultStateDatabase) {
-    restorePrivateStateStoreModes(env);
-  }
   const dirExisted = existsSync(dir);
   if (options.createDirectory) {
     mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });

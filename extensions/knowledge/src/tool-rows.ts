@@ -69,7 +69,7 @@ export type Row = Static<typeof Row>;
 export const stripComments = (value: string) => value.replace(/\s*<!--[\s\S]*?-->/gu, "").trim();
 
 /** Calendar day of a row: occurrence, else when Knowledge recorded it. */
-export const rowDate = (s: { occurredAt?: string; recordedAt?: string }) =>
+const rowDate = (s: { occurredAt?: string; recordedAt?: string }) =>
   (s.occurredAt ?? s.recordedAt)?.slice(0, 10);
 
 /** Lifecycle appears only when a record is not active. */

@@ -19,9 +19,9 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import { mergeDevicePairingRoles } from "./device-pairing-roles.js";
 import {
   loadDevicePairingStateForMutation,
-  mergeDevicePairingRoles,
   mergeDevicePairingScopes,
   preserveDeviceRoleScopes,
   resolveRequestedDeviceRoles,

@@ -79,6 +79,7 @@ describe("chat run registration lifecycle", () => {
       await h.emitMany(runId, [
         ["compaction", { phase: "start", itemId: "recovery-compaction" }],
         ["compaction", { phase: "notice", messages: ["Synthetic private hook notice"] }],
+        ["compaction", { phase: "context_bounded", message: "Older history is omitted." }],
         ["compaction", { phase: "end", itemId: "recovery-compaction", completed }],
       ]);
 
@@ -89,6 +90,12 @@ describe("chat run registration lifecycle", () => {
           sessionKey,
           stream: "compaction",
           data: { phase: "start", itemId: "recovery-compaction" },
+        }),
+        expect.objectContaining({
+          runId: "client-compaction",
+          sessionKey,
+          stream: "compaction",
+          data: { phase: "context_bounded", message: "Older history is omitted." },
         }),
         expect.objectContaining({
           runId: "client-compaction",

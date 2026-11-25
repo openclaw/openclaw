@@ -50,6 +50,7 @@ const config = {
     "internal/reasoning-tag-text-partitioner":
       "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
+    "internal/session-resources": "packages/ai/src/session-resources.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
   },

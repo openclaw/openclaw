@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/json-schema";
 import { createJsonSchemaValidator } from "@openclaw/normalization-core/json-schema-validator";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { Format } from "typebox/format";
 import {
@@ -145,27 +146,24 @@ function relaxConditionalRequiredKeywords(
   schema: JsonSchemaValue,
   insideConditionalBranch = false,
 ): JsonSchemaValue {
-  if (Array.isArray(schema)) {
-    return schema.map((entry) =>
-      relaxConditionalRequiredKeywords(entry as JsonSchemaValue, insideConditionalBranch),
-    ) as never;
-  }
-  if (!schema || typeof schema !== "object") {
+  if (typeof schema === "boolean") {
     return schema;
   }
   return Object.fromEntries(
     Object.entries(schema)
       .filter(([key]) => !(insideConditionalBranch && key === "required"))
-      .map(([key, value]) => [
-        key,
-        typeof value === "boolean" || (value && typeof value === "object")
-          ? relaxConditionalRequiredKeywords(
-              value as JsonSchemaValue,
-              insideConditionalBranch || key === "then" || key === "else",
-            )
-          : value,
-      ]),
-  ) as JsonSchemaValue;
+      .map(([key, value]) => {
+        const inBranch = insideConditionalBranch || key === "then" || key === "else";
+        const relaxValue = (entry: unknown): unknown => {
+          if (Array.isArray(entry)) {
+            return entry.map(relaxValue);
+          }
+          const object = asOptionalObjectRecord(entry);
+          return object ? relaxConditionalRequiredKeywords(object, inBranch) : entry;
+        };
+        return [key, relaxValue(value)];
+      }),
+  );
 }
 
 function checkSchema(validate: SchemaValidator, value: unknown): TypeBoxValidationError[] | null {
@@ -457,4 +455,77 @@ export function validateJsonSchemaValue(params: {
         ? params.value
         : applyValidatedSourceDefaults(structuredClone(params.value), originalValue, value),
   };
+}
+
+export function validatePluginConfig(params: {
+  origin: PluginOrigin;
+  schema?: Record<string, unknown>;
+  cacheKey?: string;
+  value?: unknown;
+  sourceValue?: unknown;
+}): Result<Record<string, unknown> | undefined, string[]> {
+  const { schema, value } = params;
+  if (!schema) {
+    return ok(value as Record<string, unknown> | undefined);
+  }
+  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
+    if (
+      value === undefined ||
+      (value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === 0)
+    ) {
+      return ok({});
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return resultError(["<root>: must be object"]);
+    }
+    return resultError(["<root>: config must be empty"]);
+  }
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
+    schema,
+    cacheKey: params.cacheKey,
+    value: value ?? {},
+    sourceValue: params.sourceValue,
+    applyDefaults: true,
+  });
+  return result.ok
+    ? ok(result.value as Record<string, unknown> | undefined)
+    : resultError(result.errors.map((error) => error.text));
+}
+
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
+
+function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
+  if (schema.type !== "object" || schema.additionalProperties !== false) {
+    return false;
+  }
+  const properties = schema.properties;
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties) ||
+    Object.keys(properties).length > 0
+  ) {
+    return false;
+  }
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
