@@ -23,7 +23,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
-import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -352,7 +352,32 @@ export async function prepareUpdate(params: {
           );
         }
       }
+      const checkStartedAtMs = Date.now();
       const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+      if (verdict.candidate) {
+        await recordUpdateRunPhaseAsync(
+          params.runId,
+          "validating",
+          {
+            origin: {
+              releaseAdmission: {
+                owner: "candidate",
+                candidateVersion: prepared.version,
+                verdict: verdict.ok ? "admit" : "refuse",
+                ...(verdict.reason ? { reason: verdict.reason } : {}),
+                warnings: (verdict.candidate.warnings ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT),
+              },
+            },
+            step: {
+              step: "candidate-release-check",
+              status: verdict.ok ? "completed" : "failed",
+              startedAtMs: checkStartedAtMs,
+              endedAtMs: Date.now(),
+            },
+          },
+          { env },
+        );
+      }
       if (!verdict.ok) {
         return await fail(
           "release-check-failed",
@@ -516,6 +541,7 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
   const failed = parsed.surfaces.filter((surface) => surface.error);
   return {
     ok: parsed.ok && result.code === 0,
+    candidate: parsed,
     reason: parsed.reason,
     detail: failed.map((s) => `${s.plugin}/${s.surface}: ${s.error}`).join("\n") || result.stderr,
   };

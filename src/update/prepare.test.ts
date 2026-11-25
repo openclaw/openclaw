@@ -620,7 +620,7 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
         `import fs from 'node:fs';
 fs.appendFileSync(${JSON.stringify(path.join(root, "release-commands"))}, process.argv[3] + ':' + (process.env.FIXTURE_RUNTIME ?? 'node') + '\\n');
 console.log(JSON.stringify(process.argv[3] === 'check-release'
-  ? {ok:true,surfaces:[]}
+  ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
       const archive = path.join(root, "candidate.tgz");
@@ -707,6 +707,7 @@ if (process.argv[2] !== 'install') {
           });
         }
         if (!releaseAware) {
+          expect(preparedRun?.origin.releaseAdmission).toBeUndefined();
           expect(outcome).toMatchObject({
             status: "failed",
             reason: "release-updates-unsupported",
@@ -741,6 +742,20 @@ if (process.argv[2] !== 'install') {
           return;
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        expect(preparedRun?.steps).toContainEqual(
+          expect.objectContaining({ step: "candidate-release-check", status: "completed" }),
+        );
+        expect(preparedRun?.origin.releaseAdmission).toEqual({
+          owner: "candidate",
+          candidateVersion: "2026.11.21",
+          verdict: "admit",
+          warnings: [
+            {
+              code: "configured-plugin-path-unavailable",
+              message: "Fixture plugin path is unavailable",
+            },
+          ],
+        });
         if (adopt) {
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           if (readOnly) {
@@ -779,6 +794,7 @@ if (process.argv[2] !== 'install') {
         });
         const rolledBack = await getUpdateRunAsync(run.runId);
         expect(rolledBack?.status).toBe("failed");
+        expect(rolledBack?.origin.releaseAdmission).toEqual(preparedRun?.origin.releaseAdmission);
         for (const name of ["pack", "install"]) {
           expect(rolledBack?.steps.find(({ step }) => step === `prepare:${name}`)).toMatchObject({
             status: "completed",

@@ -61,6 +61,17 @@ it("accepts a config whose agents section has no entries, like every other confi
   expect(await checkRelease({ env, configPath })).toMatchObject({ ok: true });
 });
 
+it("admits an unavailable configured plugin path and reports its typed warning", async () => {
+  const missing = path.join(root, "missing-plugin");
+  await fs.writeFile(configPath, JSON.stringify({ plugins: { load: { paths: [missing] } } }));
+  const result = await checkRelease({ env, configPath });
+  expect(result.ok).toBe(true);
+  expect(result.warnings).toContainEqual({
+    code: "configured-plugin-path-unavailable",
+    message: expect.stringContaining(missing),
+  });
+});
+
 it.each(["state", "agent"] as const)(
   "refuses a newer %s schema by reading its file directly",
   async (kind) => {
