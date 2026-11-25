@@ -130,16 +130,28 @@ struct LocalDeviceSettingsScreen: View {
         }
     }
 
+    /// Without voice support (the Simulator) a voice switch can't be turned on, but one that is
+    /// already on (Talk from the composer, a restored preference) can always be turned off.
     private func voiceSection(_ snapshot: DeviceSettingsSnapshot) -> some View {
-        Section {
-            self.toggle("Voice Wake", key: .wakeEnabled, value: snapshot.voice.wakeEnabled)
-            self.toggle("Talk", key: .talkEnabled, value: snapshot.voice.talkEnabled)
-            self.toggle("Show Talk control", key: .talkButtonEnabled, value: snapshot.voice.talkButtonEnabled)
+        let onlyOff = !snapshot.voice.supported
+        return Section {
+            self.toggle("Voice Wake", key: .wakeEnabled, value: snapshot.voice.wakeEnabled, onlyOff: onlyOff)
+            self.toggle("Talk", key: .talkEnabled, value: snapshot.voice.talkEnabled, onlyOff: onlyOff)
+            self.toggle(
+                "Show Talk control",
+                key: .talkButtonEnabled,
+                value: snapshot.voice.talkButtonEnabled,
+                onlyOff: onlyOff)
             self.toggle(
                 "Background listening",
                 key: .talkBackgroundEnabled,
-                value: snapshot.voice.talkBackgroundEnabled)
-            self.toggle("Speakerphone", key: .speakerphoneEnabled, value: snapshot.voice.speakerphoneEnabled)
+                value: snapshot.voice.talkBackgroundEnabled,
+                onlyOff: onlyOff)
+            self.toggle(
+                "Speakerphone",
+                key: .speakerphoneEnabled,
+                value: snapshot.voice.speakerphoneEnabled,
+                onlyOff: onlyOff)
         } header: {
             SettingsSectionTitle("Voice")
         } footer: {
@@ -150,7 +162,6 @@ struct LocalDeviceSettingsScreen: View {
                 """)
                 .font(SettingsType.footnote)
         }
-        .disabled(!snapshot.voice.supported)
     }
 
     /// Each permission is a short row with its iOS state as the value. A permission iOS has not
@@ -210,7 +221,12 @@ struct LocalDeviceSettingsScreen: View {
         }
     }
 
-    private func toggle(_ title: LocalizedStringKey, key: DeviceSettingKey, value: Bool?) -> some View {
+    private func toggle(
+        _ title: LocalizedStringKey,
+        key: DeviceSettingKey,
+        value: Bool?,
+        onlyOff: Bool = false) -> some View
+    {
         Toggle(isOn: Binding(
             get: { value ?? false },
             set: { self.perform(.set(key, .boolean($0))) }))
@@ -218,6 +234,7 @@ struct LocalDeviceSettingsScreen: View {
             Text(title).font(SettingsType.label)
         }
         .tint(OpenClawBrand.ok)
+        .disabled(onlyOff && value != true)
         .accessibilityIdentifier("LocalDeviceSettings." + key.rawValue)
     }
 
