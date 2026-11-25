@@ -177,6 +177,12 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
+/* An iframe swallows the drag events of a file dropped over it, so widgets
+   and previews yield to the chat until the drag ends. */
+.chat[data-attachment-drop-active] iframe {
+  pointer-events: none;
+}
+
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
