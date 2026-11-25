@@ -125,7 +125,7 @@ describe("ordinary automation scratch editor", () => {
         expect(button.disabled).toBe(false);
         expect(editor.querySelector('[role="status"]')?.textContent).toBe(guidance);
       });
-      const details = editor.querySelector("details details");
+      const details = editor.querySelector<HTMLDetailsElement>("details details");
       expect(details?.open).toBe(false);
       expect(details?.textContent).toContain("Synthetic request unavailable");
       expect(editor.querySelector("textarea")).toBe(textarea);
