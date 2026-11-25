@@ -112,7 +112,9 @@ suite.define(() => {
         await row.getByText("Verified handoff record", { exact: true }).waitFor();
         await expect(pathEl).toHaveCSS("white-space", "normal");
         await expect(pathEl).toHaveText(memoryPath);
-        expect((await gw.getRequests("agents.workspace.get")).at(-1)?.params.path).toBe(memoryPath);
+        expect((await gw.getRequests("agents.workspace.get")).at(-1)?.params).toMatchObject({
+          path: memoryPath,
+        });
         await choose.press("Enter");
         await expect(choose).toHaveAttribute("aria-expanded", "false");
       },
