@@ -327,6 +327,54 @@ it.each([false, true])("exports unchanged cohorts (tied agents: %s)", async (tie
   });
 });
 
+it("exports the detailed latency percentile after refreshing the overview", async () => {
+  const { result } = cacheSnapshot("fresh");
+  const totals = usageTotals(101, 12.625);
+  let count = 101;
+  const { page } = await loadUsagePage(async (method: string, params?: { projection?: string }) => {
+    if (method !== "sessions.usage") {
+      return { providers: [] };
+    }
+    // Two quarters contain 100 replies at 100 ms and one at 10,000 ms, respectively.
+    const latency = {
+      count,
+      minMs: 100,
+      maxMs: 10_000,
+      avgMs: 20_000 / 101,
+      p95Ms: params?.projection === "overview" ? 10_000 : 100,
+    };
+    const sessions = [
+      {
+        key: "agent:main:notebook",
+        sessionId: "notebook",
+        usage: { ...totals, latency, dailyLatency: [{ date: result.startDate, ...latency }] },
+      },
+    ];
+    return { ...result, sessions, totals, aggregates: buildAggregatesFromSessions(sessions) };
+  });
+  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
+  const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
+  const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+  await page.refresh();
+  await settleUsagePage(page);
+  expect(page.read().data.aggregates?.latency?.p95Ms).toBe(10_000);
+  await exportJson();
+  await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+  const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+  expect(payload.aggregates.latency?.p95Ms).toBe(100);
+  expect(payload.aggregates.dailyLatency).toMatchObject([{ date: result.startDate, p95Ms: 100 }]);
+  expect(payload.sessions[0]?.usage?.latency?.p95Ms).toBe(100);
+
+  count++;
+  await exportJson();
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Refresh usage and try again") }),
+    ),
+  );
+  expect(download).toHaveBeenCalledOnce();
+});
+
 it("requires a refresh when an unbilled message changes the displayed usage", async () => {
   const { result } = cacheSnapshot("fresh");
   let userMessages = 0;

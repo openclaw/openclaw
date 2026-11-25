@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionLatencyStats } from "../../../../src/infra/session-cost-usage.types.js";
 import {
   usageDailyModelIdentity,
   usageModelIdentity,
@@ -64,10 +65,21 @@ function groupByIdentity<T>(rows: readonly T[] | undefined, identity: (row: T) =
   return groups;
 }
 
+// The overview takes the largest quarter p95. Detail ranks the combined samples.
+function comparableLatency<T extends SessionLatencyStats>(latency: T | undefined) {
+  if (!latency) {
+    return undefined;
+  }
+  const { p95Ms: _p95Ms, ...common } = latency;
+  return common;
+}
+
 function comparableAggregates(aggregates: SessionsUsageResult["aggregates"]) {
   // These groups are ranked by measurements. Roundoff can change their display order.
   return {
     ...aggregates,
+    latency: comparableLatency(aggregates.latency),
+    dailyLatency: aggregates.dailyLatency?.map(comparableLatency),
     tools: {
       ...aggregates.tools,
       tools: groupByIdentity(aggregates.tools.tools, (row) => row.name),
@@ -89,7 +101,13 @@ function measuredUsage(row: UsageSessionEntry, days: ReadonlySet<string>) {
   const { usage } = compactUsageOverviewSession(row, days);
   // Recomputing cache metadata for a new prompt report does not change the measured usage.
   return usage
-    ? { ...usage, computedAt: undefined, refreshing: undefined, staleSince: undefined }
+    ? {
+        ...usage,
+        latency: comparableLatency(usage.latency),
+        computedAt: undefined,
+        refreshing: undefined,
+        staleSince: undefined,
+      }
     : null;
 }
 
