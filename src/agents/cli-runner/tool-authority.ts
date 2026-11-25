@@ -9,6 +9,7 @@ import {
   readPreparedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { resolveAgentDir } from "../agent-scope.js";
 import {
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
@@ -72,11 +73,15 @@ function prepareCliReplyToolAuthority(
     },
     undefined,
     undefined,
+    // Record the caller's selection, as the reply and embedded producers do: the runner derives
+    // cwd and defaults agentDir only after this capture. The agentDir default repeats
+    // prepare.ts's rather than moving it earlier; if the two drift, steering refuses.
     captureReplyMessageJoinObservation({
       run: {
         ...workspace,
+        cwd: params.cwd,
         config: params.config,
-        agentDir: params.agentDir,
+        agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, workspace.agentId),
         sessionFile: params.sessionFile,
         authProfileId: params.authProfileId,
       },
