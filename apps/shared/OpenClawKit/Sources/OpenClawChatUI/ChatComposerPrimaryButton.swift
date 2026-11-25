@@ -152,11 +152,16 @@ struct ChatComposerPrimaryButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Stop arrives under the finger that just tapped Send, so it stays inert for a moment.
     @State private var isStopArmed = false
+    /// Set by the Send tap so the swap to Stop lands in the next frame: the send keeps the main
+    /// thread busy for a few hundred milliseconds, which held a cross-fade on Send that long.
+    /// A refused send keeps it until the next role change, which then swaps without a fade.
+    @State private var swapsWithoutFade = false
 
     var body: some View {
         self.menuHost
             .task(id: self.role) {
                 self.isStopArmed = false
+                self.swapsWithoutFade = false
                 guard self.role == .stop else { return }
                 do {
                     try await Task.sleep(for: .milliseconds(700))
@@ -214,6 +219,7 @@ struct ChatComposerPrimaryButton: View {
         case .send:
             ForEach(self.send.queueModes, id: \.self) { mode in
                 Button {
+                    self.swapsWithoutFade = true
                     self.send.action(mode)
                 } label: {
                     switch mode {
@@ -240,15 +246,16 @@ struct ChatComposerPrimaryButton: View {
         case .talk:
             self.talkControl?.toggle(self.sessionKey)
         case .send:
+            self.swapsWithoutFade = true
             self.send.action(nil)
         case .stop:
             self.stop.action()
         }
     }
 
-    /// Reduce Motion swaps faces without a cross-fade.
+    /// Reduce Motion, and the swap a Send tap starts, change faces without a cross-fade.
     private var faceAnimation: Animation? {
-        self.reduceMotion ? nil : .easeInOut(duration: 0.2)
+        self.reduceMotion || self.swapsWithoutFade ? nil : .easeInOut(duration: 0.2)
     }
 
     private var isInertStop: Bool {
