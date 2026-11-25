@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   prewarm: vi.fn(),
 }));
-vi.mock("../infra/host-memory.js", () => ({ isConstrainedProcessLowOnMemory: mocks.lowMemory }));
+vi.mock("../infra/host-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/host-memory.js")>()),
+  isConstrainedProcessLowOnMemory: mocks.lowMemory,
+}));
 vi.mock("node:fs/promises", () => ({ default: { stat: mocks.stat } }));
 vi.mock("../config/sessions/session-sqlite-target.js", () => ({
   prepareSqliteTargetFromSessionStorePath: mocks.prepare,
