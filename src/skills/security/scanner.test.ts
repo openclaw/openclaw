@@ -221,6 +221,21 @@ describe("scanSource", () => {
         1,
       ],
       ["dangerous-exec", 'const run = exec;\nrun("id");\nimport { exec } from "child_process";', 2],
+      [
+        "dangerous-exec",
+        'function task() { run("id"); }\nconst { exec: run } = require("child_process");\ntask();',
+        1,
+      ],
+      [
+        "dangerous-exec",
+        'const task = () => { run("id"); };\nconst mod = require("child_process");\nconst run = mod.exec;\ntask();',
+        1,
+      ],
+      [
+        "dynamic-code-execution",
+        'function outer() { function inner() { run("1+1"); } const run = eval; inner(); }\nouter();',
+        1,
+      ],
     ];
     for (const [ruleId, source, expectedLine] of cases) {
       const findings = scanSource(source, "plugin.ts").filter((f) => f.ruleId === ruleId);
@@ -256,12 +271,13 @@ describe("scanSource", () => {
       'let r = x => x;\nfunction example() { r = eval; }\nr("ok");',
       'function safe(launch) { launch("ok"); }\nimport { spawn as launch } from "child_process";',
       'let run = proc.exec;\nrun = x => x;\nrun("ok");\nimport proc from "child_process";',
+      'function task(run) { run("ok"); }\nconst { exec: run } = require("child_process");\ntask(x => x);',
     ]) {
       expect(scanSource(source, "plugin.ts"), source).toEqual([]);
     }
   });
 
-  it("keeps fenced examples independent and reports original call locations", () => {
+  it("keeps Markdown examples independent and reports original call locations", () => {
     const source = [
       "# Examples",
       "",
@@ -277,6 +293,11 @@ describe("scanSource", () => {
     ].join("\n");
     expect(scanSource(source, "SKILL.md")).toEqual([
       expect.objectContaining({ ruleId: "dynamic-code-execution", line: 5 }),
+    ]);
+    const indented =
+      '# Examples\n\n    const { exec: run } = require("child_process");\n    run("id");\n\nNext example:\n\n    const run = x => x;\n    run("ok");';
+    expect(scanSource(indented, "SKILL.md")).toEqual([
+      expect.objectContaining({ ruleId: "dangerous-exec", line: 4 }),
     ]);
   });
 

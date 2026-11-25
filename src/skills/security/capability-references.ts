@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
-import type { Binding, Scope } from "@babel/traverse";
+import type { Binding, NodePath, Scope, Visitor } from "@babel/traverse";
 import type * as t from "@babel/types";
+import { markdownToIRWithMeta } from "../../../packages/markdown-core/src/ir.js";
 
 const require = createRequire(import.meta.url);
 const PROCESS_METHODS = new Set([
@@ -57,7 +58,7 @@ function isProcessModule(name: string | undefined): boolean {
 
 /**
  * Bounded, source-order capability analysis using lexical bindings and object identity.
- * Functions are inspected independently; their writes do not execute in the enclosing scope.
+ * Functions are inspected after outer initialization; their writes do not execute in the enclosing scope.
  * This does not interpret branches/loops, call arguments/returns, arbitrary computed values,
  * call/apply/bind, prototypes, or cross-file flows. Unparseable fragments retain literal rules.
  */
@@ -69,7 +70,7 @@ export function collectCapabilityCalls(source: string): CallMatches {
   const { parse }: typeof import("@babel/parser") = require("@babel/parser");
   const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
 
-  function analyze(code: string, startLine: number, startIndex: number): void {
+  function analyze(code: string, startLine: number, startIndex: number): boolean {
     let file: t.File;
     try {
       file = parse(code, {
@@ -84,12 +85,13 @@ export function collectCapabilityCalls(source: string): CallMatches {
       });
     } catch (error) {
       if (error instanceof SyntaxError || error instanceof RangeError) {
-        return;
+        return false;
       }
       throw error;
     }
     let state: State = { bindings: new Map(), properties: new Map() };
     const objects = new WeakMap<t.ObjectExpression, ObjectValue>();
+    const functions: Array<{ path: NodePath<t.Function>; parent: State }> = [];
 
     function readBinding(key: Binding | string): Value | undefined {
       for (let current: State | undefined = state; current; current = current.parent) {
@@ -188,16 +190,10 @@ export function collectCapabilityCalls(source: string): CallMatches {
         }
       }
     }
-    traverse(file, {
-      Function: {
-        enter() {
-          state = { bindings: new Map(), properties: new Map(), parent: state };
-        },
-        exit() {
-          if (state.parent) {
-            state = state.parent;
-          }
-        },
+    const visitor: Visitor = {
+      Function(path) {
+        functions.push({ path, parent: state });
+        path.skip();
       },
       Program(path) {
         // ESM bindings exist before module evaluation, even when imports follow calls.
@@ -302,21 +298,40 @@ export function collectCapabilityCalls(source: string): CallMatches {
           columns.add(location.column);
         },
       },
-    });
+    };
+    traverse(file, visitor);
+    // Closures can be declared before their captured bindings are initialized. Inspect each
+    // body once after its containing scope, without executing its writes in that scope.
+    for (const job of functions) {
+      state = { bindings: new Map(), properties: new Map(), parent: job.parent };
+      job.path.traverse(visitor);
+    }
+    return true;
   }
 
-  // Markdown examples are independent programs; preserve original finding lines and columns.
-  const fences = [
-    ...source.matchAll(/^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*\r?$/gm),
-  ];
-  if (fences.length === 0) {
-    analyze(source, 1, 0);
-  } else {
-    for (const fence of fences) {
-      const body = fence[2] ?? "";
-      const start = fence.index + fence[0].indexOf("\n") + 1;
-      analyze(body, source.slice(0, start).split("\n").length, start);
+  if (analyze(source, 1, 0)) {
+    return matches;
+  }
+  // Reuse the Markdown owner's block ranges for fenced and indented examples. Parse raw
+  // source slices so findings retain their original lines and columns, not rendered offsets.
+  const lines = source.split("\n");
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  for (const block of markdownToIRWithMeta(source).ir.blocks ?? []) {
+    if (
+      block.kind !== "code_block" ||
+      block.sourceStartLine === undefined ||
+      block.sourceEndLine === undefined
+    ) {
+      continue;
     }
+    const start = block.sourceStartLine + (block.codeOrigin === "fenced" ? 1 : 0);
+    const end = block.sourceEndLine - (block.codeClosed === true ? 1 : 0);
+    analyze(lines.slice(start, end).join("\n"), start + 1, starts[start] ?? source.length);
   }
   return matches;
 }
