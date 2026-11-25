@@ -245,6 +245,9 @@ export function buildBenchmarkCommandEnv(
     NODE_COMPILE_CACHE: treatment?.nodeCache ?? path.join(cacheRoot, "node-compile"),
     ...(treatment
       ? {
+          COREPACK_ENABLE_NETWORK: "0",
+          npm_config_offline: "true",
+          pnpm_config_manage_package_manager_versions: "false",
           OPENCLAW_VITEST_RUNTIME: "node",
           OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
           OPENCLAW_VITEST_WORKER_CACHE: "0",
@@ -255,7 +258,11 @@ export function buildBenchmarkCommandEnv(
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(cacheRoot, "vitest-fs"),
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
-    PATH: ambientEnv.PATH,
+    PATH: treatment
+      ? [path.dirname(packageManager.executable), path.dirname(process.execPath), ambientEnv.PATH]
+          .filter(Boolean)
+          .join(path.delimiter)
+      : ambientEnv.PATH,
     TMPDIR: path.join(cacheRoot, "tmp"),
     npm_config_cache: npmCache,
     // Both source cuts must use the benchmark's selected pnpm, even when their

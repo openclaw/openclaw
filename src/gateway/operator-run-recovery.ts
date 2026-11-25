@@ -33,7 +33,6 @@ export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
   /** Only Gateway recovery reauthenticates a Control UI profile. */
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
   release: () => void;
 };
 

@@ -27,6 +27,763 @@ const enChatToolOperations = {
         timeout: "Sent · reply timed out",
       },
       operationLabels: {
+        automations: {
+          status: {
+            action: "Check automation service",
+            running: "Checking automation service",
+            done: "Checked automation service",
+          },
+          list: {
+            action: "List automations",
+            running: "Listing automations",
+            done: "Listed automations",
+          },
+          get: {
+            action: "Read automation",
+            running: "Reading automation",
+            done: "Read automation",
+          },
+          plan: {
+            action: "Plan automations",
+            running: "Planning automations",
+            done: "Planned automations",
+          },
+          add: {
+            action: "Create automation",
+            running: "Creating automation",
+            done: "Created automation",
+          },
+          update: {
+            action: "Update automation",
+            running: "Updating automation",
+            done: "Updated automation",
+          },
+          remove: {
+            action: "Remove automation",
+            running: "Removing automation",
+            done: "Removed automation",
+          },
+          run: {
+            action: "Request automation run",
+            running: "Requesting automation run",
+            done: "Requested automation run",
+          },
+          runs: {
+            action: "List automation runs",
+            running: "Listing automation runs",
+            done: "Listed automation runs",
+          },
+          wake: {
+            action: "Request agent wake",
+            running: "Requesting agent wake",
+            done: "Requested agent wake",
+          },
+          bind: {
+            action: "Bind automation",
+            running: "Binding automation",
+            done: "Bound automation",
+          },
+          scratch_get: {
+            action: "Read automation notes",
+            running: "Reading automation notes",
+            done: "Read automation notes",
+          },
+          scratch_set: {
+            action: "Save automation notes",
+            running: "Saving automation notes",
+            done: "Saved automation notes",
+          },
+          record_result: {
+            action: "Record automation result",
+            running: "Recording automation result",
+            done: "Recorded automation result",
+          },
+          next_check: {
+            action: "Schedule next automation check",
+            running: "Scheduling next automation check",
+            done: "Scheduled next automation check",
+          },
+        },
+        gateway: {
+          config_get: {
+            action: "Read Gateway configuration",
+            running: "Reading Gateway configuration",
+            done: "Read Gateway configuration",
+          },
+          config_schema_lookup: {
+            action: "Read configuration schema",
+            running: "Reading configuration schema",
+            done: "Read configuration schema",
+          },
+          users_getRole: {
+            action: "Read user role",
+            running: "Reading user role",
+            done: "Read user role",
+          },
+          users_setRole: {
+            action: "Set user role",
+            running: "Setting user role",
+            done: "Set user role",
+          },
+          update_run: {
+            action: "Request OpenClaw update",
+            running: "Requesting OpenClaw update",
+            done: "Requested OpenClaw update",
+          },
+          restart: {
+            action: "Request Gateway restart",
+            running: "Requesting Gateway restart",
+            done: "Requested Gateway restart",
+          },
+          update_cleanup: {
+            action: "Clean up previous update",
+            running: "Cleaning up previous update",
+            done: "Cleaned up previous update",
+          },
+        },
+        plugins: {
+          list: { action: "List plugins", running: "Listing plugins", done: "Listed plugins" },
+          inspect: {
+            action: "Inspect plugin",
+            running: "Inspecting plugin",
+            done: "Inspected plugin",
+          },
+          search: {
+            action: "Search plugins",
+            running: "Searching plugins",
+            done: "Searched plugins",
+          },
+          install: {
+            action: "Install plugin",
+            running: "Installing plugin",
+            done: "Installed plugin",
+          },
+          enable: { action: "Enable plugin", running: "Enabling plugin", done: "Enabled plugin" },
+          disable: {
+            action: "Disable plugin",
+            running: "Disabling plugin",
+            done: "Disabled plugin",
+          },
+          uninstall: {
+            action: "Uninstall plugin",
+            running: "Uninstalling plugin",
+            done: "Uninstalled plugin",
+          },
+          reload: {
+            action: "Reload plugins",
+            running: "Reloading plugins",
+            done: "Reloaded plugins",
+          },
+          reloadAndResume: {
+            action: "Ask to reload plugins and resume chat",
+            running: "Asking to reload plugins and resume chat",
+            done: "Asked to reload plugins and resume chat",
+          },
+        },
+        openclaw: {
+          status: {
+            action: "Check OpenClaw status",
+            running: "Checking OpenClaw status",
+            done: "Checked OpenClaw status",
+          },
+          models: { action: "List models", running: "Listing models", done: "Listed models" },
+          agents: { action: "List agents", running: "Listing agents", done: "Listed agents" },
+          channels: {
+            action: "List channels",
+            running: "Listing channels",
+            done: "Listed channels",
+          },
+          channel_info: {
+            action: "Read channel information",
+            running: "Reading channel information",
+            done: "Read channel information",
+          },
+          audit: {
+            action: "Audit OpenClaw",
+            running: "Auditing OpenClaw",
+            done: "Audited OpenClaw",
+          },
+          validate_config: {
+            action: "Validate configuration",
+            running: "Validating configuration",
+            done: "Validated configuration",
+          },
+          doctor: {
+            action: "Check OpenClaw setup",
+            running: "Checking OpenClaw setup",
+            done: "Checked OpenClaw setup",
+          },
+          health: {
+            action: "Check OpenClaw health",
+            running: "Checking OpenClaw health",
+            done: "Checked OpenClaw health",
+          },
+          config_get: {
+            action: "Read configuration",
+            running: "Reading configuration",
+            done: "Read configuration",
+          },
+          config_schema: {
+            action: "Read configuration schema",
+            running: "Reading configuration schema",
+            done: "Read configuration schema",
+          },
+          gateway_status: {
+            action: "Check Gateway status",
+            running: "Checking Gateway status",
+            done: "Checked Gateway status",
+          },
+          overview: {
+            action: "Read OpenClaw overview",
+            running: "Reading OpenClaw overview",
+            done: "Read OpenClaw overview",
+          },
+          plugin_list: {
+            action: "List plugins",
+            running: "Listing plugins",
+            done: "Listed plugins",
+          },
+          plugin_search: {
+            action: "Search plugins",
+            running: "Searching plugins",
+            done: "Searched plugins",
+          },
+          template_review: {
+            action: "Request template review",
+            running: "Requesting template review",
+            done: "Requested template review",
+          },
+          template_install: {
+            action: "Request template installation",
+            running: "Requesting template installation",
+            done: "Requested template installation",
+          },
+          connect_channel: {
+            action: "Request channel setup",
+            running: "Requesting channel setup",
+            done: "Requested channel setup",
+          },
+          configure_skills: {
+            action: "Request skill setup",
+            running: "Requesting skill setup",
+            done: "Requested skill setup",
+          },
+          configure_search: {
+            action: "Request web search setup",
+            running: "Requesting web search setup",
+            done: "Requested web search setup",
+          },
+          configure_gateway: {
+            action: "Request Gateway setup",
+            running: "Requesting Gateway setup",
+            done: "Requested Gateway setup",
+          },
+          import_memory: {
+            action: "Request memory import setup",
+            running: "Requesting memory import setup",
+            done: "Requested memory import setup",
+          },
+          configure_model_provider: {
+            action: "Request model provider sign-in guidance",
+            running: "Requesting model provider sign-in guidance",
+            done: "Requested model provider sign-in guidance",
+          },
+          manage_model_accounts: {
+            action: "Request model account settings",
+            running: "Requesting model account settings",
+            done: "Requested model account settings",
+          },
+          open_agent: {
+            action: "Request agent chat",
+            running: "Requesting agent chat",
+            done: "Requested agent chat",
+          },
+          open_setup: {
+            action: "Request setup guidance",
+            running: "Requesting setup guidance",
+            done: "Requested setup guidance",
+          },
+          setup: {
+            action: "Request OpenClaw setup",
+            running: "Requesting OpenClaw setup",
+            done: "Requested OpenClaw setup",
+          },
+          set_default_model: {
+            action: "Request default model change",
+            running: "Requesting default model change",
+            done: "Requested default model change",
+          },
+          config_set: {
+            action: "Request configuration change",
+            running: "Requesting configuration change",
+            done: "Requested configuration change",
+          },
+          config_unset: {
+            action: "Request configuration value removal",
+            running: "Requesting configuration value removal",
+            done: "Requested configuration value removal",
+          },
+          config_set_ref: {
+            action: "Request secret reference change",
+            running: "Requesting secret reference change",
+            done: "Requested secret reference change",
+          },
+          create_agent: {
+            action: "Request agent creation",
+            running: "Requesting agent creation",
+            done: "Requested agent creation",
+          },
+          create_team: {
+            action: "Request team creation",
+            running: "Requesting team creation",
+            done: "Requested team creation",
+          },
+          gateway_start: {
+            action: "Request Gateway start",
+            running: "Requesting Gateway start",
+            done: "Requested Gateway start",
+          },
+          gateway_stop: {
+            action: "Request Gateway stop",
+            running: "Requesting Gateway stop",
+            done: "Requested Gateway stop",
+          },
+          gateway_restart: {
+            action: "Request Gateway restart",
+            running: "Requesting Gateway restart",
+            done: "Requested Gateway restart",
+          },
+          plugin_install: {
+            action: "Request plugin installation",
+            running: "Requesting plugin installation",
+            done: "Requested plugin installation",
+          },
+          plugin_activate_artifact: {
+            action: "Request plugin artifact activation",
+            running: "Requesting plugin artifact activation",
+            done: "Requested plugin artifact activation",
+          },
+          plugin_uninstall: {
+            action: "Request plugin removal",
+            running: "Requesting plugin removal",
+            done: "Requested plugin removal",
+          },
+        },
+        structured_output: {
+          default: {
+            action: "Return structured result",
+            running: "Returning structured result",
+            done: "Returned structured result",
+          },
+        },
+        dispatch_action: {
+          default: {
+            action: "Dispatch action",
+            running: "Dispatching action",
+            done: "Dispatched action",
+          },
+        },
+        tool_call: {
+          default: { action: "Call tool", running: "Calling tool", done: "Called tool" },
+        },
+        tool_call_update: {
+          default: {
+            action: "Update tool call",
+            running: "Updating tool call",
+            done: "Updated tool call",
+          },
+        },
+        autoreview: {
+          default: {
+            action: "Review changes",
+            running: "Reviewing changes",
+            done: "Reviewed changes",
+          },
+        },
+        github_read: {
+          default: { action: "Read GitHub", running: "Reading GitHub", done: "Read GitHub" },
+        },
+        github_search: {
+          default: {
+            action: "Search GitHub",
+            running: "Searching GitHub",
+            done: "Searched GitHub",
+          },
+        },
+        "llm-task": {
+          default: {
+            action: "Run structured model task",
+            running: "Running structured model task",
+            done: "Ran structured model task",
+          },
+        },
+        lobster: {
+          run: { action: "Run workflow", running: "Running workflow", done: "Ran workflow" },
+          resume: {
+            action: "Resume workflow",
+            running: "Resuming workflow",
+            done: "Resumed workflow",
+          },
+          cancel: {
+            action: "Cancel workflow",
+            running: "Canceling workflow",
+            done: "Canceled workflow",
+          },
+          decline: {
+            action: "Decline workflow approval",
+            running: "Declining workflow approval",
+            done: "Declined workflow approval",
+          },
+        },
+        mcp_events: {
+          default: {
+            action: "Read MCP events",
+            running: "Reading MCP events",
+            done: "Read MCP events",
+          },
+        },
+        node_inference: {
+          discover: {
+            action: "Find inference nodes",
+            running: "Finding inference nodes",
+            done: "Found inference nodes",
+          },
+          run: {
+            action: "Run model on node",
+            running: "Running model on node",
+            done: "Ran model on node",
+          },
+        },
+        onepassword: {
+          list: {
+            action: "List 1Password items",
+            running: "Listing 1Password items",
+            done: "Listed 1Password items",
+          },
+          get: {
+            action: "Read 1Password item",
+            running: "Reading 1Password item",
+            done: "Read 1Password item",
+          },
+        },
+        visitor_invite: {
+          default: {
+            action: "Invite visitor",
+            running: "Inviting visitor",
+            done: "Invited visitor",
+          },
+        },
+        visitor_revoke: {
+          default: {
+            action: "Revoke visitor access",
+            running: "Revoking visitor access",
+            done: "Revoked visitor access",
+          },
+        },
+        visitor_list: {
+          default: {
+            action: "List visitors",
+            running: "Listing visitors",
+            done: "Listed visitors",
+          },
+        },
+        workboard_list: {
+          default: {
+            action: "List workboard cards",
+            running: "Listing workboard cards",
+            done: "Listed workboard cards",
+          },
+        },
+        workboard_create: {
+          default: {
+            action: "Create workboard card",
+            running: "Creating workboard card",
+            done: "Created workboard card",
+          },
+        },
+        workboard_link: {
+          default: {
+            action: "Link workboard cards",
+            running: "Linking workboard cards",
+            done: "Linked workboard cards",
+          },
+        },
+        workboard_read: {
+          default: {
+            action: "Read workboard card",
+            running: "Reading workboard card",
+            done: "Read workboard card",
+          },
+        },
+        workboard_claim: {
+          default: {
+            action: "Claim workboard card",
+            running: "Claiming workboard card",
+            done: "Claimed workboard card",
+          },
+        },
+        workboard_heartbeat: {
+          default: {
+            action: "Renew card claim",
+            running: "Renewing card claim",
+            done: "Renewed card claim",
+          },
+        },
+        workboard_complete: {
+          default: {
+            action: "Complete workboard card",
+            running: "Completing workboard card",
+            done: "Completed workboard card",
+          },
+        },
+        workboard_attachment_add: {
+          default: {
+            action: "Attach file to card",
+            running: "Attaching file to card",
+            done: "Attached file to card",
+          },
+        },
+        workboard_attachment_read: {
+          default: {
+            action: "Read card attachment",
+            running: "Reading card attachment",
+            done: "Read card attachment",
+          },
+        },
+        workboard_attachment_delete: {
+          default: {
+            action: "Delete card attachment",
+            running: "Deleting card attachment",
+            done: "Deleted card attachment",
+          },
+        },
+        workboard_block: {
+          default: {
+            action: "Block workboard card",
+            running: "Blocking workboard card",
+            done: "Blocked workboard card",
+          },
+        },
+        workboard_boards: {
+          default: {
+            action: "List workboards",
+            running: "Listing workboards",
+            done: "Listed workboards",
+          },
+        },
+        workboard_board_create: {
+          default: {
+            action: "Save workboard",
+            running: "Saving workboard",
+            done: "Saved workboard",
+          },
+        },
+        workboard_board_archive: {
+          default: {
+            action: "Archive workboard",
+            running: "Archiving workboard",
+            done: "Archived workboard",
+          },
+          restore: {
+            action: "Restore workboard",
+            running: "Restoring workboard",
+            done: "Restored workboard",
+          },
+        },
+        workboard_board_delete: {
+          default: {
+            action: "Delete workboard",
+            running: "Deleting workboard",
+            done: "Deleted workboard",
+          },
+        },
+        workboard_sessions_board_read: {
+          default: {
+            action: "Read sessions board",
+            running: "Reading sessions board",
+            done: "Read sessions board",
+          },
+        },
+        workboard_sessions_board_update: {
+          default: {
+            action: "Update sessions board",
+            running: "Updating sessions board",
+            done: "Updated sessions board",
+          },
+        },
+        workboard_sessions_board_move: {
+          default: {
+            action: "Move sessions board card",
+            running: "Moving sessions board card",
+            done: "Moved sessions board card",
+          },
+        },
+        workboard_stats: {
+          default: {
+            action: "Read workboard statistics",
+            running: "Reading workboard statistics",
+            done: "Read workboard statistics",
+          },
+        },
+        workboard_runs: {
+          default: {
+            action: "List workboard runs",
+            running: "Listing workboard runs",
+            done: "Listed workboard runs",
+          },
+        },
+        workboard_specify: {
+          default: {
+            action: "Define workboard task",
+            running: "Defining workboard task",
+            done: "Defined workboard task",
+          },
+        },
+        workboard_decompose: {
+          default: {
+            action: "Split workboard task",
+            running: "Splitting workboard task",
+            done: "Split workboard task",
+          },
+        },
+        workboard_notify_subscribe: {
+          default: {
+            action: "Subscribe to workboard updates",
+            running: "Subscribing to workboard updates",
+            done: "Subscribed to workboard updates",
+          },
+        },
+        workboard_notify_list: {
+          default: {
+            action: "List workboard subscriptions",
+            running: "Listing workboard subscriptions",
+            done: "Listed workboard subscriptions",
+          },
+        },
+        workboard_notify_events: {
+          default: {
+            action: "Read workboard events",
+            running: "Reading workboard events",
+            done: "Read workboard events",
+          },
+        },
+        workboard_notify_advance: {
+          default: {
+            action: "Advance workboard event cursor",
+            running: "Advancing workboard event cursor",
+            done: "Advanced workboard event cursor",
+          },
+        },
+        workboard_notify_unsubscribe: {
+          default: {
+            action: "Unsubscribe from workboard updates",
+            running: "Unsubscribing from workboard updates",
+            done: "Unsubscribed from workboard updates",
+          },
+        },
+        workboard_promote: {
+          default: {
+            action: "Promote workboard card",
+            running: "Promoting workboard card",
+            done: "Promoted workboard card",
+          },
+        },
+        workboard_reassign: {
+          default: {
+            action: "Reassign workboard card",
+            running: "Reassigning workboard card",
+            done: "Reassigned workboard card",
+          },
+        },
+        workboard_reclaim: {
+          default: {
+            action: "Reclaim workboard card",
+            running: "Reclaiming workboard card",
+            done: "Reclaimed workboard card",
+          },
+        },
+        workboard_dispatch: {
+          default: {
+            action: "Run workboard maintenance",
+            running: "Running workboard maintenance",
+            done: "Ran workboard maintenance",
+          },
+        },
+        workboard_release: {
+          default: {
+            action: "Release card claim",
+            running: "Releasing card claim",
+            done: "Released card claim",
+          },
+        },
+        workboard_comment: {
+          default: {
+            action: "Comment on workboard card",
+            running: "Commenting on workboard card",
+            done: "Commented on workboard card",
+          },
+        },
+        workboard_proof: {
+          default: {
+            action: "Record workboard evidence",
+            running: "Recording workboard evidence",
+            done: "Recorded workboard evidence",
+          },
+        },
+        workboard_verify: {
+          default: {
+            action: "Record workboard card check",
+            running: "Recording workboard card check",
+            done: "Recorded workboard card check",
+          },
+          confirmed: {
+            action: "Verify workboard card",
+            running: "Verifying workboard card",
+            done: "Verified workboard card",
+          },
+        },
+        workboard_worker_log: {
+          default: {
+            action: "Record worker log",
+            running: "Recording worker log",
+            done: "Recorded worker log",
+          },
+        },
+        workboard_protocol_violation: {
+          default: {
+            action: "Record workboard protocol violation",
+            running: "Recording workboard protocol violation",
+            done: "Recorded workboard protocol violation",
+          },
+        },
+        workboard_unblock: {
+          default: {
+            action: "Unblock workboard card",
+            running: "Unblocking workboard card",
+            done: "Unblocked workboard card",
+          },
+        },
+        workboard_move: {
+          default: {
+            action: "Move workboard card",
+            running: "Moving workboard card",
+            done: "Moved workboard card",
+          },
+        },
+        reef_guard_verdict: {
+          default: {
+            action: "Return guard decision",
+            running: "Returning guard decision",
+            done: "Returned guard decision",
+          },
+        },
+        wait: {
+          default: {
+            action: "Wait for tool result",
+            running: "Waiting for tool result",
+            done: "Waited for tool result",
+          },
+        },
         memory_search: {
           default: {
             action: "Search memory",
