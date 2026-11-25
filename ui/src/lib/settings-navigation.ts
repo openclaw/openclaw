@@ -101,10 +101,14 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
   return false;
 }
 
+function normalizeSettingsSearchText(value: string): string {
+  return foldSearchCase(normalizeLowercaseStringOrEmpty(value)).normalize("NFC");
+}
+
 /** Lower ranks first: exact title, title prefix, title match, then no title match. */
 export function settingsSearchTitleRank(titles: readonly string[], query: string): number {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  const candidates = titles.map((title) => normalizeLowercaseStringOrEmpty(title).normalize("NFC"));
+  const normalizedQuery = normalizeSettingsSearchText(query);
+  const candidates = titles.map(normalizeSettingsSearchText);
   if (candidates.includes(normalizedQuery)) {
     return 0;
   }
@@ -115,8 +119,8 @@ export function settingsSearchTitleRank(titles: readonly string[], query: string
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = foldSearchCase(normalizeLowercaseStringOrEmpty(value)).normalize("NFC");
-  const normalizedQuery = foldSearchCase(normalizeLowercaseStringOrEmpty(query)).normalize("NFC");
+  const candidate = normalizeSettingsSearchText(value);
+  const normalizedQuery = normalizeSettingsSearchText(query);
   if (!normalizedQuery) {
     return false;
   }

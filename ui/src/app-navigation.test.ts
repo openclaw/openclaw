@@ -25,7 +25,7 @@ import {
 import { routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
-import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
+import { settingsSearchTextMatches, settingsSearchTitleRank } from "./lib/settings-navigation.ts";
 
 function expectBase(base: string, ...paths: string[]) {
   for (const path of paths) {
@@ -47,6 +47,14 @@ it.each([
 ] as const)("matches setting text %s against %s: %s", (text, query, matches) => {
   expect(settingsSearchTextMatches(text, query)).toBe(matches);
 });
+
+it.each(["ελεγχοΣ", "ελεγχοσ", "ελεγχος"])(
+  "keeps exact and prefix settings ranks for %s",
+  (query) => {
+    expect(settingsSearchTitleRank(["ΕΛΕΓΧΟΣ"], query)).toBe(0);
+    expect(settingsSearchTitleRank(["ΕΛΕΓΧΟΣ API"], query)).toBe(1);
+  },
+);
 
 it.each([
   [{ context: "About", brandName: "Northstar", attentionCount: 2 }, "(2) About — Northstar"],
