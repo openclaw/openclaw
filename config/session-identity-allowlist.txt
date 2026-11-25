@@ -1056,7 +1056,6 @@ src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
 src/gateway/session-send-delivery.ts	4
-src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
 src/gateway/session-sharing-policy.ts	4
 src/gateway/session-sharing-preparation.ts	4

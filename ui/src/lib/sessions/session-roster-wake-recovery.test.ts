@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -27,15 +27,40 @@ const unavailable = new GatewayRequestError({
   retryAfterMs: 7_000,
 });
 
+beforeEach(() => vi.useFakeTimers());
+
+const failingWake = () => vi.fn().mockReturnValueOnce(held).mockRejectedValueOnce(unavailable);
+
+it("restores a loaded saved pin at its remotely shortened snooze deadline", async () => {
+  vi.setSystemTime(0);
+  let snoozedUntil = 3_600_000;
+  const row = () => ({ ...saved, snoozedUntil, pinned: Date.now() >= snoozedUntil });
+  const { sessions, watch, listRows, emitEvent } = rosterReadFixture(
+    () => ({
+      ...sessionsResult([row()], Date.now()),
+      activityExpiresAt: Date.now() < snoozedUntil ? snoozedUntil - 1 : undefined,
+    }),
+    "viewer",
+  );
+  const query = owners[0];
+  watch(query);
+  await sessions.refreshList(query);
+  snoozedUntil = 120_000;
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "patch", session: row(), ancestorSessions: [] },
+  });
+  await advance(119_999);
+  expect(listRows(query)?.[0]).toMatchObject({ snoozedUntil, pinned: false });
+  await advance(2);
+  expect(listRows(query)?.[0]?.pinned).toBe(true);
+});
+
 it.each(owners)(
   "recovers the mounted $source window once after its wake read fails",
   async (query) => {
-    vi.useFakeTimers();
-    const read = vi
-      .fn()
-      .mockReturnValueOnce(held)
-      .mockRejectedValueOnce(unavailable)
-      .mockReturnValue(restored);
+    const read = failingWake().mockReturnValue(restored);
     const { sessions, watch, listRows } = rosterReadFixture(read);
     watch(query);
     watch(query); // A second consumer of the same window is not a second retry owner.
@@ -61,7 +86,6 @@ it.each([
 ] as const)(
   "stops automatic reads for a persistent $message error but accepts an explicit recovery",
   async (error, expectedReads) => {
-    vi.useFakeTimers();
     const read = vi.fn().mockReturnValueOnce(held).mockRejectedValue(error);
     const { sessions, watch, listRows } = rosterReadFixture(read);
     const query = owners[1];
@@ -80,7 +104,6 @@ it.each([
 it.each(owners)(
   "retains only the outstanding cutoff across overlapping $source reads",
   async (query) => {
-    vi.useFakeTimers();
     const same = createDeferred<SessionsListResult>();
     const newer = createDeferred<SessionsListResult>();
     const secondCutoff = { ...held, ts: 10_102, activityExpiresAt: 19_000 };
@@ -119,11 +142,7 @@ it.each(owners)(
 );
 
 it.each(owners)("absorbs a queued $source wake retry on explicit replacement", async (query) => {
-  vi.useFakeTimers();
-  const read = vi
-    .fn()
-    .mockReturnValueOnce(held)
-    .mockRejectedValueOnce(unavailable)
+  const read = failingWake()
     .mockReturnValueOnce({ ...held, ts: 10_103, activityExpiresAt: 30_103 })
     .mockReturnValue(restored);
   const { sessions, watch, listRows } = rosterReadFixture(read);
@@ -140,13 +159,9 @@ it.each(owners)("absorbs a queued $source wake retry on explicit replacement", a
 });
 
 it("does not let a successful append consume a pending full-window retry", async () => {
-  vi.useFakeTimers();
   const query = owners[1];
   const tail = sessionRow("agent:main:tail");
-  const read = vi
-    .fn()
-    .mockReturnValueOnce(held)
-    .mockRejectedValueOnce(unavailable)
+  const read = failingWake()
     .mockReturnValueOnce({ ...sessionsResult([tail], 10_103), hasMore: false, offset: 2 })
     .mockReturnValue({ ...sessionsResult([saved, returning, recent], 17_102), hasMore: true });
   const { sessions, watch, listRows } = rosterReadFixture(read);
@@ -168,7 +183,6 @@ it.each([
 ])(
   "repairs the held $query.source prefix when Load More crosses its cutoff",
   async ({ query, activityExpiresAt }) => {
-    vi.useFakeTimers();
     const tail = sessionRow("agent:main:tail");
     const read = vi
       .fn()
@@ -203,7 +217,6 @@ it.each([
 ])(
   "honors the first due cutoff when an earlier tail receipt arrives at $delivery ms",
   async ({ delivery, wake }) => {
-    vi.useFakeTimers();
     const query = owners[1];
     const append = createDeferred<SessionsListResult>();
     const tail = {
@@ -235,13 +248,8 @@ it.each([
 );
 
 it("parks both retries while hidden and catches up only the still-mounted window", async () => {
-  vi.useFakeTimers();
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const sidebar = vi
-    .fn()
-    .mockReturnValueOnce(held)
-    .mockRejectedValueOnce(unavailable)
-    .mockReturnValue(restored);
+  const sidebar = failingWake().mockReturnValue(restored);
   const table = vi.fn().mockReturnValueOnce(held).mockRejectedValue(unavailable);
   const { sessions, watch, listRows, settle } = rosterReadFixture((params) =>
     params.search ? table() : sidebar(),
@@ -267,7 +275,6 @@ it("parks both retries while hidden and catches up only the still-mounted window
 });
 
 it("does not replay a late rejected wake against the newly selected primary roster", async () => {
-  vi.useFakeTimers();
   const slow = createDeferred<SessionsListResult>();
   const sidebar = vi.fn().mockReturnValueOnce(held).mockReturnValue(slow.promise);
   const otherRows = [sessionRow("agent:other:active")];
@@ -294,7 +301,6 @@ it("does not replay a late rejected wake against the newly selected primary rost
 it.each(["primary", "observed"] as const)(
   "recovers the late-joining %s owner after the first owner retires",
   async (survivor) => {
-    vi.useFakeTimers();
     const query = { ...owners[0], rowMode: "sidebar", includeDerivedTitles: true } as const;
     const shared = createDeferred<SessionsListResult>();
     const read = vi
@@ -339,7 +345,6 @@ it.each(["primary", "observed"] as const)(
 );
 
 it("does not lose the primary wake to an observed transport sampled before the cutoff", async () => {
-  vi.useFakeTimers();
   const query = { ...owners[0], rowMode: "sidebar", includeDerivedTitles: true } as const;
   const older = createDeferred<SessionsListResult>();
   const read = vi
@@ -371,7 +376,6 @@ it.each([
 ])(
   "repairs a batched prefix at its earliest actual cutoff (tail $tailTs, repeated $repeatTorn)",
   async ({ tailTs, repeatTorn }) => {
-    vi.useFakeTimers();
     const query = { ...owners[1], limit: 4, pageSize: 2 };
     const tail = sessionRow("agent:main:tail");
     const fourth = sessionRow("agent:main:fourth");
@@ -417,7 +421,6 @@ it.each([
 );
 
 it("retries the signed-in primary's owner-first prefix after Load More", async () => {
-  vi.useFakeTimers();
   const tail = sessionRow("agent:main:tail");
   const repaired = sessionsResult([saved, returning, recent, tail], 17_103);
   const read = vi

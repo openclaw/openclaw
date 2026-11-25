@@ -16,6 +16,7 @@ import {
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunDelegatedAuthority,
@@ -30,6 +31,7 @@ import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-erro
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 import {
   createOperationalRunInstanceRef,
@@ -65,6 +67,15 @@ export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
   const readCurrentRoleFacts = source.readCurrentRoleFacts;
+  const recoverySnapshot =
+    source.participationCeiling && source.recoverySnapshot
+      ? normalizeGatewayOperatorRecoverySnapshot({
+          ...source.recoverySnapshot,
+          version: 2,
+          participationCeiling: source.participationCeiling,
+          scopes: intersectOperatorScopes(source.recoverySnapshot.scopes, source.scopes),
+        })
+      : source.recoverySnapshot;
   const authority = Object.freeze({
     profileId: source.profileId,
     canonicalIdentity:
@@ -87,10 +98,13 @@ export function createAdmittedRunOperatorAuthority(
         principal: Object.freeze({ ...source.ingress.principal }),
         scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
       }),
-    recoverySnapshot: source.recoverySnapshot
-      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+    recoverySnapshot: recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(recoverySnapshot))
       : undefined,
-    recoverySnapshotUnavailableReason: source.recoverySnapshotUnavailableReason,
+    recoverySnapshotUnavailableReason:
+      source.recoverySnapshot && !recoverySnapshot
+        ? ("decode-failed" as const)
+        : source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
@@ -99,8 +113,10 @@ export function createAdmittedRunOperatorAuthority(
       : undefined,
     channelOwner: source.channelOwner && Object.freeze({ ...source.channelOwner }),
     scopes: Object.freeze([...source.scopes]),
-    requesterOwner: source.requesterOwner,
     grant: source.grant,
+    participationCeiling: source.participationCeiling
+      ? freezeJsonSnapshot(structuredClone(source.participationCeiling))
+      : undefined,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,

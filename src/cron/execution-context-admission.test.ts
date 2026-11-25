@@ -35,7 +35,6 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   canonicalIdentity: null,
   profileId: "requester",
   scopes: ["operator.admin"],
-  requesterOwner: true,
   grant: decideTurnGrant(["operator.admin"]),
 };
 

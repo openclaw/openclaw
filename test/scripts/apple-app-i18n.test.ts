@@ -92,7 +92,7 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
   }
 });
 
-it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
+it("checks both app catalogs through the public strict and obsolete-warning paths", async () => {
   const stages: Array<{ stage: string; started: number; finished?: number }> = [];
   const startStage = (stage: string) => {
     const record: (typeof stages)[number] = { stage, started: performance.now() };
@@ -123,95 +123,35 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
     const finishSync = startStage("sync");
     const { build, macosBuild } = await apple.syncAppleAppI18n();
     finishSync();
-    const catalogs = [
-      {
-        platform: "ios",
-        filePath: path.resolve("apps/ios/Resources/Localizable.xcstrings"),
-        catalog: build.catalog,
-      },
-      {
-        platform: "macos",
-        filePath: path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
-        catalog: macosBuild.catalog,
-      },
-    ];
-    for (const { platform, filePath, catalog } of catalogs) {
+    for (const [platform, filePath, catalog] of [
+      ["ios", path.resolve("apps/ios/Resources/Localizable.xcstrings"), build.catalog],
+      [
+        "macos",
+        path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
+        macosBuild.catalog,
+      ],
+    ] as const) {
       const finishPrepare = startStage(`${platform}:prepare`);
-      const warnings: string[] = [];
-      const options = { reportObsolete: (message: string) => warnings.push(message) };
-      const strings = expectDefined(catalog.strings, "active catalog strings");
-      const activeKey = expectDefined(
-        Object.keys(strings).find((key) => key.includes("%@")),
-        "active format key",
+      probe.catalogs.set(
+        filePath,
+        apple.serializeAppleCatalog({
+          ...catalog,
+          strings: { ...catalog.strings, "Retired empty title": {} },
+        }),
       );
-      const retired = "Retired empty title";
-      const obsolete: typeof catalog & { strings: typeof strings } = {
-        ...catalog,
-        strings: {
-          ...strings,
-          "Retired synthetic %@": { localizations: { en: unit("", "new") } },
-          [retired]: {},
-        },
-      };
-      const serialized = apple.serializeAppleCatalog(obsolete);
       finishPrepare();
-      const reject = async (stage: string, invalid: string) => {
-        const finish = startStage(`${platform}:${stage}`);
-        probe.catalogs.set(filePath, invalid);
-        await expect(apple.checkAppleAppI18n(options)).rejects.toThrow();
-        finish();
-      };
-      probe.catalogs.set(filePath, serialized);
       const finishStrict = startStage(`${platform}:strict-stale`);
       await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
       finishStrict();
       const finishWarning = startStage(`${platform}:obsolete-warning`);
-      await expect(apple.checkAppleAppI18n(options)).resolves.toBeUndefined();
+      const warnings: string[] = [];
+      await expect(
+        apple.checkAppleAppI18n({ reportObsolete: (message) => warnings.push(message) }),
+      ).resolves.toBeUndefined();
       expect(warnings).toEqual([
-        `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=2)`,
+        `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=1)`,
       ]);
       finishWarning();
-
-      for (const [index, row] of [
-        "null",
-        "42",
-        '{"localizations":null}',
-        '{"localizations":{"en":42}}',
-        '{"localizations":{"en":{"stringUnit":null}}}',
-        '{"localizations":{"en":{"stringUnit":{"state":"new"}}}}',
-        '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
-        '{"comment":42}',
-        '{"localizations":{"en":{"variations":{}}}}',
-      ].entries()) {
-        await reject(
-          `malformed-${index}`,
-          serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`),
-        );
-      }
-
-      const mutate = (change: (copy: typeof obsolete, row: (typeof strings)[string]) => void) => {
-        const copy = structuredClone(obsolete);
-        change(copy, expectDefined(copy.strings[activeKey], "active catalog entry"));
-        return apple.serializeAppleCatalog(copy);
-      };
-      const finishMutants = startStage(`${platform}:mutants`);
-      const invalidCatalogs = [
-        mutate((copy) => delete copy.strings[activeKey]),
-        mutate((_copy, row) => delete row.localizations?.de),
-        mutate((_copy, row) => {
-          expectDefined(row.localizations?.de?.stringUnit, "German format unit").value =
-            "Missing format argument";
-        }),
-        mutate((_copy, row) => Object.assign(row, { comment: "Unexpected metadata" })),
-        apple.serializeAppleCatalog({ ...obsolete, sourceLanguage: "fr" }),
-        apple.serializeAppleCatalog({ ...obsolete, version: "2.0" }),
-        `${serialized}\n`,
-        `${serialized}malformed\n`,
-      ];
-      finishMutants();
-      for (const [index, invalid] of invalidCatalogs.entries()) {
-        await reject(`invalid-${index}`, invalid);
-      }
       const finishRestore = startStage(`${platform}:restore`);
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
       finishRestore();
@@ -221,6 +161,116 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
     probe.catalogs.clear();
   }
 });
+
+it.each(["ios", "macos"] as const)(
+  "warns only when obsolete %s keys are the entire catalog drift",
+  (platform) => {
+    const buildCatalog = platform === "ios" ? apple.buildIosCatalog : apple.buildMacosCatalog;
+    const inventory = [makeEntry("format", "Active %@", [site("ui-call", platform)])];
+    const { catalog } = buildCatalog(emptyCatalog, inventory, []);
+    const strings = expectDefined(catalog.strings, "active catalog strings");
+    const activeKey = "Active %@";
+    const active = expectDefined(strings[activeKey], "active catalog entry");
+    expectDefined(active.localizations, "active localizations").de = unit("Aktiv %@");
+    const retired = "Retired empty title";
+    const obsolete: typeof catalog & { strings: typeof strings } = {
+      ...catalog,
+      strings: {
+        ...strings,
+        "Retired synthetic %@": { localizations: { en: unit("", "new") } },
+        [retired]: {},
+      },
+    };
+    const serialized = apple.serializeAppleCatalog(obsolete);
+    const warnings: string[] = [];
+    const reportObsolete = (message: string) => warnings.push(message);
+    const check = (actual: string, report?: (message: string) => void) => {
+      // Rebuild from each input: translated units survive generation and must still pass
+      // semantic validation after comparison, just as in the public check.
+      const build = buildCatalog(JSON.parse(actual) as typeof catalog, inventory, []);
+      apple.assertAppleCatalogCurrent(platform, actual, build.catalog, report);
+      apple.validateAppleCatalog(platform, build.catalog);
+    };
+    expect(() => check(serialized)).toThrow("is stale");
+    expect(() => check(serialized, reportObsolete)).not.toThrow();
+    expect(warnings).toEqual([`Apple obsolete catalog rows: ${platform} (keys=2)`]);
+
+    for (const row of [
+      "null",
+      "42",
+      '{"localizations":null}',
+      '{"localizations":{"en":42}}',
+      '{"localizations":{"en":{"stringUnit":null}}}',
+      '{"localizations":{"en":{"stringUnit":{"state":"new"}}}}',
+      '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
+      '{"comment":42}',
+      '{"localizations":{"en":{"variations":{}}}}',
+    ]) {
+      expect(() =>
+        check(serialized.replace(`"${retired}": {}`, `"${retired}": ${row}`), reportObsolete),
+      ).toThrow();
+    }
+
+    const mutate = (change: (copy: typeof obsolete, row: (typeof strings)[string]) => void) => {
+      const copy = structuredClone(obsolete);
+      change(copy, expectDefined(copy.strings[activeKey], "active catalog entry"));
+      return apple.serializeAppleCatalog(copy);
+    };
+    const invalidCatalogs = [
+      mutate((copy) => delete copy.strings[activeKey]),
+      mutate((_copy, row) => delete row.localizations?.de),
+      mutate((_copy, row) => {
+        expectDefined(row.localizations?.de?.stringUnit, "German format unit").value =
+          "Missing format argument";
+      }),
+      mutate((_copy, row) => Object.assign(row, { comment: "Unexpected metadata" })),
+      apple.serializeAppleCatalog({ ...obsolete, sourceLanguage: "fr" }),
+      apple.serializeAppleCatalog({ ...obsolete, version: "2.0" }),
+      `${serialized}\n`,
+      `${serialized}malformed\n`,
+    ];
+    for (const invalid of invalidCatalogs) {
+      expect(() => check(invalid, reportObsolete)).toThrow();
+    }
+
+    const translated = structuredClone(catalog);
+    expectDefined(
+      translated.strings?.[activeKey]?.localizations?.de?.stringUnit,
+      "translated German unit",
+    ).value = "Anderer gültiger %@";
+    expect(() => check(apple.serializeAppleCatalog(translated))).not.toThrow();
+    expect(() =>
+      check(
+        apple.serializeAppleCatalog({
+          ...obsolete,
+          strings: {
+            ...obsolete.strings,
+            [activeKey]: expectDefined(translated.strings?.[activeKey], "translated entry"),
+          },
+        }),
+        reportObsolete,
+      ),
+    ).not.toThrow();
+
+    const invalidTranslation = structuredClone(translated);
+    expectDefined(
+      invalidTranslation.strings?.[activeKey]?.localizations?.de?.stringUnit,
+      "translated German unit",
+    ).value = "Missing format argument";
+    const invalidBuild = buildCatalog(invalidTranslation, inventory, []);
+    // A translated value can be current byte-for-byte and still violate placeholders.
+    expect(() =>
+      apple.assertAppleCatalogCurrent(
+        platform,
+        apple.serializeAppleCatalog(invalidTranslation),
+        invalidBuild.catalog,
+      ),
+    ).not.toThrow();
+    expect(() => apple.validateAppleCatalog(platform, invalidBuild.catalog)).toThrow(
+      "placeholder drift in de",
+    );
+  },
+);
 
 it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
   const coveredMacosEntries: Entry[] = [

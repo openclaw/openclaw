@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertCompletedUpdate } from "../../../lib/update-receipt.mjs";
 import { readJson, writeJson } from "../fixtures/common.mjs";
 
 const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
@@ -95,10 +96,14 @@ if (stage === "seed") {
   if (stage === "post-update") {
     const raw = fs.readFileSync(path.join(artifactRoot, "update.json"), "utf8");
     const update = JSON.parse(raw.slice(raw.indexOf("{")));
-    assert.equal(update.status, "ok", "Missing load path must not require update recovery");
+    const lifecycle = assertCompletedUpdate(update);
+    const warnings = lifecycle
+      ? update.origin?.releaseAdmission?.warnings
+      : update.postUpdate?.plugins?.warnings;
     assert(
-      update.postUpdate?.plugins?.warnings?.some(
-        (warning) => warning.reason === code && warning.message === message,
+      warnings?.some(
+        (warning) =>
+          (lifecycle ? warning.code : warning.reason) === code && warning.message === message,
       ),
       "Update report omitted the typed configured-load-path warning",
     );

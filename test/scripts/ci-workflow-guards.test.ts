@@ -2046,14 +2046,16 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/migration-bulk-access.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/update-runs.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-launcher.log",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
@@ -2061,7 +2063,7 @@ AFTER_CD
       ".artifacts/upgrade-survivor/baseline/legacy-operator-baseline-turn.err",
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
-      ".artifacts/upgrade-survivor/release-update-survivor/crash/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-env.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read/config.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read-env.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-baseline/state/openclaw.sqlite",

@@ -76,7 +76,6 @@ function createOperatorRunFixture() {
     sessionKey: "agent:main:visitor-work",
     runId: "compat-request",
     messageChannel: "webchat",
-    senderIsOwner: false,
     operatorScopes: ["operator.sessions.write"],
     requestAuth: {
       authMethod: "trusted-proxy",
@@ -434,23 +433,33 @@ describe("OpenAI-compatible operator run authority", () => {
     });
   });
 
-  it.each(["owner", "system"] as const)(
-    "preserves %s authority without requiring a person-bound Gateway capture",
-    async (actor) => {
+  it.each([
+    { authMethod: "token", scopes: ["operator.admin", "operator.write"], owner: true },
+    { authMethod: "none", scopes: ["operator.write"], owner: false },
+  ] as const)(
+    "admits the $authMethod owner credential as the owner principal with its own scopes",
+    async ({ authMethod, scopes, owner }) => {
       await withOpenClawTestState({ label: "compat-run-owner" }, async () => {
         const fixture = createOperatorRunFixture();
-        fixture.params.resolveGatewayContext = undefined;
-        fixture.params.senderIsOwner = true;
-        fixture.params.requestAuth.operatorAccessAuthority = undefined;
-        if (actor === "owner") {
-          fixture.params.requestAuth.authenticatedUserProfile!.profileId = "gateway-owner";
-        } else {
-          fixture.params.requestAuth.operatorRoleActor = { kind: "system" };
-        }
+        const profile = await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
+        fixture.params.operatorScopes = scopes;
+        fixture.params.requestAuth = {
+          authMethod,
+          trustDeclaredOperatorScopes: authMethod === "none",
+          ...(authMethod === "token" ? { operatorRoleActor: { kind: "system" as const } } : {}),
+          authenticatedUserProfile: gatewayProfile(
+            profile.id,
+            "Synthetic owner",
+            profile.updatedAt,
+          ),
+        };
         vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          expect(options.operatorAuthority).toBeUndefined();
-          expect(options.abortSignal).toBe(fixture.request.signal);
-          expect(options.senderIsOwner).toBe(true);
+          expect(options.operatorAuthority).toMatchObject({
+            profileId: "gateway-owner",
+            scopes,
+            grant: { owner, skillAuthoring: true, questionReplace: true },
+          });
+          expect(options.senderIsOwner).toBe(owner);
           return completedResult;
         });
         await expect(runOpenAiCompatibleAgentCommand(fixture.params)).resolves.toBe(
@@ -493,7 +502,6 @@ describe("OpenAI-compatible command admission", () => {
         sessionKey: "agent:main:main",
         runId: "http-run",
         messageChannel: "webchat",
-        senderIsOwner: true,
         requestAuth: {
           authMethod: "token",
           trustDeclaredOperatorScopes: false,

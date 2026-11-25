@@ -322,22 +322,14 @@ suite.define(() => {
       state: "error",
       errorMessage: diagnostic,
     });
-    const failedAlert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
+    const failedAlert = page.locator(".chat-error--reply");
     await failedAlert.waitFor();
-    await failedAlert
-      .locator(".app-toast__message")
-      .getByText("Couldn't finish this reply.", { exact: true })
-      .waitFor();
-    await failedAlert
-      .locator(".app-toast__description")
-      .getByText("Check the conversation before trying again.", { exact: true })
-      .waitFor();
-    expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
-    await failedAlert.locator("summary").click();
-    await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
-    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
-      renderedDiagnostic,
-    );
+    expect(await failedAlert.locator(".app-toast__message").textContent()).toBe(renderedDiagnostic);
+    expect(await failedAlert.locator(".app-toast__message").getAttribute("role")).toBe("alert");
+    expect(await failedAlert.locator(".app-toast__description").count()).toBe(0);
+    expect(
+      await failedAlert.getByRole("button", { name: "Show details", exact: true }).count(),
+    ).toBe(0);
     expect(await page.locator(".chat-group.assistant").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
 
@@ -941,7 +933,7 @@ suite.define(() => {
 
     const alert = page.getByRole("alert").filter({ hasText: diagnostic });
     await alert.waitFor();
-    expect((await alert.textContent())?.trim()).toContain(`Error: ${diagnostic}`);
+    expect((await alert.textContent())?.trim()).toContain(diagnostic);
     expect(await page.getByLabel("Run status: Interrupted").count()).toBe(0);
     expect(await stopButton(page).count()).toBe(0);
   });

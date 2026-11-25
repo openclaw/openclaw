@@ -12,9 +12,17 @@ const adapters = vi.hoisted(() => ({
   readIndex: vi.fn(),
   future: vi.fn(),
 }));
-vi.mock("node:child_process", () => ({ spawn: adapters.spawn, execFileSync: adapters.pack }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: adapters.spawn,
+  execFileSync: adapters.pack,
+}));
 vi.mock("../../scripts/e2e/lib/plugin-update/process-observer.mjs", () => ({
   observePostCoreCommand: adapters.observe,
+}));
+vi.mock("../../scripts/e2e/lib/plugin-update/activation.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/e2e/lib/plugin-update/activation.mjs")>()),
+  settlePluginUpdate: vi.fn(),
 }));
 vi.mock("../../scripts/e2e/lib/plugin-index-sqlite.mjs", () => ({
   readPluginInstallIndex: adapters.readIndex,
@@ -57,7 +65,7 @@ const coreVersions = new Map<string, string>();
 const tagUpdates: string[][] = [];
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const hostPackagePath = () => path.resolve(path.dirname(entry), "..", "package.json");
+const hostPackagePath = () => path.join(path.dirname(entry), "package.json");
 const toolsFor = (version: number) =>
   Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
 function writeOutput(descriptor: unknown, output: string) {
@@ -186,7 +194,7 @@ beforeEach(() => {
   record = {};
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "consent-scenario-contract-"));
   roots.push(root);
-  entry = path.join(root, "host", "dist", "entry.js");
+  entry = path.join(root, "host", "openclaw.mjs");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
   writeJson(hostPackagePath(), { version: "2026.9.5" });
   coreTarball = path.join(root, "core.tgz");

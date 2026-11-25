@@ -33,13 +33,16 @@ import { readClientCredentialFileIdentity } from "../infra/client-credential-rec
 import type { ClientCredentialDatabase } from "../infra/client-credential-schema.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { assertNoPendingLegacyExecApprovals } from "../infra/exec-approvals-migration-gate.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readRestartSentinelRowSync } from "../infra/restart-sentinel-store.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { canSettleInterruptedUpdate } from "../infra/update-run-interruption-store.js";
 import { readInterruptedUpdateCandidate, readUpdateRuns } from "../infra/update-run-read.kernel.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -97,7 +100,6 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   const raw = config.raw;
   assert.ok(typeof raw === "string", "QA fixture config must exist");
   assertNoPendingLegacyExecApprovals({ env });
-  assert.equal(hasActiveStartupMigrationLease({ env }), false, "Startup lease remains active");
   const registered = await inspectOpenClawRegisteredAgentDatabases({ env, path: statePath });
   assertSessionStoreMigrationComplete({
     cfg: config.sourceConfig,
@@ -109,6 +111,19 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   using shared = openNodeSqliteDatabase(statePath, { readOnly: true });
   // Seals accelerate startup; the canonical reader also admits valid unsealed stores.
   assertExistingOpenClawStateRuntimeSchema(shared, statePath);
+  assert.equal(
+    executeSqliteQueryTakeFirstSync(
+      shared,
+      getNodeSqliteKysely<StateDB>(shared)
+        .selectFrom("state_leases")
+        .select("owner")
+        .where("scope", "=", "startup-migrations")
+        .where("lease_key", "=", "global")
+        .where("expires_at", ">", Date.now()),
+    ),
+    undefined,
+    "Startup lease remains active",
+  );
   const startupReady = getStateRuntimeSchemaAdmission(shared)?.startupReady;
   assert.equal(startupReady, true, "Shared state must be ready for startup");
   assert.equal(readStateSchemaPublicationBlocker(shared), undefined, "Schema publication blocked");
