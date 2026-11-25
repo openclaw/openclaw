@@ -682,6 +682,24 @@ extension OpenClawSnapshotUITests {
         }
     }
 
+    /// The phone composer shows its model and effort chips while the draft is focused.
+    func inlineModelChip(in app: XCUIApplication) -> XCUIElement {
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        return app.buttons["chat-composer-inline-model"]
+    }
+
+    /// Opens a provider in the model picker card and returns one of its model rows.
+    func pickerModelRow(_ selectionID: String, provider: String, in app: XCUIApplication) -> XCUIElement {
+        let providerRow = app.buttons["chat-model-picker-provider-\(provider)"]
+        XCTAssertTrue(providerRow.waitForExistence(timeout: 3), app.debugDescription)
+        providerRow.tap()
+        let row = app.buttons["chat-model-picker-model-\(selectionID)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 3), app.debugDescription)
+        return row
+    }
+
     func verifyComposerMenus(in app: XCUIApplication) {
         let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
         let inlineEffort = app.buttons["chat-composer-inline-effort"]
@@ -699,10 +717,12 @@ extension OpenClawSnapshotUITests {
         self.chatMessageInput(in: app).tap()
 
         inlineEffort.tap()
-        XCTAssertTrue(app.buttons["Default (inherited)"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Fast"].exists)
+        XCTAssertFalse(app.buttons["Default (inherited)"].exists, "The effort bar shows only levels")
         self.attachScreenshot(named: "chat-composer-effort")
         outsideMenu.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForNonExistence(timeout: 3))
 
         app.buttons["Chat actions"].tap()
         XCTAssertTrue(contextUsage.waitForExistence(timeout: 3))

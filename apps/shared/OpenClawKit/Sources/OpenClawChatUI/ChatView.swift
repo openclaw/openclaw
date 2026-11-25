@@ -288,7 +288,7 @@ extension OpenClawChatView {
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
-                self.composerAccessory?.chatColumn(column)
+                self.composerAccessory?.chatColumn(column).modifier(ChatComposerPanelsYield())
                 self.composer
                     .chatBehaviorProbe(.composer)
                     .chatColumn(

@@ -97,6 +97,48 @@ extension OpenClawChatViewModel {
             defaultProvider: defaultProvider)
     }
 
+    /// The phone picker's catalog: every provider with all of its models.
+    public var modelPickerCatalog: ChatModelPickerCatalog {
+        let defaults = self.modelPickerDefault
+        return ChatModelPickerStore.catalog(
+            choices: self.modelChoices,
+            favorites: self.modelPickerFavorites,
+            recents: self.modelPickerRecents,
+            defaultProvider: ChatModelPickerStore.resolvedDefaultProvider(
+                provider: defaults.provider,
+                model: defaults.model))
+    }
+
+    /// The model the session runs on, the agent's own included, so the picker can mark it.
+    public func isCurrentPickerModel(_ model: OpenClawChatModelChoice) -> Bool {
+        self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID == model.selectionID
+    }
+
+    /// The agent's own model, as the composer chip writes it.
+    public var defaultModelShortLabel: String? {
+        let defaults = self.modelPickerDefault
+        guard let defaultModelID = normalizedModelSelectionID(defaults.model, provider: defaults.provider) else {
+            return nil
+        }
+        // An exact provider/model ref first: a router can list the same id under its own provider.
+        guard let choice = self.modelChoices.first(where: { $0.selectionID == defaultModelID })
+            ?? self.modelChoices.first(where: { $0.modelID == defaultModelID })
+        else {
+            return defaultModelID.split(separator: "/").last.map(String.init) ?? defaultModelID
+        }
+        return Self.shortModelLabel(name: choice.name, provider: choice.provider, modelID: choice.modelID)
+    }
+
+    /// Picking a model waits while settings save, and on the phone while a reply runs.
+    var composerModelChoicesLocked: Bool {
+        let unavailable = !self.composerModelMutationAvailable || self.isUpdatingSessionSettings
+        #if os(iOS)
+        return unavailable || !self.showsModelPicker || self.hasActiveRunForComposerSettings
+        #else
+        return unavailable
+        #endif
+    }
+
     public var modelSelectionTargetDescription: String? {
         switch self.sessionDefaults?.modelSelectionTarget {
         case "agent": String(localized: "Changes this agent's default")
@@ -223,6 +265,11 @@ extension OpenClawChatViewModel {
         return "\(provider.lowercased())/\(modelID)"
     }
 
+    /// Whether a chosen model is the agent's own one, so going back to it would change nothing.
+    func isDefaultModel(selection selectionID: String) -> Bool {
+        self.modelChoices.first { $0.selectionID == selectionID }.map(self.isDefaultModel) ?? false
+    }
+
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
         let defaults = self.modelPickerDefault
         return ChatModelPickerStore.isDefaultModel(
@@ -238,7 +285,11 @@ extension OpenClawChatViewModel {
 
     public func toggleSelectedModelPinned() {
         guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
-        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
+        self.toggleModelPinned(self.modelSelectionID)
+    }
+
+    public func toggleModelPinned(_ selectionID: String) {
+        self.modelPickerStore.toggleFavorite(selectionID)
         self.modelPickerFavorites = self.modelPickerStore.favorites
     }
 
@@ -278,6 +329,27 @@ extension OpenClawChatViewModel {
 
     public var fastModeIsEnabled: Bool {
         self.fastModeProfile.isEnabled
+    }
+
+    /// Ultrafast is offered only when the selected model's account advertises the tier.
+    public var selectedModelSupportsUltrafast: Bool {
+        let model = self.selectedModelChoice(for: self.currentSessionEntry())
+        return self.selectedModelSupportsFastMode && model?.available != false &&
+            model?.serviceTiers?.contains("ultrafast") == true
+    }
+
+    /// Speed choices for the phone effort bar: Standard and Fast, and Ultrafast where offered.
+    public var composerSpeedOptions: [String] {
+        self.selectedModelSupportsUltrafast ? ["off", "on", "ultrafast"] : ["off", "on"]
+    }
+
+    /// The speed the next reply runs at, inherited or chosen.
+    public var composerSpeedSelection: String {
+        let profile = self.fastModeProfile
+        if profile.override == .ultrafast || (profile.override == nil && profile.effective == .ultrafast) {
+            return self.selectedModelSupportsUltrafast ? "ultrafast" : "on"
+        }
+        return profile.isEnabled ? "on" : "off"
     }
 
     public var composerInlineModelLabel: String {
@@ -484,9 +556,11 @@ extension OpenClawChatViewModel {
         case Self.inheritedThinkingSelectionID: next = nil
         case "on": next = .on
         case "off": next = .off
+        case "ultrafast": next = .ultrafast
         default: return
         }
         guard next == nil || self.selectedModelSupportsFastMode else { return }
+        guard next != .ultrafast || self.selectedModelSupportsUltrafast else { return }
         let target = self.currentModelPatchTarget()
         let sessionKey = self.sessionKey
         let baselineFastMode = self.currentSessionEntry()?.fastMode

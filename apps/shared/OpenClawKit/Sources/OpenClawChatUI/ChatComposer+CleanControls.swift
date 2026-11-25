@@ -72,7 +72,13 @@ extension OpenClawChatComposer {
     }
 
     #if os(iOS)
-    func cleanPhoneEditor(expanded: Bool) -> some View {
+    func cleanPhoneEditor(expanded focused: Bool) -> some View {
+        ChatComposerPanelExpansion(isFocused: focused) { expanded in
+            self.cleanPhoneEditor(expandedLayout: expanded)
+        }
+    }
+
+    private func cleanPhoneEditor(expandedLayout expanded: Bool) -> some View {
         CleanComposerPhoneLayout(expanded: expanded) {
             // Open, the field hugs its lines so the layout can place them; closed, it takes the
             // controls' full height, which centers the line on them and keeps the whole pill tappable.
@@ -191,6 +197,17 @@ extension OpenClawChatComposer {
     }
 
     private func cleanInlineModelPicker(compact: Bool) -> some View {
+        #if os(iOS)
+        // The phone opens the picker card over the chat (ChatModelPickerCard).
+        ChatComposerPanelButton(panel: .model, isFocused: self.isFocused) {
+            self.cleanInlineModelLabel(compact: compact)
+        }
+        .accessibilityLabel("Model")
+        .accessibilityValue(self.viewModel.composerInlineModelLabel)
+        .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
+        .accessibilityIdentifier("chat-composer-inline-model")
+        .layoutPriority(1)
+        #else
         Menu {
             // ViewThatFits constructs both footer variants while typing. Keep catalog
             // grouping and menu actions inside the menu's own evaluation boundary.
@@ -224,7 +241,7 @@ extension OpenClawChatComposer {
                         }
                     }
                 }
-                .disabled(self.cleanModelChoicesDisabled)
+                .disabled(self.viewModel.composerModelChoicesLocked)
                 #if os(macOS)
                 if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                     Divider()
@@ -240,20 +257,13 @@ extension OpenClawChatComposer {
                     Divider()
                     self.modelSignInButton
                 }
-                #elseif os(iOS)
-                Divider()
-                self.modelSignInButton
                 #endif
             }
         } label: {
             self.cleanInlineModelLabel(compact: compact)
         }
         .menuIndicator(.hidden)
-        #if os(iOS)
-        .tint(CleanChatComposerMetrics.footerInk)
-        #else
         .tint(OpenClawChatTheme.muted)
-        #endif
         #if os(macOS)
         // Mac session settings remain editable during a response; pinning is
         // local and stays available while a Gateway settings save is pending.
@@ -272,6 +282,7 @@ extension OpenClawChatComposer {
         .accessibilityHint(self.cleanInlineModelDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-model")
         .layoutPriority(1)
+        #endif
     }
 
     @ViewBuilder
@@ -372,20 +383,9 @@ extension OpenClawChatComposer {
             .help(self.cleanInlineEffortDisabledHint ?? self.viewModel.composerInlineEffortLabel)
             .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
             .fixedSize()
-        #else
-        Menu {
-            if self.viewModel.showsThinkingPicker {
-                #if os(iOS)
-                self.thinkingSelectionPicker.pickerStyle(.inline)
-                #else
-                self.thinkingPicker
-                #endif
-            }
-            if self.viewModel.showsFastModeControls {
-                self.fastModeToggle
-            }
-        } label: {
-            #if os(iOS)
+        #elseif os(iOS)
+        // The phone opens the effort bar over the composer (ChatEffortBar).
+        ChatComposerPanelButton(panel: .effort, isFocused: self.isFocused) {
             HStack(spacing: 3) {
                 CleanChatEffortGauge(
                     angle: self.viewModel.composerInlineEffortAngle,
@@ -401,7 +401,25 @@ extension OpenClawChatComposer {
             .padding(.trailing, 6)
             .frame(height: self.cleanControlHeight)
             .contentShape(Rectangle())
-            #else
+        }
+        .disabled(
+            !self.viewModel.composerEffortMutationAvailable ||
+                self.viewModel.isUpdatingSessionSettings ||
+                (!self.viewModel.showsThinkingPicker && !self.viewModel.selectedModelSupportsFastMode))
+        .disabled(self.viewModel.hasActiveRunForComposerSettings)
+        .accessibilityLabel("Effort")
+        .accessibilityValue(self.viewModel.composerPhoneEffortLabel)
+        .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
+        .accessibilityIdentifier("chat-composer-inline-effort")
+        #else
+        Menu {
+            if self.viewModel.showsThinkingPicker {
+                self.thinkingPicker
+            }
+            if self.viewModel.showsFastModeControls {
+                self.fastModeToggle
+            }
+        } label: {
             CleanChatEffortGauge(
                 angle: self.viewModel.composerInlineEffortAngle,
                 fastModeEnabled: self.viewModel.fastModeIsEnabled,
@@ -413,14 +431,9 @@ extension OpenClawChatComposer {
                     width: self.cleanControlHeight,
                     height: self.cleanControlHeight)
                 .contentShape(Rectangle())
-            #endif
         }
         .menuIndicator(.hidden)
-        #if os(iOS)
-        .tint(CleanChatComposerMetrics.footerInk)
-        #else
         .tint(OpenClawChatTheme.muted)
-        #endif
         .disabled(
             !self.viewModel.composerEffortMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings)
@@ -441,16 +454,6 @@ extension OpenClawChatComposer {
             self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu
-        #endif
-    }
-
-    private var cleanModelChoicesDisabled: Bool {
-        let unavailable = !self.viewModel.composerModelMutationAvailable ||
-            self.viewModel.isUpdatingSessionSettings
-        #if os(iOS)
-        return unavailable || !self.viewModel.showsModelPicker || self.viewModel.hasActiveRunForComposerSettings
-        #else
-        return unavailable
         #endif
     }
 

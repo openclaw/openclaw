@@ -24,16 +24,22 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(self.waitUntilEnabled(modelPicker), app.debugDescription)
         modelPicker.tap()
         self.capture(app, named: "opened-model-menu")
+        // Search reaches every provider's models without opening each provider.
+        let search = app.textFields["chat-model-picker-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
+        search.tap()
+        search.typeText("fixture")
         let unknownRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "catalog-proof/fixture")).firstMatch
+            format: "identifier BEGINSWITH %@", "chat-model-picker-model-catalog-proof/fixture")).firstMatch
         XCTAssertTrue(unknownRow.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(unknownRow.isEnabled)
         let authRequiredRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "anthropic/claude-fixture")).firstMatch
+            format: "identifier BEGINSWITH %@", "chat-model-picker-model-anthropic/claude-fixture")).firstMatch
         XCTAssertTrue(authRequiredRow.waitForExistence(timeout: 10))
         XCTAssertFalse(authRequiredRow.isEnabled)
-        let modelRow = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "\(model.provider)/\(model.id)")).firstMatch
+        app.buttons["Clear search"].tap()
+        search.typeText(model.id)
+        let modelRow = app.buttons["chat-model-picker-model-\(model.provider)/\(model.id)"]
         XCTAssertTrue(modelRow.waitForExistence(timeout: 10), app.debugDescription)
         self.capture(app, named: "published-model-picker")
         modelRow.tap()
@@ -41,14 +47,14 @@ final class ChatCatalogUITests: XCTestCase {
         XCTAssertTrue(effort.waitForExistence(timeout: 10))
         XCTAssertTrue(self.waitUntilEnabled(effort))
         effort.tap()
-        let thinking = app.buttons["Thinking"]
-        XCTAssertTrue(thinking.waitForExistence(timeout: 5), app.debugDescription)
+        let bar = app.descendants(matching: .any)["chat-effort-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), app.debugDescription)
         self.capture(app, named: "published-fast-unavailable")
         XCTAssertFalse(app.buttons["Fast"].exists, "Fast must follow this model's published supportsFastMode=false")
-        thinking.tap()
-        for level in model.thinkingLevels {
-            XCTAssertTrue(app.buttons["\(level.label) (override)"].waitForExistence(timeout: 5), app.debugDescription)
+        if model.thinkingLevels.count > 1 {
+            XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar-slider"].exists, app.debugDescription)
         }
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "(override)")).firstMatch.exists)
         self.capture(app, named: "published-thinking-choices")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         modelPicker.tap()

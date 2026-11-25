@@ -230,6 +230,10 @@ struct ChatProTab: View {
                 .onChange(of: self.followUpMode, initial: true) { _, mode in
                     viewModel.defaultFollowUpMode = OpenClawChatQueueMode(rawValue: mode)
                 }
+                .openClawChatComposerPanels(
+                    viewModel: viewModel,
+                    agentName: self.agentDisplayName,
+                    agentAvatar: self.agentAvatarImage)
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {

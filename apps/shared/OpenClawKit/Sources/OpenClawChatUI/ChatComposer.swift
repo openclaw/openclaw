@@ -59,7 +59,7 @@ struct OpenClawChatComposerPresentationOwner: Equatable {
 
 @MainActor
 struct OpenClawChatComposer: View {
-    private enum ModelSignInAction {
+    enum ModelSignInAction {
         case open
         case refresh
     }
@@ -109,7 +109,7 @@ struct OpenClawChatComposer: View {
     #endif
     #if os(iOS)
     /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
-    @State private var isFocused = false
+    @State var isFocused = false
     @State var showsPermissionsSheet = false
     #else
     @FocusState private var isFocused: Bool
@@ -219,7 +219,7 @@ struct OpenClawChatComposer: View {
         .accessibilityIdentifier("chat-model-sign-in")
     }
 
-    private func performModelSignInAction(_ action: ModelSignInAction) {
+    func performModelSignInAction(_ action: ModelSignInAction) {
         guard self.modelSignInAction == nil else { return }
         let owner = self.presentationOwner
         let request = ModelSignInRequest(action: action)
@@ -718,6 +718,7 @@ struct OpenClawChatComposer: View {
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
         #endif
         .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius))
+        .modifier(ChatComposerPanelBridge(composer: self))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
     }

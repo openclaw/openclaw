@@ -262,7 +262,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
             thinkingDefault: model.thinkingdefault,
             input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
-            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            providerName: model.providername,
+            serviceTiers: model.servicetiers)
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
