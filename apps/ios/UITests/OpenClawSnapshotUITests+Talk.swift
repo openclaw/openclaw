@@ -45,10 +45,10 @@ extension OpenClawSnapshotUITests {
             ("connecting", "Connecting…"),
             ("listening", "Listening"),
             ("hearing", "Listening"),
-            ("thinking", "Waiting for the reply"),
+            ("thinking", "Waiting for a reply"),
             ("speaking", "Speaking"),
             ("muted", "Muted"),
-            ("mic-off", "Microphone is off"),
+            ("mic-off", "No mic access"),
             ("offline", "Offline"),
             ("failed", "Couldn’t get a reply"),
         ]

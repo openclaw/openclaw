@@ -398,8 +398,9 @@ struct ChatProTab: View {
     }
 
     private var voiceAvatarAccessibilityLabel: String {
+        // Talk on: the same phrase the composer's Talk row shows, never the owner's raw status.
         let state = self.appModel.talkMode.isEnabled
-            ? self.appModel.talkMode.statusText
+            ? Self.talkControl(appModel: self.appModel).statusPhrase
             : String(localized: "Voice off")
         return "\(self.agentDisplayName), \(state)"
     }

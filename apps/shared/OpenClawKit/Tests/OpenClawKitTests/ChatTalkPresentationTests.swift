@@ -34,7 +34,7 @@ final class ChatTalkPresentationTests: XCTestCase {
     func testEachStateSaysOnePhraseAndNeverTheOwnersRawStatus() {
         XCTAssertEqual(self.presentation(self.control(.connecting)).text, "Connecting…")
         XCTAssertEqual(self.presentation(self.control(.listening)).text, "Listening")
-        XCTAssertEqual(self.presentation(self.control(.thinking)).text, "Waiting for the reply")
+        XCTAssertEqual(self.presentation(self.control(.thinking)).text, "Waiting for a reply")
         XCTAssertEqual(self.presentation(self.control(.speaking)).text, "Speaking")
         XCTAssertEqual(self.presentation(self.control(.listening, muted: true)).text, "Muted")
         XCTAssertEqual(self.presentation(self.control(.issue(.offline))).text, "Offline")
@@ -58,12 +58,12 @@ final class ChatTalkPresentationTests: XCTestCase {
         // Muted: nothing more is heard, so the row says Muted.
         XCTAssertEqual(self.presentation(self.control(.listening, muted: true, heard: "What’s")).text, "Muted")
         // Heard words never stand in for another state.
-        XCTAssertEqual(self.presentation(self.control(.thinking, heard: "What’s")).text, "Waiting for the reply")
+        XCTAssertEqual(self.presentation(self.control(.thinking, heard: "What’s")).text, "Waiting for a reply")
     }
 
     func testMuteDoesNotHideWhatTheAgentIsDoing() {
         XCTAssertEqual(self.presentation(self.control(.speaking, muted: true)).text, "Speaking")
-        XCTAssertEqual(self.presentation(self.control(.thinking, muted: true)).text, "Waiting for the reply")
+        XCTAssertEqual(self.presentation(self.control(.thinking, muted: true)).text, "Waiting for a reply")
     }
 
     func testOnlyAccessIssuesOfferSettings() {
@@ -76,6 +76,6 @@ final class ChatTalkPresentationTests: XCTestCase {
     func testHostsWithoutAPhaseDeriveItFromListeningAndSpeaking() {
         XCTAssertEqual(self.presentation(self.control(nil, listening: true)).text, "Listening")
         XCTAssertEqual(self.presentation(self.control(nil, speaking: true)).text, "Speaking")
-        XCTAssertEqual(self.presentation(self.control(nil)).text, "Waiting for the reply")
+        XCTAssertEqual(self.presentation(self.control(nil)).text, "Waiting for a reply")
     }
 }

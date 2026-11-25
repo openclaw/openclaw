@@ -45,7 +45,7 @@ struct ChatTalkPresentation: Equatable {
             mark = .meter(listening: true)
             showsHeardWords = !heard.isEmpty
         case .thinking:
-            status = String(localized: "Waiting for the reply")
+            status = String(localized: "Waiting for a reply")
             mark = .thinking
         case .speaking:
             status = String(localized: "Speaking")
@@ -65,15 +65,22 @@ struct ChatTalkPresentation: Equatable {
 
     static func text(for issue: OpenClawChatTalkIssue) -> String {
         switch issue {
-        case .microphoneAccess: String(localized: "Microphone is off")
-        case .speechRecognitionAccess: String(localized: "Speech access is off")
+        case .microphoneAccess: String(localized: "No mic access")
+        case .speechRecognitionAccess: String(localized: "No speech access")
         case .offline: String(localized: "Offline")
         case .notAllowed: String(localized: "Talk needs approval")
         case .approvalRequested: String(localized: "Waiting for approval")
         case .startFailed: String(localized: "Couldn’t start Talk")
         case .replyFailed: String(localized: "Couldn’t get a reply")
-        case .speechFailed: String(localized: "Couldn’t play the reply")
+        case .speechFailed: String(localized: "Couldn’t play audio")
         }
+    }
+}
+
+extension OpenClawChatTalkControl {
+    /// The state as the Talk row says it, for any other place that names it (the chat header's VoiceOver label).
+    public var statusPhrase: String {
+        ChatTalkPresentation(control: self).status
     }
 }
 
