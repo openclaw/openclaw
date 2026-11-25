@@ -137,6 +137,15 @@ export type OperatorRecoveryUnavailableReason = z.infer<typeof recoveryUnavailab
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),
   z.strictObject({ kind: z.literal("channel"), snapshot: channelSnapshotSchema }),
+  // A configured channel owner: only the sender, admitted again from current config.
+  z.strictObject({
+    kind: z.literal("channel-owner"),
+    sender: z.strictObject({
+      channelId: boundedString,
+      accountId: boundedString,
+      senderId: boundedString,
+    }),
+  }),
   z.strictObject({
     kind: z.literal("unavailable"),
     reason: recoveryUnavailableReasonSchema.optional(),

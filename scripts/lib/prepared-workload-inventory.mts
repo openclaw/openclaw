@@ -19,14 +19,17 @@ export async function inventoryPreparedWorkload(
   }
   const result: PreparedEntry[] = [];
   const visit = async (directory: string) => {
-    for (const name of (await readdir(directory)).sort()) {
+    for (const name of (await readdir(directory)).toSorted()) {
       deadline.throwIfExpired();
-      if (directory === root && name === ".git") continue;
+      if (directory === root && name === ".git") {
+        continue;
+      }
       const file = path.join(directory, name);
       const relative = path.relative(root, file).split(path.sep).join("/");
       const stat = await lstat(file);
-      if (stat.isDirectory()) await visit(file);
-      else if (stat.isSymbolicLink()) {
+      if (stat.isDirectory()) {
+        await visit(file);
+      } else if (stat.isSymbolicLink()) {
         const target = await readlink(file);
         const physical = await realpath(file);
         const gitMetadata = path.join(root, ".git");
@@ -50,11 +53,13 @@ export async function inventoryPreparedWorkload(
           sha256: hash.digest("hex"),
           mode: stat.mode & 0o777,
         });
-      } else throw new Error(`Prepared workload contains a special file: ${relative}`);
+      } else {
+        throw new Error(`Prepared workload contains a special file: ${relative}`);
+      }
     }
   };
   await visit(root);
-  return result.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return result.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 export function preparedInventoryDelta(before: PreparedEntry[], after: PreparedEntry[]) {

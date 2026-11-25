@@ -220,6 +220,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         assertCurrent,
         operatorAuthority: captured?.authority,
         scopes: resolved.client.connect.scopes,
+        requesterOrigin: requester?.origin,
         signal: lifetime.signal,
         release,
         run: runInScope,
