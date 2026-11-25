@@ -77,6 +77,8 @@ struct ChatMarkdownRenderer: View {
     @ScaledMetric private var inlineMathFontSize: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var parentOpenURL
+    @Environment(\.openClawToastPresenter) private var toastPresenter
+    /// macOS only: the iPhone confirms through its toast instead.
     @State private var copiedFilePath: String?
 
     init(
@@ -181,7 +183,11 @@ struct ChatMarkdownRenderer: View {
             }
             // No file viewer exists on this surface yet; copying keeps the path usable.
             ChatPasteboard.copy(file.path)
-            self.copiedFilePath = file.path
+            if let toastPresenter {
+                toastPresenter.post(.copied(String(localized: "Path copied")))
+            } else {
+                self.copiedFilePath = file.path
+            }
             return .handled
         })
         .overlay(alignment: .topTrailing) {

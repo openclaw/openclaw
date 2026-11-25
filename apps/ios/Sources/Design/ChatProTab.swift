@@ -29,7 +29,6 @@ struct ChatProTab: View {
     }
 
     @State private var transcriptShareItem: TranscriptShareItem?
-    @State private var showsTranscriptExportError = false
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
@@ -98,18 +97,6 @@ struct ChatProTab: View {
                     .presentationDetents(self.dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
                     .presentationDragIndicator(.visible)
                 }
-            }
-            .alert(
-                String(localized: "Unable to Export Chat"),
-                isPresented: self.$showsTranscriptExportError)
-            {
-                Button(role: .cancel) {} label: {
-                    Text("OK")
-                        .font(OpenClawType.body)
-                }
-            } message: {
-                Text("OpenClaw could not prepare the Markdown file.")
-                    .font(OpenClawType.body)
             }
     }
 
@@ -541,7 +528,10 @@ struct ChatProTab: View {
             try viewModel.exportTranscriptMarkdown().write(to: fileURL, atomically: true, encoding: .utf8)
             self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
         } catch {
-            self.showsTranscriptExportError = true
+            // Export chat in the ⋯ menu stays the other way to try again.
+            self.appModel.toasts.post(.failure(
+                String(localized: "Couldn’t export this chat."),
+                retry: { self.exportTranscript() }))
         }
     }
 

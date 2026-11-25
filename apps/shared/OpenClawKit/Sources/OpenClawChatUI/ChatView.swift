@@ -1523,16 +1523,8 @@ extension OpenClawChatView {
         return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
     }
 
-    @ViewBuilder
     private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
-        let text = ChatMessageVisibleText.copyText(in: message)
-        if !text.isEmpty {
-            Button {
-                ChatPasteboard.copy(text)
-            } label: {
-                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
-            }
-        }
+        ChatCopyMessageMenuButton(text: ChatMessageVisibleText.copyText(in: message))
     }
 
     #if os(iOS)
