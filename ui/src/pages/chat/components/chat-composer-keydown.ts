@@ -126,32 +126,22 @@ export function createComposerKeyDownHandler({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        altKey: event.altKey,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        isComposing: event.isComposing,
-        keyCode: event.keyCode,
+        modified: event.altKey || event.ctrlKey || event.metaKey || event.shiftKey,
       });
-      if (result.handled) {
-        state.editRevision += 1;
-        const revision = state.editRevision;
-        if (result.preventDefault) {
-          event.preventDefault();
-        }
-        if (result.restoreCaret) {
-          restoreHistoryCaret(target, result.restoreCaret);
-        }
-        if (result.completion) {
-          void result.completion.then((completed) => {
+      if (result) {
+        const revision = ++state.editRevision;
+        event.preventDefault();
+        if (typeof result === "string") {
+          restoreHistoryCaret(target, result);
+        } else {
+          void result.then((direction) => {
             if (
-              completed.handled &&
-              completed.restoreCaret &&
+              direction &&
               state.editRevision === revision &&
               target.isConnected &&
               composerInputHasFocus(target)
             ) {
-              restoreHistoryCaret(target, completed.restoreCaret);
+              restoreHistoryCaret(target, direction);
             }
           });
         }

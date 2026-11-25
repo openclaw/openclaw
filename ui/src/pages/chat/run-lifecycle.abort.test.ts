@@ -83,10 +83,7 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     chatMessage: "",
     chatMessages: [],
     chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
+
     hello: sessionMutationGatewayHello(),
     ...over,
   };

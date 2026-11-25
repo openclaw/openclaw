@@ -134,10 +134,7 @@ function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = 
     chatMessages: [],
     chatMessagesBySession,
     chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
+
     chatAttachments,
     chatQueue: [],
     chatRunId: null,

@@ -1727,7 +1727,7 @@ describe("chat state render lifecycle", () => {
         if (handled) {
           state.chatMessage = "recalled draft";
         }
-        return { handled, preventDefault: handled, restoreCaret: handled ? "up" : null } as const;
+        return handled ? ("up" as const) : null;
       });
       state.handleChatInputHistoryKey = navigateHistory;
       const publishedDrafts: string[] = [];
@@ -1740,7 +1740,7 @@ describe("chat state render lifecycle", () => {
         const input = createInputHistoryKey(selection, selection);
         const result = state.handleChatInputHistoryKey!(input);
 
-        expect(result.handled).toBe(handled);
+        expect(result).toBe(handled ? "up" : null);
         expect(navigateHistory).toHaveBeenCalledWith(input);
         expect(publishedDrafts).toEqual(handled ? ["recalled draft"] : []);
       } finally {

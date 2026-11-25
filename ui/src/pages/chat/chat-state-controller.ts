@@ -297,24 +297,24 @@ export function createChatState<TState extends ChatPageHost>(
           },
         ),
       );
+      const draftChanged = () => {
+        composerPersistence.schedule();
+        publishComposerDraft();
+      };
       const commitDraftChange = state.handleChatDraftChange;
       state.handleChatDraftChange = (next, mentions) => {
         commitDraftChange(next, mentions);
-        composerPersistence.schedule();
-        publishComposerDraft();
+        draftChanged();
       };
       const navigateInputHistory = state.handleChatInputHistoryKey;
       state.handleChatInputHistoryKey = (input) => {
         const result = navigateInputHistory(input);
-        if (result.handled) {
-          composerPersistence.schedule();
-          publishComposerDraft();
-        }
-        if (result.completion) {
-          void result.completion.then((completed) => {
-            if (completed.handled) {
-              composerPersistence.schedule();
-              publishComposerDraft();
+        if (typeof result === "string") {
+          draftChanged();
+        } else {
+          void result?.then((direction) => {
+            if (direction) {
+              draftChanged();
             }
           });
         }

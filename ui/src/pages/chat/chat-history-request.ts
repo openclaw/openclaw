@@ -7,10 +7,7 @@ import {
   oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
-import {
-  isUiSelectedGlobalSessionKey,
-  resolveUiSelectedSessionAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   chatHistoryRequestParams,
@@ -403,9 +400,7 @@ export async function loadOlderChatHistoryPage(
   }
   const client = state.client;
   const sessionKey = state.sessionKey;
-  const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
-    ? resolveUiSelectedSessionAgentId(state)
-    : undefined;
+  const requestAgentId = scopedAgentIdForSession(state, sessionKey);
   const ownership = beginHistoryRequest(
     state,
     client,
@@ -440,9 +435,7 @@ export function captureOlderHistoryClaim(state: ChatState, client: GatewayBrowse
     sessionKey,
     sessions: state.sessions,
     version: chatHistoryRequests(state).historyVersion,
-    agentId: isUiSelectedGlobalSessionKey(state, sessionKey)
-      ? resolveUiSelectedSessionAgentId(state)
-      : undefined,
+    agentId: scopedAgentIdForSession(state, sessionKey),
   };
 }
 

@@ -1,9 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { setChatError } from "./chat-history-state.ts";
+import type { ChatInputHistoryReader } from "./input-history-request.ts";
 
-const CHAT_INPUT_HISTORY_LIMIT = 100;
+export const CHAT_INPUT_HISTORY_LIMIT = 100;
 
 type ChatLocalInputHistoryEntry = {
   text: string;
@@ -13,54 +16,36 @@ type ChatLocalInputHistoryEntry = {
 export type ChatInputHistoryState = {
   sessionKey: string;
   chatLoading: boolean;
+  chatError?: string | null;
+  lastError?: string | null;
+  recallError?: string;
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
   chatMessages: unknown[];
   chatLocalInputHistoryBySession: Record<string, ChatLocalInputHistoryEntry[]>;
-  chatInputHistorySessionKey: string | null;
-  chatInputHistoryItems: string[] | null;
-  chatInputHistoryIndex: number;
-  chatDraftBeforeHistory: string | null;
-  chatMentionsBeforeHistory?: readonly HumanMention[];
+  chatInputHistory?: ChatInputHistoryRound;
 };
 
 export type ChatInputHistoryKeyInput = {
   key: "ArrowUp" | "ArrowDown";
   selectionStart: number;
   selectionEnd: number;
-  altKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-  isComposing: boolean;
-  keyCode: number;
+  modified?: boolean;
 };
 
-export type ChatInputHistoryKeyResult = {
-  handled: boolean;
-  preventDefault: boolean;
-  restoreCaret: "up" | "down" | null;
-  completion?: Promise<ChatInputHistoryKeyResult>;
-};
+// A deferred Up consumes the key synchronously; null leaves it to the browser.
+export type ChatInputHistoryKeyResult = "up" | "down" | null | Promise<"up" | null>;
 
-export type ChatInputHistoryReader = {
-  isCurrent: () => boolean;
-  read: (
-    signal: AbortSignal,
-    ownsAction: () => boolean,
-  ) => Promise<{ messages?: unknown[]; hasMore: boolean } | undefined>;
-};
-
-type ChatInputHistoryReaderFactory = () => ChatInputHistoryReader | undefined;
-
-type ChatInputHistoryRound = {
+export type ChatInputHistoryRound = {
+  sessionKey: string;
+  items: string[];
+  index: number;
   firstMessage: unknown;
-  // null: all older pages in this traversal have been consumed.
-  reader?: ChatInputHistoryReader | null;
-  pending?: { controller: AbortController; completion: Promise<ChatInputHistoryKeyResult> };
+  draft: string;
+  mentions?: readonly HumanMention[];
+  reader?: ChatInputHistoryReader;
+  pending?: { controller: AbortController; completion: Promise<"up" | null> };
 };
-
-const inputHistoryRounds = new WeakMap<string[], ChatInputHistoryRound>();
 
 export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, text: string) {
   const trimmed = text.trim();
@@ -77,15 +62,23 @@ export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, te
   ].slice(0, CHAT_INPUT_HISTORY_LIMIT);
 }
 
+function cancelPending(round: ChatInputHistoryRound) {
+  round.pending?.controller.abort();
+  round.pending = undefined;
+}
+
+function ownsDraft(state: ChatInputHistoryState, round: ChatInputHistoryRound) {
+  return (
+    state.sessionKey === round.sessionKey &&
+    state.chatMessage === (round.items[round.index] ?? round.draft)
+  );
+}
+
 export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {
-  if (state.chatInputHistoryItems) {
-    inputHistoryRounds.get(state.chatInputHistoryItems)?.pending?.controller.abort();
+  if (state.chatInputHistory) {
+    cancelPending(state.chatInputHistory);
   }
-  state.chatInputHistorySessionKey = null;
-  state.chatInputHistoryItems = null;
-  state.chatInputHistoryIndex = -1;
-  state.chatDraftBeforeHistory = null;
-  state.chatMentionsBeforeHistory = undefined;
+  state.chatInputHistory = undefined;
 }
 
 export function handleChatDraftChange(
@@ -98,230 +91,126 @@ export function handleChatDraftChange(
   resetChatInputHistoryNavigation(state);
 }
 
-function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
-  if (
-    state.chatInputHistoryItems !== null &&
-    (state.chatInputHistoryIndex !== -1 ||
-      (state.chatDraftBeforeHistory === state.chatMessage &&
-        inputHistoryRounds.get(state.chatInputHistoryItems)?.reader)) &&
-    state.chatInputHistorySessionKey === state.sessionKey
-  ) {
-    return state.chatInputHistoryItems;
-  }
-  // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
+// Older rows must not displace a draft or shift the order of an active traversal.
+function beginRound(state: ChatInputHistoryState): ChatInputHistoryRound {
   const messages = state.chatMessages;
-  const localEntries = state.chatLocalInputHistoryBySession[state.sessionKey] ?? [];
-  // Assistant/tool activity must not evict the user inputs it answered.
-  const candidates: Array<{ text: string; ts: number }> = [...localEntries];
-  let transcriptInputs = 0;
-  for (let i = messages.length - 1; i >= 0 && transcriptInputs < CHAT_INPUT_HISTORY_LIMIT; i--) {
-    const message = messages[i];
-    if (!message || typeof message !== "object") {
-      continue;
+  const candidates = [...(state.chatLocalInputHistoryBySession[state.sessionKey] ?? [])];
+  for (let i = messages.length - 1, users = 0; i >= 0 && users < CHAT_INPUT_HISTORY_LIMIT; i--) {
+    const entry = asOptionalRecord(messages[i]);
+    const text = userInput(entry);
+    if (text) {
+      candidates.push({ text, ts: typeof entry?.timestamp === "number" ? entry.timestamp : 0 });
+      users++;
     }
-    const entry = message as { role?: unknown; timestamp?: unknown };
-    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-    if (role !== "user") {
-      continue;
-    }
-    const text = extractText(message);
-    if (!text || !text.trim()) {
-      continue;
-    }
-    candidates.push({ text, ts: typeof entry.timestamp === "number" ? entry.timestamp : 0 });
-    transcriptInputs += 1;
   }
-
   candidates.sort((a, b) => b.ts - a.ts);
-  const items = [...new Set(candidates.map(({ text }) => text))].slice(0, CHAT_INPUT_HISTORY_LIMIT);
-  state.chatInputHistoryItems = items;
-  inputHistoryRounds.set(items, { firstMessage: messages[0] });
-  state.chatInputHistorySessionKey = state.sessionKey;
-  state.chatInputHistoryIndex = -1;
-  state.chatDraftBeforeHistory = state.chatMessage;
-  state.chatMentionsBeforeHistory = state.chatMentions;
-  return items;
-}
-
-function appendOlderInputs(items: string[], messages: unknown[], end = messages.length) {
-  const known = new Set(items);
-  for (let i = end - 1; i >= 0 && items.length < CHAT_INPUT_HISTORY_LIMIT; i--) {
-    const message = messages[i];
-    const entry = asOptionalRecord(message);
-    if (typeof entry?.role !== "string" || entry.role.toLowerCase() !== "user") {
-      continue;
-    }
-    const text = extractText(message);
-    if (!text?.trim() || known.has(text)) {
-      continue;
-    }
-    known.add(text);
-    items.push(text);
-  }
-}
-
-function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" | "down"): boolean {
-  const items = ensureChatInputHistorySnapshot(state);
-  const nextIndex = state.chatInputHistoryIndex + (direction === "up" ? 1 : -1);
-  if (direction === "up" && nextIndex === items.length && items.length < CHAT_INPUT_HISTORY_LIMIT) {
-    const round = inputHistoryRounds.get(items);
-    if (round && round.firstMessage !== state.chatMessages[0]) {
-      // A transcript prepend moved its cursor past these prompts. Append only the
-      // prefix before our held row; newer arrivals must not reorder active recall.
-      const end = state.chatMessages.indexOf(round.firstMessage);
-      if (end > 0) {
-        appendOlderInputs(items, state.chatMessages, end);
-      }
-      round.firstMessage = state.chatMessages[0];
-    }
-  }
-  if (nextIndex < -1 || nextIndex >= items.length) {
-    return false;
-  }
-  state.chatInputHistoryIndex = nextIndex;
-  state.chatMessage =
-    nextIndex === -1
-      ? (state.chatDraftBeforeHistory ?? "")
-      : (items[nextIndex] ?? state.chatMessage);
-  state.chatMentions = nextIndex === -1 ? state.chatMentionsBeforeHistory : [];
-  if (nextIndex === -1) {
-    resetChatInputHistoryNavigation(state);
-  }
-  return true;
-}
-
-function loadOlderChatInputHistory(
-  state: ChatInputHistoryState,
-  items: string[],
-  round: ChatInputHistoryRound,
-): Promise<ChatInputHistoryKeyResult> {
-  const sessionKey = state.sessionKey;
-  const index = state.chatInputHistoryIndex;
-  const draft = state.chatMessage;
-  const controller = new AbortController();
-  const unhandled: ChatInputHistoryKeyResult = {
-    handled: false,
-    preventDefault: false,
-    restoreCaret: null,
+  return {
+    sessionKey: state.sessionKey,
+    items: [...new Set(candidates.map(({ text }) => text))].slice(0, CHAT_INPUT_HISTORY_LIMIT),
+    index: -1,
+    firstMessage: messages[0],
+    draft: state.chatMessage,
+    mentions: state.chatMentions,
   };
-  const isCurrent = () =>
-    !controller.signal.aborted &&
-    !state.chatLoading &&
-    state.sessionKey === sessionKey &&
-    state.chatInputHistoryItems === items &&
-    state.chatInputHistoryIndex === index &&
-    state.chatMessage === draft;
+}
 
-  const pending = (async (): Promise<ChatInputHistoryKeyResult> => {
-    // Like explicit transcript paging, one keystroke may cross three sparse pages.
-    // Leave the reader at its continuation for the next Up, even with no local prompts.
-    for (let pages = 0; pages < 3 && round.reader; pages++) {
-      const reader = round.reader;
-      const page = await reader.read(controller.signal, isCurrent);
-      if (!page || !isCurrent() || !reader.isCurrent()) {
-        return unhandled;
-      }
-
-      appendOlderInputs(items, page.messages ?? []);
-      if (!page.hasMore) {
-        round.reader = null;
-      }
-      if (items.length > index + 1) {
-        break;
-      }
-    }
-
-    const next = items[index + 1];
-    if (!isCurrent() || next === undefined) {
-      return unhandled;
-    }
-    state.chatInputHistoryIndex = index + 1;
-    state.chatMessage = next;
-    state.chatMentions = [];
-    return { handled: true, preventDefault: false, restoreCaret: "up" };
-  })()
-    .catch(() => unhandled)
-    .finally(() => {
-      if (round.pending?.controller === controller) {
-        round.pending = undefined;
-      }
-    });
-  round.pending = { controller, completion: pending };
-  return pending;
+export function userInput(entry: ReturnType<typeof asOptionalRecord>) {
+  const text =
+    typeof entry?.role === "string" && entry.role.toLowerCase() === "user"
+      ? extractText(entry)
+      : undefined;
+  return text?.trim() ? text : undefined;
 }
 
 export function handleChatInputHistoryKey(
   state: ChatInputHistoryState,
   input: ChatInputHistoryKeyInput,
-  createReader?: ChatInputHistoryReaderFactory,
+  createReader?: () => ChatInputHistoryReader | undefined,
 ): ChatInputHistoryKeyResult {
-  // Programmatic draft updates can bypass handleChatDraftChange(); if the current
-  // draft no longer matches the active recalled item, drop back to editing mode.
+  let round = state.chatInputHistory;
   if (
-    state.chatInputHistoryIndex !== -1 &&
-    (state.chatInputHistorySessionKey !== state.sessionKey ||
-      state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage)
+    round &&
+    ((round.index < 0 && !round.pending && !round.reader?.cursor.selector) ||
+      !ownsDraft(state, round))
   ) {
     resetChatInputHistoryNavigation(state);
+    round = undefined;
   }
-  if (
-    state.chatLoading ||
-    input.altKey ||
-    input.ctrlKey ||
-    input.metaKey ||
-    input.shiftKey ||
-    input.isComposing ||
-    input.keyCode === 229
-  ) {
-    return { handled: false, preventDefault: false, restoreCaret: null };
+  if (state.chatLoading) {
+    return null;
   }
-
-  if (input.key === "ArrowDown") {
-    // Even a native caret move withdraws the pending Up; don't swallow that move.
-    const round =
-      state.chatInputHistoryItems && inputHistoryRounds.get(state.chatInputHistoryItems);
-    if (round?.pending) {
-      round.pending.controller.abort();
-      round.pending = undefined;
+  const up = input.key === "ArrowUp";
+  if (!up) {
+    // A native caret move also withdraws the pending Up.
+    if (round) {
+      cancelPending(round);
     }
-    if (state.chatInputHistoryIndex === -1) {
+    if (!round || round.index === -1) {
       resetChatInputHistoryNavigation(state);
-      return { handled: false, preventDefault: false, restoreCaret: null };
+      return null;
     }
   }
-
   if (
+    input.modified ||
     input.selectionStart !== input.selectionEnd ||
-    (input.selectionStart !== 0 &&
-      (input.key === "ArrowUp" || input.selectionEnd !== state.chatMessage.length))
+    (input.selectionStart !== 0 && (up || input.selectionEnd !== state.chatMessage.length))
   ) {
-    return { handled: false, preventDefault: false, restoreCaret: null };
+    return null;
   }
-
-  const direction = input.key === "ArrowUp" ? "up" : "down";
-  const navigated = navigateChatInputHistory(state, direction);
-  if (!navigated && direction === "up" && state.chatInputHistoryItems) {
-    const items = state.chatInputHistoryItems;
-    const round = inputHistoryRounds.get(items);
-    if (round && round.reader !== null && items.length < CHAT_INPUT_HISTORY_LIMIT) {
-      if (!round.reader?.isCurrent()) {
-        round.pending?.controller.abort();
-        round.pending = undefined;
-        round.reader = createReader?.();
+  const active = (state.chatInputHistory ??= beginRound(state));
+  const { items, index } = active;
+  const nextIndex = index + (up ? 1 : -1);
+  if (nextIndex < items.length) {
+    active.index = nextIndex;
+    state.chatMessage = items[nextIndex] ?? active.draft;
+    state.chatMentions = nextIndex === -1 ? active.mentions : [];
+    if (nextIndex === -1) {
+      resetChatInputHistoryNavigation(state);
+    }
+    return up ? "up" : "down";
+  }
+  if (items.length < CHAT_INPUT_HISTORY_LIMIT) {
+    if (active.reader && !active.reader.isCurrent()) {
+      cancelPending(active);
+      active.reader = undefined;
+    }
+    const reader = (active.reader ??= createReader?.());
+    const hasPrefix =
+      active.firstMessage !== state.chatMessages[0] &&
+      state.chatMessages.includes(active.firstMessage);
+    if (reader?.cursor.selector || hasPrefix) {
+      if (!active.pending) {
+        const controller = new AbortController();
+        const current = () =>
+          !controller.signal.aborted &&
+          !state.chatLoading &&
+          state.chatInputHistory === active &&
+          active.index === index &&
+          ownsDraft(state, active) &&
+          reader?.isCurrent() !== false;
+        const completion = import("./input-history-older.ts")
+          .then(
+            ({ recallOlderInput }) =>
+              recallOlderInput(state, active, index, controller.signal, current),
+            () => {
+              if (current()) {
+                setChatError(state, (state.recallError = t("lazyView.staleSubtitle")));
+              }
+              return null;
+            },
+          )
+          .finally(() => {
+            if (active.pending?.controller === controller) {
+              active.pending = undefined;
+            }
+          });
+        active.pending = { controller, completion };
       }
-      if (round.pending || round.reader) {
-        return {
-          handled: true,
-          preventDefault: true,
-          restoreCaret: null,
-          completion: round.pending?.completion ?? loadOlderChatInputHistory(state, items, round),
-        };
-      }
+      return active.pending.completion;
     }
   }
-  return {
-    handled: navigated,
-    preventDefault: navigated,
-    restoreCaret: navigated ? direction : null,
-  };
+  if (index === -1) {
+    resetChatInputHistoryNavigation(state);
+  }
+  return null;
 }

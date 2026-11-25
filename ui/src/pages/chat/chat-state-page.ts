@@ -267,10 +267,7 @@ export function createPageState(
     basePath: context.basePath,
     resourceBasePath: context.resourceBasePath,
     chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
+
     chatStreamRenderFrame: null,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
