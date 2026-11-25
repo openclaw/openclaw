@@ -145,10 +145,11 @@ export function appendTtsBlockSource(
     ) {
       // Two single-marker blocks still have their normal separator until a third marker
       // establishes a fence. Only remove it when the scanner saw both on the same line.
-      if (run.length === 2 && source.endsWith(marker + "\n" + marker)) {
-        source = source.slice(0, -2) + marker;
-      }
-      return source + text;
+      const joinedSource =
+        run.length === 2 && source.endsWith(marker + "\n" + marker)
+          ? source.slice(0, -2) + marker
+          : source;
+      return joinedSource + text;
     }
   }
   return source + "\n" + text;
