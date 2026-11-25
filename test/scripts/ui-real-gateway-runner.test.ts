@@ -9,7 +9,8 @@ import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descr
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
 import { withEnvAsync } from "../../src/test-utils/env.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 
 const fixtures = vi.hoisted(() => ({
   workers: 2,
@@ -63,6 +64,7 @@ vi.mock("node:fs/promises", async (original) => ({
   ...(await original<typeof import("node:fs/promises")>()),
   readFile: vi.fn(),
 }));
+const diagnosticFixture = createFixtureLifetime();
 const managed = vi.mocked(runManagedCommand);
 const createWorkers = vi.mocked(createVitestWorkerRun);
 const borrowWorkers = vi.fn(async (_child: ChildProcess) => {});
@@ -134,7 +136,11 @@ beforeEach(() => {
   managed.mockReset().mockResolvedValue(0);
   vi.mocked(fs.readFile).mockReset().mockResolvedValue(JSON.stringify(safeReceipt));
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  // Timed-out bodies must join before their shared stdout mocks are restored.
+  await diagnosticFixture.cleanup();
+  vi.restoreAllMocks();
+});
 
 it.each([
   {
@@ -171,7 +177,7 @@ it.each([
 });
 
 // Exercise the real Logger/streams while keeping native config resolution at its boundary.
-it.each([
+it.for([
   { rejectConfig: false, rejectOutput: false },
   { rejectConfig: true, rejectOutput: false },
   { rejectConfig: false, rejectOutput: true },
@@ -179,146 +185,210 @@ it.each([
   { rejectConfig: true, rejectOutput: true, sameError: true },
 ])(
   "joins config diagnostics before admission (%j)",
-  async ({ rejectConfig, rejectOutput, sameError }) => {
-    const outputError = new Error("output rejected");
-    const configError = sameError ? outputError : new Error("config rejected");
-    const outputEnding = createDeferred();
-    const marker = "fixture config diagnostic";
-    const stdoutWrite = process.stdout.write.bind(process.stdout);
-    let flush: ((error?: Error | null) => void) | undefined;
-    let output: Writable | undefined;
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
-      if (String(chunk).includes(marker)) {
-        flush = typeof encoding === "function" ? encoding : callback;
-        return true;
-      }
-      return typeof encoding === "function"
-        ? stdoutWrite(chunk, encoding)
-        : stdoutWrite(chunk, encoding, callback);
-    });
-    const resolve = fixtures.resolveConfig.getMockImplementation()!;
-    fixtures.resolveConfig.mockImplementation(async (...args) => {
-      const harness = args[2];
-      expect(harness.logger.outputStream).toBeInstanceOf(Writable);
-      output = harness.logger.outputStream;
-      expect(output).not.toBe(process.stdout);
-      expect(harness.logger.outputStream).not.toHaveProperty("isTTY", true);
-      expect(harness.logger.errorStream).toBe(process.stderr);
-      const end = output.end.bind(output);
-      vi.spyOn(output, "end").mockImplementation(() => {
-        outputEnding.resolve();
-        return end();
+  ({ rejectConfig, rejectOutput, sameError }, { signal }) =>
+    diagnosticFixture.run(async () => {
+      signal.throwIfAborted();
+      const outputError = new Error("output rejected");
+      const configError = sameError ? outputError : new Error("config rejected");
+      const outputEnding = createDeferred();
+      const marker = "fixture config diagnostic";
+      const stdoutWrite = process.stdout.write.bind(process.stdout);
+      let flush: ((error?: Error | null) => void) | undefined;
+      let output: Writable | undefined;
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
+        if (String(chunk).includes(marker)) {
+          flush = typeof encoding === "function" ? encoding : callback;
+          return true;
+        }
+        return typeof encoding === "function"
+          ? stdoutWrite(chunk, encoding)
+          : stdoutWrite(chunk, encoding, callback);
       });
-      harness.logger.log(marker);
-      if (rejectConfig) {
-        throw configError;
-      }
-      return resolve(...args);
-    });
-    const destination = process.stdout;
-    const originalListeners = destination.rawListeners("error");
-    const persistentListeners = originalListeners.filter(
-      (listener) => !Object.hasOwn(listener, "listener"),
-    );
-    const sentinel = () => {};
-    destination.on("error", sentinel);
-    const baselineListeners = destination.listeners("error");
-    let flushed = false;
-    let emitted = false;
-    const releaseOutput = () => {
-      if (flush && !flushed) {
-        flushed = true;
-        flush(rejectOutput ? outputError : undefined);
-      }
-    };
-    const releaseError = () => {
-      if (rejectOutput && flushed && !emitted) {
-        emitted = true;
-        destination.emit("error", outputError);
-      }
-    };
-    const running = runRealGatewayUiTests([], env);
-    const observed = running.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      await awaitGateBeforeSettlement(
-        outputEnding.promise,
-        running,
-        "Config resolution ended before output cleanup",
+      const resolve = fixtures.resolveConfig.getMockImplementation()!;
+      fixtures.resolveConfig.mockImplementation(async (...args) => {
+        const harness = args[2];
+        expect(harness.logger.outputStream).toBeInstanceOf(Writable);
+        output = harness.logger.outputStream;
+        expect(output).not.toBe(process.stdout);
+        expect(harness.logger.outputStream).not.toHaveProperty("isTTY", true);
+        expect(harness.logger.errorStream).toBe(process.stderr);
+        const end = output.end.bind(output);
+        vi.spyOn(output, "end").mockImplementation(() => {
+          outputEnding.resolve();
+          return end();
+        });
+        harness.logger.log(marker);
+        if (rejectConfig) {
+          throw configError;
+        }
+        return resolve(...args);
+      });
+      const destination = process.stdout;
+      const originalListeners = destination.rawListeners("error");
+      const persistentListeners = originalListeners.filter(
+        (listener) => !Object.hasOwn(listener, "listener"),
       );
-      expect(flush).toBeTypeOf("function");
-      expect(managed).not.toHaveBeenCalled();
-      expect(createWorkers).not.toHaveBeenCalled();
-      expect(disposeWorkers).not.toHaveBeenCalled();
-      releaseOutput();
-      if (rejectOutput) {
-        await awaitGateBeforeSettlement(
-          setImmediate(),
-          running,
-          "Config output settled before its destination error event",
+      const sentinel = () => {};
+      destination.on("error", sentinel);
+      const baselineListeners = destination.listeners("error");
+      let flushed = false;
+      let emitted = false;
+      const releaseOutput = () => {
+        if (flush && !flushed) {
+          flushed = true;
+          flush(rejectOutput ? outputError : undefined);
+        }
+      };
+      const releaseError = () => {
+        if (rejectOutput && flushed && !emitted) {
+          emitted = true;
+          destination.emit("error", outputError);
+        }
+      };
+      const running = runRealGatewayUiTests([], env);
+      const observed = running.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            outputEnding.promise,
+            running,
+            "Config resolution ended before output cleanup",
+          ),
+          signal,
         );
-        expect(destination.listeners("error")).toEqual([
-          ...baselineListeners,
-          expect.any(Function),
-        ]);
+        expect(flush).toBeTypeOf("function");
         expect(managed).not.toHaveBeenCalled();
         expect(createWorkers).not.toHaveBeenCalled();
+        expect(disposeWorkers).not.toHaveBeenCalled();
+        releaseOutput();
+        if (rejectOutput) {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              setImmediate(),
+              running,
+              "Config output settled before its destination error event",
+            ),
+            signal,
+          );
+          expect(destination.listeners("error")).toEqual([
+            ...baselineListeners,
+            expect.any(Function),
+          ]);
+          expect(managed).not.toHaveBeenCalled();
+          expect(createWorkers).not.toHaveBeenCalled();
+        }
+      } finally {
+        releaseOutput();
+        releaseError();
+        const onAbort = () => {
+          output?.destroy();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+        try {
+          await observed;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          destination.off("error", sentinel);
+        }
       }
-    } finally {
-      releaseOutput();
-      releaseError();
-      await observed;
-      destination.off("error", sentinel);
-    }
-    expect(destination.rawListeners("error")).toEqual(
-      rejectOutput ? persistentListeners : originalListeners,
-    );
-    const result = await observed;
-    if (rejectConfig && rejectOutput && !sameError) {
-      expect(result).toMatchObject({
-        error: { name: "AggregateError", errors: [configError, outputError] },
-      });
-    } else if (rejectConfig || rejectOutput) {
-      expect("error" in result ? result.error : undefined).toBe(
-        rejectConfig ? configError : outputError,
+      expect(destination.rawListeners("error")).toEqual(
+        rejectOutput ? persistentListeners : originalListeners,
       );
-    } else {
-      expect(result).toEqual({ value: 0 });
-    }
-    expect(managed).toHaveBeenCalledTimes(rejectConfig || rejectOutput ? 0 : 3);
-    expect(output?.destroyed).toBe(true);
-    expect(process.stdout.destroyed).toBe(false);
-    expect(process.stderr.destroyed).toBe(false);
-  },
+      const result = await observed;
+      if (rejectConfig && rejectOutput && !sameError) {
+        expect(result).toMatchObject({
+          error: { name: "AggregateError", errors: [configError, outputError] },
+        });
+      } else if (rejectConfig || rejectOutput) {
+        expect("error" in result ? result.error : undefined).toBe(
+          rejectConfig ? configError : outputError,
+        );
+      } else {
+        expect(result).toEqual({ value: 0 });
+      }
+      expect(managed).toHaveBeenCalledTimes(rejectConfig || rejectOutput ? 0 : 3);
+      expect(output?.destroyed).toBe(true);
+      expect(process.stdout.destroyed).toBe(false);
+      expect(process.stderr.destroyed).toBe(false);
+    }),
 );
 
-it.each([false, true])(
+it.for([false, true])(
   "rejects an unwritable diagnostic destination (errored: %s)",
-  async (errored) => {
-    const failure = new Error("stdout already failed");
-    const destination = process.stdout;
-    const listeners = destination.listeners("error");
-    const write = vi.spyOn(destination, "write");
-    vi.spyOn(destination, "writable", "get").mockReturnValue(false);
-    vi.spyOn(destination, "errored", "get").mockReturnValue(errored ? failure : null);
-    const resolve = fixtures.resolveConfig.getMockImplementation()!;
-    fixtures.resolveConfig.mockImplementation(async (...args) => {
-      args[2].logger.log("fixture closed-output diagnostic");
-      return resolve(...args);
-    });
-    const running = runRealGatewayUiTests([], env);
-    if (errored) {
-      await expect(running).rejects.toBe(failure);
-    } else {
-      await expect(running).rejects.toThrow("UI config stdout is not writable");
-    }
-    expect(write).not.toHaveBeenCalled();
-    expect(destination.listeners("error")).toEqual(listeners);
-    expect(managed).not.toHaveBeenCalled();
-    expect(createWorkers).not.toHaveBeenCalled();
-  },
+  (errored, { signal }) =>
+    diagnosticFixture.run(async () => {
+      signal.throwIfAborted();
+      const failure = new Error("stdout already failed");
+      const destination = process.stdout;
+      const listeners = destination.listeners("error");
+      const write = vi.spyOn(destination, "write");
+      const originals = (["writable", "errored"] as const).map(
+        (key) => [key, Object.getOwnPropertyDescriptor(destination, key)] as const,
+      );
+      let output: Writable | undefined;
+      try {
+        // Inherited Node accessors are non-configurable; these own overrides must be removable.
+        Object.defineProperties(destination, {
+          writable: { configurable: true, value: false },
+          errored: { configurable: true, value: errored ? failure : null },
+        });
+        const resolve = fixtures.resolveConfig.getMockImplementation()!;
+        fixtures.resolveConfig.mockImplementation(async (...args) => {
+          output = args[2].logger.outputStream;
+          args[2].logger.log("fixture closed-output diagnostic");
+          return resolve(...args);
+        });
+        const running = runRealGatewayUiTests([], env);
+        const observed = running.then(
+          () => {},
+          () => {},
+        );
+        try {
+          if (errored) {
+            await withinTest(expect(running).rejects.toBe(failure), signal);
+          } else {
+            await withinTest(
+              expect(running).rejects.toThrow("UI config stdout is not writable"),
+              signal,
+            );
+          }
+          expect(write).not.toHaveBeenCalled();
+          expect(destination.listeners("error")).toEqual(listeners);
+          expect(managed).not.toHaveBeenCalled();
+          expect(createWorkers).not.toHaveBeenCalled();
+        } finally {
+          const onAbort = () => {
+            output?.destroy();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) {
+            onAbort();
+          }
+          try {
+            await observed;
+          } finally {
+            signal.removeEventListener("abort", onAbort);
+          }
+        }
+      } finally {
+        for (const [key, descriptor] of originals) {
+          if (descriptor) {
+            Object.defineProperty(destination, key, descriptor);
+          } else {
+            Reflect.deleteProperty(destination, key);
+          }
+        }
+      }
+      for (const [key, descriptor] of originals) {
+        expect(Object.getOwnPropertyDescriptor(destination, key)).toEqual(descriptor);
+      }
+    }),
 );
 
 it.each(
