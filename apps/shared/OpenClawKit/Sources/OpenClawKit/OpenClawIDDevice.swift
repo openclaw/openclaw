@@ -210,7 +210,7 @@ public final class OpenClawIDDeviceRecords {
             stores.append(OpenClawIDNodeIdentityKeychainStore(enrollmentID: node, purpose: .node))
         }
         for store in stores {
-            try? store.delete()
+            try? await store.delete()
         }
     }
 }
