@@ -414,14 +414,36 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
       const expectedRuntimes = new Map<string, SessionMcpRuntime>();
       const catalogsAreCurrent = catalogs.captureSession(sessionId);
-      for (const key of lifecycle.runtimeKeysForSessionId(sessionId)) {
+      const runtimeKeys = lifecycle.runtimeKeysForSessionId(sessionId);
+      for (const key of runtimeKeys) {
         const runtime = store.runtimesBySessionId.get(key);
         if (runtime) {
           expectedRuntimes.set(key, runtime);
         }
       }
       if (expectedRuntimes.size === 0 && !catalogsAreCurrent) {
-        return undefined;
+        // An idle sweep unpublishes its runtime before closing the transport. A delayed
+        // abort must join that disposal even if its session key has since been reused.
+        const receipts = runtimeKeys.flatMap((key) => store.pendingDisposals.get(key) ?? []);
+        if (receipts.length === 0) {
+          return undefined;
+        }
+        const pending = Promise.allSettled(
+          new Set(receipts.flatMap(({ pending }) => [...pending])),
+        );
+        const failure = receipts.find((receipt) => receipt.failure)?.failure;
+        return {
+          sessionId,
+          async retire(assertCurrent: () => void) {
+            assertCurrent();
+            const outcomes = await pending;
+            assertCurrent();
+            const rejected = failure ?? outcomes.find((outcome) => outcome.status === "rejected");
+            if (rejected) {
+              throw rejected.reason;
+            }
+          },
+        };
       }
       return {
         sessionId,

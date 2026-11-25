@@ -200,12 +200,18 @@ export function createSessionMcpRuntimeManagerLifecycle(
     };
     receipt.agentId ??= runtimeAgentId(runtime);
     store.pendingDisposals.set(runtimeKey, receipt);
-    try {
+    // Replacement and requester revocation can close a transport without a queued
+    // session disposal. Publish the physical close before it can yield or reenter.
+    const closing = Promise.resolve().then(async () => {
       await runtime.dispose();
       if (!runtime.joinCleanup) {
         throw new Error("MCP runtime does not expose cleanup ownership");
       }
       await runtime.joinCleanup();
+    });
+    receipt.pending.add(closing);
+    try {
+      await closing;
       const slot = store.runtimeSlots.get(runtime);
       if (releaseSlot && slot) {
         store.liveRuntimeSlots.delete(slot);
@@ -217,6 +223,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       recordAgentCleanupFailure();
       throw error;
     } finally {
+      receipt.pending.delete(closing);
       if (receipt.pending.size === 0 && !receipt.failure) {
         store.pendingDisposals.delete(runtimeKey);
       }

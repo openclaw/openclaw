@@ -18,6 +18,14 @@ export function peekSessionMcpRuntimeManager():
   >;
 }
 
+/** Captures the current runtimes and their pending disposals without selecting a successor. */
+export function captureSessionMcpRuntimeRetirement(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}) {
+  return peekSessionMcpRuntimeManager()?.captureSessionRetirement(params);
+}
+
 export function listAgentSessionMcpRuntimeIds(agentId: string): string[] {
   return peekSessionMcpRuntimeManager()?.listSessionIdsForAgent(agentId) ?? [];
 }
