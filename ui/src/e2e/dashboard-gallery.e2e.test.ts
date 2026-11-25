@@ -387,6 +387,47 @@ suite.define(() => {
     },
   );
 
+  it("keeps the remove button reachable for a long dashboard author on a phone", async () => {
+    const author = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+    const rows = dashboardRows.slice(0, 2).map((row, index) =>
+      Object.assign({}, row, {
+        hasBoard: true,
+        createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
+      }),
+    );
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, { sessions: rows });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const gallery = page.locator("openclaw-dashboards-page");
+        const cards = gallery.locator("[data-dashboard-session]");
+        await expect.poll(() => cards.count()).toBe(2);
+        await gallery.getByRole("button", { name: "Filter by author", exact: true }).tap();
+        await page
+          .locator("#dashboards-author-filter")
+          .getByRole("checkbox", { name: new RegExp(author) })
+          .check();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => cards.count()).toBe(1);
+        const remove = gallery.getByRole("button", { name: "Remove author filter" });
+        expect(
+          await remove.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return (
+              box.right <= innerWidth &&
+              button.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              )
+            );
+          }),
+        ).toBe(true);
+        await remove.tap();
+        await expect.poll(() => cards.count()).toBe(2);
+      },
+    );
+  });
+
   it("bounds mounted dashboards across list and small author groups", async () => {
     const rows = Array.from({ length: 1_000 }, (_, index) => ({
       ...dashboardRows[index % dashboardRows.length]!,
