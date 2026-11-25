@@ -182,16 +182,21 @@ suite.define(() => {
                     for (const row of elements) {
                       const button = row.querySelector("button")!;
                       const box = button.getBoundingClientRect();
-                      if (box.height < 32) return false;
+                      if (box.height < 32) {
+                        return false;
+                      }
                       const range = document.createRange();
                       range.selectNodeContents(button);
-                      if (Math.abs(range.getBoundingClientRect().left - box.left) > 1) return false;
+                      if (Math.abs(range.getBoundingClientRect().left - box.left) > 1) {
+                        return false;
+                      }
                       const status = row.querySelector("small")!.getBoundingClientRect();
                       if (
                         compact &&
                         (status.top < box.bottom || Math.abs(status.left - box.left) > 1)
-                      )
+                      ) {
                         return false;
+                      }
                       statusStarts.push(status.left);
                     }
                     return Math.max(...statusStarts) - Math.min(...statusStarts) < 1;
