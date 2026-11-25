@@ -99,8 +99,8 @@ it("retains the source-reader lock tolerance beyond the runtime busy timeout", a
   const pathname = path.join(root, "agent.sqlite");
   using writer = openRawDatabase(pathname);
   writer.exec(`
-      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
-      INSERT INTO schema_meta VALUES ('primary', 'before-lock');
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT, role TEXT, schema_version INTEGER, agent_id TEXT);
+      INSERT INTO schema_meta VALUES ('primary', 'before-lock', 'agent', ${supportedVersions.agent}, 'main');
       PRAGMA user_version = ${supportedVersions.agent};
       BEGIN EXCLUSIVE;
       UPDATE schema_meta SET app_version = 'after-lock';
