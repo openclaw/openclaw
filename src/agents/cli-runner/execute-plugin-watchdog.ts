@@ -31,6 +31,7 @@ export function createCliPluginWatchdog(params: {
   hasReplayUnsafeActivity: () => boolean;
   onNoOutputTimeout: (error: FailoverError) => void;
   onOverallTimeout: () => void;
+  onOverallDeadlineChange?: (deadlineAtMs: number) => void;
 }) {
   const noOutputTimeoutMs = params.noOutputTimeoutMs;
   const overallTimeoutMs = params.overallTimeoutMs;
@@ -93,6 +94,9 @@ export function createCliPluginWatchdog(params: {
         params.onOverallTimeout();
         return;
       }
+    }
+    if (suspendedMs > 0 && overallActiveRemainingMs !== undefined) {
+      params.onOverallDeadlineChange?.(nowMs + overallActiveRemainingMs);
     }
     if (
       noOutputTimeoutMs !== undefined &&

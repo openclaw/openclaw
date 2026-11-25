@@ -439,6 +439,11 @@ export async function executePluginOwnedProcess(params: {
         params.onNoOutputTimeout?.(error);
         controller.abort(error);
       },
+      onOverallDeadlineChange: (deadlineAtMs) => {
+        if (outstanding.awaitingContinuation) {
+          params.onContinuationHoldChange?.(deadlineAtMs);
+        }
+      },
       onOverallTimeout: () => {
         termination.reason = "overall-timeout";
         controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));

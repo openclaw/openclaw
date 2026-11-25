@@ -4,6 +4,7 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS as WORK_GRACE_MS,
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
+  getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import {
@@ -11,6 +12,7 @@ import {
   startGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { waitUntilAborted } from "./execute-plugin.test-support.js";
@@ -68,6 +70,7 @@ afterEach(() => {
   for (const owner of owners.splice(0)) {
     closeDiagnosticEmbeddedRunOwner(owner);
   }
+  testing.resetSessionControllerForTest();
   resetDiagnosticStateForTest();
   vi.useRealTimers();
 });
@@ -120,6 +123,13 @@ it("waits past both watchdogs for a background shell after the answer", async ()
     await answered.promise;
     await vi.advanceTimersByTimeAsync(WORK_GRACE_MS + 2 * HEARTBEAT_MS);
     expect(recoverStuckSession).not.toHaveBeenCalled();
+    // Suspending the host past the original deadline must extend both watchdog owners.
+    vi.setSystemTime(Date.now() + 4 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
+    expect(
+      getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,
+    ).toBeGreaterThan(Date.now());
+    expect(recoverStuckSession).not.toHaveBeenCalled();
 
     shellFinished.resolve();
     const output = await run;
@@ -140,16 +150,19 @@ it.each([
   },
 ])("returns the committed answer when $name", async (testCase) => {
   const { context } = contextFor("held-answer-deadline", testCase.timeoutMs);
+  const started = createDeferred();
   context.executionTarget = {
     kind: "plugin",
     async *execute(execution) {
       yield ANSWER;
       yield* testCase.continuation;
+      started.resolve();
       await waitUntilAborted(execution);
     },
   };
   const run = execute(context);
 
+  await started.promise;
   await vi.advanceTimersByTimeAsync(NO_OUTPUT_MS + 1_000);
 
   await expect(run).resolves.toMatchObject({
