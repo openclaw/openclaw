@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enSessionOrganizationShared = {
   sessionsView: {
+    forkSession: "Fork session",
     renameSession: "Rename session",
     verbose: "Verbose",
     reasoning: "Reasoning",
