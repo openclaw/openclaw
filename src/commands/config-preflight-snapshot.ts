@@ -439,7 +439,7 @@ export async function readAdmittedConfigSnapshot(params: {
         // clobbered source under the recovered config's guard would mutate the
         // wrong owners before readiness can refuse. The recovery owner applies
         // that candidate only after the unchanged readiness checks below admit it.
-        if (!admitted.recovery) {
+        if (!("recovery" in admitted && admitted.recovery)) {
           await upgradeStateOnGatewayStart(
             env,
             () =>
