@@ -299,25 +299,23 @@ it("fails repair when the recovery directory cannot be read", async () => {
   const { resolveOpenClawStateSqlitePath } = await import("../../state/openclaw-state-db.paths.js");
   const path = await import("node:path");
   const parent = path.dirname(resolveOpenClawStateSqlitePath(process.env));
-  vi.mocked(service.readCommand).mockImplementation(async () => {
-    if (events.includes("finalized")) {
-      await fs.chmod(parent, 0o300);
-    }
-    return {
-      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
-      sourcePath: state.path("gateway.service"),
-    };
+  const readdir = fs.readdir;
+  const denied = Object.assign(new Error("synthetic recovery directory read denied"), {
+    code: "EACCES",
   });
-  try {
-    await repair();
-    expect(events).not.toContain("start");
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
-      expect.objectContaining({ status: "warning" }),
-    );
-  } finally {
-    await fs.chmod(parent, 0o700);
-  }
+  vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+    if (args[0] === parent && events.includes("finalized")) {
+      return Promise.reject(denied);
+    }
+    return readdir(...args);
+  });
+  await repair();
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(denied.message));
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+    expect.objectContaining({ status: "warning" }),
+  );
 });
 
 it("prints manual Gateway recovery guidance in normal terminal output", async () => {
