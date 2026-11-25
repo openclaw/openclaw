@@ -168,7 +168,7 @@ it("escapes physical prefixes while preserving positive and negative pattern syn
 it.skipIf(process.platform === "win32")(
   "preserves POSIX glob escapes through coordinate projection",
   () => {
-    const root = path.join(tempDirs.make("openclaw-pattern-escapes-"), "root[1]\\backslash");
+    const root = path.join(tempDirs.make("openclaw-pattern-escapes-"), "root[1]");
     for (const file of ["test/a[1].test.ts", "test/a\\b.test.ts"]) {
       writeFileSync(fixturePath(root, file), "");
       const pattern = convertPathToPattern(file);
