@@ -102,7 +102,7 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const admission = resolveAgentRunAdmissionModel(params);
+  const admission = await resolveAgentRunAdmissionModel(params);
   if (!admission) {
     return undefined;
   }
@@ -634,6 +634,7 @@ export async function prepareAgentRunDispatch(
         sessionId: params.getAdmittedSessionId(),
         spawnedBy: params.sessionEntry?.spawnedBy,
         inputProvenance: userTurn.inputProvenance,
+        grant: capturedOperator.authority?.grant,
       },
       activeRunAbort.controller.signal,
     );

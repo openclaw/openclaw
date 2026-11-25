@@ -63,7 +63,7 @@ function writeFixture(
   return file;
 }
 
-function runHotpathCandidate(consentSupported: boolean) {
+function runHotpathCandidate(consentSupported: boolean, candidateVersion?: string) {
   const root = mkTempRoot();
   const hotpath = script.slice(
     script.indexOf('if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]'),
@@ -95,6 +95,8 @@ ${hotpath}`,
         ARGV_LOG: path.join(root, "argv.log"),
         CONSENT_SUPPORTED: consentSupported ? "1" : "0",
         FIXTURE_ROOT: root,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: candidateVersion ? root : "",
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: candidateVersion ?? "",
       },
     },
   );
@@ -204,6 +206,13 @@ it.each([false, true])(
     expect(calls.some((call) => call.startsWith("onboard "))).toBe(true);
   },
 );
+
+it("installs the exact sealed Codex companion for mounted candidates", () => {
+  const calls = runHotpathCandidate(true, "2026.11.10");
+  expect(
+    calls.filter((call) => call.startsWith("plugins install ") && !call.endsWith(" --help")),
+  ).toEqual(["plugins install npm:@openclaw/codex@2026.11.10 --pin --accept-capabilities"]);
+});
 
 it("adds loadable private SDK exports without replacing existing harness exports", () => {
   const root = mkTempRoot();

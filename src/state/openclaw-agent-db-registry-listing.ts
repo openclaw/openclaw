@@ -419,7 +419,7 @@ function cloneRegisteredAgentDatabases(
   const cloned = entries.map((entry) => ({ ...entry }));
   return options.includeIncompatibleSchemaVersions
     ? cloned
-    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+    : cloned.filter((entry) => entry.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
 type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
@@ -461,7 +461,7 @@ export function readRegisteredAgentDatabases(
     }
     return options.includeIncompatibleSchemaVersions
       ? entries
-      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+      : entries.filter((entry) => entry.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION);
   };
   return artifactPreserving
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(read, options).then(finish)

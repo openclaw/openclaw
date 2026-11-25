@@ -43,7 +43,9 @@ export function createReplyCronAuthorityFactory(
 ) {
   const authority = getCommandOwnerAuthority(context);
   const requester = resolveReplyCronChannelRequester(context, params);
-  if (!authority || !requester) {
+  // A linked owner manages by its profile's grant; an asserted owner has no grant (owner list).
+  const grant = authority?.operatorAuthority?.grant;
+  if (!authority || !requester || (grant && grant.automations !== "manage")) {
     return undefined;
   }
   const owner = {
@@ -75,9 +77,11 @@ export function logReplyCronOwnerWithoutAuthority(
   const owner = getCommandOwnerAuthority(context);
   const reason = !owner?.channelPrincipal
     ? "ingress-identity-unbound"
-    : owner.isCurrent()
-      ? "ingress-identity-mismatch"
-      : "owner-revoked";
+    : !owner.isCurrent()
+      ? "owner-revoked"
+      : (owner.operatorAuthority?.grant.automations ?? "manage") !== "manage"
+        ? "grant-without-manage"
+        : "ingress-identity-mismatch";
   log.info("cron: owner turn without management authority", {
     channel: params.channel,
     accountId: normalizeAccountId(params.accountId),

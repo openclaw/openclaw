@@ -26,7 +26,8 @@ type Kind =
   | "plugin-grant"
   | Exclude<OperatorRunRecoverySnapshot["sourceIngress"], Ingress>
   | LiveAdmissionKind
-  | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable">;
+  // A saved channel owner has no socket handshake to replay; owed-exec-requester.test.ts has its cells.
+  | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable" | "channel-owner">;
 const rows: Record<Kind, Row> = {
   "token:control-ui": { credential: "token", ingress: "control-ui" },
   "token:internal": { credential: "token", ingress: "internal" },
@@ -95,16 +96,19 @@ const modeFor = (row: Row): Mode =>
 // harness admits both with operator.read + operator.write over a socket. A linked channel sender
 // gets its profile's Control UI grant. An HTTP shared-secret request names the same owner with
 // the documented HTTP scope set (operator.admin included), so it gets the owner's full grant.
-// Cron runs, restart and durable exec wakes and subagent completion join with the PRs that move
+// Durable exec wakes (requester x session principal, configured channel owner) have their cells
+// in owed-exec-requester.test.ts. Cron runs and subagent completion join with the PRs that move
 // them.
 const WRITER_GRANT: TurnGrant = {
   owner: false,
+  automations: "self",
   skillAuthoring: true,
   questionReplace: true,
   commands: "none",
 };
 const OWNER_GRANT: TurnGrant = {
   owner: true,
+  automations: "manage",
   skillAuthoring: true,
   questionReplace: true,
   commands: "all",

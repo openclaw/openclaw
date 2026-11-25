@@ -1,4 +1,3 @@
 # Exact net growth above 400: the setting ID check's own contract (core list, published IDs, plugin manifests), browser flows that open every drawn Settings row and a plugin row from their links, the arrival owner's unit contract, and plugin manifest validation for declared setting IDs.
 # Includes late-render browser cases for MCP, agent tools, command allowlists and provider priority.
-# Narrow the Systems inventory fixture to its request so New Session cannot consume it.
-651
+649

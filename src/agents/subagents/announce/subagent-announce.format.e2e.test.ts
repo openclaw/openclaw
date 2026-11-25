@@ -38,8 +38,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { testing as deliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
-import { announceTesting } from "./subagent-announce-overrides.test-support.js";
+import { announceTesting, outputTesting } from "./subagent-announce-overrides.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import {
   visibleAgentResponse,
