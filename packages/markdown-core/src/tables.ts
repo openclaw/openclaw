@@ -79,8 +79,9 @@ function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): 
         actual.text === run.text
       );
     })
-  )
+  ) {
     return markdown;
+  }
 
   const italic: MarkdownStyleSpan[] = [];
   const strike: MarkdownStyleSpan[] = [];
