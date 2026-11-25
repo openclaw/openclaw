@@ -456,6 +456,50 @@ describe("sessionsTailCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it.each(["main", "MAIN", "Agent:OPS:Main"])(
+    "tails a non-main configured default from the %s selector",
+    async (selector) => {
+      mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { ops: {} } } });
+      const key = "agent:ops:main";
+      const store = path.join(tmpDir, "state", "agents", "ops", "agent", "openclaw-agent.sqlite");
+      await upsertSessionEntryCore(
+        { sessionKey: key, storePath: store },
+        { sessionId: "ops-session", updatedAt: 3, status: "done" },
+      );
+      appendSqliteTrajectoryRuntimeEvents(
+        { agentId: "ops", sessionId: "ops-session", storePath: store },
+        [toolResult("selected", { sessionId: "ops-session", sessionKey: key })],
+      );
+
+      await tail({ sessionKey: selector });
+
+      expectOutput([key, "selected ok"]);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("tails the qualified main session when global scope also has a global entry", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { entries: { main: {} } },
+      session: { scope: "global" },
+    });
+    const qualifiedKey = "agent:main:main";
+    await writeSessionEntry(qualifiedKey);
+    await writeSessionEntry("global", { sessionId: "global-session" });
+    await appendEvents([toolResult("qualified")], { key: qualifiedKey });
+    await appendEvents([toolResult("global", { sessionId: "global-session" })], {
+      key: "global",
+      sessionId: "global-session",
+    });
+
+    await explicitTail({ sessionKey: "Agent:Main:Main" });
+
+    expectOutput(["qualified ok"], ["global ok"]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");

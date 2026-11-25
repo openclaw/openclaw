@@ -5,17 +5,25 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.types.js";
 import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  classifySessionKeyShape,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
@@ -142,13 +150,48 @@ function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   }
 }
 
+function selectExplicitTailSessions(
+  selections: TailSelection[],
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): TailSelection[] {
+  const exact = selections.filter(({ key }) => key === sessionKey);
+  if (exact.length > 0) {
+    return exact;
+  }
+
+  const qualified = parseAgentSessionKey(sessionKey);
+  if (qualified) {
+    // Keep an existing qualified session ahead of a main alias that maps to global.
+    const normalized = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
+    const matching = selections.filter(({ key }) => key === normalized);
+    if (matching.length > 0) {
+      return matching;
+    }
+  }
+
+  const qualifiedAgentId = qualified ? normalizeAgentId(qualified.agentId) : undefined;
+  const storeKeys = new Map<string, string>();
+  return selections.filter(({ agentId, key }) => {
+    if (qualifiedAgentId && qualifiedAgentId !== agentId) {
+      return false;
+    }
+    let storedKey = storeKeys.get(agentId);
+    if (storedKey === undefined) {
+      storedKey = resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey });
+      storeKeys.set(agentId, storedKey);
+    }
+    return key === storedKey;
+  });
+}
+
 async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
 ): Promise<TailSelection[] | undefined> {
-  if (opts.sessionKey || selections.length === 0) {
-    return selections.filter((selection) => selection.key === opts.sessionKey);
+  if (selections.length === 0) {
+    return [];
   }
   const sorted = selections.toSorted(
     (a, b) => sessionActivityTimestamp(b.entry) - sessionActivityTimestamp(a.entry),
@@ -266,14 +309,24 @@ function followSelections(
 }
 
 function resolveTailTargetAgent(
+  cfg: OpenClawConfig,
   opts: SessionsTailOptions,
   sessionKey: string | undefined,
 ): string | undefined {
   // Keep explicit blanks for the selector to reject instead of inferring a different owner.
-  if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
+  if (
+    opts.agent !== undefined ||
+    opts.store !== undefined ||
+    opts.allAgents === true ||
+    !sessionKey
+  ) {
     return opts.agent;
   }
-  return sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
+  const defaultAgentId =
+    classifySessionKeyShape(sessionKey) === "legacy_or_alias"
+      ? resolveAgentOperationAgentId(cfg)
+      : undefined;
+  return resolveAgentIdFromSessionKey(sessionKey, defaultAgentId);
 }
 
 /** Tails recent trajectory events for the selected session(s). */
@@ -300,7 +353,7 @@ export async function sessionsTailCommand(
     cfg,
     opts: {
       store: opts.store,
-      agent: resolveTailTargetAgent(opts, requestedKey),
+      agent: resolveTailTargetAgent(cfg, opts, requestedKey),
       allAgents: opts.allAgents,
     },
   });
@@ -318,11 +371,9 @@ export async function sessionsTailCommand(
       }
     }
   }
-  const selected = await selectSessionsToTail(
-    selections,
-    { ...opts, sessionKey: requestedKey },
-    runtime,
-  );
+  const selected = requestedKey
+    ? selectExplicitTailSessions(selections, cfg, requestedKey)
+    : await selectSessionsToTail(selections, opts, runtime);
   if (!selected) {
     return;
   }
