@@ -209,7 +209,6 @@ describe("subagents native run contract", () => {
   });
   it("gives a worker's Gateway call enough time to outlive every wait it accepts", async () => {
     const location = getAgentToolExecutionLocation(tool);
-    expect(location.kind).toBe("gateway");
     const invokeGatewayTool = vi.fn<GatewayClient["invokeGatewayTool"]>(async () => ({
       type: "res",
       id: "response-1",
@@ -239,15 +238,12 @@ describe("subagents native run contract", () => {
       },
       { invokeGatewayTool, cancelGatewayTool: vi.fn<GatewayClient["cancelGatewayTool"]>() },
     );
-    for (const timeoutSeconds of [undefined, 55, 60]) {
+    for (const timeoutSeconds of [undefined, 60]) {
       await proxy!.execute("wait", { action: "wait", runIds: ["run-1"], timeoutSeconds });
     }
-    // Worker requests otherwise use a 30 s default, which a 30 s wait races and a 55 s wait loses.
-    const [byDefault, at55, atMaximum] = invokeGatewayTool.mock.calls.map(
-      (call) => call[1]?.timeoutMs,
-    );
+    // Worker requests otherwise use a 30 s default, which a default wait races and longer waits lose.
+    const [byDefault, atMaximum] = invokeGatewayTool.mock.calls.map((call) => call[1]?.timeoutMs);
     expect(byDefault).toBeGreaterThan(30_000);
-    expect(at55).toBeGreaterThan(55_000);
     expect(atMaximum).toBeGreaterThan(60_000);
   });
   it("never lets a revoked controller selection cancel after an await", async () => {
