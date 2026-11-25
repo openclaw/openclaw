@@ -598,15 +598,20 @@ export class CodexToolTranscriptProjection {
         output: text,
       });
     }
+    const missingResults = [...missingTranscript, ...missingTrajectory].filter(
+      ([id]) => !params.retainedCommands?.get(id),
+    );
+    if (missingResults.length === 0) {
+      return undefined;
+    }
     if (params.terminalDisposition === "tool_error") {
-      this.recordMissingToolError([...missingTranscript, ...missingTrajectory]);
+      this.recordMissingToolError(missingResults);
       return undefined;
     }
     if (params.terminalDisposition === "diagnostic_only") {
       return undefined;
     }
-    const missingCount = new Set([...missingTranscript, ...missingTrajectory].map(([id]) => id))
-      .size;
+    const missingCount = new Set(missingResults.map(([id]) => id)).size;
     return missingCount === 1
       ? MISSING_TOOL_RESULT_ERROR
       : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
