@@ -262,13 +262,16 @@ export function captureExecRequesterSource(target: SessionEventTarget | undefine
   return source?.kind === "unavailable" ? undefined : source;
 }
 
-/** Admits a saved requester again and captures their chat as them, so the wake runs as them. */
+/**
+ * Admits a saved requester again and captures their chat as them, so the wake runs as them. The
+ * caller releases the admission after the wake is enqueued, once the queue holds the authority.
+ */
 export async function captureOwedRequesterTarget(
   to: ChatRef,
   source: unknown,
   context: OperatorAdmissionContext | undefined,
   assertCurrent: () => void,
-): Promise<SessionEventTarget> {
+): Promise<{ target: SessionEventTarget; release: () => void }> {
   if (!context) {
     throw new GatewayOperatorAccessUnavailableError();
   }
@@ -279,12 +282,14 @@ export async function captureOwedRequesterTarget(
     assertCurrent,
   });
   try {
-    return await captureSessionEventTarget(to.agentId, to.sessionKey, {
+    const target = await captureSessionEventTarget(to.agentId, to.sessionKey, {
       operatorAuthority: admitted.authority,
       assertCurrent,
     });
-  } finally {
+    return { target, release: admitted.release };
+  } catch (error) {
     admitted.release();
+    throw error;
   }
 }
 
@@ -417,12 +422,12 @@ async function notifyOnExit(
               return false;
             },
           );
-          let expectedTarget = target;
+          let admitted: { target: SessionEventTarget; release: () => void } | undefined;
           if (session.operatorSource) {
             // A restored process wakes as its requester, admitted again now. If their access
             // ended, the stored result stays in the chat with that cause.
             try {
-              expectedTarget = await captureOwedRequesterTarget(
+              admitted = await captureOwedRequesterTarget(
                 owed.to,
                 session.operatorSource,
                 getInProcessGatewayRequestContext(),
@@ -438,12 +443,20 @@ async function notifyOnExit(
           }
           // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
           // target and request owners carry the requester's authority into the one retry too.
-          wakeOwedExec(
-            owed,
-            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget },
-            (cancel) => recordNotifyOnExitRemoval(session, cancel),
-            stored ? 1 : 0,
-          );
+          try {
+            wakeOwedExec(
+              owed,
+              {
+                ...eventOptions,
+                sourceRunId: session.startedByRunId,
+                expectedTarget: admitted?.target ?? target,
+              },
+              (cancel) => recordNotifyOnExitRemoval(session, cancel),
+              stored ? 1 : 0,
+            );
+          } finally {
+            admitted?.release();
+          }
         }),
       );
     } catch (error) {

@@ -101,11 +101,15 @@ export async function continueSessionQueuedInputs(
           text: owedText,
         };
         await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          const expectedTarget =
+          const admitted =
             source === undefined
               ? undefined
               : await captureOwedRequesterTarget(owed.to, source, context, assertCurrent);
-          wakeOwedExec(owed, expectedTarget ? { expectedTarget } : {}, undefined, 1);
+          try {
+            wakeOwedExec(owed, admitted ? { expectedTarget: admitted.target } : {}, undefined, 1);
+          } finally {
+            admitted?.release();
+          }
         });
         return undefined;
       }
