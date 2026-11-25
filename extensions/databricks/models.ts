@@ -35,6 +35,16 @@ function usesWorkspaceServing(baseUrl: string | undefined): boolean {
   );
 }
 
+export function applyDatabricksServingCompat<T extends Pick<ModelDefinitionConfig, "compat">>(
+  model: T,
+  baseUrl?: string,
+): T {
+  if (!usesWorkspaceServing(baseUrl) || model.compat?.maxTokensField !== undefined) {
+    return model;
+  }
+  return { ...model, compat: { ...model.compat, maxTokensField: "max_tokens" } };
+}
+
 export function getDatabricksDefaultModelRef(baseUrl: string | undefined): string {
   const id = usesWorkspaceServing(baseUrl)
     ? DATABRICKS_SERVING_MODEL_ID
@@ -93,8 +103,5 @@ export function buildDatabricksModelDefinition(
         contextWindow: 128000,
         maxTokens: 8192,
       };
-  if (usesWorkspaceServing(baseUrl)) {
-    model.compat = { ...model.compat, maxTokensField: "max_tokens" };
-  }
-  return model;
+  return applyDatabricksServingCompat(model, baseUrl);
 }

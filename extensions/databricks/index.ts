@@ -15,6 +15,7 @@ import {
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  applyDatabricksServingCompat,
   buildDatabricksModelDefinition,
   DATABRICKS_PROVIDER_ID,
   getDatabricksDefaultModelRef,
@@ -190,6 +191,11 @@ export default definePluginEntry({
           };
         },
       },
+      // Configured models skip dynamic discovery. Use the final model-level route in both paths.
+      normalizeResolvedModel: ({ model }) =>
+        model.api === "openai-completions"
+          ? applyDatabricksServingCompat(model, model.baseUrl)
+          : undefined,
       resolveDynamicModel: (ctx) => {
         const baseUrl =
           ctx.providerConfig?.baseUrl ?? resolveDatabricksBaseUrl(process.env[HOST_ENV_VAR]);
