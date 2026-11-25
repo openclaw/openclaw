@@ -418,6 +418,9 @@ generation receipt. Unchanged warm startup reuses those facts. Added, removed, o
 changed companions require admission again. If a recorded capture directory is
 missing, fresh admission reads the installed package without promoting the missing
 capture's identities. This also applies to post-update Doctor with older updaters.
+If a package swap removes the host targeted by a retained capture's link, the
+next admission creates a replacement namespace for the current host. It leaves
+the previous host link unchanged so it resolves again if the old package returns.
 Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
 capture retains or releases. First-read metadata stamps from Windows security
