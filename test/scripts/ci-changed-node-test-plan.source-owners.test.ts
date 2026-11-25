@@ -209,7 +209,7 @@ describe("CI changed Node test plan", () => {
       "test/fixtures/sqlite/openclaw-agent-schema-v26.sql",
       "src/commands/doctor-historical-imports.process.test.ts",
     ],
-    ...["src/state/sqlite-copy-swap.test.ts", "test/state-upgrade.e2e.test.ts"].flatMap((reader) =>
+    ...["test/state-upgrade.e2e.test.ts"].flatMap((reader) =>
       ["2026.7.1", "2026.9.37"].map((release) => [
         `test/fixtures/state-corpus-populated/${release}/manifest.json`,
         reader,
