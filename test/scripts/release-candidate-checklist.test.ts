@@ -25,6 +25,7 @@ import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   candidateCumulativeShippedPullRequests,
+  inspectCandidateChangelogRange,
   loadCandidateShippedBaseline,
   validateCandidateChangelogProvenance,
   validateCandidateReleaseNotes,
@@ -968,6 +969,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
           parsePluginReleaseSelection,
           isRecord,
           requireString: (value: string) => value,
+          inspectCandidateChangelogRange,
           validateCandidateChangelog: () => {
             if (changelogFailure) {
               throw new Error("candidate changelog rejected");
@@ -975,7 +977,8 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             return {
               releaseNotesText: "Fixture notes.",
               releaseNotesCheck: { status: "passed" },
-              releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
+              releaseNotesProvenance: { status: "passed", target: targetSha, shippedBaselines: [] },
+              changelogPaths: ["CHANGELOG.md"],
             };
           },
           runLocalGeneratedCheckIfNeeded: generatedChecks,
