@@ -432,6 +432,31 @@ type LlamaServerInstallOptions = {
   onProgress?: LlamaDownloadProgress;
 };
 
+async function downloadLlamaServerArchive(
+  archive: LlamaServerArchive | LlamaServerDependency,
+  destination: string,
+  options: LlamaServerInstallOptions,
+): Promise<void> {
+  const url = assetUrl(archive);
+  try {
+    await downloadVerifiedFile({
+      url,
+      destination,
+      expectedSha256: archive.sha256,
+      expectedSize: archive.archive === "vc-redist" ? archive.size : undefined,
+      signal: options.signal,
+      onProgress: options.onProgress,
+    });
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot download verified llama.cpp runtime artifact ${archive.name} from ${new URL(url).hostname}. If this source is unreachable, check the Gateway host's network/proxy access to this source and its download redirects, then retry setup; or install a compatible llama-server manually and set models.providers.llama-cpp.localService.command to its absolute path. Detail: ${detail}`,
+      { cause: error },
+    );
+  }
+}
+
 function formatVcRuntimeFallbackError(startupError: unknown, fallbackError: unknown): Error {
   const startupDetail = startupError instanceof Error ? startupError.message : String(startupError);
   const fallbackDetail =
@@ -470,13 +495,7 @@ async function installLlamaServer(
   const extractDir = path.join(dataDir, `.extract-${randomUUID()}`);
   await fsp.mkdir(dataDir, { recursive: true });
   try {
-    await downloadVerifiedFile({
-      url: assetUrl(asset),
-      destination: archivePath,
-      expectedSha256: asset.sha256,
-      signal: options.signal,
-      onProgress: options.onProgress,
-    });
+    await downloadLlamaServerArchive(asset, archivePath, options);
     const serverExtractDir = path.join(extractDir, "server");
     await fsp.mkdir(serverExtractDir, { recursive: true });
     const extractedCommand = path.join(
@@ -490,14 +509,7 @@ async function installLlamaServer(
     ): Promise<void> => {
       options.signal?.throwIfAborted();
       const dependencyArchive = path.join(extractDir, dependency.name);
-      await downloadVerifiedFile({
-        url: assetUrl(dependency),
-        destination: dependencyArchive,
-        expectedSha256: dependency.sha256,
-        expectedSize: dependency.archive === "vc-redist" ? dependency.size : undefined,
-        signal: options.signal,
-        onProgress: options.onProgress,
-      });
+      await downloadLlamaServerArchive(dependency, dependencyArchive, options);
       const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
       await fsp.mkdir(dependencyExtractDir);
       let dependencyRoot: string;
