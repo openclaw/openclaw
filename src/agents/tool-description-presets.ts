@@ -25,6 +25,12 @@ export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
 export const SKILL_LIBRARY_TOOL_DISPLAY_SUMMARY = "Author skills in the personal library";
 
+export function describeCronTool(managementOnly: boolean): string {
+  return managementOnly
+    ? "Manage existing automations within this turn's scope."
+    : CRON_TOOL_DISPLAY_SUMMARY;
+}
+
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
     ? 'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'

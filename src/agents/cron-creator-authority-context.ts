@@ -240,18 +240,35 @@ export function bindRequesterOwnerIdentity(params: {
   };
 }
 
-/** Bind at tool construction, never rediscover authority from model arguments or routes. */
-export function bindCronManagementGrant(runId: string | undefined, config?: OpenClawConfig) {
+/** Inventory precedes execution binding; describing admission never grants execution. */
+export function resolveCronToolManagementMode(
+  runId: string | undefined,
+  config?: OpenClawConfig,
+): "only" | "also" | undefined {
   if (!isCronModelManagementAllowed(config)) {
     return undefined;
   }
   const scope = activeCronCreatorAuthority.getStore();
-  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
     !scope?.managementEntitlement ||
     !scope.active ||
     scope.signal.aborted ||
     scope.isCurrent?.() === false ||
+    (runId !== undefined && scope.runId !== runId)
+  ) {
+    return undefined;
+  }
+  return scope.callerOrigin.kind === "unknown" && !scope.callerScopedCreation ? "only" : "also";
+}
+
+/** Bind at tool construction, never rediscover authority from model arguments or routes. */
+export function bindCronManagementGrant(runId: string | undefined, config?: OpenClawConfig) {
+  const scope = activeCronCreatorAuthority.getStore();
+  const management = resolveCronToolManagementMode(runId, config);
+  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
+  if (
+    !scope ||
+    management === undefined ||
     scope.runId !== runId ||
     !authority ||
     authority.operationalRunInstance.runId !== runId ||
@@ -259,7 +276,7 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
   ) {
     return undefined;
   }
-  const managementOnly = scope.callerOrigin.kind === "unknown" && !scope.callerScopedCreation;
+  const managementOnly = management === "only";
   return {
     managementOnly,
     mint: (method: string, signal?: AbortSignal) => {
