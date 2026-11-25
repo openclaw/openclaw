@@ -12,6 +12,7 @@ import {
   bindInProcessSessionRun,
   type PreparedSessionRun,
 } from "../../../gateway/in-process-session-run.js";
+import { runWithOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.js";
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -22,6 +23,7 @@ import { captureRequesterOrigin, requesterCreatorProfileId } from "../../request
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolOperatorContinuation,
 } from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
@@ -76,6 +78,29 @@ export function captureSubagentSpawnGatewayContext() {
     // Personal-tool selection changes authority, not who caused this delegation.
     creatorProfileId: requesterCreatorProfileId(gatewayCaller?.requesterOrigin),
   };
+}
+
+/** Keep the derived source on initial registration and delayed child dispatch alike. */
+export function bindSubagentSpawnOperatorAuthority({
+  operatorAuthority,
+  requester,
+}: ReturnType<typeof captureSubagentSpawnGatewayContext>) {
+  return <T>(run: () => T): T =>
+    operatorAuthority?.participationCeiling
+      ? runWithOperatorToolGatewayAuthority(
+          {
+            operatorRunAuthority: operatorAuthority,
+            scopes: operatorAuthority.scopes,
+            signal: operatorAuthority.signal ?? AbortSignal.any([]),
+            assertCurrent: () => operatorAuthority.signal?.throwIfAborted(),
+          },
+          () =>
+            withGatewayToolOperatorContinuation(
+              { operatorAuthority, requesterOrigin: requester?.requesterOrigin },
+              run,
+            ),
+        )
+      : run();
 }
 
 async function dispatchSubagentGateway(

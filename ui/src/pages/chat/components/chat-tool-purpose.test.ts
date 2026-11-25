@@ -174,6 +174,21 @@ it.each([
 );
 
 it.each([
+  [
+    "kill",
+    { status: "completed", cancellationRequested: true, terminationConfirmed: false },
+    "Requested process stop",
+  ],
+  ["clear", { status: "completed" }, "Removed finished process record"],
+] as const)("describes what a completed process %s call did", async (action, details, label) => {
+  const container = await mountCard(
+    { id: action, name: "process", args: { action, sessionId: "job" }, completed: true, details },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-row__title")).toBe(label);
+});
+
+it.each([
   { code: "await tools.read({ path: 'README.md' })" },
   { command: "set -euo pipefail\npnpm test" },
 ])("shows the recorded exec action and retains purpose in inspection: %j", async (args) => {
@@ -242,7 +257,12 @@ it("uses names already available to chat rows without exposing unresolved routin
   const session = { key, kind: "direct" as const, label: "Research", updatedAt: 1, activeRunIds };
   for (const [name, args, known, unresolved] of [
     ["sessions_history", { sessionKey: key }, "Read chat Research", "Read chat"],
-    ["sessions_send", { sessionKey: key }, "Send message to Research", "Send message"],
+    [
+      "sessions_send",
+      { sessionKey: key },
+      "Delivery unconfirmed · Research",
+      "Delivery unconfirmed",
+    ],
     ["agents_wait", { ids: ["run"] }, "Waited for Research", "Waited for agents"],
   ] as const) {
     for (const [subagentSessions, expected] of [
@@ -260,7 +280,8 @@ it("uses names already available to chat rows without exposing unresolved routin
 });
 
 it.each([
-  [undefined, "Send message to Release review"],
+  [undefined, "Delivery unconfirmed · Release review"],
+  [{ status: "other" }, "Delivery unconfirmed · Release review"],
   [{ status: "accepted", targetDisposition: "queued" }, "Message accepted for Release review"],
   [{ status: "queued", runStarted: false }, "Queued message to Release review"],
   [
@@ -294,6 +315,28 @@ it.each([
   [{ name: "sessions_send", isError: true, details: { status: "ok" } }, "Send message"],
   [
     {
+      name: "sessions_send",
+      args: { label: "Review" },
+      isError: true,
+      details: { status: "timeout", error: "agent run timed out", sentBeforeError: true },
+    },
+    "Sent to Review · reply timed out",
+  ],
+  [
+    {
+      name: "sessions_send",
+      isError: true,
+      outputText: JSON.stringify({
+        status: "error",
+        error: "Gateway admission is still pending; inspect this run before retrying.",
+        sentBeforeError: true,
+      }),
+    },
+    "Delivery unconfirmed",
+  ],
+  [{ name: "sessions_send", isError: true, details: { status: "timeout" } }, "Send message"],
+  [
+    {
       name: "tool_call",
       args: { id: "openclaw:core:sessions_send", args: { label: "Review", message: "Check this" } },
       completed: true,
@@ -312,6 +355,32 @@ it.each([
       { expanded: false, runActive: true },
     );
     expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+  },
+);
+
+it.each([
+  ["conversations_send", { details: { status: "sent" } }, "Sent to conversation"],
+  ["conversations_send", { outputText: '{"status":"queued"}' }, "Message queued"],
+  ["conversations_send", { details: { status: "suppressed" } }, "Message not sent"],
+  ["conversations_send", { details: { status: "unknown" } }, "Delivery unconfirmed"],
+  ["conversations_send", {}, "Delivery unconfirmed"],
+  ["conversations_turn", { live: true, completed: false }, "Sending and waiting for a reply"],
+  ["conversations_turn", { details: { status: "replied" } }, "Sent · reply received"],
+  ["conversations_turn", { details: { status: "timeout" } }, "Sent · reply timed out"],
+  [
+    "conversations_turn",
+    { details: { status: "sent", error: "No reply correlation" } },
+    "Sent to conversation",
+  ],
+  ["conversations_turn", { details: { status: "queued" } }, "Message queued"],
+] as const)(
+  "shows the conversation delivery receipt for %s: %j",
+  async (name, result, expected) => {
+    const container = await mountCard(
+      { id: "conversation", name, args: { message: "Hello" }, completed: true, ...result },
+      { expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(expected);
   },
 );
 

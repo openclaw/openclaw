@@ -17,6 +17,7 @@ function fixture(supportsImages = false, assertModelInput?: (model: Pick<Model, 
     maxTokens: 1024,
   });
   const snapshot = vi.fn(() => ({
+    agentHarness: { id: "openclaw" },
     effectiveModel: model,
     providerRuntimeHandle: { provider: model.provider },
   }));

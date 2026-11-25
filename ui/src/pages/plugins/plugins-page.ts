@@ -7,13 +7,11 @@ import {
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import type { PluginListResult, PluginMutationResult } from "../../lib/plugins/index.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createCredentialPresentation } from "./credential-presentation.ts";
 import { installedPluginDetailTabFromHash } from "./detail-tabs.ts";
@@ -21,6 +19,7 @@ import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
 import { createPluginPromptLaunch } from "./plugin-prompt-launch.ts";
+import { confirmPluginRemoval } from "./plugin-removal-confirmation.ts";
 import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
@@ -660,7 +659,6 @@ export function createPluginsPage(options: {
   }
 
   async function uninstall(pluginId: string, rowKey: string): Promise<void> {
-    const name = state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
     const trigger = options.element().contains(document.activeElement)
       ? document.activeElement
       : null;
@@ -694,11 +692,13 @@ export function createPluginsPage(options: {
       {
         action: "uninstall",
         confirm: () =>
-          showConfirmDialog({
-            title: t("pluginsPage.removeConfirmTitle", { name }),
-            message: t("pluginsPage.removeConfirmMessage"),
-            confirmLabel: t("pluginsPage.remove"),
-            danger: true,
+          confirmPluginRemoval({
+            pluginId,
+            name: state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId,
+            context,
+            gateway,
+            inspection: details.inspection.receipt()?.result,
+            detail: () => state.detail,
           }),
       },
     );

@@ -147,6 +147,16 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
   const resizeRows = (heights: Map<number, number>) => {
     sizingRows = true;
     try {
+      // A native scroll can reach the end before its event. Anchor this batch to that
+      // edge; away from it, keep the virtualizer's normal top-of-viewport anchor.
+      if (
+        scroller &&
+        scroller.scrollTop > 0 &&
+        Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 1
+      ) {
+        syncScrollOffset?.();
+        virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => true;
+      }
       for (const [index, height] of heights) {
         const offset = virtualizer.scrollOffset;
         virtualizer.resizeItem(index, height);
@@ -156,6 +166,7 @@ export function PluginCatalogGrid<T extends { id: string }>(props: {
         }
       }
     } finally {
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
       sizingRows = false;
     }
     publish();

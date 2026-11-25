@@ -58,6 +58,7 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   /** Captured policy owner; null excludes ambient request authority. */
@@ -223,6 +224,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
+    operatorAuthority: params.pluginExecutionAuthority,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,

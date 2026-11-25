@@ -11,6 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
+import { createEmptyRuntimeChunksPlugin } from "./scripts/lib/empty-runtime-chunks.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -1190,7 +1191,11 @@ for (const config of configs) {
   if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
     continue;
   }
-  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+  config.plugins = [
+    config.plugins,
+    createEmptyRuntimeChunksPlugin(),
+    createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot }),
+  ]
     .flat()
     .filter(Boolean);
 }

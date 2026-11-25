@@ -19,6 +19,7 @@ import { SettingsManager } from "../../sessions/settings-manager.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 
 // mock-isolation: records the boundary's lifecycle calls; the real hooks need a Gateway.
@@ -216,6 +217,56 @@ const completedCompactions = (events: AgentSessionEvent[]) =>
   events.filter((event) => event.type === "compaction_end" && event.outcome.status === "completed");
 
 describe("warm text compaction at the request boundary", () => {
+  it("does not turn fresh-request maintenance headroom into hard overflow", async () => {
+    const f = await fixture({ history: SessionManager.inMemory() });
+    const boundary = createRequestBoundaryCompaction({
+      variant: "text",
+      session: f.session,
+      contextTokenBudget: 110_000,
+      reserveTokens: 20_000,
+      isToolBoundarySafe: () => true,
+      runId: "fresh-knowledge",
+      timeoutMs: 30_000,
+      assertActive: () => {},
+      withTranscriptWrite: (write) => withSessionManagerWrite(f.sessionManager, write),
+      onPrecheck: f.onPrecheck,
+    });
+    const context = {
+      systemPrompt: "Use the configured tools to answer the current request. ".repeat(1_500),
+      tools: [
+        {
+          name: "knowledge_record",
+          description: "Read source evidence and update the selected knowledge record. ".repeat(
+            5_000,
+          ),
+          parameters: Type.Object({}),
+        },
+      ],
+      messages: [{ role: "user" as const, content: "BUDGET-QA-PING", timestamp: 1 }],
+    };
+    const send = () =>
+      boundary(f.session.agent.streamFn, { ...model, contextWindow: 110_000 }, context, {
+        sessionId: f.session.sessionId,
+      });
+    await expect(send()).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+    expect(f.onPrecheck).toHaveBeenCalledWith(expect.objectContaining({ pressure: "maintenance" }));
+    expect(f.onPrecheck.mock.calls[0]?.[0].estimatedPromptTokens).toBeLessThan(110_000);
+    expect(requests).toHaveLength(0);
+    declineBoundaryMaintenance("fresh-knowledge");
+    try {
+      await expect(send()).resolves.toBeUndefined();
+      expect(f.onPrecheck).toHaveBeenCalledOnce();
+      context.messages[0]!.content = "中".repeat(110_000);
+      await expect(send()).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+      expect(f.onPrecheck).toHaveBeenLastCalledWith(
+        expect.objectContaining({ pressure: "overflow" }),
+      );
+      expect(requests).toHaveLength(0);
+    } finally {
+      clearBoundaryMaintenance("fresh-knowledge");
+    }
+  });
+
   it("sends the unchanged request plus one unmarked summarize item", async () => {
     const plain = await fixture({ boundary: false });
     await plain.submit();
@@ -290,6 +341,7 @@ describe("warm text compaction at the request boundary", () => {
     expect(requests.map(isSummaryRequest)).toEqual([false, true]);
     expect(JSON.stringify(requests[1])).toContain("large tool output.");
     const compaction = manager.getEntries().findLast((entry) => entry.type === "compaction");
+    expect(compaction).toBeDefined();
     expect(compaction && "summary" in compaction ? compaction.summary : "").not.toContain(
       "Turn Context (split turn)",
     );

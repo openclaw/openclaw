@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { resolveOpenAIResponsesPromptCacheLifetimeMs } from "@openclaw/ai/transports";
+import {
+  isOpenAIResponsesApi,
+  resolveOpenAIResponsesPromptCacheLifetimeMs,
+} from "@openclaw/ai/transports";
 import { getRuntimeConfig } from "../config/config.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -259,7 +262,8 @@ async function readPlan(
   let ttlMs: number | undefined;
   if (api === "anthropic-messages") {
     ttlMs = readObservedPromptCacheTtlMs(branch, route);
-  } else if (api === "openai-responses" || api === "azure-openai-responses") {
+  } else if (isOpenAIResponsesApi(api) && api !== "openai-chatgpt-responses") {
+    // ChatGPT sign-in documents no cache lifetime, so it gets no pings (#204219).
     const extraParams = resolveExtraParams({
       cfg,
       provider: route.provider,

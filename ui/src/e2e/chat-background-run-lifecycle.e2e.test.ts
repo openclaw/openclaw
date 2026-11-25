@@ -82,6 +82,7 @@ suite.define(() => {
       const thread = page.locator(".chat-thread-inner");
       const savings = page.getByText("saved 183.7k tokens (73.1%)", { exact: true });
       const working = page.locator(".chat-working-indicator");
+      await thread.locator(".chat-compaction-activity summary").click();
       await savings.waitFor();
       await working.waitFor();
       await page.getByRole("button", { name: "Stop", exact: true }).waitFor();

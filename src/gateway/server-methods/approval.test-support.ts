@@ -12,6 +12,7 @@ import {
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { ExpectedProfileBinding } from "../expected-profile.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
@@ -140,6 +141,7 @@ type ApprovalInvocationParams = {
   client: GatewayWsClient | null;
   context?: GatewayRequestHandlerOptions["context"];
   sessionMutationCommitGuard?: () => void;
+  expectedProfileBinding?: ExpectedProfileBinding;
 };
 
 export function createApprovalInvocation(params: ApprovalInvocationParams) {
@@ -166,7 +168,7 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
   const options = bindGatewayRequestHandlerMutationAuthority(
     request,
     { ...request, params: params.body },
-    undefined,
+    params.expectedProfileBinding,
   );
   return {
     context,

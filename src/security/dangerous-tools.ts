@@ -2,7 +2,6 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 // Shared tool-risk constants.
 // Keep these centralized so gateway HTTP restrictions and security audits don't drift.
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
 /**
  * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
@@ -79,6 +78,53 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "intent",
 ] as const;
 
+const participantAuthorityMethods = new Set([
+  "config.set",
+  "config.apply",
+  "config.patch",
+  "plugins.install",
+  "plugins.uninstall",
+  "plugins.setEnabled",
+  "plugins.reload",
+  "users.setRole",
+  "session.visibility.set",
+  "session.members.add",
+  "session.members.setAccess",
+  "session.members.remove",
+  "session.publicShare.set",
+  "gateway.restart.request",
+  "gateway.stop.request",
+  "gateway.suspend.prepare",
+  "gateway.suspend.handoff",
+  "gateway.suspend.resume",
+  "update.run",
+  "update.recovery.cleanup",
+]);
+
+/** A participating turn cannot select another admitted person's tool identity. */
+export function assertParticipationToolUser(
+  profileId: string | undefined,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (
+    authority?.participationCeiling &&
+    profileId !== undefined &&
+    profileId !== authority.profileId
+  ) {
+    throw new Error("Participant tools must use the admitted participant's identity.");
+  }
+}
+
+/** Tool delegation never includes changing the participant's own authority or its host. */
+export function assertParticipationGatewayMethod(
+  method: string,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (authority?.participationCeiling && participantAuthorityMethods.has(method)) {
+    throw new Error(`Participating tools cannot change Gateway authority (${method}).`);
+  }
+}
+
 const gatewayOwnerOnlyCoreToolNames = new Set<string>(GATEWAY_OWNER_ONLY_CORE_TOOLS);
 // Retained operator custody covers these control-plane paths, not every
 // owner-only executor. Other tools keep their sender or scoped admission.
@@ -88,7 +134,7 @@ function isGatewayOwnerOnlyCoreTool(toolName: string): boolean {
   return gatewayOwnerOnlyCoreToolNames.has(toolName);
 }
 
-/** Live admin is owner-tool eligible, as at interactive agent admission; it is not sender identity. */
+/** An admitted turn's grant decides owner tools; the sender flag decides only unadmitted turns. */
 export function hasGatewayOwnerToolAuthority(
   senderIsOwner: boolean | undefined,
   operatorAuthority?: AdmittedRunOperatorAuthority,
@@ -98,14 +144,7 @@ export function hasGatewayOwnerToolAuthority(
   if (turnTainted && senderIsOwner !== true) {
     return false;
   }
-  if (operatorAuthority) {
-    return roleScopesAllow({
-      role: "operator",
-      requestedScopes: ["operator.admin"],
-      allowedScopes: operatorAuthority.scopes,
-    });
-  }
-  return senderIsOwner === true;
+  return operatorAuthority ? operatorAuthority.grant.owner : senderIsOwner === true;
 }
 
 export function assertGatewayOwnerToolAuthority(
