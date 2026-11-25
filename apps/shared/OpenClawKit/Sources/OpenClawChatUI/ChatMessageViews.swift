@@ -218,6 +218,12 @@ private enum ChatUIConstants {
     static let bubbleCorner: CGFloat = 10
     #endif
     static let onboardingBubbleCorner: CGFloat = 18
+
+    /// The images past the four a message shows.
+    static func imagesNotShown(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 more image not shown")
+            : String(format: String(localized: "%lld more images not shown"), Int64(count))
+    }
 }
 
 #if os(iOS)
@@ -729,9 +735,7 @@ extension ChatMessageBubble {
             }
 
             if omittedImageAttachmentCount > 0 {
-                Text(String(
-                    format: String(localized: "Additional images hidden: %lld"),
-                    Int64(omittedImageAttachmentCount)))
+                Text(ChatUIConstants.imagesNotShown(omittedImageAttachmentCount))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -944,9 +948,7 @@ extension ChatMessageBubble {
                     .frame(maxWidth: self.column.userBubbleMaxWidth)
             }
             if self.omittedImageAttachmentCount > 0 {
-                Text(String(
-                    format: String(localized: "Additional images hidden: %lld"),
-                    Int64(self.omittedImageAttachmentCount)))
+                Text(ChatUIConstants.imagesNotShown(self.omittedImageAttachmentCount))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
