@@ -206,8 +206,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         specificKey,
         includeContextWeight,
         creatorKey,
-        // Paging, sorting, and usage filters derive from the same source snapshot.
-        overview: overviewOptions !== undefined,
         projection: p.projection === "overview" ? "overview" : "detail",
         includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
