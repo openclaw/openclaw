@@ -11,6 +11,7 @@ struct SettingsHubScreen: View {
     @AppStorage("screen.preventSleep") private var preventSleep = true
     @State private var showApprovalNotificationSettings = false
     @State private var embedCompatibility = DashboardEmbedCompatibility()
+    @State private var account = SettingsAccount.cached
     @Binding var navigationPath: [SettingsRoute]
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onRouteChange: ((SettingsRoute?) -> Void)?
@@ -48,6 +49,10 @@ struct SettingsHubScreen: View {
 
     private var root: some View {
         List {
+            if let account = self.visibleAccount {
+                Section { SettingsAccountHeader(account: account) }
+            }
+
             Section {
                 self.gatewayRow
                 if self.appModel.pendingExecApprovalCount > 0 {
@@ -99,6 +104,7 @@ struct SettingsHubScreen: View {
             }
         }
         .listStyle(.insetGrouped)
+        .task(id: self.accountRequest) { await self.refreshAccount(self.accountRequest) }
         .accessibilityIdentifier("SettingsHub.Native")
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -117,6 +123,33 @@ struct SettingsHubScreen: View {
 
     private var agentID: String {
         self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
+    }
+
+    private var accountRequest: SettingsAccount.Request {
+        SettingsAccount.Request(
+            ownerID: self.appModel.chatViewModelOwnerID,
+            authorityGeneration: self.appModel.operatorAuthorityGeneration,
+            isConnected: self.appModel.isOperatorGatewayConnected && !self.appModel.isLocalGatewayFixtureEnabled)
+    }
+
+    private var visibleAccount: SettingsAccount? {
+        guard let account, account.request == self.accountRequest, account.request.isConnected else { return nil }
+        return account
+    }
+
+    /// Identity is scoped to the admitted operator connection, including same-host account changes.
+    private func refreshAccount(_ request: SettingsAccount.Request) async {
+        guard request.isConnected, request == self.accountRequest, !Task.isCancelled else { return }
+        let gateway = self.appModel.operatorSession
+        guard let route = await gateway.currentRoute(),
+              let data = try? await gateway.request(method: "users.self", params: [:], ifCurrentRoute: route),
+              !Task.isCancelled,
+              await gateway.currentRoute() == route,
+              request == self.accountRequest
+        else { return }
+        let account = SettingsAccount(request: request, selfProfile: data)
+        self.account = account
+        SettingsAccount.cached = account
     }
 
     /// The connection row names the host and stays quiet while everything works; only an
@@ -596,5 +629,90 @@ private struct NativeStorageSettingsScreen: View {
         } catch {
             self.failure = clearing ? "Could not clear the cache." : "Could not read storage."
         }
+    }
+}
+
+/// The signed-in person as `users.self` reports them: the name the Control UI profile shows
+/// (display name, else GitHub login, else email) and the email as the one secondary line.
+struct SettingsAccount: Equatable {
+    struct Request: Equatable {
+        let ownerID: String
+        let authorityGeneration: UInt64
+        let isConnected: Bool
+    }
+
+    private struct SelfProfile: Decodable {
+        struct Profile: Decodable {
+            struct GitHubIdentity: Decodable {
+                let login: String
+            }
+
+            let displayName: String?
+            let emails: [String]?
+            let githubIdentity: GitHubIdentity?
+        }
+
+        let profile: Profile
+    }
+
+    /// Last profile read for a request, so reopening Settings does not shift the list when it lands.
+    @MainActor static var cached: SettingsAccount?
+
+    let request: Request
+    let name: String
+    let detail: String?
+
+    init?(request: Request, selfProfile data: Data) {
+        guard let profile = try? JSONDecoder().decode(SelfProfile.self, from: data).profile else { return nil }
+        let email = profile.emails?.lazy.compactMap(\.trimmedNonEmpty).first
+        guard let name = profile.displayName?.trimmedNonEmpty ?? profile.githubIdentity?.login.trimmedNonEmpty ?? email
+        else { return nil }
+        self.request = request
+        self.name = name
+        self.detail = email == name ? nil : email
+    }
+
+    var initials: String {
+        self.name.split(whereSeparator: \.isWhitespace)
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+    }
+}
+
+/// Account header in the place of the iOS Settings account row. There is no profile screen to
+/// open on iPhone yet, so it is a plain header: no chevron, no tap.
+private struct SettingsAccountHeader: View {
+    let account: SettingsAccount
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var avatarSize = 60.0
+
+    var body: some View {
+        let layout = self.dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(spacing: 14))
+        layout {
+            Text(verbatim: self.account.initials)
+                .font(OpenClawType.avatar(size: 24))
+                .foregroundStyle(.white)
+                .frame(width: self.avatarSize, height: self.avatarSize)
+                .background(Color(uiColor: .systemGray).gradient, in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: self.account.name)
+                    .font(OpenClawType.title3SemiBold)
+                    .foregroundStyle(.primary)
+                if let detail = self.account.detail {
+                    Text(verbatim: detail)
+                        .font(SettingsType.description)
+                        .foregroundStyle(SettingsInk.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("SettingsHub.Account")
     }
 }

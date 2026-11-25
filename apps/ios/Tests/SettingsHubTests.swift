@@ -28,6 +28,29 @@ struct SettingsHubTests {
         }
     }
 
+    @Test func `Account header names the person and adds the email only when it is not the name`() throws {
+        let request = SettingsAccount.Request(ownerID: "owner", authorityGeneration: 1, isConnected: true)
+        func account(_ profile: String) -> SettingsAccount? {
+            SettingsAccount(request: request, selfProfile: Data(#"{"profile":\#(profile)}"#.utf8))
+        }
+        let named = try #require(account(#"""
+        {"id":"p1","displayName":" Avery Quinn ","emails":["avery@example.test"],
+         "githubIdentity":{"login":"avery","profileUrl":"u","avatarUrl":"a"},"hasAvatar":false}
+        """#))
+        #expect(named.name == "Avery Quinn")
+        #expect(named.detail == "avery@example.test")
+        #expect(named.initials == "AQ")
+        let login = try #require(account(
+            #"{"id":"p1","displayName":null,"emails":[],"githubIdentity":{"login":"avery"}}"#))
+        #expect(login.name == "avery")
+        #expect(login.detail == nil)
+        let email = try #require(account(#"{"id":"p1","displayName":"","emails":["avery@example.test"]}"#))
+        #expect(email.name == "avery@example.test")
+        #expect(email.detail == nil)
+        // A token-only owner profile has nothing to show, so there is no header.
+        #expect(account(#"{"id":"gateway-owner","displayName":null,"emails":[],"githubIdentity":null}"#) == nil)
+    }
+
     @Test func `Access cookie resource rule admits only the Gateway authority`() async throws {
         let gateway = try #require(URL(string: "https://gateway.example.test/dashboard"))
         let rules = try #require(AuthenticatedControlUIAccessCookieBoundary.rules(for: gateway))
