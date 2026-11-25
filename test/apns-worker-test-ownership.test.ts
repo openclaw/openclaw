@@ -83,7 +83,7 @@ it("preserves mixed watch selection when device pairing leaves the fast thread p
       config: "test/vitest/vitest.database-worker-watch.config.ts",
       databaseWorkerWatchOwner: "test/vitest/vitest.unit-fast.config.ts",
       databaseWorkerWatchTests: [pairing],
-      forwardedArgs: [],
+      forwardedArgs: ["--watch"],
       includePatterns: [pairing, ordinary],
       watchMode: true,
     },

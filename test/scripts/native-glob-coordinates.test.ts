@@ -6,6 +6,10 @@ import { convertPathToPattern } from "tinyglobby";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestRuntime } from "../../scripts/lib/test-runtime.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
+import {
+  createVitestRunSpecs,
+  writeVitestIncludeFile,
+} from "../../scripts/test-projects.test-support.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
@@ -186,6 +190,47 @@ it("preserves Windows drive and filename case in native test admission", async (
   expect(result.status, result.stderr + result.stdout).toBe(0);
 });
 
+it("preserves native no-project failure with an empty inherited watch selection", async ({
+  onTestFinished,
+  signal,
+}) => {
+  signal.throwIfAborted();
+  const lifetime = createFixtureLifetime();
+  onTestFinished(() => lifetime.cleanup());
+  return lifetime.run(async () => {
+    signal.throwIfAborted();
+    const directory = lifetime.createTempDir("native-project-filter-");
+    const includeFile = write(directory, "include.json", "[]");
+    const config = write(
+      directory,
+      "vitest.config.mjs",
+      `export default {
+      root:${JSON.stringify(directory)},test:{name:'tooling',include:[],reporters:[]}
+    };`,
+    );
+    const env = testRunnerFixtureEnv({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile });
+    const specs = createVitestRunSpecs(
+      ["--watch", "test/scripts/unknown*.test.ts", "--project=missing", "--passWithNoTests"],
+      { cwd: directory, baseEnv: env },
+    );
+    expect(specs).toHaveLength(1);
+    const args = specs[0]!.pnpmArgs.slice(2);
+    const configIndex = args.indexOf("--config");
+    expect(configIndex).toBeGreaterThanOrEqual(0);
+    args[configIndex + 1] = config;
+    const result = await runNodeScript([...args, "--run"], env, 20_000, {
+      cwd: directory,
+      executable: process.execPath,
+      signal,
+      requireProcessTreeExit: process.platform !== "win32",
+      maxBuffer: 128 * 1024,
+    });
+    if (result.error) throw result.error;
+    expect(result.status, result.stderr + result.stdout).toBe(1);
+    expect(result.stderr + result.stdout).toContain('No projects matched the filter "missing"');
+  });
+});
+
 type WatchRecord = {
   kind: "module" | "ready" | "add" | "removed" | "run";
   file?: string;
@@ -199,10 +244,14 @@ type WatchRecord = {
 };
 
 // This fixture requires the native POSIX process-group join contract.
-it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
-  "discovers new files with native owner scopes and discovery dir %s",
+it.skipIf(process.platform === "win32").for([
+  { discoveryDir: ".", cliProcess: false },
+  { discoveryDir: "test/helpers", cliProcess: false },
+  { discoveryDir: "src/cli", cliProcess: true },
+])(
+  "discovers new files with native owner scopes %j",
   { timeout: 120_000 },
-  async (discoveryDir, { onTestFinished, signal }) => {
+  async ({ discoveryDir, cliProcess }, { onTestFinished, signal }) => {
     const lifetime = createFixtureLifetime();
     onTestFinished(() => lifetime.cleanup());
     await lifetime.run(async () => {
@@ -214,7 +263,10 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
         return { ...channel, cleanup: () => channel.close() };
       });
       const observed = path.join(directory, "observed.jsonl");
-      const seed = "test/scripts/native-glob-seed.test.ts";
+      const seed = cliProcess
+        ? "src/cli/update-cli/update-command-candidate-exit.test.ts"
+        : "test/scripts/native-glob-seed.test.ts";
+      const seedOwner = cliProcess ? "cli-process" : "tooling";
       const runtime = resolveTestRuntime(process.env);
       expect(Boolean(process.versions.bun)).toBe(runtime === "bun");
       const source = (generation: number, inSource = false) => {
@@ -230,12 +282,17 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
       };
       fs.mkdirSync(path.resolve(directory, discoveryDir), { recursive: true });
       write(directory, seed, source(1));
-      for (const file of [
-        "test/scripts/blocked/initial.test.ts",
-        "test/scripts/inherited-blocked-initial.test.ts",
-        "test/helpers/vendor/initial.test.ts",
-        "test/helpers/node_modules/initial.test.ts",
-      ])
+      for (const file of cliProcess
+        ? [
+            "src/cli/update-cli/update-command.test.ts",
+            "src/cli/update-cli/update-command-migrated.test.ts",
+          ]
+        : [
+            "test/scripts/blocked/initial.test.ts",
+            "test/scripts/inherited-blocked-initial.test.ts",
+            "test/helpers/vendor/initial.test.ts",
+            "test/helpers/node_modules/initial.test.ts",
+          ])
         write(directory, file, "throw new Error('excluded fixture');");
       const absolute = (pattern: string) => `${convertPathToPattern(directory)}/${pattern}`;
       const excluded = [
@@ -248,7 +305,10 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
       // cross-owner selection/intersection belongs to the prepared-watch change.
       const selections = [
         ["test/**/*.test.ts"],
-        ["test/scripts/vitest-fork-shutdown.test.ts"],
+        [
+          "test/scripts/vitest-fork-shutdown.test.ts",
+          "test/scripts/upgrade-survivor-native-systemd.test.ts",
+        ],
         ["test/scripts/docker-build-helper.test.ts"],
       ].map((patterns, index) =>
         write(
@@ -257,6 +317,39 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
           JSON.stringify([...patterns.map(absolute), ...excluded]),
         ),
       );
+      const cliArgs = [
+        "--watch",
+        "src/cli/update-cli/update-command{,-*}.test.ts",
+        "--project=cli",
+        "--project=cli-process",
+        "--exclude",
+        "update-cli/update-command.test.ts",
+        "--dir",
+        discoveryDir,
+      ];
+      let preparedArgs: string[] | undefined;
+      if (cliProcess) {
+        const inherited = [
+          "update-cli/update-command{,-*}.test.ts",
+          "!update-cli/update-command-{migrated,fresh-terminal}.test.ts",
+        ];
+        write(directory, "inherited.json", JSON.stringify(inherited));
+        const specs = createVitestRunSpecs(cliArgs, {
+          cwd: directory,
+          baseEnv: {
+            OPENCLAW_VITEST_INCLUDE_FILE: path.join(directory, "inherited.json"),
+          },
+        });
+        expect(specs).toHaveLength(1);
+        expect(specs[0]?.config).toBe("test/vitest/vitest.cli-process.config.ts");
+        expect(specs[0]?.pnpmArgs).toEqual(expect.arrayContaining(cliArgs.slice(2)));
+        expect(specs[0]?.includePatterns).toEqual(inherited);
+        preparedArgs = [...specs[0]!.pnpmArgs];
+        writeVitestIncludeFile(selections[0]!, specs[0]!.includePatterns!, {
+          cwd: directory,
+          expandGlobs: false,
+        });
+      }
       const reporter = write(
         directory,
         "reporter.mjs",
@@ -306,11 +399,12 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
         "vitest.config.mts",
         `
         import path from 'node:path';
+        import {createCliProcessVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.cli-process.config.ts")).href)};
         import {createToolingVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling.config.ts")).href)};
         import {createToolingIsolatedVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling-isolated.config.ts")).href)};
         import {createToolingDockerVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling-docker.config.ts")).href)};
         const root=${JSON.stringify(directory)},selections=${JSON.stringify(selections)};
-        const projects=[createToolingVitestConfig,createToolingIsolatedVitestConfig,createToolingDockerVitestConfig]
+        const projects=(${cliProcess}?[createCliProcessVitestConfig]:[createToolingVitestConfig,createToolingIsolatedVitestConfig,createToolingDockerVitestConfig])
           .map((create,index)=>{
             const config=create({OPENCLAW_VITEST_INCLUDE_FILE:selections[index]});
             return {...config,extends:false,root,test:{
@@ -328,8 +422,14 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
       `,
       );
       const env = testRunnerFixtureEnv({ OPENCLAW_VITEST_RUNTIME: runtime });
+      if (preparedArgs) {
+        const configIndex = preparedArgs.indexOf("--config");
+        expect(configIndex).toBeGreaterThanOrEqual(0);
+        preparedArgs[configIndex + 1] = config;
+        preparedArgs.push("--configLoader", "runner");
+      }
       const handle = spawnWatchedVitestProcess({
-        pnpmArgs: [
+        pnpmArgs: preparedArgs ?? [
           "exec",
           "node",
           path.join(root, "node_modules/vitest/vitest.mjs"),
@@ -363,22 +463,29 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
       try {
         await Promise.all([wait(`module:${seed}:generation 1`), wait("ready")]);
         const initial = records().filter((record) => record.kind === "module");
-        expect(initial.map((record) => [record.file, record.owner])).toEqual([[seed, "tooling"]]);
+        expect(initial.map((record) => [record.file, record.owner])).toEqual([[seed, seedOwner]]);
         expect(records().find((record) => record.kind === "ready")?.projects).toEqual(
-          ["tooling", "tooling-isolated", "tooling-docker"].map((name) => ({
-            name,
-            root: directory,
-            dir: path.resolve(directory, discoveryDir),
-          })),
+          (cliProcess ? ["cli-process"] : ["tooling", "tooling-isolated", "tooling-docker"]).map(
+            (name) => ({
+              name,
+              root: directory,
+              dir: path.resolve(directory, discoveryDir),
+            }),
+          ),
         );
-        const negatives = [
-          "test/scripts/blocked/later.test.ts",
-          "test/scripts/inherited-blocked-later.test.ts",
-          "test/helpers/vendor/later.test.ts",
-          "test/scripts/no-run.test.ts",
-          "src/ignored.source.ts",
-          "src/not-a-test.source.ts",
-        ];
+        const negatives = cliProcess
+          ? [
+              "src/cli/update-cli/update-command-proof-unowned.test.ts",
+              "src/cli/update-cli/update-command-fresh-terminal.test.ts",
+            ]
+          : [
+              "test/scripts/blocked/later.test.ts",
+              "test/scripts/inherited-blocked-later.test.ts",
+              "test/helpers/vendor/later.test.ts",
+              "test/scripts/no-run.test.ts",
+              "src/ignored.source.ts",
+              "src/not-a-test.source.ts",
+            ];
         const excluded = negatives.map((file) => wait(`add:${file}`));
         for (const file of negatives) {
           write(
@@ -395,43 +502,54 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
             records().find((record) => record.kind === "add" && record.file === file)?.owners,
           ).toEqual([]);
         }
-        const additions = [
-          ["test/scripts/upgrade-survivor-native-systemd.test.ts", "tooling"],
-          ["test/scripts/vitest-fork-shutdown.test.ts", "tooling-isolated"],
-          ["test/scripts/docker-build-helper.test.ts", "tooling-docker"],
-          ["src/live.source.ts", "tooling"],
-        ] as const;
+        const additions: ReadonlyArray<readonly [string, string]> = cliProcess
+          ? ([["src/cli/update-cli/update-command-fresh-preview.test.ts", "cli-process"]] as const)
+          : ([
+              ["test/scripts/upgrade-survivor-native-systemd.test.ts", "tooling-isolated"],
+              ["test/scripts/vitest-fork-shutdown.test.ts", "tooling-isolated"],
+              ["test/scripts/docker-build-helper.test.ts", "tooling-docker"],
+              ["src/live.source.ts", "tooling"],
+            ] as const);
         const created = additions.map(([file]) => wait(`module:${file}:generation 1`));
         for (const [file] of additions) {
           write(directory, file, source(1, file.endsWith(".source.ts")));
         }
         await Promise.all(created);
-        const edited = wait(`module:${seed}:generation 2`);
-        write(directory, seed, source(2));
-        await edited;
-        const recreate = additions[1][0];
-        const removed = wait(`removed:${recreate}`);
-        fs.unlinkSync(path.join(directory, recreate));
-        await removed;
-        const recreated = wait(`module:${recreate}:generation 2`);
-        write(directory, recreate, source(2));
-        await recreated;
-        await wait(`ready:${recreate}:generation 2`);
+        if (!cliProcess) {
+          const edited = wait(`module:${seed}:generation 2`);
+          write(directory, seed, source(2));
+          await edited;
+          const recreate = additions[1]![0];
+          const removed = wait(`removed:${recreate}`);
+          fs.unlinkSync(path.join(directory, recreate));
+          await removed;
+          const recreated = wait(`module:${recreate}:generation 2`);
+          write(directory, recreate, source(2));
+          await recreated;
+          await wait(`ready:${recreate}:generation 2`);
+        } else {
+          await wait(`ready:${additions[0]![0]}:generation 1`);
+        }
         const final = records();
         const modules = final.filter((record) => record.kind === "module");
         const expectedModules = [
-          [seed, "tooling", "generation 1"],
-          [seed, "tooling", "generation 2"],
+          [seed, seedOwner, "generation 1"],
           ...additions.map(([file, owner]) => [file, owner, "generation 1"]),
-          [recreate, "tooling-isolated", "generation 2"],
         ];
-        if (discoveryDir !== ".") {
+        if (!cliProcess) {
+          expectedModules.push(
+            [seed, seedOwner, "generation 2"],
+            [additions[1]![0], "tooling-isolated", "generation 2"],
+          );
+        }
+        if (!cliProcess && discoveryDir !== ".") {
           // Relative fallback exclusions follow dir; absolute selections still
           // admit these outside-dir files to the ordinary tooling owner.
           expectedModules.push(
-            [recreate, "tooling", "generation 1"],
-            [recreate, "tooling", "generation 2"],
-            [additions[2][0], "tooling", "generation 1"],
+            [additions[0]![0], "tooling", "generation 1"],
+            [additions[1]![0], "tooling", "generation 1"],
+            [additions[1]![0], "tooling", "generation 2"],
+            [additions[2]![0], "tooling", "generation 1"],
           );
         }
         const moduleTuples = modules.map((record) => [
@@ -453,7 +571,7 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
         expect(
           final
             .filter((record) => record.kind === "ready")
-            .every((record) => record.cached?.join(",") === "tooling"),
+            .every((record) => record.cached?.join(",") === seedOwner),
         ).toBe(true);
       } finally {
         handle.child.kill("SIGTERM");

@@ -459,7 +459,7 @@ mockNativeModuleExports(${JSON.stringify(owner)}, {
         planGroups: configs.map((config, i) => ({
           // Real-home admission needs a canonical live-aware owner, not custom fixture configs.
           config: realHomeReplay
-            ? path.join(repoRoot, "test/vitest/vitest.tooling-isolated.config.ts")
+            ? path.join(repoRoot, "test/vitest/vitest.unit-support.config.ts")
             : path.join(root, config),
           estimatedCost: 1,
           extensionIds: [i ? "beta" : "alpha"],

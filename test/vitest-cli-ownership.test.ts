@@ -139,7 +139,7 @@ it.each(["src/gateway/config-reload.telegram-policy.test.ts", "src/gateway"])(
     const plans = buildVitestRunPlans(["--watch", ...filters, ...forwardedArgs]);
     const plan = {
       config: "test/vitest/vitest.gateway.config.ts",
-      forwardedArgs,
+      forwardedArgs: ["--watch", ...forwardedArgs],
       includePatterns: [workerFile, isFile ? target : `${target}/**/*.test.ts`],
       watchMode: true,
     };
