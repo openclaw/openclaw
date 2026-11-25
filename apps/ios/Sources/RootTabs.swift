@@ -746,7 +746,10 @@ struct RootTabs: View {
                     }
                 }
             }
-            .fullScreenCover(isPresented: self.$showOnboarding, onDismiss: { self.openClawIDSetup = nil }) {
+            .fullScreenCover(
+                isPresented: self.$showOnboarding,
+                onDismiss: { self.openClawIDSetup = nil },
+                content: {
                 if let openClawIDSetup {
                     OpenClawIDOnboardingView(
                         model: openClawIDSetup,
@@ -754,7 +757,7 @@ struct RootTabs: View {
                 } else {
                     self.onboardingWizard(offersNewUserGuide: offersNewUserGuide)
                 }
-            }
+            })
             .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
             .execApprovalPromptDialog(

@@ -85,7 +85,9 @@ public final class OpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationCo
             endpoint: metadata.authorization, verifier: verifier, state: state, nonce: nonce, freshLogin: freshLogin)
         let callback = try await self.authenticate(authorize)
         let code = try Self.code(
-            from: callback, state: state, issuer: self.configuration.issuer,
+            from: callback,
+            state: state,
+            issuer: self.configuration.issuer,
             callbackScheme: self.configuration.callbackScheme)
         let idToken = try await self.exchange(code: code, verifier: verifier, endpoint: metadata.token)
         guard Self.nonce(of: idToken) == nonce else { throw OpenClawIDSignInError.stateMismatch }

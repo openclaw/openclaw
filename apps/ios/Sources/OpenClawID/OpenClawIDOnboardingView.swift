@@ -24,7 +24,7 @@ struct OpenClawIDOnboardingView: View {
                 if let error = self.model.error {
                     Text(verbatim: error)
                         .font(OpenClawType.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(OpenClawBrand.statusWarning)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 14)
                     if self.model.step.isJoined {
@@ -193,7 +193,10 @@ struct OpenClawIDStepContent: View {
             .buttonStyle(OpenClawSecondaryActionButtonStyle())
             self.row(
                 "Stays on this device",
-                detail: "The code approves this device and is then erased. It is never saved, sent to \(claw) or logged.",
+                detail: """
+                The code approves this device and is then erased. \
+                It is never saved, sent to \(claw) or logged.
+                """,
                 icon: "lock.shield")
             Button {
                 let code = self.recoveryCode
@@ -333,7 +336,7 @@ struct OpenClawIDStepContent: View {
 
     private func problemHeading(_ title: String, detail: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: icon).font(.system(size: 40)).foregroundStyle(.orange)
+            Image(systemName: icon).font(.system(size: 40)).foregroundStyle(OpenClawBrand.statusWarning)
             Text(verbatim: title).font(OpenClawType.title2SemiBold)
             Text(verbatim: detail).font(OpenClawType.subhead).foregroundStyle(.secondary)
         }

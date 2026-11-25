@@ -152,10 +152,7 @@ public final class OpenClawIDAccountSetupService: OpenClawIDSetupService {
     public func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         if let step = try await self.performMemberJoin(action) { return step }
         switch action {
-        case .pasteNodeInvitation, .requestNode:
-            guard let nodeInvitations else { throw CocoaError(.featureUnsupported) }
-            return try await nodeInvitations.perform(action)
-        case .checkApproval where self.approval == nil:
+        case .pasteNodeInvitation, .requestNode, .checkApproval where self.approval == nil:
             guard let nodeInvitations else { throw CocoaError(.featureUnsupported) }
             return try await nodeInvitations.perform(action)
         case .switchAccount:
