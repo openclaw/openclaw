@@ -235,6 +235,8 @@ private final class RecordingInputDelegate: NSObject, UITextInputDelegate {
         self.events.append("textWillChange")
     }
 
+    func conversationContext(_: UIConversationContext?, didChange _: (any UITextInput)?) {}
+
     func textDidChange(_: (any UITextInput)?) {
         self.events.append("textDidChange")
     }
