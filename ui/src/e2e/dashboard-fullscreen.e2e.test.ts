@@ -871,7 +871,7 @@ suite.define(() => {
         const links = page.getByRole("link");
         expect(await links.count()).toBe(10);
         const first = links.first();
-        expect(await first.getAttribute("title")).toBe(candidates[0].displayName);
+        expect(await first.getAttribute("title")).toBe(candidates[0]!.displayName);
         expect(
           await first.evaluate((link) => {
             const style = getComputedStyle(link);
