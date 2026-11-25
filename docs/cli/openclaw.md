@@ -236,9 +236,17 @@ the history write fails after the role committed, the role change still
 succeeds and the Gateway logs a warning, so a missing entry does not prove the
 role is unchanged. Check `users.list` for the current role.
 
-History is stored in the `diagnostic_events` table of the shared
-`~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
-and `config-audit` scopes. Each scope retains its latest 50,000 records.
+Set `logging.audit.profileChanges` to `true` to include committed Gateway
+display-name changes, including clears. This is off by default and requires
+`logging.audit.enabled`. Entries identify the affected profile and, when
+known, the authenticated requester profile. Neither the old nor new name is
+stored. Unchanged and refused edits are not recorded. Recording is best
+effort and does not backfill earlier edits.
+
+History is stored in the `diagnostic_events` table of the shared state database
+under the `system-agent-audit`, `config-audit`, and `profile-change-audit`
+scopes. Each scope retains its latest 50,000 records, so display-name changes
+do not displace role assignments or configuration history.
 Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.

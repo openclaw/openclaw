@@ -20,6 +20,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   listSystemChanges,
+  PROFILE_CHANGE_AUDIT_SCOPE,
   SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE,
   systemChangesHandlers,
 } from "./system-changes.js";
@@ -424,6 +425,32 @@ describe("openclaw.changes.list", () => {
       expect((await listSystemChanges({ limit: 50 })).entries).toContainEqual(
         expect.objectContaining({ changedPaths: ["gateway.port"] }),
       );
+    });
+  });
+
+  it("merges profile history into a frozen, paged view of other changes", async () => {
+    await withAuditStores(async ({ systemStore, configStore }) => {
+      const profiles = createSqliteAuditRecordStore({
+        scope: PROFILE_CHANGE_AUDIT_SCOPE,
+        maxEntries: 2,
+        env: process.env,
+      });
+      seedOperation(systemStore, "Updated configuration");
+      writeConfigs(configStore, ["older-config", 1_000, "c", "d", "gateway.port", "config-rpc"]);
+      const writeProfile = (profileId: string, at: number) =>
+        profiles.upsert(profileId, { operation: "users.setDisplayName", profileId }, at);
+      writeProfile("profile-one", 2_000);
+
+      const first = await listSystemChanges({ limit: 1 });
+      expectEntries(first.entries, [{ summary: "Updated configuration" }]);
+      writeProfile("profile-two", 5_000);
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor });
+      expectEntries(second.entries, [
+        { summary: "Display name for profile profile-one changed by an unidentified requester" },
+      ]);
+      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor });
+      expectEntries(third.entries, [{ changedPaths: ["gateway.port"] }]);
+      expect(third.nextCursor).toBeUndefined();
     });
   });
 

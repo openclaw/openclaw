@@ -59,11 +59,13 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
   "logging.audit.enabled":
-    "Records new run, tool, and enabled message audit events. Default: true. Changes apply immediately; accepted writes finish and retained rows remain queryable until they expire.",
+    "Records new run, tool, and enabled message and profile-change audit records. Default: true. Disabling stops new collection; accepted writes finish and retained records remain readable within their existing bounds.",
   "logging.audit.executionIdentity":
     "Retains bounded execution-identity attribution for exact-run inspection. Default: false. Requires logging.audit.enabled and applies to newly admitted runs; existing contexts remain unchanged.",
   "logging.audit.messages":
     'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Requires logging.audit.enabled. Changes apply to subsequent lifecycle events.',
+  "logging.audit.profileChanges":
+    "Records committed Gateway display-name changes in admin-only change history without storing old or new names. Default: false. Requires logging.audit.enabled.",
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":

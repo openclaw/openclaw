@@ -94,7 +94,7 @@ export async function prepareProfileMutationAccess(
   };
   try {
     assertCurrent();
-    return assertCurrent;
+    return { assertCurrent, requesterProfileId: requester.profileId };
   } catch (error) {
     options.respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error)));
     return undefined;

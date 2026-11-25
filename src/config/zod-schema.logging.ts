@@ -58,7 +58,7 @@ export const LoggingConfigSchema = z
     consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
     /** Regex patterns used to redact sensitive tokens from logs and diagnostics. */
     redactPatterns: z.array(z.string()).optional(),
-    /** Metadata-only agent activity audit ledger settings. */
+    /** Metadata-only activity and change-history collection settings. */
     audit: z
       .strictObject({
         /**
@@ -79,6 +79,8 @@ export const LoggingConfigSchema = z
          * unknown conversation kinds. Default: `off`.
          */
         messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
+        /** Record committed Gateway display-name changes in admin history. Default: false. */
+        profileChanges: z.boolean().optional(),
       })
       .optional(),
   })

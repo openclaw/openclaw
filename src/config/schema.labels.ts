@@ -61,6 +61,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.audit.enabled": "Audit Ledger Enabled",
   "logging.audit.executionIdentity": "Execution Identity Audit",
   "logging.audit.messages": "Message Audit Scope",
+  "logging.audit.profileChanges": "Profile Change Audit",
   diagnostics: "Diagnostics",
   "diagnostics.otel": "OpenTelemetry",
   "diagnostics.cacheTrace": "Cache Trace",

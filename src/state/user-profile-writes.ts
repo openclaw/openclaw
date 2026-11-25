@@ -250,9 +250,26 @@ export async function setCanonicalUserProfileRole(
 export async function setCanonicalUserProfileDisplayName(
   profileId: string,
   name: string | null,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { onDisplayNameChanged?: (profileId: string) => void } = {},
 ) {
-  return unwrap(await write("userProfiles.setDisplayName", { profileId, name }, options));
+  const onChanged = options.onDisplayNameChanged;
+  return unwrap(
+    await write(
+      "userProfiles.setDisplayName",
+      { profileId, name },
+      options,
+      onChanged &&
+        ((publication) => {
+          const before = new Map(publication.before);
+          for (const [id, row] of publication.after) {
+            const previous = before.get(id);
+            if (row && previous && row.display_name !== previous.display_name) {
+              onChanged(id);
+            }
+          }
+        }),
+    ),
+  );
 }
 export async function setCanonicalUserProfileAvatar(
   profileId: string,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   ErrorCodes,
@@ -10,7 +11,10 @@ import {
 import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
+import {
+  createSqliteAuditRecordReader,
+  createSqliteAuditRecordWriter,
+} from "../../infra/sqlite-audit-record-store.async.js";
 import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { UserProfileRoleChange } from "../../state/user-profile-writes.js";
@@ -38,6 +42,15 @@ const CONFIG_WRITE_PREFIXES = new Map<SystemChangeEntry["source"], string>([
 ]);
 
 const ROLE_ASSIGNMENT_OPERATION = "users.setRole";
+const DISPLAY_NAME_CHANGE_OPERATION = "users.setDisplayName";
+export const PROFILE_CHANGE_AUDIT_SCOPE = "profile-change-audit";
+const PROFILE_CHANGE_AUDIT_MAX_ENTRIES = 50_000;
+
+type ProfileChangeAuditEntry = {
+  operation: typeof DISPLAY_NAME_CHANGE_OPERATION;
+  profileId: string;
+  actorProfileId?: string;
+};
 
 /**
  * Records one committed `users.setRole` transition in the shared change history.
@@ -77,6 +90,28 @@ export async function recordRoleAssignmentChange(
   }
 }
 
+export async function recordProfileDisplayNameChange(
+  profileId: string,
+  actorProfileId: string | undefined,
+  log: Pick<SubsystemLogger, "warn">,
+): Promise<void> {
+  try {
+    // Self-service edits must not consume the role/configuration history budget.
+    await createSqliteAuditRecordWriter<ProfileChangeAuditEntry>({
+      scope: PROFILE_CHANGE_AUDIT_SCOPE,
+      maxEntries: PROFILE_CHANGE_AUDIT_MAX_ENTRIES,
+    }).register(randomUUID(), {
+      operation: DISPLAY_NAME_CHANGE_OPERATION,
+      profileId,
+      actorProfileId,
+    });
+  } catch (error) {
+    log.warn(
+      `users.setDisplayName committed, but its change-history record failed: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
 type PendingCollapse = {
   transition: string;
   maxConfigSequence: number;
@@ -87,10 +122,14 @@ type ChangeCursor = {
   version: 1;
   systemAgentBefore: number;
   configBefore: number;
+  profileBefore?: number;
   pendingCollapse?: PendingCollapse[];
 };
 
-type ChangeScope = typeof SYSTEM_AGENT_AUDIT_SCOPE | typeof CONFIG_AUDIT_SCOPE;
+type ChangeScope =
+  | typeof SYSTEM_AGENT_AUDIT_SCOPE
+  | typeof CONFIG_AUDIT_SCOPE
+  | typeof PROFILE_CHANGE_AUDIT_SCOPE;
 
 type ChangeCandidate = {
   entry: SystemChangeEntry;
@@ -124,12 +163,14 @@ function decodeCursor(value: string): ChangeCursor {
   } catch {
     throw new Error("invalid change-history cursor");
   }
+  const profileBefore = (parsed as { profileBefore?: unknown } | null)?.profileBefore;
   if (
     !parsed ||
     typeof parsed !== "object" ||
     (parsed as { version?: unknown }).version !== 1 ||
     !Number.isSafeInteger((parsed as { systemAgentBefore?: unknown }).systemAgentBefore) ||
     !Number.isSafeInteger((parsed as { configBefore?: unknown }).configBefore) ||
+    (profileBefore !== undefined && !Number.isSafeInteger(profileBefore)) ||
     !isValidPendingCollapses((parsed as { pendingCollapse?: unknown }).pendingCollapse)
   ) {
     throw new Error("invalid change-history cursor");
@@ -217,6 +258,24 @@ function toSystemAgentCandidate(
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),
     recordedAt: record.createdAt,
     position: { scope: SYSTEM_AGENT_AUDIT_SCOPE, sequence: record.sequence },
+  };
+}
+
+function toProfileCandidate(
+  record: SequencedSqliteAuditRecordEntry<ProfileChangeAuditEntry>,
+): ChangeCandidate {
+  const { profileId, actorProfileId } = record.value;
+  const by = actorProfileId ? `profile ${actorProfileId}` : "an unidentified requester";
+  return {
+    entry: {
+      id: `${PROFILE_CHANGE_AUDIT_SCOPE}:${record.sequence}`,
+      at: record.createdAt,
+      kind: "operation",
+      source: "config-rpc",
+      summary: `Display name for profile ${profileId} changed by ${by}`,
+    },
+    recordedAt: record.createdAt,
+    position: { scope: PROFILE_CHANGE_AUDIT_SCOPE, sequence: record.sequence },
   };
 }
 
@@ -419,14 +478,19 @@ export async function listSystemChanges(
     scope: CONFIG_AUDIT_SCOPE,
     env,
   });
+  const profileStore = createSqliteAuditRecordReader<ProfileChangeAuditEntry>({
+    scope: PROFILE_CHANGE_AUDIT_SCOPE,
+    env,
+  });
   const cursor = params.beforeCursor
     ? decodeCursor(params.beforeCursor)
     : {
         version: 1 as const,
-        // Freeze both journal heads before scanning so page two cannot admit a
+        // Freeze the journal heads before scanning so page two cannot admit a
         // record inserted into the untouched scope after page one was read.
         systemAgentBefore: await initialBefore(systemStore.latest),
         configBefore: await initialBefore(configStore.latest),
+        profileBefore: await initialBefore(profileStore.latest),
       };
   const limit = Math.min(MAX_CHANGE_LIMIT, Math.max(1, params.limit ?? DEFAULT_CHANGE_LIMIT));
   const target = limit + 1;
@@ -444,6 +508,14 @@ export async function listSystemChanges(
   });
   const systemCandidates = systemScan.entries;
   const configCandidates = configScan.entries;
+  // Cursors issued before this scope was introduced have no profile snapshot.
+  const profileCursorBefore = cursor.profileBefore ?? 0;
+  const profileCandidates =
+    profileCursorBefore > 0
+      ? (await profileStore.latest({ limit: target, beforeSequence: profileCursorBefore })).map(
+          toProfileCandidate,
+        )
+      : [];
   // A visible write can enrich the operation immediately. Its cursor position
   // stays in the config stream and is suppressed only when that stream reaches it.
   const plannedMatches = planConfigMatches(systemCandidates, configCandidates);
@@ -469,6 +541,7 @@ export async function listSystemChanges(
   }
   let systemIndex = 0;
   let configIndex = 0;
+  let profileIndex = 0;
   let systemBefore: number | undefined;
   let configBefore: number | undefined;
   const collapseMarkers = [...(cursor.pendingCollapse ?? [])];
@@ -477,12 +550,17 @@ export async function listSystemChanges(
   while (true) {
     const system = systemCandidates[systemIndex];
     const config = configCandidates[configIndex];
-    const next =
+    const profile = profileCandidates[profileIndex];
+    const systemOrConfig =
       system && config
         ? compareCandidates(system, config) <= 0
           ? system
           : config
         : (system ?? config);
+    const next =
+      profile && (!systemOrConfig || compareCandidates(profile, systemOrConfig) < 0)
+        ? profile
+        : systemOrConfig;
     if (!next) {
       break;
     }
@@ -507,6 +585,8 @@ export async function listSystemChanges(
           collapseMarkers.shift();
         }
       }
+    } else if (next === profile) {
+      profileIndex += 1;
     } else {
       configBefore = config!.position.sequence;
       configIndex += 1;
@@ -515,6 +595,7 @@ export async function listSystemChanges(
 
   const hasBufferedSystemEntries = systemIndex < systemCandidates.length;
   const hasBufferedConfigEntries = configIndex < configCandidates.length;
+  const hasBufferedProfileEntries = profileIndex < profileCandidates.length;
   // Payload timestamps can move backwards, so only discard markers after every
   // remaining config record has passed the cursor and none was a partner.
   const pendingCollapse = configScan.exhausted && !hasBufferedConfigEntries ? [] : collapseMarkers;
@@ -526,6 +607,10 @@ export async function listSystemChanges(
     configBefore: hasBufferedConfigEntries
       ? (configBefore ?? cursor.configBefore)
       : configScan.nextBeforeSequence,
+    // At most `limit` of the `limit + 1` loaded profile entries can be consumed.
+    profileBefore: hasBufferedProfileEntries
+      ? (profileCandidates[profileIndex - 1]?.position.sequence ?? profileCursorBefore)
+      : 0,
   };
   if (pendingCollapse.length > 0) {
     next.pendingCollapse = pendingCollapse;
@@ -535,6 +620,7 @@ export async function listSystemChanges(
   const hasMore =
     hasBufferedSystemEntries ||
     hasBufferedConfigEntries ||
+    hasBufferedProfileEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;
