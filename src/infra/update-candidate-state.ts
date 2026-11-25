@@ -47,6 +47,7 @@ import {
 } from "./update-candidate-plugin-code-links.js";
 import {
   createUpdateStateSnapshotReporter,
+  workboardSnapshotRecoveryHint,
   type UpdateStateInspectionProgress,
 } from "./update-candidate-state.diagnostics.js";
 import {
@@ -650,6 +651,7 @@ export async function snapshotUpdateCandidateState(
               // A SQLite upgrade can make owned FTS indexes look malformed; the
               // candidate's agent database admission rebuilds them.
               ftsSchemas: AGENT_FTS_SCHEMAS,
+              foreignKeyRecoveryHint: workboardSnapshotRecoveryHint(sourceRoot, file),
             }
           : undefined,
       // The rehearsal is private and disposable; compaction would create another

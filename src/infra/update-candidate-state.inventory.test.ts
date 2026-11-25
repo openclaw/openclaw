@@ -497,6 +497,50 @@ describe("snapshot execution approvals", () => {
   );
 });
 
+describe("snapshot Workboard integrity", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([false, true])("refuses orphaned rows (unrelated violations: %s)", async (mixed) => {
+    const root = dirs.make("candidate-workboard-");
+    const stateDir = path.join(root, "source");
+    const targetStateDir = path.join(root, "rehearsal");
+    const file = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.mkdir(targetStateDir);
+    {
+      using db = openNodeSqliteDatabase(file);
+      db.exec(
+        `PRAGMA foreign_keys = OFF;
+        PRAGMA user_version = 4;
+        CREATE TABLE workboard_cards (id TEXT PRIMARY KEY);
+        CREATE TABLE workboard_card_labels (
+          card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE
+        );
+        INSERT INTO workboard_card_labels VALUES ('missing');`,
+      );
+      if (mixed) {
+        db.exec(`CREATE TABLE unrelated (card_id TEXT REFERENCES workboard_cards(id));
+          INSERT INTO unrelated VALUES ('also-missing');`);
+      }
+      expect(db.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+    }
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
+    const inventory = await readUpdateCandidateStateInventoryInProcess(input);
+    const snapshot = snapshotUpdateCandidateState({
+      ...input,
+      pluginPlanPath: path.join(targetStateDir, inventory.pluginPlan),
+      databaseInventory: [...inventory.databases.keys()],
+    });
+    await expect(snapshot).rejects.toThrow(/foreign_key_check failed.*workboard_card_labels/su);
+    const hint = /Workboard orphan repair:.*openclaw doctor --fix/su;
+    if (mixed) {
+      await expect(snapshot).rejects.not.toThrow(hint);
+    } else {
+      await expect(snapshot).rejects.toThrow(hint);
+    }
+  });
+});
+
 describe("snapshot FTS integrity", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const ftsTables = ["memory_index_chunks_fts", "session_transcript_fts"];

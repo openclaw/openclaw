@@ -1,6 +1,11 @@
 import fs from "node:fs";
-import type { BackupProgressInfo } from "node:sqlite";
+import { normalize, relative } from "node:path";
+import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
+import {
+  inspectWorkboardCardOrphans,
+  WORKBOARD_SQLITE_STATE_PATH,
+} from "@openclaw/workboard-contract";
 import { z } from "zod";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import {
@@ -20,6 +25,16 @@ const CaptureSpaceSchema = z
     volume: z.enum(["backup", "rollback"]).optional(),
   })
   .refine(({ requiredBytes, availableBytes }) => availableBytes < requiredBytes);
+
+export function workboardSnapshotRecoveryHint(stateDir: string, source: string) {
+  if (relative(stateDir, source) !== normalize(WORKBOARD_SQLITE_STATE_PATH)) {
+    return undefined;
+  }
+  return (database: DatabaseSync) =>
+    inspectWorkboardCardOrphans(database)?.count
+      ? 'Workboard orphan repair: Stop the Gateway and run "openclaw doctor --fix" with Workboard enabled before retrying the update.'
+      : undefined;
+}
 
 export function formatUpdateStateInspectionError(error: unknown): string {
   const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);

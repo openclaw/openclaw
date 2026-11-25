@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { WORKBOARD_SQLITE_STATE_PATH } from "@openclaw/workboard-contract";
 import {
   getDatabaseEngineInput,
   openEngineWorkerStore,
@@ -28,7 +29,7 @@ export function createWorkboardSqliteStores(options: {
   lazy?: boolean;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
-    options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
+    options.dbPath ?? path.join(resolveStateDir(), WORKBOARD_SQLITE_STATE_PATH),
   );
   const selectedDatabase = getDatabaseEngineInput("workboard");
   const openWorker = () =>

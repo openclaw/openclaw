@@ -19,6 +19,8 @@ export {
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
+export { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
+export { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 
 /** Read-only model selector inventory for provider retirement diagnostics. */
 export { inspectDoctorModelReferences } from "../commands/doctor/shared/model-reference-inventory.js";

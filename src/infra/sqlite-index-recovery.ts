@@ -34,6 +34,7 @@ export async function backupDoctorSqliteRepair(
   repair:
     | "index"
     | "session-window"
+    | "workboard-card-orphans"
     | "transcript-headers"
     | "transcript-labels"
     | "media-persistence"

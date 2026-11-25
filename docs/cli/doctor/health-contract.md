@@ -51,6 +51,16 @@ Core doctor checks that declare structured health checks stay attached to the or
 
 Set `category` at the producing check. Do not classify free-form message text. Absent a category, warning/error findings require attention and info findings are recommendations. Historical findings describe retained evidence, not current readiness. Doctor summarizes remaining findings after repair verification.
 
+### Plugin-owned SQLite repair
+
+Inside an explicit offline Doctor state migration, a bundled plugin can load
+`openclaw/plugin-sdk/doctor-repair-runtime` lazily. For a database the plugin
+owns, `backupDoctorSqliteRepair(path, repairKind)` returns the path to a private,
+verified, WAL-aware pre-repair copy. The caller owns maintenance custody,
+diagnosis, preservation of any additional recovery artifacts, and mutation.
+Use `assertSqliteIntegrity(database, label)` before committing the repair
+transaction; it throws if either the database integrity or foreign-key check fails.
+
 ### Model-reference retirement inventory
 
 The internal `openclaw/plugin-sdk/doctor-repair-runtime` surface exports

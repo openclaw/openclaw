@@ -1,3 +1,5 @@
+import path from "node:path";
+import { WORKBOARD_SQLITE_STATE_PATH } from "@openclaw/workboard-contract";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const RECOVERY =
@@ -34,6 +36,22 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     detectLegacyState: detectRetiredState,
     async migrateLegacyState(params) {
       return { changes: [], warnings: (await detectRetiredState(params))?.preview ?? [] };
+    },
+  },
+  {
+    id: "workboard-card-orphans",
+    label: "Workboard orphaned card rows",
+    doctorOnly: true,
+    collectBackupResources: ({ stateDir }) => [
+      { kind: "sqlite", path: path.resolve(stateDir, WORKBOARD_SQLITE_STATE_PATH) },
+    ],
+    async detectLegacyState({ stateDir }) {
+      const { detectWorkboardCardOrphans } = await import("./src/doctor-card-orphans.js");
+      return detectWorkboardCardOrphans(path.resolve(stateDir, WORKBOARD_SQLITE_STATE_PATH));
+    },
+    async migrateLegacyState({ stateDir }) {
+      const { repairWorkboardCardOrphans } = await import("./src/doctor-card-orphans.js");
+      return repairWorkboardCardOrphans(path.resolve(stateDir, WORKBOARD_SQLITE_STATE_PATH));
     },
   },
 ];
