@@ -183,20 +183,16 @@ struct ChatModelPickerSheet: View {
             onPick: self.onPick)
     }
 
+    /// A plain drill-in row. The current model carries the check on the root and on its provider's page.
     private func providerRow(_ provider: ChatModelProviderSection) -> some View {
-        let holdsCurrent = provider.models.contains { self.viewModel.isCurrentPickerModel($0) }
-        return NavigationLink(value: provider.id) {
+        NavigationLink(value: provider.id) {
             HStack(spacing: 12) {
                 ChatProviderMark(providerID: provider.id)
                 Text(verbatim: provider.displayName)
                     .font(OpenClawChatTypography.settingsBody)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if holdsCurrent {
-                    ChatModelPickerCheck()
-                }
             }
         }
-        .accessibilityValue(holdsCurrent ? Text("Current provider") : Text(verbatim: ""))
         .accessibilityIdentifier("chat-model-picker-provider-\(provider.id)")
     }
 

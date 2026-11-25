@@ -965,7 +965,6 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.2065dce8171fac59","source":"Add to Favorites"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.f97bfdf58457390b","source":"Remove from Favorites"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.50ae97042e9ad1b0","source":"Close"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.f93a498b2b1215c1","source":"Current provider"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.96b4ebe3abd13a42","source":"Favorites"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.4238f1cc6d590fc1","source":"Model"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.6badae9b225b6794","source":"Model sign-in"},
