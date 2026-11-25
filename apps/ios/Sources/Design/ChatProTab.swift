@@ -31,6 +31,7 @@ struct ChatProTab: View {
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsNewSessionOptions = false
     @State private var speech: OpenClawChatSpeechController?
+    @State private var headerEdge = ChatHeaderScrollEdge()
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     /// Set only while no Gateway has ever been saved or connected on this device.
     let startFirstGatewaySetup: (() -> Void)?
@@ -74,6 +75,7 @@ struct ChatProTab: View {
     private var content: some View {
         self.chatSurface
             .scrollEdgeEffectStyle(.soft, for: .vertical)
+            .modifier(ChatHeaderScrollEdgeTracker(edge: self.headerEdge))
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(self.usesSideToolbar ? .visible : .hidden, for: .navigationBar)
@@ -119,6 +121,7 @@ struct ChatProTab: View {
             .padding(.horizontal, OpenClawProMetric.pagePadding)
             .padding(.vertical, 4)
         }
+        .background(alignment: .top) { ChatHeaderLegibilityBlur(edge: self.headerEdge) }
     }
 
     @ToolbarContentBuilder
@@ -698,5 +701,73 @@ extension ChatProTab: @MainActor Equatable {
             lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation &&
             lhs.headerSidebarAction?.hasApprovalAttention == rhs.headerSidebarAction?.hasApprovalAttention &&
             (lhs.startFirstGatewaySetup != nil) == (rhs.startFirstGatewaySetup != nil)
+    }
+}
+
+/// How far transcript content has scrolled under the chat header, from 0 (nothing under it) to 1.
+@MainActor @Observable
+private final class ChatHeaderScrollEdge {
+    var amount: Double = 0
+}
+
+/// Feeds the header's blur from the transcript's scroll position, in steps, so scrolling redraws only the blur.
+private struct ChatHeaderScrollEdgeTracker: ViewModifier {
+    let edge: ChatHeaderScrollEdge
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: Double.self) { geometry in
+            let scrolled = Double(geometry.contentOffset.y + geometry.contentInsets.top)
+            let amount: Double = min(max(scrolled / 24, 0), 1)
+            return (amount * 12).rounded() / 12
+        } action: { _, amount in
+            self.edge.amount = amount
+        }
+    }
+}
+
+/// The system's soft top edge has a fixed reach that ends above the session title, so text and photos scrolled
+/// under the header ran through the title; no edge style or taller bar extends it. This carries the dissolve
+/// under the title: a system material blur behind the header, washed with the canvas color, that fades to
+/// nothing a little below it, with no lower edge, under the system's own soft edge. It shows only while content
+/// is under the header, so an empty or short chat keeps the plain canvas, and it is mounted only while it draws,
+/// so an invisible layer never sits in front of the controls for assistive touch.
+private struct ChatHeaderLegibilityBlur: View {
+    /// Points the blur reaches above the header, through the status bar.
+    private static let topReach: CGFloat = 200
+    /// Where the fade starts, from the header's bottom edge, and how far it runs.
+    private static let fadeStart: CGFloat = -8
+    private static let fadeLength: CGFloat = 28
+    /// The material's own tint lifts a dark canvas and grays a light one; the canvas over it cancels most of that,
+    /// so the blur dissolves content into the canvas instead of laying a fill over it.
+    private static let canvasOpacity: Double = 0.7
+
+    let edge: ChatHeaderScrollEdge
+
+    var body: some View {
+        if self.edge.amount > 0 {
+            GeometryReader { proxy in
+                let height = Self.topReach + proxy.size.height + Self.fadeLength
+                let solidEnd = (Self.topReach + proxy.size.height + Self.fadeStart) / height
+                ZStack {
+                    Rectangle().fill(.ultraThinMaterial)
+                    OpenClawBrand.canvas.opacity(Self.canvasOpacity)
+                }
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: solidEnd),
+                            .init(color: .black.opacity(0.5), location: solidEnd + (1 - solidEnd) * 0.4),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom)
+                }
+                .frame(height: height)
+                .offset(y: -Self.topReach)
+            }
+            .opacity(self.edge.amount)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 }
