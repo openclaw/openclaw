@@ -1,3 +1,5 @@
+import { listen } from "../../lib/reactive/listener.ts";
+
 const PORTAL_REACHABILITY_TIMEOUT_MS = 4_000;
 
 /**
@@ -22,8 +24,10 @@ export async function probePortalReachable(url: string): Promise<PortalReachabil
   };
   // Callable outside a DOM (tests, any non-browser import): without a document
   // there is no violation signal, so the probe stays reachable/unreachable.
-  const violationTarget = typeof document === "undefined" ? undefined : document;
-  violationTarget?.addEventListener("securitypolicyviolation", onViolation);
+  const stopViolation =
+    typeof document === "undefined"
+      ? undefined
+      : listen(document, "securitypolicyviolation", onViolation);
   try {
     await fetch(url, {
       mode: "no-cors",
@@ -37,6 +41,6 @@ export async function probePortalReachable(url: string): Promise<PortalReachabil
     });
     return blocked ? "blocked" : "unreachable";
   } finally {
-    violationTarget?.removeEventListener("securitypolicyviolation", onViolation);
+    stopViolation?.();
   }
 }

@@ -5,14 +5,13 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
-export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/install-source-utils.js";
+export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/npm-registry-spec.js";
 
 type NpmInstallPathRecord = Pick<PluginInstallRecord, "source" | "installPath">;
 
@@ -37,7 +36,6 @@ export function reconcileNpmPluginLoadPath(params: {
   config: OpenClawConfig;
   previousInstall: NpmInstallPathRecord | undefined;
   nextInstall: NpmInstallPathRecord;
-  env?: NodeJS.ProcessEnv;
 }): OpenClawConfig {
   const previousPath = params.previousInstall?.installPath;
   const nextPath = params.nextInstall.installPath;
@@ -49,26 +47,22 @@ export function reconcileNpmPluginLoadPath(params: {
   ) {
     return params.config;
   }
-  const previousResolved = resolveUserPath(previousPath, params.env);
-  const nextResolved = resolveUserPath(nextPath, params.env);
+  const previousResolved = resolveUserPath(previousPath);
+  const nextResolved = resolveUserPath(nextPath);
   const existing = params.config.plugins?.load?.paths;
   if (previousResolved === nextResolved || !existing?.length) {
     return params.config;
   }
-  const replaceAt = existing.findIndex(
-    (entry) => resolveUserPath(entry, params.env) === previousResolved,
-  );
+  const replaceAt = existing.findIndex((entry) => resolveUserPath(entry) === previousResolved);
   if (replaceAt < 0) {
     return params.config;
   }
-  const existingNextAt = existing.findIndex(
-    (entry) => resolveUserPath(entry, params.env) === nextResolved,
-  );
+  const existingNextAt = existing.findIndex((entry) => resolveUserPath(entry) === nextResolved);
 
   // An explicit reference to the prior managed root carries precedence intent.
   // Preserve an existing target slot; otherwise move the prior slot with the record.
   const paths = existing.flatMap((entry, index) => {
-    const resolved = resolveUserPath(entry, params.env);
+    const resolved = resolveUserPath(entry);
     if (existingNextAt >= 0) {
       if (
         resolved === previousResolved ||

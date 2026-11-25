@@ -23,7 +23,7 @@ import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
-  assertBrowserNavigationAllowed,
+  assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -36,6 +36,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
+import { resolveProfileHeadless } from "../server-context.availability.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   getPreviousSnapshotKeys,
@@ -80,13 +81,27 @@ async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: n
 async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
   const normalized = await normalizeBrowserScreenshot(capture.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
-  const annotations = await rescaleAnnotationsForNormalization({
-    annotations: capture.annotations,
-    originalBuffer: capture.buffer,
-    normalized,
-  });
+  let annotations = capture.annotations;
+  const originalBuffer = capture.buffer;
+  if (annotations?.length) {
+    const orig = normalized.sourceDimensions;
+    // Preserve coordinates when dimensions are unavailable or identical bytes cannot rescale boxes.
+    if (originalBuffer !== normalized.buffer && orig?.width && orig?.height) {
+      const next = await getImageMetadata(normalized.buffer);
+      if (
+        next?.width &&
+        next?.height &&
+        (next.width !== orig.width || next.height !== orig.height)
+      ) {
+        annotations = scaleAnnotations(
+          annotations,
+          next.width / orig.width,
+          next.height / orig.height,
+        );
+      }
+    }
+  }
   const imagePath = await saveBrowserMedia(
     normalized.buffer,
     normalized.contentType ?? `image/${type}`,
@@ -100,30 +115,6 @@ async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "
     ...(capture.truncated ? { truncated: true } : {}),
     ...(annotations?.length ? { annotations } : {}),
   };
-}
-
-// Preserve original coordinates when image dimensions cannot be recovered.
-async function rescaleAnnotationsForNormalization(params: {
-  annotations?: AnnotationItem[];
-  originalBuffer: Buffer;
-  normalized: Awaited<ReturnType<typeof normalizeBrowserScreenshot>>;
-}): Promise<AnnotationItem[] | undefined> {
-  if (!params.annotations || params.annotations.length === 0) {
-    return params.annotations;
-  }
-  const orig = params.normalized.sourceDimensions;
-  // The normalizer already owns the source dimensions; identical bytes cannot rescale boxes.
-  if (params.originalBuffer === params.normalized.buffer || !orig?.width || !orig?.height) {
-    return params.annotations;
-  }
-  const next = await getImageMetadata(params.normalized.buffer);
-  if (!next?.width || !next?.height) {
-    return params.annotations;
-  }
-  if (next.width === orig.width && next.height === orig.height) {
-    return params.annotations;
-  }
-  return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
 export function registerBrowserAgentSnapshotRoutes(
@@ -155,7 +146,7 @@ export function registerBrowserAgentSnapshotRoutes(
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-          await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+          await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
@@ -182,6 +173,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             url,
             timeoutMs,
+            signal,
             ...(assertCurrent ? { assertCurrent } : {}),
             ...(resolveRelayTarget
               ? {
@@ -341,7 +333,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                   timeoutMs,
                   signal,
                 })
@@ -355,12 +347,12 @@ export function registerBrowserAgentSnapshotRoutes(
             type,
             timeoutMs,
             signal,
+            headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
           };
           capture = labels
             ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
-          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
@@ -369,9 +361,7 @@ export function registerBrowserAgentSnapshotRoutes(
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
-              headless:
-                profileRuntime?.running?.headless ??
-                (await profileRuntime?.externalBrowserMode?.headless),
+              headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
             }),
           };
         }
@@ -509,7 +499,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ? await pwModule
                 .getObservedBrowserStateViaPlaywright({
                   ...playwrightTarget,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                 })
                 .catch(() => undefined)
             : undefined;
@@ -589,7 +579,7 @@ export function registerBrowserAgentSnapshotRoutes(
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
               ...playwrightTarget,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
               signal,
@@ -672,6 +662,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 type: "png",
                 timeoutMs: plan.timeoutMs,
                 signal,
+                headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
               });
               image = await saveBrowserScreenshot(labeled, "png");
             }
@@ -694,7 +685,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ...playwrightTarget,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               signal,
             });
           } else {
@@ -724,4 +715,3 @@ export function registerBrowserAgentSnapshotRoutes(
     }
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

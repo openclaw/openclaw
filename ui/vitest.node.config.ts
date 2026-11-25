@@ -1,4 +1,5 @@
 // Control UI config module wires vitest behavior.
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
 import { sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
@@ -13,6 +14,10 @@ export default defineConfig({
     controlUiSolidPlugin(),
   ],
   test: {
+    globalSetup: [
+      fileURLToPath(new URL("../test/vitest/vitest.node-policy.global-setup.ts", import.meta.url)),
+    ],
+    execArgv: sharedVitestConfig.test.execArgv,
     reporters: sharedVitestConfig.test.reporters,
     clearMocks: false,
     isolate: false,
@@ -21,6 +26,7 @@ export default defineConfig({
     include: [
       "src/**/*.node.test.{ts,tsx}",
       "src/pages/chat/chat-responsive.browser.test.{ts,tsx}",
+      "src/pages/chat/chat-run-spacing.browser.test.{ts,tsx}",
       "src/pages/chat/chat-footer-layout.browser.test.{ts,tsx}",
     ],
     environment: "node",

@@ -1,17 +1,14 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
-import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
-import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
-import {
-  hasActiveStartupMigrationLease,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
-  STARTUP_MIGRATION_LEASE_TTL_MS,
-} from "../../infra/startup-migration-checkpoint.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { STARTUP_MIGRATION_LEASE_TTL_MS } from "../../infra/startup-migration-checkpoint.js";
+import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils.js";
 import {
@@ -36,22 +33,21 @@ import {
   allListenersOwnedByRuntimePid,
   listenerOwnedByRuntimePid,
 } from "./restart-port-ownership.js";
-export {
-  DEFAULT_RESTART_HEALTH_ATTEMPTS,
-  DEFAULT_RESTART_HEALTH_DELAY_MS,
-} from "./restart-health.constants.js";
-export { inspectGatewayRestart } from "./restart-health-inspect.js";
-export { waitForGatewayHttpReadiness } from "./restart-health-probe.js";
+export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 export {
   formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
+export { inspectGatewayRestart } from "./restart-health-inspect.js";
+export { waitForGatewayHttpReadiness } from "./restart-health-probe.js";
+export {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+} from "./restart-health.constants.js";
 export type { GatewayRestartSnapshot } from "./restart-health.types.js";
-export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
-const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
@@ -88,22 +84,23 @@ type GatewayRestartWaitOptions = {
   /** Diagnostics return the last observation at expiry; lifecycle callers keep throwing. */
   deadlineOutcome?: "throw" | "snapshot";
   phase?: string;
-  settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
-  requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  requireOwnedListener?: boolean;
+  allowUnattributedDiagnosticProbe?: boolean;
   /** Diagnostics can report absence immediately; start/restart callers wait for installation. */
   waitForMissingService?: boolean;
   supervisorKeepsAlive?: boolean;
-  isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
   probeHosts?: readonly string[];
   probeContext?: GatewayRestartProbeContext;
   onProgress?: (phase: string) => void;
   onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function waitForGatewayHealthyRestart(
@@ -113,7 +110,9 @@ export async function waitForGatewayHealthyRestart(
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
 ): Promise<GatewayRestartResult> {
-  const signal = params.deadline?.signal ?? params.signal;
+  // A cancelled scope kills native inspections at spawn. Polling on would only ever read
+  // an unknown service while a healthy Gateway keeps the interrupted command waiting.
+  const signal = resolveCommandProcessSignal(params.deadline?.signal ?? params.signal);
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
       ? params.deadline.read(`${params.phase ?? "health-wait"}:${phase}`, operation)
@@ -143,25 +142,21 @@ export async function waitForGatewayHealthyRestart(
       : Math.min(params.timeoutMs ?? remainingDeadlineMs, remainingDeadlineMs);
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
-  const settleProbes = Math.max(1, params.settle?.probes ?? 1);
-  const settleDurationMs = params.deadline
-    ? 0
-    : Math.min(
-        (settleProbes - 1) * delayMs,
-        remainingDeadlineMs === undefined
-          ? Infinity
-          : Math.max(0, remainingDeadlineMs - (params.timeoutMs ?? remainingDeadlineMs)),
-      );
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
-  const standardDeadlineMs = timeoutMs ?? progressWindowMs;
+  // Doctor restoration uses this owner without supplying lifecycle-specific budgets.
+  const standardDeadlineMs =
+    timeoutMs ??
+    (params.attempts === undefined && process.platform === "win32"
+      ? resolveGatewayStartupTiming().deadlineMs
+      : progressWindowMs);
   // Native inspection shares the readiness deadline, not a network request's cap.
   const inspectionTimeoutMs = () =>
     params.deadline
       ? Math.max(1, params.deadline.remainingMs())
       : timeoutMs === undefined
         ? undefined
-        : Math.max(1, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+        : Math.max(1, timeoutMs - (performance.now() - startedAtMs));
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   let snapshot: GatewayRestartSnapshot = {
@@ -181,16 +176,12 @@ export async function waitForGatewayHealthyRestart(
     Math.ceil(stoppedFreeGraceMs / delayMs),
     Math.floor(attempts / 2),
   );
-  let migrationActive = false;
-  let nextMigrationActivityPollMs = 0;
-  let migrationHeartbeat: number | undefined;
-  let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
+  let startupPhasePid: number | undefined;
+  const observedStartupPhases = new Set<string>();
   let startupProgressDeadlineMs = progressWindowMs;
-  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
   let updateStartupDeadlineMs: number | undefined;
-  let observedOwner: string | undefined;
   let observedBootId: string | undefined;
   let reportedStartupPhase: string | undefined;
   let lastProgressPhase: string | undefined;
@@ -200,10 +191,12 @@ export async function waitForGatewayHealthyRestart(
       snapshot.versionMismatch ||
       snapshot.buildIdMismatch ||
       (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) ||
-      (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
       snapshot.staleGatewayPids.length > 0
     ) {
       return "timeout";
+    }
+    if (snapshot.operatorScopeWarning) {
+      return "connected-no-operator-scope";
     }
     // The service manager still owns a running startup; a closed port is not an exit.
     if (snapshot.portUsage.status === "free") {
@@ -234,35 +227,34 @@ export async function waitForGatewayHealthyRestart(
     const probeContext =
       params.probeContext ??
       (await read("probe-context", () =>
-        resolveGatewayRestartProbeContext(params.env, undefined, signal).catch(() => ({
-          auth: undefined,
-          config: {},
-        })),
+        resolveGatewayRestartProbeContext(params.env, undefined, signal, params.config).catch(
+          () => ({
+            auth: undefined,
+            config: {},
+          }),
+        ),
       ));
     const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
     const probeHosts =
       params.probeHosts ??
       (await read("probe-hosts", async () => {
         const command = await read("service-command", () =>
-          service.readCommand(params.env ?? process.env).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          }),
+          service.readCommand(params.env ?? process.env).catch(ignoreNonCleanupCommandError),
         );
         return resolveGatewayServiceProbeHosts({ env: params.env, command });
       }));
 
     for (let attempt = 0; ; attempt += 1) {
       snapshot = await inspectGatewayRestart({
+        assertCurrent: params.assertCurrent,
         service,
         port: params.port,
         env: params.env,
         expectedVersion: params.expectedVersion,
         expectedBuildId: params.expectedBuildId,
-        requirePluginHealth: params.requirePluginHealth,
         requireChannelHealth: params.requireChannelHealth,
+        requireOwnedListener: params.requireOwnedListener,
+        allowUnattributedDiagnosticProbe: params.allowUnattributedDiagnosticProbe,
         probeContext,
         configuredProbe,
         probeHosts,
@@ -275,16 +267,16 @@ export async function waitForGatewayHealthyRestart(
       signal?.throwIfAborted();
       const identifiedBoot = observedBootId === undefined && snapshot.gatewayBootId !== undefined;
       observedBootId = snapshot.gatewayBootId ?? observedBootId;
-      // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
-      // keeps both the normal deadline and migration watchdog bounded when those operations stall.
-      let elapsedMs = Math.max(0, performance.now() - startedAtMs);
+      // Native inspection and network probes share the operator-visible wait.
+      // A monotonic clock bounds startup even when those operations stall.
+      const elapsedMs = Math.max(0, performance.now() - startedAtMs);
       if (updateInProgress && snapshot.runtime.status === "running") {
         // Old updaters invoke the candidate CLI without forwarding their budget. A live
         // process earns the startup watchdog; later phases never reset its finite cap.
         updateStartupDeadlineMs ??= Math.max(standardDeadlineMs, STARTUP_MIGRATION_LEASE_TTL_MS);
       }
       const boundedDeadlineMs = timeoutMs ?? updateStartupDeadlineMs;
-      // A managed settle streak needs a concrete process identity. Scheduled Tasks can
+      // Managed readiness needs a concrete process identity. Scheduled Tasks can
       // report running without exposing a PID, so Windows retains status-only proof.
       const healthy =
         snapshot.healthy &&
@@ -295,7 +287,7 @@ export async function waitForGatewayHealthyRestart(
       snapshot.startupPhase =
         reportedStartupPhase ??
         (healthy
-          ? "settling healthy Gateway"
+          ? "healthy Gateway"
           : snapshot.runtime.status !== "running"
             ? "waiting for managed service"
             : snapshot.portUsage.status === "free"
@@ -309,7 +301,7 @@ export async function waitForGatewayHealthyRestart(
           elapsedMs,
         );
       }
-      if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
+      if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs) {
         return withWaitContext(
           { ...snapshot, healthy: false },
           expiredOutcome(elapsedMs, true),
@@ -317,24 +309,9 @@ export async function waitForGatewayHealthyRestart(
         );
       }
       if (healthy) {
-        if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
-          healthyStreak.probes += 1;
-        } else {
-          healthyStreak = { snapshot, probes: 1 };
-        }
-        if (healthyStreak.probes >= settleProbes) {
-          return withWaitContext(snapshot, "healthy", elapsedMs);
-        }
-      } else {
-        healthyStreak = undefined;
+        return withWaitContext(snapshot, "healthy", elapsedMs);
       }
-      if (settleProbes > 1 && snapshot.healthy) {
-        // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
-        snapshot.healthy = false;
-      }
-      if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
-        return withWaitContext(snapshot, "plugin-errors", elapsedMs);
-      }
+      snapshot.healthy = false;
       if (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) {
         return withWaitContext(snapshot, "channel-errors", elapsedMs);
       }
@@ -344,11 +321,15 @@ export async function waitForGatewayHealthyRestart(
       if (snapshot.buildIdMismatch) {
         return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
       }
+      if (snapshot.authenticationError) {
+        return withWaitContext(snapshot, "auth-rejected", elapsedMs);
+      }
+      if (snapshot.operatorScopeWarning) {
+        return withWaitContext(snapshot, "connected-no-operator-scope", elapsedMs);
+      }
       if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
       }
-      const stoppedFree =
-        snapshot.runtime.status === "stopped" && snapshot.portUsage.status === "free";
       const portHeldByForeignProcess =
         params.waitForMissingService === false &&
         (snapshot.runtime.status === "stopped" ||
@@ -368,77 +349,19 @@ export async function waitForGatewayHealthyRestart(
         snapshot.runtime.status !== "running" &&
         snapshot.runtime.missingUnit === true &&
         snapshot.portUsage.status === "free";
-      let missingLegacyOwner = false;
-      let startupMigrationInactive = false;
-      const diagnosticAbsence = missingServiceFree || portHeldByForeignProcess;
-      if (diagnosticAbsence) {
-        try {
-          const legacyOwner = await read("legacy-owner", () =>
-            readActiveGatewayLockIdentity({
-              env: params.env,
-              requireInspection: true,
-              timeoutMs: params.deadline?.remainingMs() ?? inspectionTimeoutMs(),
-              signal,
-            }),
-          );
-          missingLegacyOwner = legacyOwner?.port !== params.port;
-          // Lease release can precede Gateway ownership; keep observed startup for this wait.
-          observedStartupMigration ||= await read("startup-migration", async () =>
-            (params.isStartupMigrationActive ?? hasActiveStartupMigrationLease)({
-              env: params.env,
-            }),
-          );
-          startupMigrationInactive = !observedStartupMigration;
-        } catch (error) {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          signal?.throwIfAborted();
-          // An unverifiable legacy owner still earns the existing startup grace.
-        }
-        elapsedMs = Math.max(0, performance.now() - startedAtMs);
-      }
-      const owner =
-        stoppedFree || missingServiceFree || portHeldByForeignProcess
-          ? await read("owner", async () =>
-              readGatewayOwnerLease({ env: params.env, port: params.port }),
-            )
-          : undefined;
-      elapsedMs = Math.max(0, performance.now() - startedAtMs);
-      if (owner && owner.state !== "dead") {
-        observedOwner = owner.owner;
-      } else if (
-        !portHeldByForeignProcess &&
-        owner?.state === "dead" &&
-        owner.owner === observedOwner &&
-        (!missingServiceFree || (missingLegacyOwner && startupMigrationInactive))
-      ) {
+      if (missingServiceFree && !reportedStartupPhase) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);
       }
-      if (
-        missingServiceFree &&
-        missingLegacyOwner &&
-        startupMigrationInactive &&
-        (!owner || owner.state === "dead")
-      ) {
-        return withWaitContext(snapshot, "stopped-free", elapsedMs);
-      }
-      if (
-        portHeldByForeignProcess &&
-        missingLegacyOwner &&
-        startupMigrationInactive &&
-        (!owner || owner.state === "dead") &&
-        !params.supervisorKeepsAlive
-      ) {
+      if (portHeldByForeignProcess && !params.supervisorKeepsAlive) {
         snapshot.startupPhase = "Gateway port held by another process";
         snapshot.probeError = `Gateway port ${params.port} is held by another process. Inspect it with openclaw gateway status --deep; stop the conflicting listener or choose another Gateway port.`;
         return withWaitContext(snapshot, "port-held", elapsedMs);
       }
-      // A previous crashed owner cannot describe replacement startup. Keep native
-      // startup grace for it and for published 2026.9.3 processes without owner rows.
+      // A live file owner can be migrating before its listener or service PID
+      // appears. Its startup phase retains the finite startup grace.
       if (
         !missingServiceFree &&
-        (!owner || owner.state === "dead") &&
+        !reportedStartupPhase &&
         !params.supervisorKeepsAlive &&
         attempt >= minAttemptForEarlyExit &&
         snapshot.runtime.status === "stopped" &&
@@ -452,44 +375,6 @@ export async function waitForGatewayHealthyRestart(
         consecutiveStoppedFreeCount = 0;
       }
 
-      let migrationProgress = false;
-      let migrationCompleted = false;
-      if (snapshot.runtime.status !== "running") {
-        migrationActive = false;
-      } else if (elapsedMs >= nextMigrationActivityPollMs) {
-        const previousHeartbeat = migrationHeartbeat;
-        migrationHeartbeat = undefined;
-        try {
-          migrationActive = (params.isStartupMigrationActive ?? hasActiveStartupMigrationLease)({
-            env: params.env,
-            onActivity: (activity) => {
-              if (
-                activity.pid === undefined ||
-                activity.pid !== snapshot.runtime.pid ||
-                activity.heartbeatAt === null
-              ) {
-                return;
-              }
-              migrationProgress =
-                previousHeartbeat === undefined || activity.heartbeatAt > previousHeartbeat;
-              migrationHeartbeat = activity.heartbeatAt;
-            },
-          });
-          migrationCompleted = !migrationActive && previousHeartbeat !== undefined;
-        } catch {
-          migrationActive = false;
-          migrationProgress = false;
-          migrationHeartbeat = previousHeartbeat;
-        }
-        nextMigrationActivityPollMs = elapsedMs + STARTUP_MIGRATION_ACTIVITY_POLL_MS;
-      }
-      if (boundedDeadlineMs === undefined) {
-        elapsedMs = Math.max(0, performance.now() - startedAtMs);
-      }
-
-      if (migrationActive && !reportedStartupPhase) {
-        snapshot.startupPhase = "startup migration";
-      }
       if (
         (reportedStartupPhase || snapshot.runtime.status === "running") &&
         snapshot.startupPhase !== lastProgressPhase
@@ -505,28 +390,44 @@ export async function waitForGatewayHealthyRestart(
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         );
       const running = snapshot.runtime.status === "running";
+      // Before its listener the replacement has no phase endpoint, so the same service
+      // process still running is its startup signal. Afterwards only new phases from its
+      // own listener renew the watchdog; repeats and a supervisor's next process do not.
+      const preListenerStartup =
+        running &&
+        runtimePid !== undefined &&
+        !observedListener &&
+        snapshot.portUsage.status === "free" &&
+        (startupPhasePid ??= runtimePid) === runtimePid;
+      let phaseProgress = false;
+      if (
+        running &&
+        runtimePid !== undefined &&
+        reportedStartupPhase &&
+        (startupPhasePid === undefined || runtimePid === startupPhasePid) &&
+        allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid)
+      ) {
+        startupPhasePid = runtimePid;
+        phaseProgress = !observedStartupPhases.has(reportedStartupPhase);
+        observedStartupPhases.add(reportedStartupPhase);
+      }
       const startupProgress =
         attempt > 0 &&
-        ((!observedRunning && running) || (!observedListener && ownsListener) || identifiedBoot);
+        ((!observedRunning && running) ||
+          (!observedListener && ownsListener) ||
+          identifiedBoot ||
+          phaseProgress);
       const stableRunning =
         running && (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined);
       if (
         !healthy &&
         stableRunning &&
-        (boundedDeadlineMs !== undefined ||
-          elapsedMs <= startupProgressDeadlineMs + settleDurationMs) &&
-        (migrationProgress || migrationCompleted || startupProgress)
+        (boundedDeadlineMs !== undefined || elapsedMs <= startupProgressDeadlineMs) &&
+        (startupProgress || preListenerStartup)
       ) {
-        // Include one poll of observation lag after the producer's renewal interval.
         startupProgressDeadlineMs = Math.max(
           startupProgressDeadlineMs,
-          elapsedMs +
-            Math.max(
-              progressWindowMs,
-              migrationProgress
-                ? STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS + STARTUP_MIGRATION_ACTIVITY_POLL_MS
-                : 0,
-            ),
+          elapsedMs + progressWindowMs,
         );
       }
       // Re-observing a service or listener after a failed probe is not new progress.
@@ -537,9 +438,9 @@ export async function waitForGatewayHealthyRestart(
         // Explicit budgets and the shipped updater marker keep their existing behavior.
         const deadlineMs =
           boundedDeadlineMs !== undefined
-            ? boundedDeadlineMs + settleDurationMs
+            ? boundedDeadlineMs
             : Math.min(
-                (stableRunning ? startupProgressDeadlineMs : standardDeadlineMs) + settleDurationMs,
+                stableRunning ? startupProgressDeadlineMs : standardDeadlineMs,
                 startupCapMs,
               );
         if (elapsedMs >= deadlineMs) {
@@ -554,7 +455,7 @@ export async function waitForGatewayHealthyRestart(
         sleep(
           boundedDeadlineMs === undefined
             ? delayMs
-            : Math.min(delayMs, Math.max(0, boundedDeadlineMs + settleDurationMs - elapsedMs)),
+            : Math.min(delayMs, Math.max(0, boundedDeadlineMs - elapsedMs)),
           signal,
         ),
       );

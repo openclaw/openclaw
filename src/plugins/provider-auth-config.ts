@@ -9,7 +9,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { ProviderAuthConfigApplyError } from "../shared/provider-auth-result.js";
 import { transformConfigWithPendingPluginInstalls } from "./install-record-commit.js";
 import {
-  applyProviderAuthConfigPatch,
+  applyProviderAuthConfigPatchWithNormalization,
   normalizeProviderAuthRows,
 } from "./provider-auth-choice-helpers.js";
 
@@ -17,8 +17,8 @@ const patchOptions = { mergeObjectArraysById: true };
 
 export function createProviderAuthConfigPatch(base: OpenClawConfig, next: OpenClawConfig) {
   return createMergePatch(
-    applyProviderAuthConfigPatch(base, {}),
-    applyProviderAuthConfigPatch(next, {}),
+    applyProviderAuthConfigPatchWithNormalization(base, {}),
+    applyProviderAuthConfigPatchWithNormalization(next, {}),
     patchOptions,
   );
 }
@@ -35,9 +35,15 @@ export async function writeProviderAuthConfig(params: {
 }): Promise<OpenClawConfig> {
   // This is an RFC delta, not a whole auth result: never seed it with source rows.
   const configPatch = normalizeProviderAuthRows(params.configPatch);
-  const loginConfig = applyProviderAuthConfigPatch(params.config, {});
-  const sourceConfig = applyProviderAuthConfigPatch(params.configSnapshot.sourceConfig, {});
-  const runtimeConfig = applyProviderAuthConfigPatch(params.configSnapshot.runtimeConfig, {});
+  const loginConfig = applyProviderAuthConfigPatchWithNormalization(params.config, {});
+  const sourceConfig = applyProviderAuthConfigPatchWithNormalization(
+    params.configSnapshot.sourceConfig,
+    {},
+  );
+  const runtimeConfig = applyProviderAuthConfigPatchWithNormalization(
+    params.configSnapshot.runtimeConfig,
+    {},
+  );
   try {
     const written = await transformConfigWithPendingPluginInstalls({
       base: "source",
@@ -50,7 +56,7 @@ export async function writeProviderAuthConfig(params: {
           );
         }
         params.beforeCommit?.();
-        let next = applyProviderAuthConfigPatch(current, {});
+        let next = applyProviderAuthConfigPatchWithNormalization(current, {});
         if (configPatch) {
           if (
             (mergePatchConflicts(loginConfig, runtimeConfig, configPatch, patchOptions) &&
@@ -65,7 +71,7 @@ export async function writeProviderAuthConfig(params: {
           next = applyMergePatch(next, configPatch, patchOptions) as OpenClawConfig;
         }
         next = params.finalizeConfig ? params.finalizeConfig(next, current) : next;
-        next = applyProviderAuthConfigPatch(next, {});
+        next = applyProviderAuthConfigPatchWithNormalization(next, {});
         return { nextConfig: next, result: next };
       },
     });

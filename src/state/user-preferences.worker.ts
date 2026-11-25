@@ -1,15 +1,10 @@
 import { ok } from "@openclaw/normalization-core/result";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
-import {
+  acknowledgeProfileCronFailure,
   ensureUserPreferencesSchema,
   updatesGitCoauthorPreference,
   writeUserPreferences,
@@ -20,44 +15,55 @@ import type {
 } from "./user-preferences.types.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
-export function executeUserPreferenceCommand(
-  command: SqliteWorkerCommand<UserPreferenceWorkerOperations>,
-  options: OpenClawStateDatabaseOptions,
-): UserPreferenceWorkerOperations[keyof UserPreferenceWorkerOperations]["output"] {
-  ensureUserProfilesSchema(options);
-  const { update } = command.input;
-  if (
-    update.serialized.length === 0 &&
-    update.deletionKeys.length === 0 &&
-    update.expected.length === 0
-  ) {
-    const profile = selectResolvedUserProfileMetadataById(
-      openOpenClawStateDatabase(options).db,
-      command.input.profileId,
+export const userPreferenceOperations = {
+  "userPreferences.write": (
+    input: UserPreferenceWorkerOperations["userPreferences.write"]["input"],
+    context: WorkerWriteOperationContext,
+  ): UserPreferenceWorkerOperations["userPreferences.write"]["output"] => {
+    const database = context.open();
+    const options = { ...context.stateOptions(), database };
+    ensureUserProfilesSchema(options);
+    const { update } = input;
+    if (
+      update.serialized.length === 0 &&
+      update.deletionKeys.length === 0 &&
+      update.expected.length === 0 &&
+      !update.cronFailure
+    ) {
+      const profile = selectResolvedUserProfileMetadataById(database.db, input.profileId);
+      return profile ? ok({ profileId: profile.id }) : undefined;
+    }
+    ensureUserPreferencesSchema(options);
+    return context.write(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const profile = selectResolvedUserProfileMetadataById(db, input.profileId);
+        if (!profile) {
+          return undefined;
+        }
+        if (update.cronFailure) {
+          const acknowledgedAtMs = acknowledgeProfileCronFailure(
+            db,
+            profile.id,
+            update.cronFailure,
+          );
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return ok({ profileId: profile.id, acknowledgedAtMs });
+        }
+        const result = writeUserPreferences(db, profile.id, update);
+        const facts: UserPreferenceCoauthorMutation | undefined =
+          result.ok && updatesGitCoauthorPreference(update)
+            ? { kind: "user-preference-coauthor", profileId: profile.id }
+            : undefined;
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+        if (facts) {
+          deferSqliteWorkerCommitReceipt(db, facts);
+        }
+        return result.ok ? ok({ profileId: profile.id }) : result;
+      },
+      { operationLabel: "users.preferences.set" },
     );
-    return profile ? ok({ profileId: profile.id }) : undefined;
-  }
-  ensureUserPreferencesSchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const profile = selectResolvedUserProfileMetadataById(db, command.input.profileId);
-      if (!profile) {
-        return undefined;
-      }
-      const result = writeUserPreferences(db, profile.id, command.input.update);
-      const facts: UserPreferenceCoauthorMutation | undefined =
-        result.ok && updatesGitCoauthorPreference(update)
-          ? { kind: "user-preference-coauthor", profileId: profile.id }
-          : undefined;
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
-      if (facts) {
-        deferSqliteWorkerCommitReceipt(db, facts);
-      }
-      return result.ok ? ok({ profileId: profile.id }) : result;
-    },
-    options,
-    { operationLabel: "users.preferences.set" },
-  );
-}
+  },
+};

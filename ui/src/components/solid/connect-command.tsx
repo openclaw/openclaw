@@ -2,12 +2,9 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { CopyButton } from "./copy-button.tsx";
 import "../tooltip.ts";
 
-function copyCommand(target: HTMLElement) {
-  target.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
-}
-
 export function ConnectCommand(props: { command: string; variant?: "inline" | "hero" }) {
   const copyLabel = () => t("connection.help.copyCommand");
+  let copyButton: HTMLButtonElement;
   return (
     <openclaw-tooltip prop:content={copyLabel()}>
       <div
@@ -19,18 +16,22 @@ export function ConnectCommand(props: { command: string; variant?: "inline" | "h
           if (event.target instanceof Element && event.target.closest(".chat-copy-btn")) {
             return;
           }
-          copyCommand(event.currentTarget);
+          copyButton.click();
         }}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") {
             return;
           }
           event.preventDefault();
-          copyCommand(event.currentTarget);
+          copyButton.click();
         }}
       >
         <code translate="no">{props.command}</code>
-        <CopyButton text={props.command} idleLabel={copyLabel()} />
+        <CopyButton
+          ref={(element) => (copyButton = element)}
+          text={props.command}
+          idleLabel={copyLabel()}
+        />
       </div>
     </openclaw-tooltip>
   );

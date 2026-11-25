@@ -1,29 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
-import {
-  removeAuthProfilesAcrossOwnerStores,
-  setAuthProfileOrder,
-  upsertAuthProfileWithLockOrThrow,
-} from "../agents/auth-profiles/profiles.js";
+import { mockOAuthProviderOperations } from "../agents/auth-profiles/oauth-native-provider.test-support.js";
+import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import {
-  loadAuthProfileStoreWithoutExternalProfilesAsync,
-  updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../agents/auth-profiles/store-state-owner.test-support.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolvePreparedRuntimeModelAuth } from "../agents/runtime-plan/resolve-auth.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
 import {
   acquireCronInferenceAuthorization,
@@ -31,9 +26,9 @@ import {
 } from "./inference-binding.runtime.js";
 import { toPublicCronJob } from "./public-job.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
-import type { CronStoredJob } from "./types.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
+afterEach(() => vi.restoreAllMocks());
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 
@@ -48,9 +43,9 @@ function oauth(access = "synthetic-subscription-access"): OAuthCredential {
   };
 }
 
-function config(agentDir: string, primary = "openai/gpt-4.1"): OpenClawConfig {
+function config(agentDir: string): OpenClawConfig {
   return {
-    agents: { entries: { main: { agentDir } }, defaults: { model: primary } },
+    agents: { entries: { main: { agentDir } }, defaults: { model: "openai/gpt-4.1" } },
     auth: {
       profiles: {
         [platformId]: { provider: "openai", mode: "api_key" },
@@ -109,24 +104,14 @@ async function capture(cfg: OpenClawConfig, profileId: string) {
   }
   // Capturing authorization must not pin or otherwise rewrite the creator's session.
   expect(sessionEntry).toEqual(creator(profileId));
+  expect(binding).toMatchObject({ version: 1, provider: "openai", profileId, source: "auto" });
+  expect(binding.authorizationId).toMatch(/^[a-f0-9]{64}$/);
   return binding;
 }
 
 async function persistJob(stateDir: string, binding: CronInferenceBinding) {
   const storePath = path.join(stateDir, "cron", "jobs.json");
-  const job: CronStoredJob = {
-    id: "durable-inference",
-    name: "Durable inference",
-    enabled: true,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "synthetic scheduled prompt" },
-    state: {},
-    inferenceBinding: binding,
-  };
+  const job = { ...makeCronJob({}), inferenceBinding: binding };
   await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
   expect(JSON.stringify(job.inferenceBinding)).not.toMatch(/synthetic-.*(?:key|access|refresh)/);
   expect(toPublicCronJob(job)).not.toHaveProperty("inferenceBinding");
@@ -147,25 +132,21 @@ async function reloadJob(storePath: string) {
 }
 
 /** Real scheduler/auth owners, stopping at the provider I/O boundary (no session or runner mocks). */
-async function resolveFreshRun(params: {
-  storePath: string;
-  cfg: OpenClawConfig;
-  agentDir: string;
-  modelId: "gpt-4.1" | "gpt-4o";
-}) {
-  const job = await reloadJob(params.storePath);
+async function resolveFreshRun(
+  storePath: string,
+  cfg: OpenClawConfig,
+  agentDir: string,
+  modelId: "gpt-4.1" | "gpt-4o" = "gpt-4o",
+) {
+  const job = await reloadJob(storePath);
   const binding = job.inferenceBinding!;
-  const authority = await acquireCronInferenceAuthorization({
-    binding,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
+  const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
   try {
-    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     const prepared = prepareAgentRuntimeAuth({
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       provider: binding.provider,
-      modelId: params.modelId,
+      modelId,
       modelApi:
         binding.authRequirement === "subscription"
           ? "openai-chatgpt-responses"
@@ -174,9 +155,9 @@ async function resolveFreshRun(params: {
         binding.authRequirement === "subscription"
           ? "https://chatgpt.com/backend-api/codex"
           : "https://api.openai.com/v1",
-      config: params.cfg,
+      config: cfg,
       agentId: "main",
-      agentDir: params.agentDir,
+      agentDir,
       env: {},
       authProfileStore: store,
       requiredAuthProfileId: binding.profileId,
@@ -189,24 +170,21 @@ async function resolveFreshRun(params: {
     if (!route) {
       throw new Error("Expected a concrete provider route");
     }
-    const model: Model = {
-      id: params.modelId,
-      name: params.modelId,
+    const model = makeProviderModelFixture({
+      id: modelId,
+      name: modelId,
       provider: route.provider,
       api: route.api,
       baseUrl: route.baseUrl,
-      input: ["text"],
-      reasoning: false,
       contextWindow: 128_000,
       maxTokens: 8_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    };
+    });
     const resolved = await resolvePreparedRuntimeModelAuth({
       plan: prepared.plan,
       model,
-      cfg: params.cfg,
+      cfg,
       store,
-      agentDir: params.agentDir,
+      agentDir,
     });
     await authority.revalidate();
     authority.assertCurrent();
@@ -215,8 +193,6 @@ async function resolveFreshRun(params: {
       mode: resolved.auth.mode,
       apiKey: resolved.auth.apiKey,
       source: resolved.plan.forwardedAuthProfileSource,
-      requirement: resolved.plan.modelRoute?.authRequirement,
-      api: resolved.plan.modelRoute?.api,
       authorizationId: authority.authorizationId,
     };
   } finally {
@@ -224,66 +200,35 @@ async function resolveFreshRun(params: {
   }
 }
 
+// Account continuity, replacement and revocation use the real HTTP boundary in
+// isolated-agent.auth-continuity.integration.test.ts; retain refresh and explicit adoption here.
 describe("durable cron inference authorization", () => {
-  it.each([
-    {
-      profileId: platformId,
-      mode: "api-key",
-      requirement: "api-key",
-      api: "openai-responses",
-      secret: "synthetic-platform-key",
-    },
-    {
-      profileId: subscriptionId,
-      mode: "oauth",
-      requirement: "subscription",
-      api: "openai-chatgpt-responses",
-      secret: "synthetic-subscription-access",
-    },
-  ] as const)(
-    "keeps the creator's $mode account across fresh runs and changed defaults",
-    async ({ profileId, mode, requirement, api, secret }) => {
+  it.each([platformId, subscriptionId])(
+    "allows concurrent runs to reacquire the same saved account (%s)",
+    async (profileId) => {
       await fixture(async (root, cfg) => {
+        // capture releases its observation, as saving a job does before its runs start.
         const binding = await capture(cfg, profileId);
-        expect(binding).toMatchObject({
-          version: 1,
-          provider: "openai",
-          profileId,
-          source: "auto",
-          authRequirement: requirement,
-        });
-        expect(binding.authorizationId).toMatch(/^[a-f0-9]{64}$/);
-        const storePath = await persistJob(root.stateDir, binding);
-        const other = profileId === platformId ? subscriptionId : platformId;
-        const changed = config(root.agentDir, "openai/gpt-4o@" + other);
-        changed.auth!.order = { openai: [other, "openai:new", profileId] };
-        await persistAuthProfileBatch({
-          profiles: [{ profileId: "openai:new", credential: apiKey("synthetic-new-key") }],
-        });
-        await setAuthProfileOrder({
-          agentDir: root.agentDir,
-          provider: "openai",
-          order: [other, "openai:new", profileId],
-        });
-        await updateAuthProfileStoreWithLock({
-          agentDir: root.agentDir,
-          updater(store) {
-            store.lastGood = { openai: other };
-            return true;
-          },
-        });
-        for (const modelId of ["gpt-4.1", "gpt-4o"] as const) {
-          expect(
-            await resolveFreshRun({ storePath, cfg: changed, agentDir: root.agentDir, modelId }),
-          ).toEqual({
-            profileId,
-            mode,
-            apiKey: secret,
-            source: "auto",
-            requirement,
-            api,
-            authorizationId: binding.authorizationId,
-          });
+        const results = await Promise.allSettled(
+          [0, 1].map(() =>
+            acquireCronInferenceAuthorization({ binding, cfg, agentDir: root.agentDir }),
+          ),
+        );
+        try {
+          for (const result of results) {
+            if (result.status === "rejected") {
+              throw result.reason;
+            }
+            expect(result.value.authorizationId).toBe(binding.authorizationId);
+            await result.value.revalidate();
+            expect(result.value.assertCurrent).not.toThrow();
+          }
+        } finally {
+          for (const result of results) {
+            if (result.status === "fulfilled") {
+              result.value.dispose();
+            }
+          }
         }
       });
     },
@@ -307,12 +252,8 @@ describe("durable cron inference authorization", () => {
         expires: Date.now() + 3_600_000,
         accountId: "synthetic-account",
       }));
-      const manager = createOAuthManager({
-        buildApiKey: async (_provider, credential) => credential.access,
-        readBootstrapCredential: () => null,
-        canRefreshCredential: async () => true,
-        refreshCredential,
-      });
+      mockOAuthProviderOperations({ refreshCredential });
+      const manager = createOAuthManager();
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(root.agentDir);
       const credential = store.profiles[subscriptionId];
       if (credential?.type !== "oauth") {
@@ -326,9 +267,7 @@ describe("durable cron inference authorization", () => {
         forceRefresh: true,
       });
       expect(refreshCredential).toHaveBeenCalledOnce();
-      expect(
-        await resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4.1" }),
-      ).toMatchObject({
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir, "gpt-4.1")).toMatchObject({
         profileId: subscriptionId,
         mode: "oauth",
         apiKey: "synthetic-refreshed-access",
@@ -336,33 +275,6 @@ describe("durable cron inference authorization", () => {
       });
     }, true);
   });
-
-  it.each(["replacement", "revocation"] as const)(
-    "rejects saved authorization after %s without another account taking over",
-    async (change) => {
-      await fixture(async (root, cfg) => {
-        const binding = await capture(cfg, platformId);
-        const storePath = await persistJob(root.stateDir, binding);
-        if (change === "replacement") {
-          await upsertAuthProfileWithLockOrThrow({
-            profileId: platformId,
-            credential: apiKey("synthetic-replacement-key"),
-          });
-        } else {
-          expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [platformId] })).toBe(
-            true,
-          );
-        }
-        await expect(
-          resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4o" }),
-        ).rejects.toThrow(
-          change === "replacement"
-            ? /inference account was replaced/i
-            : /inference account openai:platform was removed or signed out/i,
-        );
-      });
-    },
-  );
 
   it("adopts an explicitly selected model@profile only by capturing a new authorized binding", async () => {
     await fixture(async (root, cfg) => {
@@ -387,9 +299,7 @@ describe("durable cron inference authorization", () => {
       });
       expect(adopted.authorizationId).not.toBe(old.authorizationId);
       const storePath = await persistJob(root.stateDir, adopted);
-      expect(
-        await resolveFreshRun({ storePath, cfg, agentDir: root.agentDir, modelId: "gpt-4o" }),
-      ).toMatchObject({
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir)).toMatchObject({
         profileId: platformId,
         mode: "api-key",
         apiKey: "synthetic-replacement-key",
@@ -415,14 +325,9 @@ describe("durable cron inference authorization", () => {
           },
         },
       };
-      await expect(
-        resolveFreshRun({
-          storePath,
-          cfg: incompatible,
-          agentDir: root.agentDir,
-          modelId: "gpt-4o",
-        }),
-      ).rejects.toThrow(/route|subscription|compatible/i);
+      await expect(resolveFreshRun(storePath, incompatible, root.agentDir)).rejects.toThrow(
+        /route|subscription|compatible/i,
+      );
     });
   });
 });

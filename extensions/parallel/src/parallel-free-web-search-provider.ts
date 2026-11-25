@@ -1,9 +1,9 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import {
-  createParallelFreeWebSearchProviderBase,
-  PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
-} from "./parallel-free-web-search-provider.shared.js";
+  createWebSearchProviderContractFields,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-contract";
+import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
 // Reuse the paid provider's tool schema — both transports accept the same
 // objective + search_queries shape — but the free Search MCP caps session_id at
 // 100 chars (its `tools/list` schema), tighter than the paid v1 REST limit, so
@@ -27,7 +27,27 @@ const loadParallelFreeWebSearchRuntime = createLazyRuntimeModule(
 
 export function createParallelFreeWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    ...createParallelFreeWebSearchProviderBase(),
+    id: "parallel-free",
+    label: "Parallel Search (Free)",
+    hint: "Free web search via Parallel's hosted Search MCP — no API key required",
+    configPath: null,
+    onboardingScopes: ["text-inference"],
+    // Keyless: always uses Parallel's free hosted Search MCP. Keep it
+    // selectable, but never auto-detected; users must opt in before search
+    // traffic is sent to Parallel's hosted free tier. The paid `parallel`
+    // provider (v1 REST, requires a key) is a separate entry.
+    requiresCredential: false,
+    envVars: [],
+    placeholder: "(no key needed)",
+    signupUrl: "https://parallel.ai",
+    docsUrl: "https://docs.openclaw.ai/tools/parallel-search",
+    credentialPath: "",
+    ...createWebSearchProviderContractFields({
+      credentialPath: "",
+      searchCredential: { type: "scoped", scopeId: "parallel-free" },
+      // Both Parallel providers live in the `parallel` plugin.
+      selectionPluginId: "parallel",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using Parallel's free Search MCP (no API key). Returns ranked, LLM-optimized dense excerpts from web sources. Pass an `objective` describing the underlying question along with 2-3 short keyword `search_queries` (Parallel's recommended pairing). For multi-step research, thread the prior result's `sessionId` back in as `session_id` to keep Parallel's context grouped.",

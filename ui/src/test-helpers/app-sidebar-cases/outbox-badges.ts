@@ -5,15 +5,26 @@ import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar outbox attention badges", () => {
-  it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
+  it("shows only inactive draft badges while suppressing Incognito roster rows", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
     const plainKey = "agent:main:plain-thread";
     const incognitoKey = "agent:main:private-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
-    const sessions = createSessions("main", [draftKey, activeDraftKey, plainKey, incognitoKey]);
+    const sessions = createSessions("main", [
+      "main",
+      draftKey,
+      activeDraftKey,
+      plainKey,
+      incognitoKey,
+    ]);
     sessions.state.result!.sessions.find((row) => row.key === incognitoKey)!.incognito = true;
-    const { sidebar } = await mountSidebar(gateway, sessions);
+    const { sidebar } = await mountSidebar(gateway, sessions, "panel", {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = activeDraftKey;
     sidebar.storedOutboxes = {
@@ -29,16 +40,25 @@ describe("AppSidebar outbox attention badges", () => {
     expect(draftBadge?.getAttribute("aria-label")).toBe("Unsent draft");
     expect(
       sidebar.querySelector(`[data-session-key="${activeDraftKey}"] .session-row-badge--draft`),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
     ).toBeNull();
     const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
     expect(incognitoRow).not.toBeNull();
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
+    const homeDraft = () =>
+      sidebar.querySelector(".sidebar-footer-bar__home .session-row-badge--draft");
+    expect(homeDraft()).not.toBeNull();
+    sidebar.sessionKey = "agent:main:main";
+    await sidebar.updateComplete;
+    expect(homeDraft()).toBeNull();
+    sidebar.sessionKey = activeDraftKey;
+    await sidebar.updateComplete;
+    expect(homeDraft()).not.toBeNull();
   });
 
-  it("resolves agent-main aliases to one attention badge count", async () => {
+  it("keeps agent-main aliases in one agent-only roster row", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -61,15 +81,8 @@ describe("AppSidebar outbox attention badges", () => {
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
-    const badges = sidebar.querySelectorAll(
-      '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--attention',
-    );
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent).toContain("3");
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--draft[aria-label="Unsent draft"]',
-      ),
-    ).not.toBeNull();
+    expect(sidebar.querySelectorAll('[data-agent-group="main"]')).toHaveLength(1);
+    expect(sidebar.querySelector('[data-session-key="agent:main:main"]')).toBeNull();
+    expect(sidebar.querySelector('[data-agent-group="main"] .session-row-badge')).toBeNull();
   });
 });

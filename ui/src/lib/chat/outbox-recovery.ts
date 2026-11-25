@@ -11,7 +11,6 @@ import type {
 } from "./chat-types.ts";
 import { findChatSubmissionMessage } from "./history-message-identity.ts";
 import { outboxPayloadCanRecover } from "./outbox-payload-store.runtime.ts";
-import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import type { ComposerStorageTarget, StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
@@ -462,26 +461,48 @@ function consumeChatOutboxRecovery(
       const { scope } = resolved;
       key = resolved.key;
       const session = entry.session;
+      const source = parseStoredChatOutboxScope(entry.sourceScopeKey);
+      const changesConversation =
+        source &&
+        storedChatOutboxScopeKey(
+          resolveUiConversationIdentity(state, source.sessionKey, source.agentId),
+        ) !== key;
       store.sessions[key] = {
         ...session,
         awaitingDefaults: undefined,
         draftRevision: nextDraftRevision(
           Math.max(minimumRevision, destination.revision, session.draftRevision ?? 0),
         ),
-        queue: session.queue?.map((item) =>
-          Object.assign({}, item, scope, {
+        queue: session.queue?.map((item) => {
+          const freshAdmission =
+            changesConversation &&
+            !item.intent &&
+            !item.localCommandName &&
+            item.queueMode !== "steer";
+          return Object.assign({}, item, scope, {
             storageScope: JSON.stringify([destination.gatewayOwner, destination.recoveryScope]),
+            // A confirmed copy into another conversation needs a new admission;
+            // same-conversation recovery retains the possibly accepted input.
+            ...(freshAdmission
+              ? {
+                  sessionId: undefined,
+                  sendRunId: undefined,
+                  sendAttempts: 0,
+                  sendRequestStartedAtMs: undefined,
+                }
+              : {}),
             sendState:
-              item.sendState === "held"
+              !freshAdmission &&
+              (item.sendState === "held" ||
+                (item.sendAttempts ?? 0) > 0 ||
+                item.sendRequestStartedAtMs !== undefined)
                 ? "held"
-                : (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed"
-                  ? "unconfirmed"
-                  : "failed",
+                : "failed",
             sendError:
-              item.sendError ??
-              "Recovered message. Review this destination and retry only if it did not arrive.",
-          }),
-        ),
+              (freshAdmission ? undefined : item.sendError) ??
+              "Recovered message. Review this destination and retry when ready.",
+          });
+        }),
       };
     }
     // Partial delivery retains the authoritative row's draft and unproven inputs.
@@ -493,7 +514,7 @@ function consumeChatOutboxRecovery(
       delivered && (hasStoredComposerDraftInput(current.session) || remainingQueue?.length)
         ? {
             ...current,
-            session: normalizeStoredSession({ ...current.session, queue: remainingQueue })!,
+            session: { ...current.session, queue: remainingQueue },
           }
         : undefined;
     // Publication or retirement consumes the account recovery row in the same write.

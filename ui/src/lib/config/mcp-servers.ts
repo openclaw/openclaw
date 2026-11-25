@@ -233,5 +233,4 @@ export async function patchMcpServers(
   if (!patched) {
     throw new Error(runtimeConfig.state.lastError ?? t("mcpServers.configUnavailable"));
   }
-  await runtimeConfig.refresh();
 }

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, onCleanup } from "solid-js";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
@@ -8,9 +8,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
-import { formatUiError } from "./format-error.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { projectAgentSelection, projectGateway } from "./reactive/application.ts";
+import { parseAgentSessionKey } from "./sessions/session-key.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
@@ -20,27 +20,30 @@ const discoveryRequests = new WeakMap<
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
 export function createMcpAppCatalog(
   context: ApplicationContext,
-  target: () => McpAppExtensionTarget,
+  readTarget: () => McpAppExtensionTarget,
   prepareSession: () => boolean = () => false,
 ) {
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
+  const target = () => {
+    const value = readTarget();
+    // A qualified session owns its agent, independently of the current selection.
+    return { ...value, agentId: parseAgentSessionKey(value.sessionKey)?.agentId ?? value.agentId };
+  };
+  // Retain accepted rows independently so a failed read does not replace focused controls.
   const [state, setState] = createStore<{
     servers: McpAppDiscoveredServer[];
     onboarding: NonNullable<McpAppDiscoverResult["onboarding"]>;
-    loading: boolean;
-    error: string | null;
-  }>({ servers: [], onboarding: [], loading: false, error: null }, { shallow: true });
+  }>({ servers: [], onboarding: [] }, { shallow: true });
+  const [request, setRequest] = createSignal<{ promise: Promise<void> }>();
   let generation = 0;
   let identity = "";
+  let identityClient: GatewayBrowserClient | null = null;
   let preparedSessionIdentity = "";
-  let connected = true;
+  let targetRequest = new AbortController();
   const available = () => {
     const snapshot = gateway.read().snapshot;
-    return (
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
-    );
+    return canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write");
   };
   const discoveryIdentity = createMemo(() => {
     gateway.read();
@@ -48,23 +51,36 @@ export function createMcpAppCatalog(
     const value = target();
     return JSON.stringify([
       gatewayPresentationScope(context.gateway).key,
-      context.gateway.snapshot.phase === "connected",
-      available(),
       value.agentId,
       value.sessionKey,
     ]);
   });
-  createEffect(discoveryIdentity, (value) => {
+  const discoveryBinding = createMemo(
+    () =>
+      [
+        discoveryIdentity(),
+        gateway.read().snapshot.phase,
+        gateway.read().snapshot.hello,
+        gateway.read().snapshot.client,
+        available(),
+      ] as const,
+    { equals: (a, b) => a.every((value, index) => value === b[index]) },
+  );
+  createEffect(discoveryBinding, ([value, phase, , client, canDiscover]) => {
+    const changed = identity !== value || identityClient !== client;
+    targetRequest.abort();
+    targetRequest = new AbortController();
     identity = value;
+    identityClient = client;
+    preparedSessionIdentity = "";
     generation++;
-    setState((draft) => {
-      draft.servers = [];
-      draft.onboarding = [];
-      draft.error = null;
-      draft.loading = false;
-    });
-    // The identity memo owns reactivity; each request snapshots target and live authority.
-    untrack(() => void refresh());
+    if (changed || (phase === "connected" && !canDiscover)) {
+      setState((draft) => {
+        draft.servers = [];
+        draft.onboarding = [];
+      });
+    }
+    void refresh();
   });
   const unsubscribe = context.gateway.subscribeEvents((event) => {
     if (event.event === "config.changed") {
@@ -72,12 +88,19 @@ export function createMcpAppCatalog(
     }
   });
   onCleanup(() => {
-    connected = false;
-    generation++;
+    targetRequest.abort();
     unsubscribe();
   });
 
-  async function refresh() {
+  function refresh() {
+    const promise = discover();
+    setRequest({ promise });
+    // Event-driven callers may outlive their status boundary. The read keeps the rejection.
+    return promise.catch(() => undefined);
+  }
+
+  async function discover() {
+    const { signal } = targetRequest;
     const client = context.gateway.snapshot.client;
     const destination = target();
     if (
@@ -89,6 +112,8 @@ export function createMcpAppCatalog(
       return;
     }
     const requestGeneration = ++generation;
+    const connectionGeneration = client.connectionGeneration;
+    const hello = context.gateway.snapshot.hello;
     const scope = gatewayPresentationScope(context.gateway).key;
     let pending = discoveryRequests.get(client);
     if (!pending) {
@@ -96,15 +121,19 @@ export function createMcpAppCatalog(
       discoveryRequests.set(client, pending);
     }
     // A config change during discovery may show the older catalog until the next refresh.
-    const requestKey = JSON.stringify([scope, destination.agentId, destination.sessionKey]);
-    setState((draft) => {
-      draft.loading = true;
-      draft.error = null;
-    });
+    const requestKey = JSON.stringify([
+      scope,
+      connectionGeneration,
+      destination.agentId,
+      destination.sessionKey,
+    ]);
     const current = () =>
-      connected &&
+      !signal.aborted &&
       requestGeneration === generation &&
       client === context.gateway.snapshot.client &&
+      client.connectionGeneration === connectionGeneration &&
+      context.gateway.snapshot.phase === "connected" &&
+      hello === context.gateway.snapshot.hello &&
       scope === gatewayPresentationScope(context.gateway).key &&
       JSON.stringify(destination) === JSON.stringify(target());
     try {
@@ -117,6 +146,7 @@ export function createMcpAppCatalog(
         if (!described.session) {
           const session = await context.sessions.createResult(sessionTarget, {
             reconciliation: "background",
+            signal,
           });
           if (!current()) {
             return;
@@ -129,18 +159,18 @@ export function createMcpAppCatalog(
         }
         preparedSessionIdentity = identity;
       }
-      let request = pending.get(requestKey);
-      if (!request) {
-        request = client.request<McpAppDiscoverResult>("mcp.app.discover", destination);
+      let discoveryRequest = pending.get(requestKey);
+      if (!discoveryRequest) {
+        discoveryRequest = client.request<McpAppDiscoverResult>("mcp.app.discover", destination);
         const release = () => {
-          if (pending.get(requestKey) === request) {
+          if (pending.get(requestKey) === discoveryRequest) {
             pending.delete(requestKey);
           }
         };
-        void request.then(release, release);
-        pending.set(requestKey, request);
+        void discoveryRequest.then(release, release);
+        pending.set(requestKey, discoveryRequest);
       }
-      const result = await request;
+      const result = await discoveryRequest;
       if (current()) {
         setState((draft) => {
           draft.servers = result.servers;
@@ -149,25 +179,27 @@ export function createMcpAppCatalog(
       }
     } catch (error) {
       if (current()) {
-        setState((draft) => {
-          draft.error = formatUiError(error);
-        });
-      }
-    } finally {
-      if (current()) {
-        setState((draft) => {
-          draft.loading = false;
-        });
+        throw error;
       }
     }
   }
-  return () => ({
-    ...state,
+  const snapshot = () => {
+    const servers = state.servers;
+    const onboarding = state.onboarding;
     // Consumers can retain a launch during render, before the refresh effect clears old results.
-    ...(discoveryIdentity() === identity
-      ? {}
-      : { servers: [], onboarding: [], loading: false, error: null }),
-    available: available(),
+    return discoveryIdentity() === identity && gateway.read().snapshot.client === identityClient
+      ? { servers, onboarding }
+      : { servers: [], onboarding: [] };
+  };
+  return {
+    target,
+    snapshot,
+    request,
+    available,
+    visible: () =>
+      available() ||
+      (gateway.read().snapshot.phase !== "connected" &&
+        (state.servers.length > 0 || state.onboarding.length > 0)),
     refresh,
-  });
+  };
 }

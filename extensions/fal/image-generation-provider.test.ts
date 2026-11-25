@@ -2,6 +2,7 @@ import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generatio
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -311,6 +312,36 @@ describe("fal image-generation provider", () => {
     expect(result.images.map((image) => image.buffer.toString())).toEqual(["first", "second"]);
   });
 
+  it.each([
+    ["application/json", '{"error":"quota exceeded"}'],
+    ["application/problem+json", '{"title":"unavailable"}'],
+    ["text/html", "<html>Sign in</html>"],
+    ["image/png", ""],
+  ])("rejects invalid generated image downloads (%s, %j)", async (contentType, body) => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce({
+        response: new Response(body, { headers: { "content-type": contentType } }),
+        release,
+      });
+
+    await expect(provider.generateImage(defaultRequest)).rejects.toThrow(
+      "fal generated image download: malformed image response",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the image/png fallback for downloads without a content type", async () => {
+    const buffer = Buffer.from("png-data");
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce({ response: new Response(buffer), release: vi.fn(async () => {}) });
+
+    const result = await provider.generateImage(defaultRequest);
+    expect(result.images).toEqual([{ buffer, mimeType: "image/png", fileName: "image-1.png" }]);
+  });
+
   it("releases a timed-out generated image download", async () => {
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
@@ -334,19 +365,18 @@ describe("fal image-generation provider", () => {
     expect(releaseDownload).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects generated image downloads that exceed the configured media cap", async () => {
+  it("keeps generated image downloads above the configured media cap", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(
         releasedJson({ images: [{ url: "https://v3.fal.media/files/example/generated.png" }] }),
       )
-      .mockResolvedValueOnce(releasedImage(Buffer.from("too-large")));
+      .mockResolvedValueOnce(releasedImage(Buffer.from("over-cap")));
 
-    await expect(
-      provider.generateImage({
-        ...defaultRequest,
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("fal generated image download exceeds 1 bytes");
+    const result = await provider.generateImage({
+      ...defaultRequest,
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    });
+    expect(result.images[0]?.buffer.toString()).toBe("over-cap");
   });
 
   it("wraps wrong-shape successful fal image responses", async () => {
@@ -745,16 +775,12 @@ describe("fal image-generation provider", () => {
 
     await provider.generateImage({
       ...defaultRequest,
-      cfg: {
-        models: {
-          providers: {
-            fal: {
-              baseUrl: "http://relay.internal:8080",
-              models: [],
-            },
-          },
+      cfg: createModelProviderConfig({
+        fal: {
+          baseUrl: "http://relay.internal:8080",
+          models: [],
         },
-      },
+      }),
     });
 
     expectFalJsonPost({

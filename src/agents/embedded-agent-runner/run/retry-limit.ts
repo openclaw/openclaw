@@ -1,10 +1,6 @@
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
-import type {
-  EmbeddedRunLivenessState,
-  EmbeddedAgentMeta,
-  EmbeddedAgentRunResult,
-} from "../types.js";
+import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { RetryLimitFailoverDecision } from "./failover-policy.js";
 
 export function handleRetryLimitExhaustion(params: {
@@ -16,7 +12,6 @@ export function handleRetryLimitExhaustion(params: {
   durationMs: number;
   agentMeta: EmbeddedAgentMeta;
   replayInvalid?: boolean;
-  livenessState?: EmbeddedRunLivenessState;
 }): EmbeddedAgentRunResult {
   if (params.decision.action === "fallback_model") {
     throw new FailoverError(params.message, {
@@ -44,7 +39,7 @@ export function handleRetryLimitExhaustion(params: {
       terminalReply: sanitizeAgentRunTerminalReply(text),
       finalAssistantVisibleText: text,
       ...(params.replayInvalid ? { replayInvalid: true } : {}),
-      ...(params.livenessState ? { livenessState: params.livenessState } : {}),
+      livenessState: "blocked",
       error: { kind: "retry_limit", message: params.message },
     },
   };

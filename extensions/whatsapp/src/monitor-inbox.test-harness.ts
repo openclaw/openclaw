@@ -36,6 +36,7 @@ export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 type MockSock = {
+  authState: { creds: { accountSyncCounter: number } };
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
@@ -188,6 +189,7 @@ function createAcceptedSendMessageMock() {
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
+    authState: { creds: { accountSyncCounter: 0 } },
     ev,
     end: vi.fn(),
     ws: { close: vi.fn() },
@@ -241,8 +243,8 @@ export function getSock(): MockSock {
   return sessionState.sock;
 }
 
-type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
-type ResetWebInboundDedupe = typeof import("./inbound.js").resetWebInboundDedupe;
+type MonitorWebInbox = typeof import("./inbound/monitor.js").monitorWebInbox;
+type ResetWebInboundDedupe = typeof import("./inbound/dedupe.js").resetWebInboundDedupe;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
@@ -330,7 +332,7 @@ export async function startInboxMonitor(
   extraOptions: Partial<InboxMonitorOptions> = {},
 ) {
   if (!monitorWebInbox) {
-    ({ monitorWebInbox } = await import("./inbound.js"));
+    ({ monitorWebInbox } = await import("./inbound/monitor.js"));
   }
   const merged = {
     cfg: mockLoadConfig() as never,
@@ -427,9 +429,8 @@ export function installWebMonitorInboxUnitTestHooks() {
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {
-      const inboundModule = await import("./inbound.js");
-      monitorWebInbox = inboundModule.monitorWebInbox;
-      resetWebInboundDedupe = inboundModule.resetWebInboundDedupe;
+      ({ monitorWebInbox } = await import("./inbound/monitor.js"));
+      ({ resetWebInboundDedupe } = await import("./inbound/dedupe.js"));
     }
     resetWebInboundDedupe();
     authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));

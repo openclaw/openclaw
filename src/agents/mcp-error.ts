@@ -1,17 +1,16 @@
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolErrorCode, SdkErrorCode, SdkHttpError } from "@modelcontextprotocol/client";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
-/** MCP lifecycle errors use the protocol code, including serialized SDK errors. */
+/** SDK deadlines use local string codes; remote numeric errors remain protocol failures. */
 export function isMcpRequestTimeoutError(error: unknown): boolean {
-  return isRecord(error) && error.code === ErrorCode.RequestTimeout;
+  return isRecord(error) && error.code === SdkErrorCode.RequestTimeout;
 }
 
 export function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ProtocolErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
@@ -21,7 +20,7 @@ export function isMcpMethodNotFoundError(error: unknown): boolean {
 /** Redacts MCP diagnostics, including response bodies the SDK includes in thrown errors. */
 export function redactMcpDiagnosticError(error: unknown): string {
   const message =
-    error instanceof StreamableHTTPError && error.code === 401
+    error instanceof SdkHttpError && error.status === 401
       ? "authentication refused (401); check this MCP server's credentials or sign in again"
       : formatErrorMessage(error).replace(
           /(Error POSTing to endpoint(?: \(HTTP \d+\))?:)[\s\S]*/,

@@ -17,6 +17,7 @@ import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts"
 import {
   getWorkboardRuntime,
   getWorkboardState,
+  notifyWorkboard,
   invalidateWorkboardLoads,
   workboardHasActiveWrites,
   workboardMutationsReady,
@@ -32,7 +33,13 @@ import type {
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
     isRecord(value) && Array.isArray(value[key]) ? value[key].length : 0;
+  const failure =
+    isRecord(value) && Array.isArray(value.startFailures) ? value.startFailures[0] : undefined;
   return {
+    firstFailure:
+      isRecord(failure) && typeof failure.title === "string" && typeof failure.error === "string"
+        ? `${failure.title}: ${failure.error}`
+        : null,
     started: countArray("started"),
     failures: countArray("startFailures"),
     promoted: countArray("promoted"),
@@ -58,14 +65,14 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   }
   if (cardId && (!base || base.id !== cardId)) {
     state.error = "This card changed before editing began. Cancel and reopen it to continue.";
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
     return;
   }
   invalidateWorkboardLoads(params.host);
   state.draftSaving = true;
   state.loading = true;
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     let payload: unknown;
     if (base) {
@@ -98,7 +105,7 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   } finally {
     state.draftSaving = false;
     state.loading = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }
 
@@ -169,11 +176,21 @@ export async function moveWorkboardCard(
       | { beforeCardId: string | null; boardFilter: string; position?: never }
     ),
 ) {
-  const cards = getWorkboardState(params.host).cards;
+  const current = getWorkboardState(params.host);
+  if (current.nextCursor && params.beforeCardId !== undefined) {
+    return;
+  }
+  const cards = current.cards;
   const card = cards.find((candidate) => candidate.id === params.cardId);
   const moves =
     params.beforeCardId === undefined
-      ? [{ id: params.cardId, status: params.status, position: params.position }]
+      ? [
+          {
+            id: params.cardId,
+            status: params.status,
+            ...(current.nextCursor ? {} : { position: params.position }),
+          },
+        ]
       : card
         ? planWorkboardCardDrop(cards, card, params.status, params.beforeCardId, params.boardFilter)
         : [];
@@ -224,7 +241,6 @@ export async function moveWorkboardCard(
     await loadWorkboard({
       host: params.host,
       client: params.client,
-      requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
     });
@@ -257,7 +273,7 @@ export async function runWorkboardCardMutation<T>(
     state.busyCardIds.add(id);
   }
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     return await mutate(state, params.client);
   } catch (error) {
@@ -270,7 +286,7 @@ export async function runWorkboardCardMutation<T>(
     for (const id of cardIds) {
       state.busyCardIds.delete(id);
     }
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }
 
@@ -347,7 +363,7 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
   state.error = null;
   state.lastDispatchSummary = null;
   state.bulkResult = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     const dispatchResult = await params.client.request(
       "workboard.cards.dispatch",
@@ -357,6 +373,8 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     const normalized = normalizeCardsPayload(payload);
     setWorkboardCards(state, normalized.cards);
     state.statuses = normalized.statuses;
+    state.nextCursor = normalized.nextCursor;
+    state.boards = normalized.boards;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     // A teardown may have invalidated this in-flight dispatch. Keep its cached
     // result reload-required so reconnect cannot treat an old completion as canonical.
@@ -365,6 +383,6 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     state.error = formatError(error);
   } finally {
     state.dispatching = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }

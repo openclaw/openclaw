@@ -3,7 +3,9 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { notifyListeners } from "../../../../src/shared/listeners.js";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
+import { listen } from "../reactive/listener.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -35,7 +37,7 @@ const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
 const storedChatOutboxChangeListeners = new Set<() => void>();
-let storageChangeListenerInstalled = false;
+let stopStorageChanges: (() => void) | undefined;
 
 export type ChatComposerScope = {
   client?: OfflineStorageClient | null;
@@ -44,7 +46,7 @@ export type ChatComposerScope = {
   settings?: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
 /** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */
@@ -122,19 +124,14 @@ const pendingLegacyTransfers = new WeakMap<
 const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
-  if (!storageChangeListenerInstalled && typeof window !== "undefined") {
-    storageChangeListenerInstalled = true;
-    window.addEventListener("storage", handleStoredChatOutboxStorageChange);
+  if (!stopStorageChanges && typeof window !== "undefined") {
+    stopStorageChanges = listen(window, "storage", handleStoredChatOutboxStorageChange);
   }
   return () => {
     storedChatOutboxChangeListeners.delete(listener);
-    if (
-      storageChangeListenerInstalled &&
-      storedChatOutboxChangeListeners.size === 0 &&
-      typeof window !== "undefined"
-    ) {
-      storageChangeListenerInstalled = false;
-      window.removeEventListener("storage", handleStoredChatOutboxStorageChange);
+    if (storedChatOutboxChangeListeners.size === 0) {
+      stopStorageChanges?.();
+      stopStorageChanges = undefined;
     }
   };
 }

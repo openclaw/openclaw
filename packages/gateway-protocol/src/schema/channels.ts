@@ -1,5 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  TALK_CAPTURE_SCOPED_EVENT_TYPES,
+  TALK_EVENT_TYPES,
+  TALK_TURN_SCOPED_EVENT_TYPES,
+} from "../talk-event-vocabulary.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
@@ -55,64 +60,7 @@ const TalkBrainSchema = stringLiteralUnion(["agent-consult", "direct-tools", "no
 
 const TalkAgentControlModeSchema = stringLiteralUnion(["status", "steer", "cancel", "followup"]);
 
-const TalkEventTypeSchema = stringLiteralUnion([
-  "session.started",
-  "session.ready",
-  "session.closed",
-  "session.error",
-  "session.replaced",
-  "turn.started",
-  "turn.ended",
-  "turn.cancelled",
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-  "usage.metrics",
-  "latency.metrics",
-  "health.changed",
-]);
-
-/** Event types that must carry a turn id for client-side stream correlation. */
-const TURN_SCOPED_TALK_EVENT_TYPES = [
-  "turn.started",
-  "turn.ended",
-  "turn.cancelled",
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-];
-
-/** Capture lifecycle events must include capture id to avoid cross-turn ambiguity. */
-const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-];
+const TalkEventTypeSchema = stringLiteralUnion(TALK_EVENT_TYPES);
 
 /** Builds JSON Schema conditional requirements while avoiding reserved word syntax. */
 function requireJsonSchemaProperties(properties: string[]): Record<string, { required: string[] }> {
@@ -145,14 +93,14 @@ export const TalkEventSchema = Type.Object(
     allOf: [
       {
         if: {
-          properties: { type: { enum: TURN_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_TURN_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["turnId"]),
       },
       {
         if: {
-          properties: { type: { enum: CAPTURE_SCOPED_TALK_EVENT_TYPES } },
+          properties: { type: { enum: TALK_CAPTURE_SCOPED_EVENT_TYPES } },
           required: ["type"],
         },
         ...requireJsonSchemaProperties(["captureId"]),
@@ -226,6 +174,12 @@ export const TalkClientToolCallResultSchema = closedObject({
   idempotencyKey: NonEmptyString,
   agentId: NonEmptyString,
   agentSessionKey: NonEmptyString,
+});
+
+export const TalkClientSayParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: VoiceIdString,
+  text: Type.String({ minLength: 1, maxLength: 1024 }),
 });
 
 export const TalkClientSteerParamsSchema = closedObject({
@@ -338,12 +292,28 @@ const TalkCatalogProviderSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   configured: Type.Boolean(),
+  // Unconfigured because the saved sign-in doesn't cover voice; an API key would.
+  apiKeyRequired: Type.Optional(Type.Literal(true)),
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
   activeVoices: Type.Optional(Type.Array(Type.String())),
   activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+  modelFamilySettings: Type.Optional(
+    closedObject({
+      // A normalized exact model name or hyphen-delimited family prefix.
+      family: NonEmptyString,
+      unlistedModelVoices: Type.Literal("active"),
+      unsupportedTransports: Type.Array(TalkTransportSchema),
+      gatewayRelayHandlesAgentConsult: Type.Boolean(),
+      hint: closedObject({
+        titleKey: NonEmptyString,
+        descriptionKey: NonEmptyString,
+        readyKey: NonEmptyString,
+      }),
+    }),
+  ),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
@@ -357,10 +327,28 @@ const TalkCatalogProviderSchema = closedObject({
   supportsSessionResumption: Type.Optional(Type.Boolean()),
 });
 
-const TalkCatalogProviderGroupSchema = closedObject({
+const TalkCatalogProviderGroupProperties = {
   ready: Type.Optional(Type.Boolean()),
   activeProvider: Type.Optional(Type.String()),
   providers: Type.Array(TalkCatalogProviderSchema),
+};
+
+const TalkCatalogProviderGroupSchema = closedObject(TalkCatalogProviderGroupProperties);
+
+const TalkCatalogTranscriptionGroupSchema = closedObject({
+  ...TalkCatalogProviderGroupProperties,
+  // Which path Talk transcription uses: a streaming transcription provider
+  // named by the Voice Call streaming config (`streaming`) or picked
+  // automatically from configured keys (`streaming-auto`), the
+  // `agents.defaults.voiceModel` default, or the media-understanding audio
+  // models (`tools.media`). Optional: older Gateways and the projection for
+  // callers without operator.read omit it.
+  source: Type.Optional(
+    stringLiteralUnion(["streaming", "streaming-auto", "voice-model", "media-understanding"]),
+  ),
+  // Readiness of the media-understanding audio providers (voice notes) when
+  // Talk uses another path; on that path they are `providers` already.
+  mediaProviders: Type.Optional(Type.Array(TalkCatalogProviderSchema)),
 });
 
 export const TalkCatalogResultSchema = closedObject({
@@ -368,7 +356,7 @@ export const TalkCatalogResultSchema = closedObject({
   transports: Type.Array(TalkTransportSchema),
   brains: Type.Array(TalkBrainSchema),
   speech: TalkCatalogProviderGroupSchema,
-  transcription: TalkCatalogProviderGroupSchema,
+  transcription: TalkCatalogTranscriptionGroupSchema,
   realtime: TalkCatalogProviderGroupSchema,
 });
 
@@ -682,6 +670,7 @@ export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
 export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
 export type TalkClientCreateParams = Static<typeof TalkClientCreateParamsSchema>;
 export type TalkClientCreateResult = Static<typeof TalkClientCreateResultSchema>;
+export type TalkClientSayParams = Static<typeof TalkClientSayParamsSchema>;
 export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
 export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
 export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;

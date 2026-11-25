@@ -6,7 +6,7 @@ import {
   isImageWithMediaPayload,
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
-} from "openclaw/plugin-sdk/provider-transport-runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeOllamaToolCallName } from "./tool-name-aliases.js";
 
@@ -127,7 +127,7 @@ export function convertToOllamaMessages(
       }),
       ...(images.length > 0 ? { images } : {}),
       ...(msg.toolCallId ? { tool_call_id: msg.toolCallId } : {}),
-      ...(msg.toolName ? { tool_name: msg.toolName } : {}),
+      ...(msg.toolName ? { tool_name: normalizeOllamaToolCallName(msg.toolName, options) } : {}),
     });
   }
 

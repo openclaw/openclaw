@@ -12,16 +12,13 @@ const probes = vi.hoisted(() => ({
   context: vi.fn(),
   wait: vi.fn(),
   http: vi.fn(),
-  inspect: vi.fn(),
 }));
 vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: probes.context,
   waitForGatewayHttpReadiness: probes.http,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
-  inspectGatewayRestart: probes.inspect,
-  isSameGatewayRestartGeneration: (a: GatewayRestartSnapshot, b: GatewayRestartSnapshot) =>
-    a.runtime.pid === b.runtime.pid && a.gatewayBootId === b.gatewayBootId,
+vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: probes.wait,
 }));
 vi.mock("../config/paths.js", () => ({ resolveGatewayPort: () => 18789 }));
@@ -32,12 +29,21 @@ vi.mock("./update-git-runtime.js", () => ({ readBuiltGatewayBuildId: probes.buil
 
 const { observeInterruptedUpdateGateway } = await import("./update-run-interruption-health.js");
 const candidate = { version: "1.0.0", buildId: "b1" };
-async function observe() {
+async function observe(advanceMs?: number) {
   const deadline = createGatewayRestartDeadline({
     timeoutMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
   });
   try {
-    return await observeInterruptedUpdateGateway(candidate, { deadline });
+    let completed = false;
+    const result = observeInterruptedUpdateGateway(candidate, { deadline }).then((value) => {
+      completed = true;
+      return value;
+    });
+    if (advanceMs !== undefined) {
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      expect(completed).toBe(true);
+    }
+    return await result;
   } finally {
     deadline.dispose();
   }
@@ -60,7 +66,6 @@ beforeEach(() => {
   probes.context.mockReset().mockResolvedValue({ auth: undefined, config: {} });
   probes.wait.mockReset().mockResolvedValue(healthy);
   probes.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-  probes.inspect.mockReset().mockResolvedValue(healthy);
 });
 afterEach(() => vi.useRealTimers());
 
@@ -75,12 +80,9 @@ it("settles a managed candidate taking 25,431 ms across setup and reconciliation
   const elapsedMs = 25_431;
   probes.root.mockImplementation(() => after(1_000, "/synthetic/root"));
   probes.context.mockImplementation(() => after(2_000, { config: {} }));
-  probes.wait.mockImplementation(() => after(elapsedMs - 7_000, healthy));
+  probes.wait.mockImplementation(() => after(elapsedMs - 5_000, healthy));
   probes.http.mockImplementation(() => after(2_000, { healthz: 200, readyz: 200 }));
-  probes.inspect.mockImplementation(() => after(1_000, healthy));
-  const result = observe();
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(await result).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "settled",
     elapsedMs,
     waitOutcome: "healthy",
@@ -90,93 +92,59 @@ it("settles a managed candidate taking 25,431 ms across setup and reconciliation
 });
 
 it.each([
-  ["root", 1, "setup:package-root"],
-  ["version", 1, "setup:installed-identity"],
-  ["context", 1, "setup:probe-context"],
-  ["wait", 1, "health-wait"],
-  ["http", 1, "reconciliation:http"],
-  ["inspect", 1, "reconciliation:inspect-before"],
-  ["inspect", 2, "reconciliation:inspect-after"],
-  ["build", 2, "reconciliation:installed-identity"],
-] as const)("bounds a stalled %s read #%s and records %s", async (probe, occurrence, phase) => {
+  ["root", "setup:package-root"],
+  ["version", "setup:installed-identity"],
+  ["context", "setup:probe-context"],
+  ["wait", "health-wait"],
+  ["http", "reconciliation:http"],
+] as const)("bounds a stalled %s read and records %s", async (probe, phase) => {
   const pending = createDeferredCore<never>();
-  if (occurrence === 2) {
-    probes[probe].mockResolvedValueOnce(probe === "inspect" ? healthy : candidate.buildId);
-  }
   probes[probe].mockReturnValueOnce(pending.promise);
-  let completed = false;
-  const result = observe().then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(completed).toBe(true);
-  expect(await result).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
     phase,
   });
-  const calls = probes.inspect.mock.calls.length;
+  const calls = probes.http.mock.calls.length;
   pending.reject(new Error("late read failed"));
   await vi.advanceTimersByTimeAsync(500);
-  expect(probes.inspect).toHaveBeenCalledTimes(calls);
+  expect(probes.http).toHaveBeenCalledTimes(calls);
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("does not grant new HTTP or inspection budgets after a slow healthy settle", async () => {
+it("keeps HTTP readiness in the original budget after a slow healthy settle", async () => {
   probes.wait.mockImplementation(() =>
-    after(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS - 6_500, healthy),
+    after(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS - 2_500, healthy),
   );
   probes.http.mockImplementation(() => after(4_000, { healthz: 200, readyz: 200 }));
-  probes.inspect.mockImplementation(() => after(4_000, healthy));
-  let completed = false;
-  const result = observe().then((value) => {
-    completed = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
-  expect(completed).toBe(true);
-  expect(await result).toMatchObject({
+  expect(await observe(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS)).toMatchObject({
     outcome: "timed-out",
     elapsedMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
-    phase: "reconciliation:inspect-before",
+    phase: "reconciliation:http",
     waitOutcome: "healthy",
   });
   await vi.advanceTimersByTimeAsync(4_000);
-  expect(probes.inspect).toHaveBeenCalledTimes(1);
+  expect(probes.http).toHaveBeenCalledTimes(1);
 });
 
-it.each(["wait", "http", "generation", "installed"])(
-  "does not settle with changed %s evidence",
-  async (change) => {
-    if (change === "wait") {
-      probes.wait.mockResolvedValue({
-        ...healthy,
-        healthy: false,
-        waitOutcome: "build-id-mismatch",
-      });
-    } else if (change === "http") {
-      probes.http.mockResolvedValue({ healthz: 200, readyz: 503 });
-    } else if (change === "generation") {
-      probes.inspect
-        .mockResolvedValueOnce(healthy)
-        .mockResolvedValue({ ...healthy, gatewayBootId: "boot-2" });
-    } else {
-      probes.build.mockResolvedValueOnce(candidate.buildId).mockResolvedValue("other-build");
-    }
-    const result = await observe();
-    expect(result.outcome).toBe("unverified");
-    expect(result.verification).toBeUndefined();
-    if (change === "wait") {
-      expect(result).toMatchObject({
-        elapsedMs: 0,
-        phase: "health-wait",
-        waitOutcome: "build-id-mismatch",
-      });
-      expect(probes.http).not.toHaveBeenCalled();
-    }
-  },
-);
+it.each([
+  ["wait", { ...healthy, healthy: false, waitOutcome: "build-id-mismatch" }],
+  ["http", { healthz: 200, readyz: 503 }],
+  ["build", "other-build"],
+] as const)("does not settle with changed %s evidence", async (probe, value) => {
+  probes[probe].mockResolvedValue(value);
+  const result = await observe();
+  expect(result.outcome).toBe("unverified");
+  expect(result.verification).toBeUndefined();
+  if (probe === "wait") {
+    expect(result).toMatchObject({
+      elapsedMs: 0,
+      phase: "health-wait",
+      waitOutcome: "build-id-mismatch",
+    });
+    expect(probes.http).not.toHaveBeenCalled();
+  }
+});
 
 it("preserves command cleanup uncertainty for the reconciliation owner", async () => {
   const failure = new CommandProcessCleanupError();

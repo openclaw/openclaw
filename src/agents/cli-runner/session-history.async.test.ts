@@ -12,24 +12,22 @@ import {
   upsertSessionEntryCore,
   withTranscriptWriteLock,
 } from "../../config/sessions/session-accessor.js";
-import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
-import {
-  recordOpenClawDatabaseQuarantine,
-  clearOpenClawDatabaseQuarantine,
-} from "../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -211,11 +209,11 @@ it.each(["run", "read-resource"] as const)(
       const interceptNext = () => {
         if (kind === "read-resource") {
           const spy = vi
-            .spyOn(targetDiscoveryLane.pool, "run")
+            .spyOn(sessionStoreLane.pool, "run")
             .mockImplementationOnce((input, options) => {
               spy.mockRestore();
               let pause = false;
-              return targetDiscoveryLane.pool
+              return sessionStoreLane.pool
                 .run(async () => {
                   const request = typeof input === "function" ? await input() : input;
                   pause = request.kind === "transcript-hydration";
@@ -299,18 +297,14 @@ it.each(["persisted", "process-local"] as const)(
           timestamp: 1,
         });
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env: state.env,
-            kind: "agent",
-            path: target.storePath,
-            reason,
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env: state.env,
+          kind: "agent",
+          path: target.storePath,
+          reason,
+        });
       } else {
-        expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason))).toBe(
-          true,
-        );
+        recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason));
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
       try {

@@ -10,6 +10,7 @@ import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-c
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isNodeHostStats } from "../../shared/node-host-stats.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode, PairedNode } from "../../shared/node-list-types.js";
@@ -17,7 +18,7 @@ import { shortenHomeInString } from "../../utils.js";
 import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { formatVersionLabel } from "../version-format.js";
-import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesReadCommand } from "./cli-utils.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -195,58 +196,11 @@ function matchesNodeConnectionFilter(
   );
 }
 
-function mergePairedNodeWithEffectiveNode(
-  paired: PairedNode | undefined,
-  effective: NodeListNode,
-): PairedNodeListRow {
-  return {
-    ...paired,
-    ...effective,
-    createdAtMs: paired?.createdAtMs,
-    // node.list can record a connection newer than the separate pairing snapshot.
-    lastConnectedAtMs:
-      effective.lastConnectedAtMs ?? paired?.lastConnectedAtMs ?? effective.connectedAtMs,
-    displayName: effective.displayName ?? paired?.displayName,
-    platform: effective.platform ?? paired?.platform,
-    version: effective.version ?? paired?.version,
-    coreVersion: effective.coreVersion ?? paired?.coreVersion,
-    uiVersion: effective.uiVersion ?? paired?.uiVersion,
-    remoteIp: effective.remoteIp ?? paired?.remoteIp,
-    permissions: effective.permissions ?? paired?.permissions,
-    approvedAtMs: effective.approvedAtMs ?? paired?.approvedAtMs,
-  };
-}
-
-function mergePairedNodesWithEffectiveNodes(
-  paired: PairedNode[],
-  effectiveNodes: NodeListNode[] | null,
-): PairedNodeListRow[] {
-  if (effectiveNodes === null) {
-    return paired;
-  }
-  const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
-  const seen = new Set<string>();
-  const rows: PairedNodeListRow[] = [];
-  for (const effective of effectiveNodes) {
-    const pairedNode = pairedById.get(effective.nodeId);
-    if (!pairedNode && effective.paired !== true) {
-      continue;
-    }
-    seen.add(effective.nodeId);
-    rows.push(mergePairedNodeWithEffectiveNode(pairedNode, effective));
-  }
-  for (const node of paired) {
-    if (!seen.has(node.nodeId)) {
-      rows.push(node);
-    }
-  }
-  return rows;
-}
-
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
     return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
   } catch (error) {
+    getAsyncWorkSignal()?.throwIfAborted();
     // Best-effort enrichment may degrade to pairing-only rows, but never
     // silently: without this notice the table looks authoritative while
     // omitting connected/commands state. Stderr keeps --json output clean.
@@ -267,7 +221,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("status", async () => {
+        await runNodesReadCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
           const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
@@ -386,7 +340,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .description("Describe a node (capabilities + supported invoke commands)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("describe", async () => {
+        await runNodesReadCommand("describe", async () => {
           const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
           const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
@@ -503,10 +457,10 @@ export function registerNodesStatusCommands(nodes: Command) {
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("list", async () => {
+        await runNodesReadCommand("list", async (signal) => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected);
-          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
           const { pending, paired } = parsePairingList(result);
           const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
@@ -517,7 +471,42 @@ export function registerNodesStatusCommands(nodes: Command) {
           const effectiveNodes = hasFilters
             ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
-          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
+          let effectivePairedRows: PairedNodeListRow[] = paired;
+          if (effectiveNodes !== null) {
+            const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
+            const seen = new Set<string>();
+            effectivePairedRows = [];
+            for (const effective of effectiveNodes) {
+              const pairedNode = pairedById.get(effective.nodeId);
+              if (!pairedNode && effective.paired !== true) {
+                continue;
+              }
+              seen.add(effective.nodeId);
+              effectivePairedRows.push({
+                ...pairedNode,
+                ...effective,
+                createdAtMs: pairedNode?.createdAtMs,
+                // node.list can record a connection newer than the separate pairing snapshot.
+                lastConnectedAtMs:
+                  effective.lastConnectedAtMs ??
+                  pairedNode?.lastConnectedAtMs ??
+                  effective.connectedAtMs,
+                displayName: effective.displayName ?? pairedNode?.displayName,
+                platform: effective.platform ?? pairedNode?.platform,
+                version: effective.version ?? pairedNode?.version,
+                coreVersion: effective.coreVersion ?? pairedNode?.coreVersion,
+                uiVersion: effective.uiVersion ?? pairedNode?.uiVersion,
+                remoteIp: effective.remoteIp ?? pairedNode?.remoteIp,
+                permissions: effective.permissions ?? pairedNode?.permissions,
+                approvedAtMs: effective.approvedAtMs ?? pairedNode?.approvedAtMs,
+              });
+            }
+            for (const node of paired) {
+              if (!seen.has(node.nodeId)) {
+                effectivePairedRows.push(node);
+              }
+            }
+          }
           const filteredPaired = effectivePairedRows.filter((node) =>
             matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
           );

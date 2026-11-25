@@ -14,6 +14,7 @@ import {
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
+import { setNativeControlHost } from "./native-web-chrome.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   resolveGatewayCredentialsForUrlEdit,
@@ -35,17 +36,6 @@ type NativeControlAuth = {
     scopes?: unknown;
   } | null;
 };
-
-type NativeGatewayClientOptions = Pick<
-  GatewayBrowserClientOptions,
-  | "clientName"
-  | "mode"
-  | "platform"
-  | "deviceFamily"
-  | "instanceId"
-  | "scopes"
-  | "nativeConnectAuth"
->;
 
 declare global {
   interface Window {
@@ -88,7 +78,16 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let nativeClient: NativeGatewayClientOptions | null = null;
+  let nativeClient: Pick<
+    GatewayBrowserClientOptions,
+    | "clientName"
+    | "mode"
+    | "platform"
+    | "deviceFamily"
+    | "instanceId"
+    | "scopes"
+    | "nativeConnectAuth"
+  > | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
     const entries = Object.entries(patch) as Array<
@@ -113,6 +112,7 @@ export function resolveApplicationStartupSettings(
   const nativeAuth =
     injectedNativeAuth ??
     (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
+  setNativeControlHost(Boolean(nativeAuth));
   if (nativeAuth) {
     try {
       delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];

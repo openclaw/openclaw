@@ -2,49 +2,19 @@ import type { TSchema } from "typebox";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import type {
+  CatalogSource,
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
-export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
-export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
-// One model-visible search response, including a batch, may expose at most this many candidates.
-export const MAX_TOOL_SEARCH_RESULTS = 50;
-export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
-export const MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES = 512;
-// Includes JSON escaping and multibyte text echoed to identify batch result groups.
-export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
-export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
-
-export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-]);
-
-export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-]);
-
-export type ToolSearchMode = "tools" | "directory";
-export type ToolSearchRequest =
-  | { kind: "single"; search: { query: string; limit: number } }
-  | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
-export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
-export type CatalogVisibilityOptions = {
-  includeMcp?: boolean;
-  allowedIds?: { has(id: string): boolean };
-};
-type UnknownToolRecoverySurface = "raw-tools" | "catalog";
-export type UnknownToolErrorOptions = {
-  exactIdOnly?: boolean;
-  recoverySurface?: UnknownToolRecoverySurface;
-};
 export type ToolSearchCallOptions = CatalogVisibilityOptions &
   UnknownToolErrorOptions & {
     parentToolCallId?: string;
@@ -59,6 +29,8 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
 
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
+  /** Stable catalog identity captured by the catalog owner before execution. */
+  toolId: string;
   toolName: string;
   source: CatalogSource;
   sourceName?: string;
@@ -74,11 +46,10 @@ export type ToolSearchCatalogToolExecutor = (params: {
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
-/** Resolved Tool Search config after defaults and limits. */
-export type ToolSearchConfig = AgentToolSurfacePresentation["toolSearch"];
-
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
+  modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
   agentId?: string;
@@ -88,7 +59,6 @@ export type ToolSearchToolContext = {
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
-  forceRestartSafeTools?: boolean;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
   codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;
@@ -105,6 +75,8 @@ export type ToolSearchCatalogEntry = {
   description: string;
   /** Recorded when the catalog owner also exposes this tool in the native surface. */
   directVisible?: boolean;
+  /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
+  requiresExactId?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -140,6 +112,7 @@ export type ToolSearchCatalogApplyResult = {
 };
 
 export type ToolSearchCatalogCompactionParams = {
+  config?: OpenClawConfig;
   tools: AnyAgentTool[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;
@@ -148,4 +121,5 @@ export type ToolSearchCatalogCompactionParams = {
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  selection?: Pick<ToolSearchConfig, "include" | "exclude">;
 };

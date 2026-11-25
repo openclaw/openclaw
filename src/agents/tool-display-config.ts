@@ -5,13 +5,12 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
-import { MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon: string;
 };
 
-type ToolDisplayConfig = {
+export type ToolDisplayConfig = {
   version: number;
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
@@ -21,23 +20,8 @@ function displayTool(icon: string, title: string, detailKeys?: string[]): ToolDi
   return detailKeys === undefined ? { icon, title } : { icon, title, detailKeys };
 }
 
-function displayAction(label: string, detailKeys?: string[]) {
-  return detailKeys === undefined ? { label } : { label, detailKeys };
-}
-
-function mediaGenerationTool(icon: string, title: string, detailKeys: string[]): ToolDisplaySpec {
-  return {
-    icon,
-    title,
-    actions: {
-      generate: displayAction("generate", detailKeys),
-      list: displayAction("list", ["provider", "model"]),
-    },
-  };
-}
-
-/** Static display metadata for known tools plus fallback detail-key selection. */
-export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
+/** Tool identity readers never load the per-action detail and progress specifications. */
+export const TOOL_DISPLAY_BASE = {
   version: 1,
   fallback: {
     icon: "puzzle",
@@ -89,105 +73,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     read: displayTool("fileText", "Read", ["path"]),
     write: displayTool("edit", "Write", ["path"]),
     edit: displayTool("penLine", "Edit", ["path"]),
-    personal_instructions: {
-      icon: "penLine",
-      title: "Personal Instructions",
-      detailKeys: ["action", "agentId"],
-      actions: {
-        get: displayAction("read", ["agentId"]),
-        set: displayAction("save", ["agentId"]),
-      },
-    },
+    personal_instructions: displayTool("penLine", "Personal Instructions", ["action", "agentId"]),
     presence: displayTool("radio", "Presence"),
     attach: displayTool("paperclip", "Attach", ["path", "url", "fileName"]),
     api: displayTool("globe", "API", ["url", "endpoint", "path", "method", "name"]),
-    browser: {
-      icon: "globe",
-      title: "Browser",
-      actions: {
-        status: displayAction("status"),
-        start: displayAction("start"),
-        stop: displayAction("stop"),
-        tabs: displayAction("tabs"),
-        open: displayAction("open", ["targetUrl"]),
-        focus: displayAction("focus", ["targetId"]),
-        close: displayAction("close", ["targetId"]),
-        snapshot: displayAction("snapshot", ["targetUrl", "targetId", "ref", "element", "format"]),
-        screenshot: displayAction("screenshot", ["targetUrl", "targetId", "ref", "element"]),
-        navigate: displayAction("navigate", ["targetUrl", "targetId"]),
-        console: displayAction("console", ["level", "targetId"]),
-        pdf: displayAction("pdf", ["targetId"]),
-        upload: displayAction("upload", ["paths", "ref", "inputRef", "element", "targetId"]),
-        dialog: displayAction("dialog", ["accept", "promptText", "targetId"]),
-        act: displayAction("act", [
-          "request.kind",
-          "request.ref",
-          "request.selector",
-          "request.text",
-          "request.value",
-        ]),
-      },
-    },
-    canvas: {
-      icon: "image",
-      title: "Canvas",
-      actions: {
-        present: displayAction("present", ["target", "node", "nodeId"]),
-        hide: displayAction("hide", ["node", "nodeId"]),
-        navigate: displayAction("navigate", ["url", "node", "nodeId"]),
-      },
-    },
+    browser: displayTool("globe", "Browser"),
+    canvas: displayTool("image", "Canvas"),
     dashboard: displayTool("layoutDashboard", "Dashboard", ["action", "tabId", "name", "title"]),
-    nodes: {
-      icon: "monitorSmartphone",
-      title: "Nodes",
-      actions: {
-        status: displayAction("status"),
-        describe: displayAction("describe", ["node", "nodeId"]),
-        pending: displayAction("pending"),
-        approve: displayAction("approve", ["requestId"]),
-        reject: displayAction("reject", ["requestId"]),
-        notify: displayAction("notify", ["node", "nodeId", "title", "body"]),
-        camera_snap: displayAction("camera snap", ["node", "nodeId", "facing", "deviceId"]),
-        camera_list: displayAction("camera list", ["node", "nodeId"]),
-        camera_clip: displayAction("camera clip", [
-          "node",
-          "nodeId",
-          "facing",
-          "duration",
-          "durationMs",
-        ]),
-        camera_ptz: displayAction("camera PTZ", ["ptzOperation", "node", "nodeId", "deviceId"]),
-        screen_record: displayAction("screen record", [
-          "node",
-          "nodeId",
-          "duration",
-          "durationMs",
-          "fps",
-          "screenIndex",
-        ]),
-        screen_snapshot: displayAction("screen snapshot", [
-          "node",
-          "nodeId",
-          "screenIndex",
-          "maxWidth",
-        ]),
-      },
-    },
-    cron: {
-      icon: "calendarClock",
-      title: "Cron",
-      actions: {
-        status: displayAction("status"),
-        list: displayAction("list"),
-        add: displayAction("add", ["job.name", "job.id", "job.schedule", "job.cron"]),
-        update: displayAction("update", ["id"]),
-        remove: displayAction("remove", ["id"]),
-        run: displayAction("run", ["id"]),
-        runs: displayAction("runs", ["id"]),
-        wake: displayAction("wake", ["text", "mode"]),
-      },
-    },
+    nodes: displayTool("monitorSmartphone", "Nodes"),
+    cron: displayTool("calendarClock", "Cron"),
     get_goal: displayTool("target", "Get Goal", []),
     create_goal: displayTool("target", "Create Goal", ["objective", "token_budget"]),
     update_goal: displayTool("target", "Update Goal", ["status"]),
@@ -197,6 +91,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     suggest_task: displayTool("spark", "Suggest Task", ["title", "tldr", "cwd"]),
     dismiss_task: displayTool("trash", "Dismiss Task", ["task_id", "reason"]),
     skill_workshop: displayTool("wrench", "Skill Workshop", ["action", "name", "proposal_id"]),
+    skill_library: displayTool("wrench", "Skill Library", ["action", "name", "skill_id"]),
     openclaw: displayTool("claw", "OpenClaw", ["action", "path", "model"]),
     gateway: displayTool("plug", "Gateway", ["action", "path"]),
     plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
@@ -207,24 +102,8 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
     github_publish: displayTool("github", "GitHub Publish", ["title"]),
     github_identity_status: displayTool("settings", "GitHub Identity Status", []),
-    sessions: {
-      icon: "layers",
-      title: "Session Settings",
-      actions: {
-        patch: displayAction("update", [
-          "sessionKey",
-          "label",
-          "pinned",
-          "archived",
-          "model",
-          "thinkingLevel",
-        ]),
-        group_list: displayAction("groups"),
-        group_set: displayAction("set groups", ["names"]),
-        group_rename: displayAction("rename group", ["name", "to"]),
-        group_delete: displayAction("delete group", ["name"]),
-      },
-    },
+    session_project: displayTool("layers", "Session Project", ["action", "projectId"]),
+    sessions: displayTool("layers", "Session Settings"),
     sessions_create: displayTool("layers", "New session", ["label", "agentId", "cwd", "group"]),
     sessions_list: displayTool("layers", "Sessions", [
       "kinds",
@@ -243,63 +122,39 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       "conversationRef",
       "timeoutSeconds",
     ]),
-    sessions_send: displayTool("send", "Session Send", [
-      "label",
-      "sessionKey",
-      "agentId",
-      "timeoutSeconds",
-    ]),
-    sessions_history: displayTool("fileText", "Session History", [
-      "sessionKey",
-      "limit",
-      "includeTools",
-    ]),
-    sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
-    transcripts: {
-      icon: "mic",
-      title: "Transcripts",
-      actions: {
-        start: displayAction("start", [
-          "sessionId",
-          "title",
-          "providerId",
-          "accountId",
-          "guildId",
-          "channelId",
-          "meetingUrl",
-        ]),
-        stop: displayAction("stop", ["sessionId"]),
-        status: displayAction("status"),
-        import: displayAction("import", [
-          "sessionId",
-          "title",
-          "providerId",
-          "meetingUrl",
-          "speakerLabel",
-        ]),
-        summarize: displayAction("summarize", ["sessionId"]),
-      },
+    knowledge_record: {
+      ...displayTool("fileText", "Knowledge Record"),
+      progress: { label: "Read knowledge record", detailKeys: [] },
     },
-    sessions_spawn: displayTool("bot", "Sub-agent", [
-      "label",
-      "taskName",
-      "agentId",
-      "model",
-      "thinking",
-      "runTimeoutSeconds",
-      "cleanup",
-    ]),
+    knowledge_remember: {
+      ...displayTool("brain", "Knowledge Remember"),
+      progress: { label: "Remember knowledge", detailKeys: [] },
+    },
+    sessions_send: {
+      ...displayTool("send", "Session Send", ["label", "sessionKey", "agentId", "timeoutSeconds"]),
+      progress: { label: "Send to session", detailKeys: ["label"], referenceKey: "sessionKey" },
+    },
+    sessions_history: {
+      ...displayTool("fileText", "Session History", ["sessionKey", "limit", "includeTools"]),
+      progress: { label: "Read session history", detailKeys: [], referenceKey: "sessionKey" },
+    },
+    sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
+    transcripts: displayTool("mic", "Transcripts"),
+    sessions_spawn: {
+      ...displayTool("bot", "Sub-agent", [
+        "label",
+        "taskName",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+      ]),
+      progress: { label: "Start subagent", detailKeys: ["label"] },
+    },
     agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
     structured_output: displayTool("fileText", "Structured Output", ["result"]),
-    subagents: {
-      icon: "users",
-      title: "Subagents",
-      actions: {
-        list: displayAction("list", ["recentMinutes"]),
-        kill: displayAction("kill", ["target"]),
-        steer: displayAction("steer", ["target"]),
-      },
-    },
+    subagents: displayTool("bot", "Subagents"),
     agents_list: displayTool("users", "Agents", []),
     memory_search: displayTool("search", "Memory Search", ["query"]),
     memory_get: displayTool("brain", "Memory Get", ["path", "from", "lines"]),
@@ -309,7 +164,8 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     web_fetch: displayTool("globe", "Web Fetch", ["url", "extractMode", "maxChars"]),
     code_execution: displayTool("braces", "Code Execution", ["task"]),
     decision_evaluate: displayTool("shieldCheck", "Decision Evaluation", []),
-    message: MESSAGE_TOOL_DISPLAY_SPEC,
+    /** Display metadata for the transport-neutral message action surface. */
+    message: displayTool("mail", "Message"),
     apply_patch: displayTool("fileDiff", "Apply Patch", []),
     // Historical transcripts retain the old name. This display-only entry
     // preserves their presentation without restoring a runtime tool alias.
@@ -322,29 +178,9 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       "prompt",
       "model",
     ]),
-    image_generate: mediaGenerationTool("image", "Image Generation", [
-      "prompt",
-      "model",
-      "count",
-      "resolution",
-      "aspectRatio",
-    ]),
-    music_generate: mediaGenerationTool("music", "Music Generation", [
-      "prompt",
-      "model",
-      "durationSeconds",
-      "format",
-      "instrumental",
-    ]),
-    video_generate: mediaGenerationTool("play", "Video Generation", [
-      "prompt",
-      "model",
-      "durationSeconds",
-      "resolution",
-      "aspectRatio",
-      "audio",
-      "watermark",
-    ]),
+    image_generate: displayTool("image", "Image Generation"),
+    music_generate: displayTool("music", "Music Generation"),
+    video_generate: displayTool("play", "Video Generation"),
     pdf: displayTool("fileText", "PDF", [
       "path",
       "paths",
@@ -357,4 +193,4 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_yield: displayTool("pause", "Yield"),
     tts: displayTool("audioLines", "TTS", ["text", "channel"]),
   },
-};
+} satisfies ToolDisplayConfig;

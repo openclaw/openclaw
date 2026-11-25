@@ -1,11 +1,8 @@
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy,
-} from "../navigation-guard.js";
+import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
+import { resolveBrowserNavigationPolicy } from "../navigation-policy.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
@@ -16,6 +13,7 @@ import {
   getProfileContext,
   jsonBrowserError,
   jsonError,
+  operatorPagesOption,
   runProfileRouteOperation,
 } from "./utils.js";
 
@@ -70,12 +68,7 @@ export function browserNavigationPolicyForProfile(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
 ) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
+  return resolveBrowserNavigationPolicy(ctx.state(), profileCtx.profile);
 }
 
 /** Require Playwright support for a route feature, returning a 501 when absent. */
@@ -144,10 +137,12 @@ export async function withRouteTabContext<T>(
       assertCurrent: params.req.assertCurrent,
       run: async (signal) => {
         // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
+        const operatorPages = operatorPagesOption(params.req);
         const tab = await profileCtx.ensureTabAvailable(params.targetId, {
           allowPlaywrightFallback: true,
           signal,
           timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+          ...operatorPages,
         });
         if (params.enforceCurrentUrlAllowed) {
           await assertBrowserNavigationResultAllowed({
@@ -173,6 +168,7 @@ export async function withRouteTabContext<T>(
               fallbackUrl,
               signal,
               timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+              ...operatorPages,
             }),
         });
       },
@@ -194,10 +190,15 @@ export async function resolveSafeRouteTabUrl(params: {
   fallbackUrl?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  includeOperatorPages?: boolean;
 }): Promise<string | undefined> {
   let tabs: Array<{ targetId: string; url: string }>;
   try {
-    tabs = await params.profileCtx.listTabs({ signal: params.signal, timeoutMs: params.timeoutMs });
+    tabs = await params.profileCtx.listTabs({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      includeOperatorPages: params.includeOperatorPages,
+    });
   } catch {
     params.signal?.throwIfAborted();
     tabs = [];

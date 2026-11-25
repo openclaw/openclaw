@@ -4,10 +4,6 @@ openclaw-file-preview-modal {
   .modal {
     width: 100%;
     height: min(780px, 86vh);
-    background: var(--bg);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xl);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -59,7 +55,7 @@ openclaw-file-preview-modal {
     grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
   }
   .tree .item {
-    grid-template-columns: 16px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
   .folder > summary {
     display: flex;
@@ -91,6 +87,9 @@ openclaw-file-preview-modal {
     font-size: 14px;
     line-height: 1.65;
     overflow-wrap: anywhere;
+    /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
   }
   .markdown > :first-child {
     margin-top: 0;
@@ -194,7 +193,7 @@ openclaw-file-preview-modal {
 
   .item {
     display: grid;
-    grid-template-columns: 16px 1fr auto;
+    grid-template-columns: 1fr auto;
     gap: 12px;
     align-items: center;
     padding: 12px 14px;
@@ -223,22 +222,6 @@ openclaw-file-preview-modal {
     color: var(--text-strong);
   }
 
-  .item-icon {
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted);
-    opacity: 0.85;
-  }
-
-  .item.is-active .item-icon {
-    color: var(--accent);
-    opacity: 1;
-  }
-
-  .item-icon svg,
   .chat-copy-btn svg {
     width: 16px;
     height: 16px;
@@ -323,54 +306,19 @@ openclaw-file-preview-modal {
     color: var(--muted);
   }
 
-  .chat-copy-btn:hover {
+  .chat-copy-btn:not([data-copy-state]):hover {
     border-color: var(--border-strong);
     color: var(--text-strong);
   }
 
-  .chat-copy-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
   .chat-copy-btn__icon {
-    display: inline-flex;
     width: 16px;
     height: 16px;
-    position: relative;
   }
 
   .chat-copy-btn__icon-copy,
   .chat-copy-btn__icon-check {
-    position: absolute;
     inset: 0;
-    transition: opacity 150ms ease;
-  }
-
-  .chat-copy-btn__icon-check,
-  .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
-    opacity: 0;
-  }
-
-  .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
-    opacity: 1;
-  }
-
-  .chat-copy-btn[data-copy-state="copying"] {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .chat-copy-btn[data-copy-state="error"] {
-    border-color: var(--danger-subtle);
-    background: var(--danger-subtle);
-    color: var(--danger);
-  }
-
-  .chat-copy-btn[data-copy-state="copied"] {
-    border-color: var(--ok-subtle);
-    background: var(--ok-subtle);
-    color: var(--ok);
   }
 
   .chips {
@@ -519,22 +467,5 @@ openclaw-file-preview-modal {
       gap: 8px;
       padding: 10px 12px;
     }
-  }
-
-  .shortcut-kbd:where(:not([hidden])) {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    vertical-align: middle;
-  }
-  .shortcut-kbd > span + span {
-    margin-inline-start: 0.15em;
-  }
-  .kbd__text {
-    text-box: trim-both cap alphabetic;
-  }
-  .shortcut-kbd::before {
-    content: "";
-    height: 1lh;
   }
 }

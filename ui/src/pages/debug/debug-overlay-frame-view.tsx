@@ -1,14 +1,18 @@
 import type { JSX } from "@solidjs/web";
-import { children, createEffect, createMemo, onCleanup, onSettled, Show, untrack } from "solid-js";
+import { children, createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import "../../styles/debug.css";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { createDebugOverlayLayout } from "./debug-overlay-layout.runtime.ts";
 import type { DebugOverlayMode } from "./debug-overlay-state.ts";
+
+registerEnglishCatalog(registerDebugEnglish);
 
 export function DebugOverlayFrame(props: {
   mode: DebugOverlayMode;
   body: JSX.Element;
+  ref?: (element: HTMLElement) => void;
   onToggleMode: () => void;
   onClose: () => void;
 }) {
@@ -28,21 +32,22 @@ export function DebugOverlayFrame(props: {
           return;
         }
         layout = createDebugOverlayLayout(element);
-        layout.update(untrack(mode));
+        layout.update(mode());
       })
       .catch((error: unknown) =>
         console.error("System busyness position controls could not load. Reload to retry.", error),
       );
-  });
-  createEffect(body, () => layout?.update(untrack(mode)));
-  onCleanup(() => {
-    disposed = true;
-    layout?.disconnect();
+    // The layout's ResizeObserver follows body changes after its initial placement.
+    return () => {
+      disposed = true;
+      layout?.disconnect();
+    };
   });
   return (
     <aside
       ref={(node) => {
         element = node;
+        props.ref?.(node);
       }}
       class={["debug-overlay", { "debug-overlay--minimized": mode() === "minimized" }]}
       aria-label={t("debug.overlay.title")}

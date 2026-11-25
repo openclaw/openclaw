@@ -6,26 +6,23 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 
-type ReplyModelLevelSelection = {
-  provider: string;
-  model: string;
-  agentRuntime?: string | null;
-  thinkLevel?: ThinkLevel;
-  thinkingExplicit: boolean;
-  reasoningLevel: ReasoningLevel;
-  reasoningExplicit: boolean;
-};
-
-type ReplyModelLevels = {
+export type ReplyModelLevelResolver = () => Promise<{
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   thinkingExplicit?: boolean;
-};
-
-export type ReplyModelLevelResolver = () => Promise<ReplyModelLevels>;
+}>;
 
 export function createReplyModelLevelResolver(params: {
-  selection: ReplyModelLevelSelection;
+  selection: {
+    provider: string;
+    /** Undefined with no model: defaults resolve to off. */
+    model: string | undefined;
+    agentRuntime?: string | null;
+    thinkLevel?: ThinkLevel;
+    thinkingExplicit: boolean;
+    reasoningLevel: ReasoningLevel;
+    reasoningExplicit: boolean;
+  };
   abortSignal?: AbortSignal;
   modelState: Pick<
     Awaited<ReturnType<typeof createModelSelectionState>>,
@@ -37,10 +34,13 @@ export function createReplyModelLevelResolver(params: {
     async () => {
       assertReplyPreprocessingActive(abortSignal);
       const { provider, model, agentRuntime } = selection;
+      const modelSelection = model ? { provider, model } : undefined;
       const resolvedThinkLevel =
         selection.thinkLevel ??
         (await racePromiseWithAbortSignal(
-          modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime }),
+          modelState.resolveDefaultThinkingLevel(
+            modelSelection && { ...modelSelection, agentRuntime },
+          ),
           abortSignal,
         ));
       // Shared catalog discovery may continue, but the canceled reply cannot use it.
@@ -51,7 +51,7 @@ export function createReplyModelLevelResolver(params: {
         resolvedThinkLevel === "off" &&
         !selection.thinkingExplicit
           ? await racePromiseWithAbortSignal(
-              modelState.resolveDefaultReasoningLevel({ provider, model }),
+              modelState.resolveDefaultReasoningLevel(modelSelection),
               abortSignal,
             )
           : selection.reasoningLevel;

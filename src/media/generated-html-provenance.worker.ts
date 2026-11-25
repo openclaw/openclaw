@@ -4,15 +4,11 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type {
-  WorkerOperationContext,
-  WorkerOperationHandlers,
+import {
+  createCommittedWorkerMutation,
+  type WorkerWriteOperationContext,
+  type WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import type { GeneratedHtmlProvenanceRow } from "./generated-html-provenance.worker-contract.js";
@@ -47,24 +43,8 @@ export const generatedHtmlProvenanceReadOperations = {
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
 
-function mutation<Input>(type: string, apply: (db: EngineConnection, input: Input) => number) {
-  return (input: Input, { open }: WorkerOperationContext) =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = apply(db, input);
-        const receipt = { type, result };
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-        deferSqliteWorkerCommitReceipt(db, receipt);
-        return result;
-      },
-      { database: open() },
-      { operationLabel: type },
-    );
-}
-
 export const generatedHtmlProvenanceOperations = {
-  "generatedHtmlProvenance.upsert": mutation(
+  "generatedHtmlProvenance.upsert": createCommittedWorkerMutation(
     "generatedHtmlProvenance.upsert",
     (db, row: GeneratedHtmlProvenanceRow) => {
       executeSqliteQuerySync(
@@ -77,7 +57,7 @@ export const generatedHtmlProvenanceOperations = {
       return 1;
     },
   ),
-  "generatedHtmlProvenance.prune": mutation(
+  "generatedHtmlProvenance.prune": createCommittedWorkerMutation(
     "generatedHtmlProvenance.prune",
     (db, rows: GeneratedHtmlProvenanceRow[]) => {
       let removed = 0;
@@ -107,4 +87,4 @@ export const generatedHtmlProvenanceOperations = {
       return removed;
     },
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

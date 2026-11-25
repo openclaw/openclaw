@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { PickerOption, PickerParams } from "./select-picker-types.ts";
 import { PickerContent } from "./select-picker-view.tsx";
 import "../styles/select-picker.css";
@@ -32,31 +32,30 @@ const PickerBridge = defineSolidBridge<{ params: PickerParams<PickerOption> }>(
   },
 );
 
-// SAFETY: The bridge transports params unchanged; each caller supplies its own option subtype.
-const TypedPicker = PickerBridge as <Option extends PickerOption>(props: {
-  params: PickerParams<Option>;
-  class?: string;
-  style?: string;
-}) => JSX.Element;
-
 export function Picker<Option extends PickerOption>(props: {
   params: PickerParams<Option>;
-  class?: string;
+  class?: JSX.ClassValue;
   style?: string;
-}) {
-  return TypedPicker({
+}): JSX.Element {
+  // SAFETY: The bridge transports params unchanged; each caller supplies its own option subtype.
+  return (PickerBridge as typeof Picker)({
     get params() {
       return props.params;
     },
     get class() {
-      return props.class ?? pickerClass(props.params);
+      return (
+        props.class ?? [
+          "settings-select picker-select",
+          {
+            "picker-select--submenu": props.params.variant === "submenu",
+            "picker-select--sheet": props.params.sheet,
+          },
+          props.params.className,
+        ]
+      );
     },
     get style() {
       return props.style ?? "width:100%;min-width:min(138px,100%)";
     },
   });
-}
-
-export function pickerClass(params: { variant?: "submenu"; sheet?: boolean; className?: string }) {
-  return `settings-select picker-select ${params.variant === "submenu" ? "picker-select--submenu" : ""} ${params.sheet ? "picker-select--sheet" : ""} ${params.className ?? ""}`;
 }

@@ -1,8 +1,6 @@
 // Qa Lab tests cover bounded Crabline provider responses and failed-body cleanup.
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
+import { withTransport } from "./crabline-transport.test-support.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -15,31 +13,9 @@ const inbound = {
   text: "Telegram response marker.",
 } as const;
 
-async function withTransport(
-  run: (transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>) => Promise<void>,
-) {
-  await withTempDir("qa-crabline-transport-", async (outputDir) => {
-    const transport = await createQaCrablineTransportAdapter({
-      outputDir,
-      selection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
-      state: createQaBusState(),
-    });
-    try {
-      await run(transport);
-    } finally {
-      await transport.cleanupAfterGatewayStop();
-    }
-  });
-}
-
 describe("crabline transport responses", () => {
   it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
-    await withTransport(async (transport) => {
+    await withTransport("telegram", async (transport) => {
       vi.stubGlobal(
         "fetch",
         vi.fn(
@@ -59,7 +35,7 @@ describe("crabline transport responses", () => {
   });
 
   it("cancels a failed inbound response before surfacing the provider error", async () => {
-    await withTransport(async (transport) => {
+    await withTransport("telegram", async (transport) => {
       const cancel = vi.fn(() => {
         throw new Error("cancel failed");
       });

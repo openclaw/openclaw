@@ -13,7 +13,6 @@ type MSTeamsCredentialConfig = Pick<
   | "tenantId"
   | "authType"
   | "certificatePath"
-  | "certificateThumbprint"
   | "useManagedIdentity"
   | "managedIdentityClientId"
 >;
@@ -30,7 +29,6 @@ type MSTeamsFederatedCredentials = {
   appId: string;
   tenantId: string;
   certificatePath?: string;
-  certificateThumbprint?: string;
   useManagedIdentity?: boolean;
   managedIdentityClientId?: string;
 };
@@ -110,11 +108,6 @@ export function resolveMSTeamsCredentials(
       allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined,
     );
 
-    const certificateThumbprint =
-      cfg?.certificateThumbprint ||
-      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_THUMBPRINT : undefined) ||
-      undefined;
-
     const useManagedIdentity =
       cfg?.useManagedIdentity ??
       (allowEnvFallback ? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true" : false);
@@ -134,7 +127,6 @@ export function resolveMSTeamsCredentials(
       appId,
       tenantId,
       certificatePath,
-      certificateThumbprint,
       useManagedIdentity: useManagedIdentity || undefined,
       managedIdentityClientId,
     };

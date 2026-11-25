@@ -7,7 +7,10 @@ type WhatsAppSchemaInput = z.input<typeof WhatsAppConfigSchema>;
 type WhatsAppSchemaAccountConfig = NonNullable<
   NonNullable<WhatsAppSchemaInput["accounts"]>[string]
 >;
-type LegacyWhatsAppConfig = Pick<CommonChannelMessagingConfig, "dms" | "heartbeat"> & {
+type LegacyWhatsAppConfig = Pick<
+  CommonChannelMessagingConfig,
+  "dms" | "heartbeat" | "heartbeatVisibility"
+> & {
   /** @deprecated Doctor-only legacy input. */
   messagePrefix?: string;
 };

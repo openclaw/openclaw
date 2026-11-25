@@ -351,6 +351,8 @@ class TdClient:
         self.lib.td_execute(json.dumps({"@type": "setLogVerbosityLevel", "new_verbosity_level": 0}).encode())
         self.client = self.lib.td_json_client_create()
         self.extra = 0
+        self.startup_phase = None
+        self.connection_state = "unknown"
         self.users = {}
         self.updates = []
         atexit.register(self.destroy)
@@ -395,6 +397,12 @@ class TdClient:
         if not raw:
             return None
         item = json.loads(raw.decode())
+        if item.get("@type") == "updateConnectionState":
+            state = (item.get("state") or {}).get("@type")
+            self.connection_state = state if state in (
+                "connectionStateWaitingForNetwork", "connectionStateConnectingToProxy",
+                "connectionStateConnecting", "connectionStateUpdating", "connectionStateReady",
+            ) else "unknown"
         if item.get("@type") == "updateUser":
             user = item.get("user") or {}
             self.users[int(user["id"])] = user
@@ -407,7 +415,26 @@ class TdClient:
         self.client = None
         self.lib.td_json_client_destroy(client)
 
+    def startup_diagnostic(self, **fields):
+        if getattr(self, "startup_phase", None):
+            # Only fixed phases/methods/classifications, never request or response payloads.
+            # The adapter retains the last 4096 stderr bytes, not an unbounded update log.
+            print(json.dumps({"type": "startup", "phase": self.startup_phase, **fields},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+
+    def set_startup_phase(self, phase):
+        self.startup_phase = phase
+        self.startup_diagnostic()
+
     def request(self, payload, timeout=20):
+        started = time.monotonic()
+        def diagnose(outcome):
+            if payload["@type"] in ("getChat", "loadChats"):
+                self.startup_diagnostic(
+                    method=payload["@type"], outcome=outcome,
+                    elapsedMs=round((time.monotonic() - started) * 1000),
+                    connectionState=getattr(self, "connection_state", "unknown"),
+                )
         extra = self.send(payload)
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -417,14 +444,21 @@ class TdClient:
             if item.get("@extra") == extra:
                 if item.get("@type") == "error":
                     message = item.get("message") or "TDLib error"
+                    diagnose(
+                        "chat-not-found" if payload["@type"] == "getChat"
+                        and item.get("code") == 400 and message == "Chat not found"
+                        else "error"
+                    )
                     raise TdRequestError(
                         f"{payload['@type']} failed ({item.get('code')}): {message}",
                         tdlib_code=item.get("code"),
                         tdlib_message=message,
                         tdlib_method=payload["@type"],
                     )
+                diagnose("ok")
                 return item
             self.updates.append(item)
+        diagnose("timeout")
         raise DriverError(
             f"Timed out waiting for {payload['@type']}",
             tdlib_method=payload["@type"],
@@ -1431,6 +1465,145 @@ def cleanup_forum(driver, manifest_path, test_server):
     return public_forum_record(record)
 
 
+def set_bot_threaded_mode(driver, identity, enabled):
+    botfather = driver.client.request({"@type": "searchPublicChat", "username": "BotFather"})
+    app = driver.client.request({
+        "@type": "getMainWebApp", "chat_id": botfather["id"],
+        "bot_user_id": botfather["type"]["user_id"], "start_parameter": "",
+        "parameters": {
+            "@type": "webAppOpenParameters", "theme": None, "application_name": "android",
+            "mode": {"@type": "webAppOpenModeFullSize"},
+        },
+    })
+    url = app["url"] if isinstance(app["url"], str) else app["url"]["url"]
+    url_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=os.environ.get("TMPDIR"), prefix="botfather-", delete=False) as handle:
+            url_path = Path(handle.name)
+            handle.write(url)
+        result = subprocess.run(
+            ["node", str(Path(__file__).with_name("botfather-threaded-mode.mjs")),
+             str(url_path), identity["sutUsername"], "on" if enabled else "off"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise DriverError("BotFather Threaded Mode action failed.")
+        state = json.loads(result.stdout)
+        if state.get("after") is not enabled:
+            raise DriverError("BotFather Threaded Mode was not confirmed.")
+        return state
+    except ValueError:
+        raise DriverError("BotFather Threaded Mode action failed.") from None
+    finally:
+        if url_path is not None:
+            url_path.unlink(missing_ok=True)
+
+
+def public_dm_topic_record(record):
+    return {key: record[key] for key in (
+        "ok", "status", "chatId", "forumTopicId", "topicTitle", "threadedMode",
+    ) if key in record}
+
+
+def resolve_dm_topic_chat(driver, identity):
+    chat_id = driver.resolve_chat(f"@{identity['sutUsername']}")
+    if str(chat_id) != identity["sutBotId"]:
+        raise DriverError("DM topic target is not the leased SUT.")
+    # Refresh native bot capabilities after the Mini App changed them outside TDLib.
+    driver.client.request({"@type": "getUserFullInfo", "user_id": int(identity["sutBotId"])})
+    return chat_id
+
+
+def prepare_dm_topic(driver, manifest_path):
+    identity = forum_identity(driver, True)
+    if manifest_path.exists():
+        raise DriverError("This lease already has a DM topic record; clean it before another creation.")
+    record = {**identity, "status": "enabling", "topicTitle": f"OpenClaw QA DM {secrets.token_hex(6)}"}
+    write_json_private(manifest_path, record)
+    record["threadedMode"] = set_bot_threaded_mode(driver, identity, True)
+    chat_id = resolve_dm_topic_chat(driver, identity)
+    record.update(chatId=str(chat_id), status="creating-topic")
+    write_json_private(manifest_path, record)
+    try:
+        topic = driver.client.request({
+            "@type": "createForumTopic", "chat_id": chat_id, "name": record["topicTitle"],
+            "is_name_implicit": False,
+            "icon": {"@type": "forumTopicIcon", "color": 0x6FB9F0, "custom_emoji_id": 0},
+        })
+    except TdRequestError as error:
+        if error.tdlib_code == 400:
+            record.update(status="creation-rejected", creationRejected=True)
+            write_json_private(manifest_path, record)
+        raise
+    record.update(ok=True, status="ready", forumTopicId=int(topic["forum_topic_id"]))
+    write_json_private(manifest_path, record)
+    return public_dm_topic_record(record)
+
+
+def cleanup_dm_topic(driver, manifest_path):
+    record = read_json(manifest_path)
+    if not record:
+        return {"ok": True, "status": "not-created"}
+    identity = forum_identity(driver, True)
+    if any(record.get(key) != identity[key] for key in ("testerUserId", "sutBotId")):
+        raise DriverError("DM topic cleanup record belongs to a different identity.")
+    if record.get("status") == "restored":
+        return public_dm_topic_record(record)
+    resuming = record.get("status") in {"restoring", "mode-disabled"}
+    record.update(ok=False, status="restoring")
+    write_json_private(manifest_path, record)
+    try:
+        if record.get("chatId") and not record.get("topicDeleted") and not record.get("creationRejected"):
+            if resuming:
+                # A previous cleanup can have disabled topics before its deletion was confirmed.
+                record["threadedMode"] = set_bot_threaded_mode(driver, identity, True)
+                write_json_private(manifest_path, record)
+            if str(resolve_dm_topic_chat(driver, identity)) != record["chatId"]:
+                raise DriverError("DM topic target changed during cleanup.")
+            topic_id = record.get("forumTopicId")
+            if topic_id is None:
+                listed = driver.client.request({
+                    "@type": "getForumTopics", "chat_id": int(record["chatId"]),
+                    "query": record["topicTitle"], "offset_date": 0, "offset_message_id": 0,
+                    "offset_forum_topic_id": 0, "limit": 100,
+                })
+                matches = [topic["info"] for topic in listed["topics"]
+                           if topic["info"]["name"] == record["topicTitle"]]
+                if len(matches) != 1:
+                    raise DriverError("DM topic creation remains uncertain.")
+                topic_id = matches[0]["forum_topic_id"]
+            driver.client.request({
+                "@type": "deleteForumTopic", "chat_id": int(record["chatId"]),
+                "forum_topic_id": int(topic_id),
+            })
+            record["topicDeleted"] = True
+            write_json_private(manifest_path, record)
+    finally:
+        # BotFather's server-side switch is authoritative; getMe can lag on the Test Server.
+        record["threadedMode"] = set_bot_threaded_mode(driver, identity, False)
+        record.update(ok=False, status="mode-disabled")
+        write_json_private(manifest_path, record)
+    record.update(ok=True, status="restored")
+    write_json_private(manifest_path, record)
+    return public_dm_topic_record(record)
+
+
+def command_dm_topic(args):
+    if not os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR"):
+        raise DriverError("DM topic commands require runner-owned leased credential state.")
+    manifest = STATE_DIR / "owned-test-dm-topic.json"
+    if args.command == "cleanup-dm-topic" and not manifest.exists():
+        print_result({"ok": True, "status": "not-created"}, args.json, args.output)
+        return
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    if not driver.authorize(args, need_ready=False):
+        raise DriverError("The leased QA user is not authorized.")
+    result = (prepare_dm_topic(driver, manifest) if args.command == "prepare-dm-topic"
+              else cleanup_dm_topic(driver, manifest))
+    print_result(result, args.json, args.output)
+
+
 def command_forum(args):
     if not os.environ.get("TELEGRAM_USER_DRIVER_STATE_DIR"):
         raise DriverError("Forum commands require runner-owned leased credential state.")
@@ -1762,15 +1935,22 @@ def write_ndjson(payload):
 def command_serve(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
+    driver.client.set_startup_phase("authorize")
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    driver.client.set_startup_phase("selected-chat")
     chat_id = driver.resolve_chat(args.chat)
+    driver.client.set_startup_phase("identity")
     tester = driver.client.request({"@type": "getMe"})
+    driver.client.set_startup_phase("selected-chat-access")
     driver.check_group_write_access(chat_id, tester["id"])
     selected_chats = {chat_id}
     for target in getattr(args, "observe_chat", []):
+        driver.client.set_startup_phase("observer-chat")
         selected = driver.resolve_chat(target)
+        driver.client.set_startup_phase("observer-chat-access")
         driver.check_group_write_access(selected, tester["id"])
         selected_chats.add(selected)
+    driver.client.set_startup_phase(None)
     write_ndjson(
         {
             "type": "ready",
@@ -1889,6 +2069,9 @@ def main():
 
     for name in ("prepare-forum", "cleanup-forum", "prepare-private-forum", "cleanup-private-forum"):
         command_parser(name, command_forum)
+    for name in ("prepare-dm-topic", "cleanup-dm-topic"):
+        command_parser(name, command_dm_topic)
+
 
     confirm_qr = command_parser("confirm-qr", command_confirm_qr)
     confirm_qr.add_argument("--link", required=True)

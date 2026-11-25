@@ -1,3 +1,4 @@
+import { listen } from "../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const POSITION_KEY = "openclaw.debug-overlay.position";
@@ -33,7 +34,6 @@ export function createDebugOverlayLayout(element: HTMLElement) {
   let frame = 0;
   let transitionFrom: DOMRect | undefined;
   let animation: Animation | undefined;
-  let observer: ResizeObserver | undefined;
   let drag:
     | {
         id: number;
@@ -60,7 +60,6 @@ export function createDebugOverlayLayout(element: HTMLElement) {
       if (!element.isConnected) {
         return;
       }
-      connect();
       if (animation) {
         // Body-size changes during the 160ms transition settle at its finish.
         return;
@@ -96,23 +95,6 @@ export function createDebugOverlayLayout(element: HTMLElement) {
       animation = undefined;
       place();
     };
-  }
-
-  function connect(): void {
-    element.addEventListener("pointerdown", pointerDown, eventOptions);
-    element.addEventListener("pointermove", pointerMove, eventOptions);
-    element.addEventListener("pointerup", pointerUp, eventOptions);
-    element.addEventListener("pointercancel", pointerCancel, eventOptions);
-    element.addEventListener("lostpointercapture", pointerCancel, eventOptions);
-    element.addEventListener("keydown", keyDown, eventOptions);
-    window.addEventListener("resize", resize, eventOptions);
-    window.addEventListener("blur", cancelDrag, eventOptions);
-    observer ??= new ResizeObserver(() => {
-      if (!animation && !frame) {
-        place();
-      }
-    });
-    observer.observe(element);
   }
 
   function clamp(candidate: Position): Position {
@@ -264,13 +246,28 @@ export function createDebugOverlayLayout(element: HTMLElement) {
     save();
   };
 
+  listen(element, "pointerdown", { handleEvent: pointerDown }, eventOptions);
+  listen(element, "pointermove", { handleEvent: pointerMove }, eventOptions);
+  listen(element, "pointerup", { handleEvent: pointerUp }, eventOptions);
+  listen(element, "pointercancel", { handleEvent: pointerCancel }, eventOptions);
+  listen(element, "lostpointercapture", { handleEvent: pointerCancel }, eventOptions);
+  listen(element, "keydown", { handleEvent: keyDown }, eventOptions);
+  listen(window, "resize", resize, eventOptions);
+  listen(window, "blur", cancelDrag, eventOptions);
+  const observer = new ResizeObserver(() => {
+    if (!animation && !frame) {
+      place();
+    }
+  });
+  observer.observe(element);
+
   function disconnect(): void {
     cancelAnimationFrame(frame);
     frame = 0;
     transitionFrom = undefined;
     cancelAnimation();
     cancelDrag();
-    observer?.disconnect();
+    observer.disconnect();
     listeners.abort();
   }
   return { update, disconnect };

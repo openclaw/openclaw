@@ -169,7 +169,7 @@ export function captureStderrWrites() {
 export function useLogsCliTestHarness() {
   beforeEach(() => {
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
-    execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
+    execFileUtf8Tail.mockResolvedValue({ stdout: "", code: 1, truncated: false });
   });
 
   afterEach(() => {

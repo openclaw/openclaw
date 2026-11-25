@@ -15,11 +15,40 @@ export function registerOpenAiHttpSamplingTests({
   firstAgentCommandOptions: () => { streamParams?: AgentStreamParams } | undefined;
   agentCommandMock: typeof sharedAgentCommandMock;
 }): void {
-  const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+  const request = (body: Record<string, unknown>) =>
+    postChatCompletions(getPort(), {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+      ...body,
+    });
+  const expectSampling = async (
+    body: Record<string, unknown>,
+    expected: Partial<AgentStreamParams> | undefined,
+  ) => {
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({ payloads } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+    const res = await request(body);
+    expect(res.status).toBe(200);
+    const params = firstAgentCommandOptions()?.streamParams;
+    if (expected === undefined) {
+      expect(params).toBeUndefined();
+    } else {
+      expect(params).toMatchObject(expected);
+    }
+    await res.text();
+    return params;
   };
-  const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+  const expectInvalid = async (body: Record<string, unknown>, field?: string) => {
+    agentCommandMock.mockClear();
+    const res = await request(body);
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+    if (field) {
+      expect(json.error?.message).toMatch(new RegExp(field));
+    }
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  };
 
   it("rejects malformed sampling numbers before agent dispatch", async () => {
     for (const field of ["temperature", "top_p", "frequency_penalty", "presence_penalty", "seed"]) {
@@ -46,123 +75,31 @@ export function registerOpenAiHttpSamplingTests({
   });
 
   it("forwards inbound temperature and top_p into streamParams", async () => {
-    const port = getPort();
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0.3,
-        top_p: 0.95,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({ temperature: 0.3, topP: 0.95 });
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 0,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      const params = getStreamParams();
-      expect(params?.temperature).toBe(0);
-      expect(params?.topP).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
+    await expectSampling({ temperature: 0.3, top_p: 0.95 }, { temperature: 0.3, topP: 0.95 });
+    const zero = await expectSampling({ temperature: 0 }, { temperature: 0 });
+    expect(zero?.topP).toBeUndefined();
+    await expectSampling({}, undefined);
+    await expectSampling(
+      {
         temperature: null,
         top_p: null,
         frequency_penalty: null,
         presence_penalty: null,
         seed: null,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toBeUndefined();
-      await res.text();
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        temperature: 999,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/temperature/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
-
-    {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        top_p: 5,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(json.error?.message).toMatch(/top_p/);
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
-    }
+      },
+      undefined,
+    );
+    await expectInvalid({ temperature: 999 }, "temperature");
+    await expectInvalid({ top_p: 5 }, "top_p");
   });
 
   it("forwards inbound penalty and seed params into streamParams", async () => {
-    const port = getPort();
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        frequency_penalty: -0.5,
-        presence_penalty: 1.25,
-        seed: 12345,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getStreamParams()).toMatchObject({
-        frequencyPenalty: -0.5,
-        presencePenalty: 1.25,
-        seed: 12345,
-      });
-      await res.text();
-    }
-
+    await expectSampling(
+      { frequency_penalty: -0.5, presence_penalty: 1.25, seed: 12345 },
+      { frequencyPenalty: -0.5, presencePenalty: 1.25, seed: 12345 },
+    );
     for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
-      agentCommandMock.mockClear();
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        ...body,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(400);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("invalid_request_error");
-      expect(agentCommandMock).toHaveBeenCalledTimes(0);
+      await expectInvalid(body);
     }
   });
 }

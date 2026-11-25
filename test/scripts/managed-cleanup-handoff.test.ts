@@ -7,73 +7,197 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { hasErrnoCode } from "../../src/infra/errno.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-async function stopRecordedPid(pid: number, signal: AbortSignal) {
-  if (isProcessAlive(pid)) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (error) {
-      if (!hasErrnoCode(error, "ESRCH")) {
-        throw error;
-      }
-    }
-  }
-  await waitForDead(pid, signal);
-}
-
 function readSpawnedPids(record: string): number[] {
   if (!fs.existsSync(record)) {
     return [];
   }
-  return fs
-    .readFileSync(record, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => {
-      const pid = Number(line);
-      if (!Number.isSafeInteger(pid) || pid <= 1) {
-        throw new Error(`Invalid fixture PID in ${record}`);
+  const pids = fs.readFileSync(record, "utf8").trim().split("\n").map(Number);
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 1) {
+      throw new Error(`Invalid fixture PID in ${record}`);
+    }
+  }
+  return pids;
+}
+
+function expectStopped(record: string, child?: ChildProcess) {
+  expect(readSpawnedPids(record).filter(isProcessAlive)).toEqual([]);
+  if (child) {
+    expect(isProcessAlive(child.pid!)).toBe(false);
+  }
+}
+
+function makeFixture(name: string) {
+  const cwd = fixture.createTempDir(`managed-handoff-${name}-`);
+  return {
+    cwd,
+    resourceOwner: createVitestResourceOwner(cwd),
+    childPath: path.join(cwd, "owner.mjs"),
+    spawnRecord: path.join(cwd, "spawned-pids"),
+    env: { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
+  };
+}
+function blockingOwner(marker: string) {
+  return `import fs from "node:fs";
+import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
+await claimManagedCleanup();
+fs.writeSync(1, ${JSON.stringify(`${marker}\n`)});
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+`;
+}
+function recordedCommand(record: string) {
+  return `import fs from "node:fs";
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+const run = (signal) => runManagedCommand({
+  bin: process.execPath, args: ["-e", ""], stdio: "ignore", signal,
+  onReady(child) { fs.appendFileSync(${JSON.stringify(record)}, String(child.pid) + "\\n"); },
+});
+`;
+}
+function controlChannel(child: ChildProcess) {
+  const channel = child.stdio[3];
+  if (!(channel instanceof Socket)) {
+    throw new Error("Managed command did not supply its private control socket");
+  }
+  return channel;
+}
+function observeOwner(pause?: boolean) {
+  const state: { child?: ChildProcess; handoff?: Socket; stdout: string; stderr: string } = {
+    stdout: "",
+    stderr: "",
+  };
+  const exited = createDeferred();
+  const gates: Array<{ matches: () => boolean; resolve: () => void }> = [];
+  const checkGates = () => {
+    for (const gate of gates) {
+      if (gate.matches()) {
+        gate.resolve();
       }
-      return pid;
-    });
+    }
+  };
+  return Object.assign(state, {
+    exited: exited.promise,
+    onReady: (owned: ChildProcess) => {
+      state.child = owned;
+      owned.once("exit", () => exited.resolve());
+      if (pause !== undefined) {
+        state.handoff = controlChannel(owned);
+        if (pause) {
+          state.handoff.pause();
+        }
+      }
+      for (const stream of ["stdout", "stderr"] as const) {
+        owned[stream]!.on("data", (chunk) => {
+          state[stream] += String(chunk);
+          if (stream === "stdout") {
+            checkGates();
+          }
+        });
+      }
+    },
+    wait(match: string | RegExp, completion: Promise<unknown>, signal: AbortSignal) {
+      const gate = createDeferred();
+      gates.push({
+        matches: () =>
+          typeof match === "string" ? state.stdout.includes(match) : match.test(state.stdout),
+        resolve: () => gate.resolve(),
+      });
+      checkGates();
+      return waitFor(gate.promise, completion, `Missing child output: ${match}`, signal);
+    },
+  });
+}
+function runOwner(
+  { childPath, cwd, env }: ReturnType<typeof makeFixture>,
+  owner: ReturnType<typeof observeOwner>,
+) {
+  return runManagedCommand({
+    bin: process.execPath,
+    args: [childPath],
+    cwd,
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+    onReady: owner.onReady,
+  }).then(
+    (status) => ({ status }),
+    (error: unknown) => ({ error }),
+  );
+}
+function waitFor(
+  gate: Promise<unknown>,
+  completion: Promise<unknown>,
+  message: string,
+  signal: AbortSignal,
+) {
+  return withinTest(awaitGateBeforeSettlement(gate, completion, message), signal);
+}
+function cleanup(
+  completion: Promise<unknown>,
+  child?: ChildProcess,
+  records: string | string[] = [],
+  handoff?: Socket,
+) {
+  return fixture.verifyCleanup(async () => {
+    handoff?.resume();
+    const signal = AbortSignal.timeout(5_000);
+    const failures: unknown[] = [];
+    const stop = async (pid: number) => {
+      for (const work of [() => killPidIfAlive(pid), () => waitForDead(pid, signal)]) {
+        await Promise.resolve()
+          .then(work)
+          .catch((error: unknown) => failures.push(error));
+      }
+    };
+    // Fence each producer before reading the next producer's final PID records.
+    if (child?.pid) {
+      await stop(child.pid);
+    }
+    for (const record of typeof records === "string" ? [records] : records) {
+      for (const pid of readSpawnedPids(record)) {
+        await stop(pid);
+      }
+    }
+    await completion;
+    if (failures.length) {
+      throw new AggregateError(failures, "Fixture cleanup failed");
+    }
+  });
 }
 
 describe.skipIf(process.platform === "win32")("managed cleanup ownership handoff", () => {
   it("acknowledges inherited custody in the current runtime", async ({ signal }) => {
-    const result = await runNodeScript(
-      [
-        "--input-type=module",
-        "-e",
-        `import { acquireManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+    const script = `import { acquireManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
 for (let index = 0; index < 2; index++) {
   const release = await acquireManagedCleanup();
   if (!release) throw new Error("Missing managed cleanup parent");
   await release(true, true);
 }
 console.log("custody-released");
-`,
-      ],
+`;
+    const result = await runNodeScript(
+      ["--input-type=module", "-e", script],
       process.env,
       undefined,
       { signal, executable: process.execPath, requireProcessTreeExit: true, maxBuffer: 64 * 1024 },
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
     expect(result.stdout).toBe("custody-released\n");
   });
 
   it.for(["acknowledge", "cancel"] as const)(
     "holds concurrent command admission until the parent can %s ownership",
-    async (action, { signal }) => {
-      await fixture.run(async () => {
+    (action, { signal }) =>
+      fixture.run(async () => {
         const cwd = fixture.createTempDir("managed-handoff-admission-");
         const childPath = path.join(cwd, "owner.mjs");
         const spawnRecord = path.join(cwd, "spawned-pids");
@@ -116,56 +240,32 @@ fs.writeSync(1, "completed " + JSON.stringify(statuses) + "\\n");
 process.exitCode = statuses.find(code => code !== 0) ?? 0;
 `,
         );
-        const requested = createDeferred();
         const cancellation = new AbortController();
-        let child: ChildProcess | undefined;
-        let handoff: Socket | undefined;
+        const owner = observeOwner(true);
         const completion = runNodeScript(childPath, process.env, undefined, {
           cwd,
           signal: cancellation.signal,
           maxBuffer: 64 * 1024,
-          onReady(owned, readOutput) {
-            child = owned;
-            // The helper supplied three standard descriptors. Hold the real owner's
-            // private channel before it can acknowledge either nested command.
-            const channel = owned.stdio[3];
-            if (!(channel instanceof Socket)) {
-              throw new Error("Managed command did not supply its private control socket");
-            }
-            handoff = channel;
-            channel.pause();
-            owned.stdout!.on("data", () => {
-              if (readOutput().stdout.includes("claims-requested\n")) {
-                requested.resolve();
-              }
-            });
-          },
+          onReady: owner.onReady,
         });
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              requested.promise,
-              completion,
-              "nested commands did not request ownership",
-            ),
-            signal,
-          );
-          // onReady records synchronously at spawn, so the child's marker proves
-          // both callers returned pending without creating an unowned command.
+          await owner.wait("claims-requested\n", completion, signal);
+          // The marker follows both admissions; synchronous onReady records prove neither spawned.
           expect(readSpawnedPids(spawnRecord)).toEqual([]);
           if (action === "cancel") {
             cancellation.abort();
           }
-          handoff!.resume();
+          owner.handoff!.resume();
           const result = await withinTest(completion, signal);
           if (action === "cancel") {
-            expect(result.error, result.stderr).toMatchObject({ code: "ABORT_ERR" });
-            expect(result.status).toBeNull();
+            expect(result, result.stderr).toMatchObject({
+              error: { code: "ABORT_ERR" },
+              status: null,
+            });
             expect(result.stdout).toContain("completed [143,143]\n");
             expect(readSpawnedPids(spawnRecord)).toEqual([]);
           } else {
-            expect(result.error, result.stderr).toBeUndefined();
-            expect(result.status, result.stderr).toBe(0);
+            expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
             expect(result.stdout).toContain("completed [0,0]\n");
             expect(readSpawnedPids(spawnRecord)).toHaveLength(2);
             for (const index of [0, 1]) {
@@ -179,35 +279,20 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
               });
             }
           }
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(child!.pid!)).toBe(false);
+          expectStopped(spawnRecord, owner.child);
         } finally {
-          await fixture.verifyCleanup(async () => {
-            handoff?.resume();
-            const cleanupSignal = AbortSignal.timeout(5_000);
-            // Fence the only PID-record producer before reading its final records.
-            if (child?.pid) {
-              await stopRecordedPid(child.pid, cleanupSignal);
-            }
-            for (const pid of readSpawnedPids(spawnRecord)) {
-              await stopRecordedPid(pid, cleanupSignal);
-            }
-            await completion;
-          });
+          await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
-      });
-    },
+      }),
   );
 
   it.for(["concurrent", "terminal", "release", "release-timeout"] as const)(
     "preserves %s outcomes while cleanup acknowledgements are pending",
-    async (mode, { signal }) => {
-      await fixture.run(async () => {
+    (mode, { signal }) =>
+      fixture.run(async () => {
         const releasing = mode === "release" || mode === "release-timeout";
-        const cwd = fixture.createTempDir("managed-handoff-abort-");
-        const resourceOwner = createVitestResourceOwner(cwd);
-        const childPath = path.join(cwd, "owner.mjs");
-        const spawnRecord = path.join(cwd, "spawned-pids");
+        const scenario = makeFixture("abort");
+        const { resourceOwner, childPath, spawnRecord } = scenario;
         fs.writeFileSync(
           childPath,
           releasing
@@ -246,16 +331,11 @@ else leaf.stdin.end();
 fs.writeSync(1, "settled " + JSON.stringify([await command]) + "\\n");
 fs.writeSync(1, "completed []\\n");
 `
-            : `import fs from "node:fs";
+            : `${recordedCommand(spawnRecord)}
 import { once } from "node:events";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
 const preaborted = new AbortController();
 preaborted.abort();
 const pending = new AbortController();
-const run = (signal) => runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore", signal,
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
 const cancelled = Promise.all([preaborted, pending].map(controller =>
   run(controller.signal).then(status => ({ status }), error => ({
     error: { code: error.code, reasonMatches: error === controller.signal.reason },
@@ -272,81 +352,19 @@ fs.writeSync(1, "completed " + JSON.stringify(statuses) + "\\n");
 process.exitCode = statuses.find(code => code !== 0) ?? 0;
 `,
         );
-        const requested = createDeferred();
-        const settled = createDeferred();
-        const exited = createDeferred();
-        const leafClosed = createDeferred();
-        let child: ChildProcess | undefined;
-        let handoff: Socket | undefined;
-        let stdout = "";
-        let stderr = "";
-        const completion = runManagedCommand({
-          bin: process.execPath,
-          args: [childPath],
-          cwd,
-          env: { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
-          stdio: ["pipe", "pipe", "pipe"],
-          onReady(owned) {
-            child = owned;
-            owned.once("exit", () => exited.resolve());
-            const channel = owned.stdio[3];
-            if (!(channel instanceof Socket)) {
-              throw new Error("Managed command did not supply its private control socket");
-            }
-            handoff = channel;
-            if (!releasing) {
-              channel.pause();
-            }
-            owned.stdout!.on("data", (chunk) => {
-              stdout += String(chunk);
-              if (stdout.includes("claims-requested\n")) {
-                requested.resolve();
-              }
-              if (stdout.includes("leaf-closed\n")) {
-                leafClosed.resolve();
-              }
-              if (/settled [^\n]*\n/u.test(stdout)) {
-                settled.resolve();
-              }
-            });
-            owned.stderr!.on("data", (chunk) => (stderr += String(chunk)));
-          },
-        }).then(
-          (status) => ({ status }),
-          (error: unknown) => ({ error }),
-        );
+        const owner = observeOwner(!releasing);
+        const completion = runOwner(scenario, owner);
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              requested.promise,
-              completion,
-              "commands did not request custody",
-            ),
-            signal,
-          );
+          await owner.wait("claims-requested\n", completion, signal);
           if (releasing) {
-            handoff!.pause();
-            child!.stdin!.end("finish\n");
-            await withinTest(
-              awaitGateBeforeSettlement(
-                leafClosed.promise,
-                completion,
-                "nested command did not exit",
-              ),
-              signal,
-            );
+            owner.handoff!.pause();
+            owner.child!.stdin!.end("finish\n");
+            await owner.wait("leaf-closed\n", completion, signal);
           } else {
-            child!.stdin!.end("abort\n");
+            owner.child!.stdin!.end("abort\n");
           }
-          await withinTest(
-            awaitGateBeforeSettlement(
-              settled.promise,
-              completion,
-              "command outcomes did not settle without acknowledgement",
-            ),
-            signal,
-          );
-          expect(stdout).toContain(
+          await owner.wait(/settled [^\n]*\n/u, completion, signal);
+          expect(owner.stdout).toContain(
             mode === "release"
               ? 'settled [{"status":0}]\n'
               : mode === "release-timeout"
@@ -354,124 +372,59 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
                 : 'settled [{"error":{"code":20,"reasonMatches":true}},{"error":{"code":"ABORT_ERR","reasonMatches":false}}]\n',
           );
           expect(readSpawnedPids(spawnRecord)).toHaveLength(releasing ? 1 : 0);
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
+          expectStopped(spawnRecord);
           if (mode !== "concurrent") {
             // Joined or never-started work must exit without an ACK keeping the socket alive.
-            await withinTest(
-              awaitGateBeforeSettlement(exited.promise, completion, "settled owner did not exit"),
-              signal,
-            );
-            expect(isProcessAlive(child!.pid!)).toBe(false);
+            await waitFor(owner.exited, completion, "settled owner did not exit", signal);
+            expect(isProcessAlive(owner.child!.pid!)).toBe(false);
           }
-          handoff!.resume();
-          expect(await withinTest(completion, signal), stderr).toEqual({ status: 0 });
-          expect(stdout).toContain(`completed ${mode === "concurrent" ? "[0,0]" : "[]"}\n`);
+          owner.handoff!.resume();
+          expect(await withinTest(completion, signal), owner.stderr).toEqual({ status: 0 });
+          expect(owner.stdout).toContain(`completed ${mode === "concurrent" ? "[0,0]" : "[]"}\n`);
           expect(readSpawnedPids(spawnRecord)).toHaveLength(
             mode === "concurrent" ? 2 : releasing ? 1 : 0,
           );
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(child!.pid!)).toBe(false);
+          expectStopped(spawnRecord, owner.child);
           resourceOwner.assertReleased();
         } finally {
-          await fixture.verifyCleanup(async () => {
-            handoff?.resume();
-            const cleanupSignal = AbortSignal.timeout(5_000);
-            if (child?.pid) {
-              await stopRecordedPid(child.pid, cleanupSignal);
-            }
-            for (const pid of readSpawnedPids(spawnRecord)) {
-              await stopRecordedPid(pid, cleanupSignal);
-            }
-            await completion;
-          });
+          await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
-      });
-    },
+      }),
   );
 
-  it("releases completed command custody before an idle implementation receives SIGTERM", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
-      const cwd = fixture.createTempDir("managed-handoff-idle-");
-      const resourceOwner = createVitestResourceOwner(cwd);
-      const childPath = path.join(cwd, "owner.mjs");
-      const spawnRecord = path.join(cwd, "spawned-pids");
-      fs.writeFileSync(
-        childPath,
-        `import fs from "node:fs";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
-const status = await runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore",
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
-if (status !== 0) throw new Error("initial command failed: " + status);
-fs.writeSync(1, "between-commands-ready\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`,
-      );
-      const idle = createDeferred();
-      let child: ChildProcess | undefined;
-      const completion = runNodeScript(
-        childPath,
-        { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
-        undefined,
-        {
-          cwd,
-          maxBuffer: 64 * 1024,
-          onReady(owned, readOutput) {
-            child = owned;
-            owned.stdout!.on("data", () => {
-              if (readOutput().stdout.includes("between-commands-ready\n")) {
-                idle.resolve();
-              }
-            });
-          },
-        },
-      );
+  it("retains custody when an acknowledged owner is lost", ({ signal }) =>
+    fixture.run(async () => {
+      const { cwd, resourceOwner, childPath, env } = makeFixture("owner-loss");
+      fs.writeFileSync(childPath, blockingOwner("ownership-accepted"));
+      const owner = observeOwner();
+      const completion = runNodeScript(childPath, env, undefined, {
+        cwd,
+        maxBuffer: 64 * 1024,
+        onReady: owner.onReady,
+      });
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(idle.promise, completion, "initial command did not join"),
-          signal,
-        );
-        expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        expect(child!.kill("SIGTERM")).toBe(true);
+        await owner.wait("ownership-accepted\n", completion, signal);
+        // SIGKILL closes the real pipe before an acknowledged owner can relinquish custody.
+        expect(owner.child!.kill("SIGKILL")).toBe(true);
         const result = await withinTest(completion, signal);
-        expect(result.error, result.stderr).toBeUndefined();
-        expect(result.status, result.stderr).toBe(143);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        resourceOwner.assertReleased();
-      } finally {
-        await fixture.verifyCleanup(async () => {
-          const cleanupSignal = AbortSignal.timeout(5_000);
-          if (child?.pid) {
-            await stopRecordedPid(child.pid, cleanupSignal);
-          }
-          for (const pid of readSpawnedPids(spawnRecord)) {
-            await stopRecordedPid(pid, cleanupSignal);
-          }
-          await completion;
+        expect(result, result.stderr).toMatchObject({
+          error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
+          status: null,
         });
+        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+      } finally {
+        await cleanup(completion, owner.child);
       }
-    });
-  });
+    }));
 
-  it("reclaims acknowledged custody before starting a later command", async ({ signal }) => {
-    await fixture.run(async () => {
-      const cwd = fixture.createTempDir("managed-handoff-reclaim-");
-      const resourceOwner = createVitestResourceOwner(cwd);
-      const childPath = path.join(cwd, "owner.mjs");
-      const spawnRecord = path.join(cwd, "spawned-pids");
+  it("reclaims acknowledged custody before starting a later command", ({ signal }) =>
+    fixture.run(async () => {
+      const scenario = makeFixture("reclaim");
+      const { resourceOwner, childPath, spawnRecord } = scenario;
       fs.writeFileSync(
         childPath,
-        `import fs from "node:fs";
-import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
-const run = () => runManagedCommand({
-  bin: process.execPath, args: ["-e", ""], stdio: "ignore",
-  onReady(child) { fs.appendFileSync(${JSON.stringify(spawnRecord)}, String(child.pid) + "\\n"); },
-});
+        `${recordedCommand(spawnRecord)}
 if (await run() !== 0) throw new Error("initial command failed");
 const continued = new Promise(resolve => process.stdin.once("data", resolve));
 fs.writeSync(1, "between-commands-ready\\n");
@@ -481,99 +434,32 @@ fs.writeSync(1, "reclaim-requested\\n");
 process.exitCode = await second;
 `,
       );
-      const idle = createDeferred();
-      const requested = createDeferred();
-      let child: ChildProcess | undefined;
-      let handoff: Socket | undefined;
-      let stdout = "";
-      let stderr = "";
-      const completion = runManagedCommand({
-        bin: process.execPath,
-        args: [childPath],
-        cwd,
-        env: { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
-        stdio: ["pipe", "pipe", "pipe"],
-        onReady(owned) {
-          child = owned;
-          const channel = owned.stdio[3];
-          if (!(channel instanceof Socket)) {
-            throw new Error("Managed command did not supply its private control socket");
-          }
-          handoff = channel;
-          owned.stdout!.on("data", (chunk) => {
-            stdout += String(chunk);
-            if (stdout.includes("between-commands-ready\n")) {
-              idle.resolve();
-            }
-            if (stdout.includes("reclaim-requested\n")) {
-              requested.resolve();
-            }
-          });
-          owned.stderr!.on("data", (chunk) => (stderr += String(chunk)));
-        },
-      }).then(
-        (status) => ({ status }),
-        (error: unknown) => ({ error }),
-      );
+      const owner = observeOwner(false);
+      const completion = runOwner(scenario, owner);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(idle.promise, completion, "initial command did not join"),
-          signal,
-        );
+        await owner.wait("between-commands-ready\n", completion, signal);
         expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        handoff!.pause();
-        child!.stdin!.end("continue\n");
-        await withinTest(
-          awaitGateBeforeSettlement(
-            requested.promise,
-            completion,
-            "later command was not requested",
-          ),
-          signal,
-        );
+        owner.handoff!.pause();
+        owner.child!.stdin!.end("continue\n");
+        await owner.wait("reclaim-requested\n", completion, signal);
         expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-        handoff!.resume();
-        expect(await withinTest(completion, signal), stderr).toEqual({ status: 0 });
+        owner.handoff!.resume();
+        expect(await withinTest(completion, signal), owner.stderr).toEqual({ status: 0 });
         expect(readSpawnedPids(spawnRecord)).toHaveLength(2);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        expect(isProcessAlive(child!.pid!)).toBe(false);
+        expectStopped(spawnRecord, owner.child);
         resourceOwner.assertReleased();
       } finally {
-        await fixture.verifyCleanup(async () => {
-          handoff?.resume();
-          const cleanupSignal = AbortSignal.timeout(5_000);
-          if (child?.pid) {
-            await stopRecordedPid(child.pid, cleanupSignal);
-          }
-          for (const pid of readSpawnedPids(spawnRecord)) {
-            await stopRecordedPid(pid, cleanupSignal);
-          }
-          await completion;
-        });
+        await cleanup(completion, owner.child, spawnRecord, owner.handoff);
       }
-    });
-  });
+    }));
 
-  it("bounds unresponsive delegated custody without killing its acknowledged owner", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
-      const cwd = fixture.createTempDir("managed-handoff-unresponsive-");
-      const resourceOwner = createVitestResourceOwner(cwd);
-      const ownerPath = path.join(cwd, "owner.mjs");
+  it("bounds unresponsive delegated custody without killing its acknowledged owner", ({ signal }) =>
+    fixture.run(async () => {
+      const { cwd, resourceOwner, childPath: ownerPath, env } = makeFixture("unresponsive");
       const supervisorPath = path.join(cwd, "supervisor.mjs");
       const ownerPidPath = path.join(cwd, "owner.pid");
       const reportPath = path.join(cwd, "result.json");
-      fs.writeFileSync(
-        ownerPath,
-        `import fs from "node:fs";
-import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
-await claimManagedCleanup();
-fs.writeSync(1, "unresponsive-owner-ready\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`,
-      );
+      fs.writeFileSync(ownerPath, blockingOwner("unresponsive-owner-ready"));
       fs.writeFileSync(
         supervisorPath,
         `import fs from "node:fs";
@@ -599,122 +485,105 @@ fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify(report));
 process.exitCode = report.error ? 1 : report.status;
 `,
       );
-      const ready = createDeferred();
-      // A native parent observes whether the actual CLI can exit after reporting
-      // failed custody; no outer managed finalizer can rescue its retained handles.
+      const owner = observeOwner();
+      // No outer managed finalizer can rescue the CLI's retained handles.
       const supervisor = spawn(process.execPath, [supervisorPath], {
         cwd,
-        env: { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
+        env,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
       const completion = once(supervisor, "close");
-      let stdout = "";
-      let stderr = "";
-      supervisor.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-        if (stdout.includes("unresponsive-owner-ready\n")) {
-          ready.resolve();
-        }
-      });
-      supervisor.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      owner.onReady(supervisor);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(ready.promise, completion, "owner did not accept custody"),
-          signal,
-        );
+        await owner.wait("unresponsive-owner-ready\n", completion, signal);
         const [ownerPid] = readSpawnedPids(ownerPidPath);
         expect(isProcessAlive(ownerPid!)).toBe(true);
         expect(supervisor.kill("SIGTERM")).toBe(true);
-        expect(await withinTest(completion, signal), stderr).toEqual([1, null]);
+        expect(await withinTest(completion, signal), owner.stderr).toEqual([1, null]);
         expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))).toMatchObject({
           error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
         });
-        // Unresolved handoff is a retained failure, never permission to force-kill
-        // the acknowledged owner or certify its potentially detached work as dead.
+        // Failed handoff cannot authorize killing the owner or certifying its work as dead.
         expect(isProcessAlive(ownerPid!)).toBe(true);
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
-        await fixture.verifyCleanup(async () => {
-          const cleanupSignal = AbortSignal.timeout(5_000);
-          if (supervisor.pid) {
-            await stopRecordedPid(supervisor.pid, cleanupSignal);
-          }
-          for (const pid of readSpawnedPids(ownerPidPath)) {
-            await stopRecordedPid(pid, cleanupSignal);
-          }
-          await completion;
-        });
+        await cleanup(completion, supervisor, ownerPidPath);
       }
-    });
-  });
+    }));
+});
 
-  it("retains the resource claim when an acknowledged owner loses its control channel", async ({
-    signal,
-  }) => {
-    await fixture.run(async () => {
-      const cwd = fixture.createTempDir("managed-handoff-owner-loss-");
-      const resourceOwner = createVitestResourceOwner(cwd);
-      const childPath = path.join(cwd, "owner.mjs");
-      fs.writeFileSync(
-        childPath,
-        `import fs from "node:fs";
-import { claimManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
-await claimManagedCleanup();
-fs.writeSync(1, "ownership-accepted\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+it.skipIf(process.platform === "win32")(
+  "joins an implementation-owned shim and synchronous preparation on outer SIGINT",
+  ({ signal }) =>
+    fixture.run(async () => {
+      const cwd = fixture.createTempDir("managed-preparation-cancellation-");
+      const file = (role: string, extension = "mjs") => path.join(cwd, `${role}.${extension}`);
+      const reportPath = file("result", "json");
+      const pidPaths = ["shim", "implementation", "preparation"].map((role) => file(role, "pid"));
+      const programs = {
+        preparation: "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);\n",
+        implementation: `import { spawnSync } from "node:child_process";
+spawnSync(process.execPath, [${JSON.stringify(file("preparation"))}], { stdio: "inherit" });
 `,
-      );
-      const accepted = createDeferred();
-      let child: ChildProcess | undefined;
-      const completion = runNodeScript(
-        childPath,
-        { ...process.env, TMPDIR: cwd, TMP: cwd, TEMP: cwd },
-        undefined,
-        {
+        shim: `import { runNodeCliShim } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/tsx-cli-shim.mjs")).href)};
+await runNodeCliShim(import.meta.url, {
+  implementation: "./implementation.mjs",
+  terminationOwner: "implementation",
+});
+`,
+        supervisor: `import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+let report;
+try {
+  report = { status: await runManagedCommand({
+    bin: process.execPath,
+    args: [${JSON.stringify(file("shim"))}],
+    stdio: "inherit",
+    // The enclosing fixture independently joins exact PIDs even on baseline failure.
+    env: { ...process.env, TMPDIR: ${JSON.stringify(process.cwd())}, TMP: ${JSON.stringify(process.cwd())}, TEMP: ${JSON.stringify(process.cwd())} },
+  }) };
+} catch (error) {
+  report = { error: { code: error.code, message: error.message, processTreeState: error.processTreeState } };
+}
+fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify(report));
+process.exitCode = report.status ?? 1;
+`,
+      };
+      for (const [role, body] of Object.entries(programs)) {
+        const handlers = ["implementation", "preparation"].includes(role)
+          ? 'for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});\n'
+          : "";
+        const pidRecord =
+          role === "supervisor"
+            ? ""
+            : `fs.writeFileSync(${JSON.stringify(file(role, "pid"))}, String(process.pid));\n`;
+        fs.writeFileSync(file(role), `import fs from "node:fs";\n${handlers}${pidRecord}${body}`);
+      }
+
+      let supervisor: ChildProcess | undefined;
+      const completion = fixture.track(
+        runNodeScript(file("supervisor"), process.env, undefined, {
           cwd,
           maxBuffer: 64 * 1024,
-          onReady(owned, readOutput) {
-            child = owned;
-            owned.stdout!.on("data", () => {
-              if (readOutput().stdout.includes("ownership-accepted\n")) {
-                accepted.resolve();
-              }
-            });
+          onReady(child) {
+            supervisor = child;
           },
-        },
+        }),
       );
+      const readOwnedPids = () => pidPaths.flatMap(readSpawnedPids);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            accepted.promise,
-            completion,
-            "cleanup owner did not receive acknowledgement",
-          ),
-          signal,
-        );
-        // Kill the acknowledged process before its exit handler can relinquish
-        // ownership. The real pipe closes; no protocol frame is forged or omitted.
-        expect(child!.kill("SIGKILL")).toBe(true);
+        await withinTest(waitForFixtureFile(file("preparation", "pid"), completion), signal);
+        expect(readOwnedPids()).toHaveLength(3);
+        expect(supervisor?.kill("SIGINT")).toBe(true);
         const result = await withinTest(completion, signal);
-        expect(result.error, result.stderr).toMatchObject({
-          code: "EPROCESSGROUP_CLEANUP_FAILED",
-          processTreeState: "indeterminate",
-        });
-        expect(result.status).toBeNull();
-        expect(isProcessAlive(child!.pid!)).toBe(false);
-        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        const report = fs.readFileSync(reportPath, "utf8");
+        expect(result.error, `${result.stderr}\n${report}`).toBeUndefined();
+        expect.soft(JSON.parse(report)).toEqual({ status: 130 });
+        expect.soft(result.status, result.stderr).toBe(130);
+        // Observe extinction before fallback teardown can conceal an orphaned owner.
+        expect.soft(readOwnedPids().filter(isProcessAlive)).toEqual([]);
       } finally {
-        await fixture.verifyCleanup(async () => {
-          // This fixture creates only the recorded child. Its independent kernel
-          // census permits teardown while preserving the asserted failed receipt.
-          if (child?.pid) {
-            await stopRecordedPid(child.pid, AbortSignal.timeout(5_000));
-          }
-          await completion;
-        });
+        await cleanup(completion, supervisor, pidPaths);
       }
-    });
-  });
-});
+    }),
+);

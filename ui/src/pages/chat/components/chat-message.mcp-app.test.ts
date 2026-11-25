@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantCanvasBlock,
@@ -49,7 +49,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
 
   const menu = container.querySelector(".chat-tool-card__widget-actions");
   expect(menu).toBeInstanceOf(HTMLElement);
-  expect(menu?.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
+  expect(menu?.querySelectorAll('[role="menuitem"]')).toHaveLength(0);
   const rawAction = () => menu?.querySelector<HTMLButtonElement>('[data-value="raw-details"]');
   const openMenu = async () => {
     menu?.querySelector<HTMLButtonElement>(".chat-tool-card__widget-actions-trigger")?.click();
@@ -57,11 +57,11 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
       expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
     );
   };
-  const selectRawDetails = async (label: string) => {
+  const selectRawDetails = async () => {
     rawAction()?.click();
     await waitForSolid(() => {
       expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
-      expect(rawAction()?.getAttribute("aria-label")).toBe(label);
+      expect(rawAction()).toBeNull();
     });
   };
   const expanded = () =>
@@ -69,8 +69,9 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
       .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
       ?.getAttribute("aria-expanded");
   await openMenu();
-  await selectRawDetails("Hide raw details");
+  await selectRawDetails();
   expect(expanded()).toBe("true");
+  await openMenu();
   expect(rawAction()?.textContent).toContain("Hide raw details");
   expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
   await draw();
@@ -78,10 +79,9 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   expect(expanded()).toBe("true");
   expect(rawAction()?.textContent).toContain("Hide raw details");
   expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
-  await openMenu();
-  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
-  await selectRawDetails("Show raw details");
+  await selectRawDetails();
   expect(expanded()).toBe("false");
+  await openMenu();
   expect(rawAction()?.textContent).toContain("Show raw details");
   expect(rawAction()?.getAttribute("aria-label")).toBe("Show raw details");
 });

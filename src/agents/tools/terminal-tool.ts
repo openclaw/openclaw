@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { renderTerminalBufferText } from "../../gateway/terminal/buffer-text.js";
 import type { TerminalAgentActionOutcome } from "../../gateway/terminal/session-manager.types.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import type { ExecMode } from "../../infra/exec-approvals.js";
@@ -66,7 +66,7 @@ const TerminalToolOutputSchema = Type.Union([
 ]);
 
 const TERMINAL_RECOVERY_GUIDANCE =
-  "Use action=list to find a shared terminal or ask the operator to open one in this chat.";
+  "Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.";
 const TERMINAL_UNAVAILABLE_MESSAGE = `Terminal session unavailable. ${TERMINAL_RECOVERY_GUIDANCE}`;
 
 type TerminalToolGatewayContext = Pick<GatewayRequestContext, "terminalSessions">;
@@ -105,6 +105,28 @@ function readDimension(params: Record<string, unknown>, key: "cols" | "rows"): n
     throw new ToolInputError(`${key} required`);
   }
   return value;
+}
+
+// Preserve tabs and line breaks; handle carriage-return overwrites below.
+const C0_EXCEPT_TAB_CR_LF = `${String.fromCharCode(0x00)}-${String.fromCharCode(0x08)}${String.fromCharCode(0x0b)}${String.fromCharCode(0x0c)}${String.fromCharCode(0x0e)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}`;
+// C1 control characters (0x80-0x9f) include the CSI introducer (0x9b),
+// which is an alternative ANSI escape prefix equivalent to ESC [.
+const C1 = `${String.fromCharCode(0x80)}-${String.fromCharCode(0x9f)}`;
+const CONTROL_BYTES_REGEX = new RegExp(`[${C0_EXCEPT_TAB_CR_LF}${C1}]`, "g");
+
+/**
+ * Approximates what a terminal would show without running a VT emulator:
+ * strips ANSI sequences, collapses carriage-return overwrites (progress bars
+ * emit "10%\r20%\r30%" — keep the last write per line), and drops remaining
+ * C0/C1 control bytes. Cursor-movement layouts (vim, htop) will not reconstruct faithfully.
+ */
+function renderTerminalBufferText(raw: string): string {
+  const stripped = stripAnsiSequences(raw);
+  // A final CR has not overwritten anything; earlier CRs select the last write on each line.
+  const text = stripped.includes("\r")
+    ? stripped.replace(/\r(?=\n|$)/g, "").replace(/(^|\n)[^\n]*\r/g, "$1")
+    : stripped;
+  return text.replace(CONTROL_BYTES_REGEX, "");
 }
 
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
@@ -250,13 +272,10 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       const delegatedAuthority = operationalRunInstance
         ? getActiveAgentRunDelegatedAuthority(operationalRunInstance)
         : undefined;
-      if (
-        !operationalRunInstance ||
-        !delegatedAuthority ||
-        callerIdentity?.receiptAuthority?.() === false
-      ) {
+      if (!operationalRunInstance || !delegatedAuthority) {
         throw new ToolInputError("Terminal input denied: agent run is no longer active");
       }
+      callerIdentity?.receiptAuthority?.();
       if (manager.snapshotAgent(owner, sessionId) === undefined) {
         throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
       }
@@ -283,6 +302,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         });
         const decision = await resolveRegisteredExecApprovalDecision({
           approvalId: registration.id,
+          expiresAtMs: registration.expiresAtMs,
           preResolvedDecision: registration.finalDecision,
         });
         if (decision !== "allow-once") {
@@ -293,12 +313,10 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       assertSessionCurrent();
       // Every write, including unprompted Full access, is bound to its exact live
       // run and Gateway immediately before synchronous PTY I/O.
-      if (
-        getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority ||
-        callerIdentity.receiptAuthority?.() === false
-      ) {
+      if (getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority) {
         throw new ToolInputError("Terminal input denied: agent run is no longer active");
       }
+      callerIdentity.receiptAuthority?.();
       if (getContext()?.terminalSessions !== manager) {
         throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
       }

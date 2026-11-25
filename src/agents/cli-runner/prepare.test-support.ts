@@ -28,6 +28,7 @@ const installSpies = {
     vi.spyOn(grants, "deactivateMcpLoopbackClientGrantCapture"),
   mintMcpLoopbackClientGrant: () => vi.spyOn(grants, "mintMcpLoopbackClientGrant"),
   revokeMcpLoopbackClientGrant: () => vi.spyOn(grants, "revokeMcpLoopbackClientGrant"),
+  revokeMintedMcpLoopbackClientGrant: () => vi.spyOn(grants, "revokeMintedMcpLoopbackClientGrant"),
   transferMcpLoopbackClientGrant: () => vi.spyOn(grants, "transferMcpLoopbackClientGrant"),
   resolveCliMcpMemoryAudience: () => vi.spyOn(memoryAudience, "resolveCliMcpMemoryAudience"),
   resolveMcpLoopbackPolicyTools: () => vi.spyOn(mcpTools, "resolveMcpLoopbackPolicyTools"),

@@ -5,11 +5,20 @@ import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-tex
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
+import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { readInlineWidgetReceipt } from "../sessions/transcript-visible-record.js";
 import {
   extractAssistantTranscriptSourceText,
   prepareAssistantTranscriptText,
 } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
+
+/** Public widgets must have a visible result, including nested tool activity. */
+export function readPublicWidgetReceipt(message: unknown): Record<string, unknown> | undefined {
+  return readNestedToolActivity(message) || publicSessionMessageEntry(message)
+    ? readInlineWidgetReceipt(message)
+    : undefined;
+}
 
 /** Publication excludes private runtime input, including its attachments and tool activity. */
 export function publicSessionMessageEntry(message: unknown): Record<string, unknown> | undefined {

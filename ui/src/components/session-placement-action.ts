@@ -1,6 +1,6 @@
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { assertRequiredWorkerMove } from "../../../src/config/required-worker-profile.js";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
@@ -38,6 +38,16 @@ export function sessionPlacementAction(
   return state === "active" ? "move" : !state || state === "local" ? "dispatch" : undefined;
 }
 
+export function sessionMenuPlacementAction(
+  row: GatewaySessionRow | undefined,
+  roster: AgentsListResult | null | undefined,
+) {
+  const action = sessionPlacementAction(row);
+  return action === "dispatch" && !roster?.sessionPlacement?.hasDispatchableCloudProfile
+    ? undefined
+    : action;
+}
+
 /** Translate the shared required-profile contract into a UI reason. */
 export function sessionPlacementTargetReason(
   requiredProfile: string | undefined,
@@ -70,7 +80,9 @@ export function sessionPlacementActionReason(
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
     requiredScope:
-      retry?.target.kind === "profile" || requiredProfile ? "operator.admin" : "operator.write",
+      action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
+        ? "operator.admin"
+        : "operator.write",
   });
   if (!access.allowed) {
     return access.reason;
@@ -106,6 +118,7 @@ export async function moveSessionFromMenu(params: {
   fallbackAgentId: string;
   currentRow: () => GatewaySessionRow | undefined;
   isCurrent: () => boolean;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   publishError?: (error: unknown) => void;
 }): Promise<void> {
   const { context, row } = params;
@@ -119,21 +132,30 @@ export async function moveSessionFromMenu(params: {
     context.gateway.snapshot.client === client &&
     context.gateway.connectionRevision === revision &&
     context.gateway.snapshot.hello === hello;
-  const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
-  await changeSessionPlacement({
-    client,
-    gatewaySnapshot: context.gateway.snapshot,
-    currentGatewaySnapshot: () => context.gateway.snapshot,
-    requiredProfile: () => context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
-    mode: "move",
-    pendingKey: null,
-    row,
-    fallbackAgentId: params.fallbackAgentId,
-    currentRow: params.currentRow,
-    isCurrent,
-    onPendingChange: () => {},
-    publishError: params.publishError ?? ((error) => showToast({ message: formatUiError(error) })),
-    reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),
-    requestUpdate: () => {},
-  });
+  const publishError: (error: unknown) => void =
+    params.publishError ??
+    ((error) => showToast({ severity: "error", message: formatUiError(error) }));
+  try {
+    const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
+    await changeSessionPlacement({
+      client,
+      gatewaySnapshot: context.gateway.snapshot,
+      currentGatewaySnapshot: () => context.gateway.snapshot,
+      requiredProfile: () => context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
+      mode: "move",
+      pendingKey: null,
+      row,
+      fallbackAgentId: params.fallbackAgentId,
+      currentRow: params.currentRow,
+      isCurrent,
+      onAdmittedCommand: params.onAdmittedCommand,
+      onPendingChange: () => {},
+      publishError,
+      reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),
+    });
+  } catch (error) {
+    if (isCurrent()) {
+      publishError(error);
+    }
+  }
 }

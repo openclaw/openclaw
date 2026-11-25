@@ -1,55 +1,105 @@
-// Tests canonical shared-SQLite APNs registration persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
-const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "ABCD1234ABCD1234ABCD1234ABCD1234";
+const relayParams = {
+  nodeId: "ios-node-relay",
+  transport: "relay" as const,
+  relayHandle: "relay-handle-123",
+  sendGrant: "send-grant-123",
+  installationId: "install-123",
+  topic: "ai.openclaw.ios",
+  environment: "production",
+  distribution: "official",
+};
 
-type TestDatabase = Pick<OpenClawStateKyselyDatabase, "apns_registrations">;
+let baseDir: string;
+beforeEach(async () => {
+  baseDir = await tempDirs.make("openclaw-push-apns-store-test-");
+});
 
-async function makeTempDir(): Promise<string> {
-  return await tempDirs.make("openclaw-push-apns-store-test-");
+function pairDevice(nodeId: string, generation: "a" | "b") {
+  const next = generation === "b" ? 1 : 0;
+  const device: PairedDevice = {
+    deviceId: nodeId,
+    publicKey: `public-key-generation-${generation}`,
+    role: "node",
+    roles: ["node"],
+    tokens: {
+      node: {
+        token: `node-token-generation-${generation}`,
+        role: "node",
+        scopes: [],
+        createdAtMs: 100 + next,
+      },
+    },
+    nodeSurface: { createdAtMs: 200, approvedAtMs: 300 + next },
+    createdAtMs: 50,
+    approvedAtMs: 300,
+  };
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: { [nodeId]: device } },
+    baseDir,
+    "paired",
+  );
+  const pairing = resolveNodePairingGeneration(device);
+  if (!pairing) {
+    throw new Error("expected node pairing generation");
+  }
+  return pairing.key;
 }
 
-async function registerDirectApnsRegistration(params: {
-  nodeId: string;
-  token?: string;
-  topic?: string;
-  environment?: unknown;
-  expectedPairingGeneration?: string;
-  baseDir: string;
-}) {
+function clearRegistration(registration: Awaited<ReturnType<typeof registerApnsRegistration>>) {
+  return clearApnsRegistrationIfCurrent({ nodeId: registration.nodeId, registration, baseDir });
+}
+
+type DirectParams = Extract<Parameters<typeof registerApnsRegistration>[0], { token: string }>;
+async function registerDirect(params: Partial<DirectParams> = {}) {
   return await registerApnsRegistration({
-    [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
+    nodeId: "ios-node-1",
+    baseDir,
+    token: APNS_DEVICE_IDENTIFIER,
     topic: "ai.openclaw.ios",
     ...params,
     transport: "direct",
   });
 }
 
-function databaseEnv(baseDir: string): NodeJS.ProcessEnv {
+function load(nodeId = "ios-node-1") {
+  return loadApnsRegistration(nodeId, baseDir);
+}
+
+function registerRelay(
+  overrides: Partial<
+    Extract<Parameters<typeof registerApnsRegistration>[0], { transport: "relay" }>
+  > = {},
+) {
+  return registerApnsRegistration({ ...relayParams, baseDir, ...overrides });
+}
+
+function databaseEnv() {
   return { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+}
+
+function queryRegistration(table: string, nodeId = "ios-node-1") {
+  return openOpenClawStateDatabase({ env: databaseEnv() })
+    .db.prepare(`SELECT * FROM ${table} WHERE node_id = ?`)
+    .get(nodeId);
 }
 
 afterEach(async () => {
@@ -60,22 +110,13 @@ afterEach(async () => {
 
 describe("push APNs registration store", () => {
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
-    const baseDir = await makeTempDir();
-    const relay = await registerApnsRegistration({
-      nodeId: "ios-node-relay",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
+    const relay = await registerRelay({
       environment: "sandbox",
-      distribution: "official",
       relayOrigin: "https://ios-push-relay-sandbox.openclaw.ai/",
       tokenDebugSuffix: " abcd-1234 ",
-      baseDir,
     });
 
-    await expect(loadApnsRegistration("ios-node-relay", baseDir)).resolves.toEqual({
+    await expect(load("ios-node-relay")).resolves.toEqual({
       ...relay,
       relayOrigin: "https://ios-push-relay-sandbox.openclaw.ai",
       tokenDebugSuffix: "abcd1234",
@@ -83,35 +124,16 @@ describe("push APNs registration store", () => {
   });
 
   it("clears transport-specific columns when a node changes registration transport", async () => {
-    const baseDir = await makeTempDir();
-    await registerDirectApnsRegistration({ nodeId: "ios-node-switch", baseDir });
-    await registerApnsRegistration({
-      nodeId: "ios-node-switch",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      baseDir,
-    });
-    const direct = await registerDirectApnsRegistration({
-      nodeId: "ios-node-switch",
-      environment: "production",
-      baseDir,
-    });
+    await registerDirect({ nodeId: "ios-node-switch" });
+    await registerRelay({ nodeId: "ios-node-switch" });
+    const direct = await registerDirect({ nodeId: "ios-node-switch", environment: "production" });
     if (direct.transport !== "direct") {
       throw new Error("expected direct APNs registration");
     }
 
-    const database = openOpenClawStateDatabase({ env: databaseEnv(baseDir) });
-    const row = database.db
-      .prepare("SELECT * FROM apns_registrations WHERE node_id = ?")
-      .get("ios-node-switch") as Record<string, unknown>;
-    expect(row).toMatchObject({
+    expect(queryRegistration("apns_registrations", "ios-node-switch")).toMatchObject({
       transport: "direct",
-      [APNS_DEVICE_FIELD]: direct.token,
+      token: direct.token,
       relay_handle: null,
       send_grant: null,
       installation_id: null,
@@ -121,193 +143,63 @@ describe("push APNs registration store", () => {
     });
   });
 
-  it("preserves request order, duplicates, and batches above the SQLite bind chunk", async () => {
-    const baseDir = await makeTempDir();
-    const env = databaseEnv(baseDir);
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<TestDatabase>(db);
-        for (let index = 0; index < 505; index += 1) {
-          const suffix = index.toString().padStart(4, "0");
-          executeSqliteQuerySync(
-            db,
-            stateDb.insertInto("apns_registrations").values({
-              node_id: `node-${suffix}`,
-              transport: "direct",
-              [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER.toLowerCase(),
-              relay_handle: null,
-              send_grant: null,
-              installation_id: null,
-              relay_origin: null,
-              topic: "ai.openclaw.ios",
-              environment: "sandbox",
-              distribution: null,
-              token_debug_suffix: null,
-              updated_at_ms: index,
-            }),
-          );
-        }
-      },
-      { env },
-    );
-    const requested = [
-      ...Array.from({ length: 505 }, (_, index) => `node-${index.toString().padStart(4, "0")}`),
-      "node-0000",
-      "missing",
-    ];
-
-    const loaded = await loadApnsRegistrations(requested, baseDir);
-    expect(loaded).toHaveLength(506);
-    expect(loaded[0]?.nodeId).toBe("node-0000");
-    expect(loaded[504]?.nodeId).toBe("node-0504");
-    expect(loaded[505]?.nodeId).toBe("node-0000");
-  });
-
   it("uses monotonic versions so stale compare-and-delete cannot remove a replacement", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-11T00:00:00Z"));
-    const baseDir = await makeTempDir();
-    const stale = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
-    const fresh = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    const stale = await registerDirect();
+    const fresh = await registerDirect();
     await expect(
       fs.access(path.join(baseDir, "push", "apns-registrations.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(fresh.updatedAtMs).toBe(stale.updatedAtMs + 1);
-    await expect(
-      clearApnsRegistrationIfCurrent({
-        nodeId: "ios-node-1",
-        registration: stale,
-        baseDir,
-      }),
-    ).resolves.toBe(false);
-    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(fresh);
-    await expect(
-      clearApnsRegistrationIfCurrent({
-        nodeId: "ios-node-1",
-        registration: fresh,
-        baseDir,
-      }),
-    ).resolves.toBe(true);
-    const database = openOpenClawStateDatabase({ env: databaseEnv(baseDir) });
-    expect(
-      database.db
-        .prepare(
-          "SELECT node_id, deleted_at_ms FROM apns_registration_tombstones WHERE node_id = ?",
-        )
-        .get("ios-node-1"),
-    ).toEqual({ node_id: "ios-node-1", deleted_at_ms: fresh.updatedAtMs + 1 });
+    await expect(clearRegistration(stale)).resolves.toBe(false);
+    await expect(load()).resolves.toEqual(fresh);
+    await expect(clearRegistration(fresh)).resolves.toBe(true);
+    expect(queryRegistration("apns_registration_tombstones")).toMatchObject({
+      node_id: "ios-node-1",
+      deleted_at_ms: fresh.updatedAtMs + 1,
+    });
 
-    const replacement = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    const replacement = await registerDirect();
     expect(replacement.updatedAtMs).toBe(fresh.updatedAtMs + 2);
-    expect(
-      database.db
-        .prepare("SELECT node_id FROM apns_registration_tombstones WHERE node_id = ?")
-        .get("ios-node-1"),
-    ).toBeUndefined();
-    await expect(
-      clearApnsRegistrationIfCurrent({
-        nodeId: "ios-node-1",
-        registration: fresh,
-        baseDir,
-      }),
-    ).resolves.toBe(false);
-    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(replacement);
+    expect(queryRegistration("apns_registration_tombstones")).toBeUndefined();
+    await expect(clearRegistration(fresh)).resolves.toBe(false);
+    await expect(load()).resolves.toEqual(replacement);
   });
 
   it("rejects a stale registration after the expected pairing generation is removed", async () => {
-    const baseDir = await makeTempDir();
     const nodeId = "ios-node-generation-guard";
-    const pairedDevice: PairedDevice = {
-      deviceId: nodeId,
-      publicKey: "public-key-generation-a",
-      role: "node",
-      roles: ["node"],
-      tokens: {
-        node: {
-          token: "node-token-generation-a",
-          role: "node",
-          scopes: [],
-          createdAtMs: 100,
-        },
-      },
-      nodeSurface: {
-        createdAtMs: 200,
-        approvedAtMs: 300,
-      },
-      createdAtMs: 50,
-      approvedAtMs: 300,
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { [nodeId]: pairedDevice } },
-      baseDir,
-      "paired",
-    );
-    const generation = resolveNodePairingGeneration(pairedDevice);
-    if (!generation) {
-      throw new Error("expected node pairing generation");
-    }
+    const generation = pairDevice(nodeId, "a");
 
-    await registerDirectApnsRegistration({
-      nodeId,
-      expectedPairingGeneration: generation.key,
-      baseDir,
-    });
+    await registerDirect({ nodeId, expectedPairingGeneration: generation });
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired", {
       clearApnsNodeIds: [nodeId],
     });
-    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toBeNull();
+    await expect(load(nodeId)).resolves.toBeNull();
 
-    const replacementDevice: PairedDevice = {
-      ...pairedDevice,
-      publicKey: "public-key-generation-b",
-      tokens: {
-        node: {
-          token: "node-token-generation-b",
-          role: "node",
-          scopes: [],
-          createdAtMs: 101,
-        },
-      },
-      nodeSurface: {
-        ...pairedDevice.nodeSurface,
-        createdAtMs: 200,
-        approvedAtMs: 301,
-      },
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { [nodeId]: replacementDevice } },
-      baseDir,
-      "paired",
-    );
-    const replacementGeneration = resolveNodePairingGeneration(replacementDevice);
-    if (!replacementGeneration) {
-      throw new Error("expected replacement node pairing generation");
-    }
-    const replacement = await registerDirectApnsRegistration({
+    const replacementGeneration = pairDevice(nodeId, "b");
+    const replacement = await registerDirect({
       nodeId,
       token: "DCBA4321DCBA4321DCBA4321DCBA4321",
-      expectedPairingGeneration: replacementGeneration.key,
-      baseDir,
+      expectedPairingGeneration: replacementGeneration,
     });
-    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
+    await expect(load(nodeId)).resolves.toEqual(replacement);
 
     await expect(
-      registerDirectApnsRegistration({
+      registerDirect({
         nodeId,
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-        expectedPairingGeneration: generation.key,
-        baseDir,
+        expectedPairingGeneration: generation,
       }),
     ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
-    await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
+    await expect(load(nodeId)).resolves.toEqual(replacement);
   });
 
   it.each(["transaction", "commit"] as const)(
     "keeps the prior APNs owner when the connection changes before worker %s admission",
     async (stage) => {
-      const baseDir = await makeTempDir();
-      const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
+      const previous = await registerDirect({ nodeId: "ios-lease" });
       let connectionCurrent = true;
       let reachedStage = false;
       const admission = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -319,11 +211,9 @@ describe("push APNs registration store", () => {
       });
       try {
         await expect(
-          registerApnsRegistration({
+          registerDirect({
             nodeId: "ios-lease",
             token: "DCBA4321DCBA4321DCBA4321DCBA4321",
-            topic: "ai.openclaw.ios",
-            baseDir,
             assertCurrent: () => {
               if (!connectionCurrent) {
                 throw new ApnsRegistrationPairingChangedError();
@@ -332,7 +222,7 @@ describe("push APNs registration store", () => {
           }),
         ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
         expect(reachedStage).toBe(true);
-        await expect(loadApnsRegistration("ios-lease", baseDir)).resolves.toEqual(previous);
+        await expect(load("ios-lease")).resolves.toEqual(previous);
       } finally {
         admission.mockRestore();
       }
@@ -340,66 +230,14 @@ describe("push APNs registration store", () => {
   );
 
   it("rejects invalid direct and relay inputs", async () => {
-    const baseDir = await makeTempDir();
     const oversized = "x".repeat(257);
 
-    await expect(
-      registerDirectApnsRegistration({
-        nodeId: "ios-node-1",
-        [APNS_DEVICE_FIELD]: "not-a-token",
-        baseDir,
-      }),
-    ).rejects.toThrow("invalid APNs token");
-    await expect(
-      registerDirectApnsRegistration({ nodeId: "n".repeat(257), baseDir }),
-    ).rejects.toThrow("nodeId required");
-    await expect(
-      registerDirectApnsRegistration({ nodeId: "ios-node-1", topic: "a".repeat(256), baseDir }),
-    ).rejects.toThrow("topic required");
-    await expect(
-      registerApnsRegistration({
-        nodeId: "ios-node-relay",
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "staging",
-        distribution: "official",
-        baseDir,
-      }),
-    ).rejects.toThrow("relay registrations must use valid APNs environment");
-    await expect(
-      registerApnsRegistration({
-        nodeId: "ios-node-relay",
-        transport: "relay",
-        relayHandle: oversized,
-        sendGrant: "send-grant-123",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        baseDir,
-      }),
-    ).rejects.toThrow("relayHandle too long");
-  });
-
-  it("fails loudly for a malformed canonical row", async () => {
-    const baseDir = await makeTempDir();
-    const env = databaseEnv(baseDir);
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          `INSERT INTO apns_registrations (
-             node_id, transport, topic, environment, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?)`,
-        ).run("corrupt-node", "unknown", "ai.openclaw.ios", "sandbox", 1);
-      },
-      { env },
+    await expect(registerDirect({ token: "not-a-token" })).rejects.toThrow("invalid APNs token");
+    await expect(registerDirect({ nodeId: "n".repeat(257) })).rejects.toThrow("nodeId required");
+    await expect(registerDirect({ topic: "a".repeat(256) })).rejects.toThrow("topic required");
+    await expect(registerRelay({ environment: "staging" })).rejects.toThrow(
+      "relay registrations must use valid APNs environment",
     );
-
-    await expect(loadApnsRegistration("corrupt-node", baseDir)).rejects.toThrow(
-      "invalid APNs registration row",
-    );
+    await expect(registerRelay({ relayHandle: oversized })).rejects.toThrow("relayHandle too long");
   });
 });

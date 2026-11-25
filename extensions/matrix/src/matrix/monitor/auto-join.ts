@@ -32,10 +32,7 @@ export function registerMatrixAutoJoin(params: {
     return () => {};
   }
 
-  if (autoJoin === "always") {
-    logVerbose("matrix: auto-join enabled for all invites");
-  } else {
-    logVerbose("matrix: auto-join enabled for allowlist invites");
+  if (autoJoin === "allowlist") {
     // Room-scoped matching only understands a room ID, an alias, or "*". Surface
     // entries that can never match (for example a Matrix user ID, which is not a
     // room target) at the default log level, otherwise an inert allowlist
@@ -52,8 +49,9 @@ export function registerMatrixAutoJoin(params: {
   }
 
   const resolveAllowedAliasRoomId = async (alias: string): Promise<string | null> => {
-    if (resolvedAliasRoomIds.has(alias)) {
-      return resolvedAliasRoomIds.get(alias) ?? null;
+    const cached = resolvedAliasRoomIds.get(alias);
+    if (cached !== undefined) {
+      return cached;
     }
     const resolved = await params.client.resolveRoom(alias);
     if (resolved) {

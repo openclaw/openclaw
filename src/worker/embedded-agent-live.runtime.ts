@@ -10,6 +10,8 @@ import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js"
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { isToolResultError } from "../agents/tool-result-error.js";
+import type { ToolSearchCatalogToolExecutor } from "../agents/tool-search.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
@@ -27,6 +29,7 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
 const MAX_LIVE_PREVIEW_BYTES = 4 * 1024;
+const LIVE_PREVIEW_INTERVAL_MS = 75;
 
 function truncateLiveText(value: string): string {
   if (
@@ -219,7 +222,43 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     streamedText = text;
     streamedPhase = phase;
   };
+  const emitThinkingSnapshot = (message: AgentMessage, delta?: string) => {
+    const text = readAssistantThinking(message);
+    if (text === streamedThinking) {
+      return;
+    }
+    enqueueLive({
+      kind: "thinking",
+      payload: { text, delta: delta ?? text, itemId: readAgentAssistantSource(message)?.itemId },
+    });
+    streamedThinking = text;
+  };
+  let pendingMessage: AgentMessage | undefined;
+  let pendingThinkingDelta: string | undefined;
+  let nextPreviewAt = 0;
+  const flushPreview = () => {
+    const message = pendingMessage;
+    const thinkingDelta = pendingThinkingDelta;
+    pendingMessage = undefined;
+    pendingThinkingDelta = undefined;
+    if (!message || !previewEnabled) {
+      return;
+    }
+    nextPreviewAt = Date.now() + LIVE_PREVIEW_INTERVAL_MS;
+    if (thinkingDelta !== undefined) {
+      emitThinkingSnapshot(message, thinkingDelta);
+    } else {
+      emitAssistantSnapshot(message);
+    }
+  };
   const handleSessionEvent = (event: AgentSessionEvent) => {
+    const updateType =
+      event.type === "message_update" ? event.assistantMessageEvent.type : undefined;
+    const isDelta = updateType === "text_delta" || updateType === "thinking_delta";
+    if (!isDelta) {
+      // Materialize previews at semantic boundaries, before changing occurrence identity.
+      flushPreview();
+    }
     if (
       (event.type === "message_start" ||
         event.type === "message_update" ||
@@ -245,40 +284,33 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
       streamedText = "";
       streamedPhase = undefined;
       streamedThinking = "";
+      nextPreviewAt = 0;
       return;
     }
     if (event.type === "message_update") {
-      if (
-        event.assistantMessageEvent.type === "text_delta" ||
-        event.assistantMessageEvent.type === "text_end"
-      ) {
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta" || update.type === "thinking_delta") {
+        const thinking = update.type === "thinking_delta";
+        if (pendingMessage && (pendingThinkingDelta !== undefined) !== thinking) {
+          flushPreview();
+        }
+        // Keep the provider-owned message lazy; copying its cumulative text here
+        // makes each small delta pay for the whole answer before wire pacing.
+        pendingMessage = event.message;
+        if (thinking) {
+          pendingThinkingDelta = (pendingThinkingDelta ?? "") + update.delta;
+        }
+        if (Date.now() >= nextPreviewAt) {
+          flushPreview();
+        }
+      } else if (update.type === "text_end") {
         emitAssistantSnapshot(event.message);
-      } else if (event.assistantMessageEvent.type === "thinking_delta") {
-        streamedThinking = readAssistantThinking(event.message);
-        enqueueLive({
-          kind: "thinking",
-          payload: {
-            text: streamedThinking,
-            delta: event.assistantMessageEvent.delta,
-            itemId: assistantSource?.itemId,
-          },
-        });
       }
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       emitAssistantSnapshot(event.message, true);
-      const finalThinking = readAssistantThinking(event.message);
-      if (finalThinking !== streamedThinking) {
-        enqueueLive({
-          kind: "thinking",
-          payload: {
-            text: finalThinking,
-            delta: finalThinking,
-            itemId: assistantSource?.itemId,
-          },
-        });
-      }
+      emitThinkingSnapshot(event.message);
       return;
     }
     if (
@@ -321,6 +353,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
+    flushPreview();
     // Later terminal merges cannot reopen replay after an owned cleanup failure.
     replayInvalid ||= hasModelFallbackStop(failure.error);
     enqueueTerminal({ aborted: failure.aborted, error: formatErrorMessage(failure.error) });
@@ -333,5 +366,28 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
     }
     await client.emitTerminal(boundLiveEvent(terminalLiveEvent));
   };
-  return { handleSessionEvent, enqueueRunFailure, emitTerminal };
+  // Catalog calls bypass AgentSession's direct-tool stream. Forward identities only;
+  // the watchdog does not need another copy of tool arguments or results.
+  const executeTool: ToolSearchCatalogToolExecutor = async (call) => {
+    const tool = { toolName: call.toolName, toolCallId: call.toolCallId };
+    handleSessionEvent({ type: "tool_execution_start", ...tool, args: null });
+    let isError = true;
+    try {
+      const result = await call.acceptResultBeforeProjection(
+        await call.tool.execute(
+          call.toolCallId,
+          call.input,
+          call.signal,
+          call.onUpdate,
+          // SAFETY: Worker catalogs contain four-argument host tools, without an extension context.
+          undefined as never,
+        ),
+      );
+      isError = isToolResultError(result);
+      return result;
+    } finally {
+      handleSessionEvent({ type: "tool_execution_end", ...tool, isError, result: null });
+    }
+  };
+  return { handleSessionEvent, executeTool, enqueueRunFailure, emitTerminal };
 }

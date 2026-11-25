@@ -1,6 +1,9 @@
+import { vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 
 export async function settleToolBridges(container: HTMLElement) {
+  flush();
+  await vi.dynamicImportSettled();
   const settled = new Set<HTMLElement>();
   // A parent commit can connect another bridge that was parked in its child fragment.
   for (;;) {

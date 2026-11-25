@@ -16,12 +16,26 @@ export function canAccessWizardSession(
   return !owner || (owner === client && !owner.invalidated && !owner.connectionSignal?.aborted);
 }
 
+// Connections that started or read each session: any open one may still show it.
+const readers = new WeakMap<WizardSession, Set<GatewayClient>>();
+
+export function noteWizardReader(session: WizardSession, client: GatewayClient | null): void {
+  if (client) {
+    readers.set(session, (readers.get(session) ?? new Set()).add(client));
+  }
+}
+
+/** A session whose every reader's socket closed may be abandoned; nobody shows it. */
+export function isWizardSessionUnwatched(session: WizardSession): boolean {
+  const current = [...(readers.get(session) ?? [])];
+  return current.length > 0 && current.every((client) => client.connectionSignal?.aborted);
+}
+
 const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 
-export function createWizardSessionTracker(options?: { now?: () => number }) {
+export function createWizardSessionTracker() {
   const wizardSessions = new Map<string, WizardSession>();
   const terminalSince = new Map<string, number>();
-  const now = options?.now ?? Date.now;
 
   const findRunningWizard = (): string | null => {
     for (const [id, session] of wizardSessions) {
@@ -31,8 +45,8 @@ export function createWizardSessionTracker(options?: { now?: () => number }) {
       }
       const observedAt = terminalSince.get(id);
       if (observedAt === undefined) {
-        terminalSince.set(id, now());
-      } else if (now() - observedAt >= UNCOLLECTED_TERMINAL_RETENTION_MS) {
+        terminalSince.set(id, Date.now());
+      } else if (Date.now() - observedAt >= UNCOLLECTED_TERMINAL_RETENTION_MS) {
         // Keep a terminal result long enough for its original client to collect
         // it; later starts may reap only an abandoned retained result.
         wizardSessions.delete(id);

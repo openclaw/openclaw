@@ -112,6 +112,22 @@ function recordPhases(fixture: Fixture) {
   fixture.surface.addEventListener("overlay-after-hide", () => phases.push(fixture.owner.phase));
   return phases;
 }
+
+it("does not rewrite unchanged inert state on closed peers when another overlay opens", async () => {
+  const closed = mountOverlay();
+  const active = mountOverlay();
+  const writes: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => writes.push(...records));
+  observer.observe(closed.surface, { attributes: true, attributeFilter: ["inert"] });
+  try {
+    await open(active);
+  } finally {
+    observer.disconnect();
+  }
+  expect(closed.surface.inert).toBe(true);
+  expect(writes).toHaveLength(0);
+});
+
 describe("native overlay lifecycle", () => {
   it("admits show and hide before changing accepted state, focus, or occlusion", async () => {
     const release = vi.fn();
@@ -615,6 +631,24 @@ describe("native overlay lifecycle", () => {
     pointer(outside, "pointerup", 5);
     await hidden;
     expect(document.activeElement).toBe(outside);
+  });
+  it("keeps a tapped overlay open when focus falls back to an ancestor of the release", async () => {
+    const fixture = mountOverlay();
+    const ancestor = fixture.surface.parentElement!;
+    ancestor.tabIndex = -1;
+    await open(fixture);
+    // Touch order: pointerup clears the press before compatibility mousedown moves focus.
+    pointer(fixture.item, "pointerdown", 6);
+    pointer(fixture.item, "pointerup", 6);
+    ancestor.focus();
+    await Promise.resolve();
+    expect(fixture.owner.open).toBe(true);
+    // The release explains only that focus change; a later one still dismisses.
+    const hidden = completion(fixture, "hidden");
+    fixture.item.focus();
+    ancestor.focus();
+    await hidden;
+    expect(fixture.owner.open).toBe(false);
   });
   it("uses native dialog operations without menu peer arbitration or content assumptions", async () => {
     const fixture = mountOverlay(

@@ -23,6 +23,7 @@ import { createOperatorWsClient } from "../server/ws-connection/authenticated-re
 import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/connect-operator-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type * as SessionStore from "../session-utils-store-worker.js";
+import { expectFailure, expectNoCalls, expectReply } from "./sessions-github-read.test-support.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type {
   GatewayClient,
@@ -61,9 +62,16 @@ async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>
 
 const expectedSystemRequester = {
   version: 2,
+  prepareDispatchCredential: expect.any(Function),
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
-  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+  snapshot: {
+    version: 1,
+    authenticationSource: "non-member",
+    actor: { kind: "system" },
+    scopes: ["operator.admin"],
+    grant: null,
+  },
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
 };
@@ -153,11 +161,8 @@ describe("sessions.github.publish", () => {
   it("uses host-owned caller identity", async () => {
     const respond = await invoke({ idempotencyKey: "tool-call-1", title: "Publish the fix" });
 
-    expectPublication({
-      idempotencyKey: "tool-call-1",
-      title: "Publish the fix",
-    });
-    expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
+    expectPublication({ idempotencyKey: "tool-call-1", title: "Publish the fix" });
+    expectReply(respond, acceptedPublication);
   });
 
   it.each([
@@ -167,13 +172,8 @@ describe("sessions.github.publish", () => {
   ])("rejects caller-supplied authority %j", async (target) => {
     const respond = await invoke({ idempotencyKey: "conflicting-owner", ...target });
 
-    expect(mocks.request).not.toHaveBeenCalled();
-    expect(mocks.loadSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectNoCalls(mocks.request, mocks.loadSession);
+    expectFailure(respond, { code: "INVALID_REQUEST" });
   });
 
   it.each(["fresh", "wrong-key", "existing", "lookup-failed", "ordinary"])(
@@ -270,7 +270,7 @@ describe("sessions.github.publish", () => {
             },
           },
         });
-        expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
+        expectReply(respond, acceptedPublication);
       });
     },
   );
@@ -305,10 +305,7 @@ describe("sessions.github.publish", () => {
             idempotencyKey: "global-publication",
             ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ status: "requested" }),
-          );
+          expectReply(respond, expect.objectContaining({ status: "requested" }));
           expect(mocks.request).toHaveBeenCalledWith({
             sessionKey: "global",
             idempotencyKey: "global-publication",
@@ -320,7 +317,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it("rejects a publication whose session authorization changes while verification waits", async () => {
+  it("retains admitted publication permission while verification waits", async () => {
     const request = createDeferredCore<Awaited<ReturnType<typeof mocks.request>>>();
     const entered = createDeferredCore();
     mocks.request.mockImplementationOnce(() => {
@@ -350,10 +347,10 @@ describe("sessions.github.publish", () => {
     expect(requester.snapshot).toEqual(expectedSystemRequester.snapshot);
     expect(() => requester.assertCurrent()).not.toThrow();
     authorized = false;
-    expect(() => requester.assertCurrent()).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(() => requester.assertCurrent()).not.toThrow();
     request.resolve({ ...acceptedPublication, requestId: "publication-revoked" });
 
-    await expect(pending).rejects.toBe(changed);
+    expectReply(await pending, { ...acceptedPublication, requestId: "publication-revoked" });
     expectPublication({ idempotencyKey: "publication-revoked", requester });
   });
 });

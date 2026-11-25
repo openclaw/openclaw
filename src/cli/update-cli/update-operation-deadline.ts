@@ -1,3 +1,4 @@
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -18,7 +19,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
   let failure: E | undefined;
   const expired = createDeferredCore<{ error: E }>();
   const inspectDeadline = () => {
-    if (!closed && !failure && admission && Date.now() >= admission.deadlineAtMs) {
+    if (!closed && !failure && admission && performance.now() >= admission.deadlineAtMs) {
       failure = admission.error;
       try {
         onExpired?.(failure);
@@ -47,16 +48,48 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
     get failure() {
       return failure;
     },
-    start(error: E, timeoutMs: number) {
+    start(error: E, timeoutMs: number, absoluteDeadlineAtMs?: number) {
       assertCurrent();
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new Error("Update operation requires a finite positive budget.");
       }
+      if (absoluteDeadlineAtMs !== undefined && !Number.isFinite(absoluteDeadlineAtMs)) {
+        throw new Error("Update operation requires a finite deadline.");
+      }
       if (admission) {
         return;
       }
-      admission = { error, timeoutMs, deadlineAtMs: Date.now() + timeoutMs };
-      cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
+      admission = {
+        error,
+        timeoutMs,
+        deadlineAtMs: absoluteDeadlineAtMs ?? performance.now() + timeoutMs,
+      };
+      inspectDeadline();
+      if (!failure) {
+        cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline, () =>
+          performance.now(),
+        );
+      }
+    },
+    /** Separately bounded work the budget does not cover: the deadline moves by its duration. */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      const started = admission;
+      if (!started) {
+        return await operation();
+      }
+      cancelDeadline?.();
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        started.deadlineAtMs += performance.now() - pausedAtMs;
+        if (!closed && !failure) {
+          cancelDeadline = scheduleAbsoluteDeadline(started.deadlineAtMs, inspectDeadline, () =>
+            performance.now(),
+          );
+        }
+      }
     },
     async run<T>(
       operation: () => Promise<T>,
@@ -65,7 +98,21 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       return await withCommandProcessScope(async () => {
         assertCurrent();
         const work = Promise.resolve()
-          .then(operation)
+          .then(() =>
+            withSqliteDatabaseAdmissionWait(
+              {
+                // The relay compares this value against Date.now(), so translate
+                // the monotonic deadline's remaining budget into an epoch timestamp.
+                get deadlineAtMs() {
+                  return admission
+                    ? Date.now() + Math.max(0, admission.deadlineAtMs - performance.now())
+                    : undefined;
+                },
+                assertActive: assertCurrent,
+              },
+              operation,
+            ),
+          )
           .then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
@@ -78,6 +125,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
             const joined = await awaitWithinDeadline(
               () => work,
               admission!.deadlineAtMs + admission!.timeoutMs,
+              () => performance.now(),
             );
             timeout.message +=
               joined === ABSOLUTE_DEADLINE_EXPIRED

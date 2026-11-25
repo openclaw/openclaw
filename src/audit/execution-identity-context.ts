@@ -28,8 +28,8 @@ import {
   presentExecutionDecisionReceiptsInDatabase,
 } from "./execution-decision-receipts.js";
 import {
-  parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
+  type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionToken,
 } from "./execution-identity-admission.js";
 import {
@@ -171,21 +171,22 @@ function pruneExecutionIdentityContextsAfterInsert(
   const expiredCount = Number(expired.numAffectedRows ?? 0n);
   const remainingPruneBudget = Math.max(0, limits.pruneBatchRows - expiredCount);
   if (remainingPruneBudget > 0) {
-    // Derive overflow from committed rows inside this transaction. A process-local
-    // count misses writes from the Gateway worker or a concurrent direct CLI.
-    const retainedIds = kysely
-      .selectFrom("execution_identity_contexts")
-      .select("context_id")
-      .orderBy("created_at", "desc")
-      .orderBy("context_id", "desc")
-      .limit(limits.maxRows);
+    // Count the compact index instead of stepping over every retained tuple.
+    const rowCount =
+      normalizeSqliteNumber(
+        executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("execution_identity_contexts")
+            .select((eb) => eb.fn.countAll<number>().as("count")),
+        )?.count ?? null,
+      ) ?? 0;
     const oldestOverflowIds = kysely
       .selectFrom("execution_identity_contexts")
       .select("context_id")
-      .where("context_id", "not in", retainedIds)
       .orderBy("created_at", "asc")
       .orderBy("context_id", "asc")
-      .limit(remainingPruneBudget);
+      .limit(Math.min(remainingPruneBudget, Math.max(0, rowCount - limits.maxRows)));
     executeSqliteQuerySync(
       db,
       kysely.deleteFrom("execution_identity_contexts").where("context_id", "in", oldestOverflowIds),
@@ -221,12 +222,9 @@ export function pruneExpiredExecutionIdentityContextsInDatabase(params: {
 
 /** Worker-owned canonicalization and persistence for one accepted admission envelope. */
 function persistExecutionIdentityAdmissionEnvelope(
-  input: unknown,
+  envelope: ExecutionIdentityAdmissionEnvelope,
   options: ExecutionIdentityStoreOptions = {},
 ): ExecutionIdentityContextV1 {
-  // Structured clone removes the admission-side freeze. Revalidate all bounds
-  // before schema/key access so malformed messages never reach persistence.
-  const envelope = parseExecutionIdentityAdmissionEnvelope(input);
   ensureExecutionIdentityContextSchema(options);
   const executionId = envelope.executionId;
   const opened = openOpenClawStateDatabase(options);
@@ -237,6 +235,10 @@ function persistExecutionIdentityAdmissionEnvelope(
     createdAt: envelope.createdAt,
   });
   const plannedContextJson = JSON.stringify(plannedContext);
+  const plannedContextBytes = Buffer.byteLength(plannedContextJson, "utf8");
+  if (plannedContextBytes > EXECUTION_IDENTITY_CONTEXT_MAX_BYTES) {
+    throw new Error("prepared execution identity context exceeds 16 KiB");
+  }
   let transactionDatabase: EngineConnection | undefined;
   try {
     return runOpenClawStateWriteTransaction(
@@ -254,17 +256,15 @@ function persistExecutionIdentityAdmissionEnvelope(
         }
         executeSqliteQuerySync(
           db,
-          executionIdentityDb(db)
-            .insertInto("execution_identity_contexts")
-            .values({
-              context_id: plannedContext.contextId,
-              execution_id: plannedContext.executionId,
-              run_id: plannedContext.runId,
-              created_at: plannedContext.createdAt,
-              coverage_state: plannedContext.coverageState,
-              context_bytes: Buffer.byteLength(plannedContextJson, "utf8"),
-              context_json: plannedContextJson,
-            }),
+          executionIdentityDb(db).insertInto("execution_identity_contexts").values({
+            context_id: plannedContext.contextId,
+            execution_id: plannedContext.executionId,
+            run_id: plannedContext.runId,
+            created_at: plannedContext.createdAt,
+            coverage_state: plannedContext.coverageState,
+            context_bytes: plannedContextBytes,
+            context_json: plannedContextJson,
+          }),
         );
         pruneExecutionIdentityContextsAfterInsert(
           db,

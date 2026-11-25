@@ -21,7 +21,7 @@ export async function pruneUsageCostRollupsForTest(params: {
   liveKeys: ReadonlySet<string>;
   rows: readonly SessionCostUsageRollupSnapshot[];
 }): Promise<void> {
-  const owner = prepareSessionCostUsageRefreshLock(params.agentId, params.databasePath);
+  const owner = await prepareSessionCostUsageRefreshLock(params.agentId, params.databasePath);
   try {
     expect(await owner.acquire()).toBe(true);
     await owner.pruneRows(params.rows.filter((row) => !params.liveKeys.has(row.key)));
@@ -60,7 +60,7 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
     bucket.messageCounts.toolCalls = 1;
     bucket.tools = [{ name: "read", count: 1 }];
   }
-  const lock = prepareSessionCostUsageRefreshLock("main");
+  const lock = await prepareSessionCostUsageRefreshLock("main");
   const encoded = encodeUsageCostRollup(currentRollup);
   try {
     expect(await lock.acquire()).toBe(true);
@@ -79,11 +79,7 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
   }
 }
 
-export function readSessionCostUsageRollupEntry(
-  row: SessionCostUsageRollupRow,
-  agentId?: string,
-  databasePath?: string,
-) {
+export function readSessionCostUsageRollupEntry(row: SessionCostUsageRollupRow, agentId?: string) {
   const envelope = decodeUsageCostRollupEnvelope(row.valueJson);
   if (!envelope) {
     return undefined;
@@ -95,7 +91,7 @@ export function readSessionCostUsageRollupEntry(
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;
     },
-    { agentId: normalizeAgentId(agentId), ...(databasePath ? { path: databasePath } : {}) },
+    { agentId: normalizeAgentId(agentId) },
   );
   return result.found ? result.value : undefined;
 }

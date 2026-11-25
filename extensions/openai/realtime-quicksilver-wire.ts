@@ -1,4 +1,3 @@
-// GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   type RealtimeVoiceAgentConsultTranscriptEntry,

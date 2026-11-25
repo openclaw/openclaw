@@ -66,6 +66,10 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
   const registry = getActivePluginRegistry();
   return listAgentIds(cfg).every((agentId) => {
     const model = resolveDefaultModelForAgent({ cfg, agentId });
+    if (!model) {
+      // No configured model runs nothing on a plugin harness.
+      return false;
+    }
     const runtime = resolveEffectiveAgentRuntime({
       cfg,
       provider: model.provider,
@@ -90,7 +94,13 @@ export async function collectNodeHostingPreconditionFindings(
   }
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
-    findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
+    findings.push({
+      checkId: CHECK_ID,
+      severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/nodes",
+      ...finding,
+    });
   if (lacksNodeOnboardingPlugin(cfg)) {
     warn({
       message:

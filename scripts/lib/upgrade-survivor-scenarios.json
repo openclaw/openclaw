@@ -1,7 +1,10 @@
 {
-  "oldestSupportedBaseline": "2026.6.34",
+  "oldestSupportedBaseline": null,
   "scenarios": [
     "base",
+    "git-release",
+    "release-update",
+    "session-share",
     "backup-schedule",
     "abandoned-update",
     "package-publication-recovery",

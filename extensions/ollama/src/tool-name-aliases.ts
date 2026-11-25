@@ -1,10 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  streamSimple,
-  type AssistantMessage,
-  type Context,
-  type ProviderStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+import { streamSimple, type Context, type ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   mapAssistantMessageStream,
   wrapProviderPayloadHook,
@@ -54,10 +49,10 @@ function collectToolNames(context: Context): Set<string> {
   return names;
 }
 
-function mapAssistantNames(
-  message: AssistantMessage,
+function mapAssistantNames<T extends Extract<Context["messages"][number], { role: "assistant" }>>(
+  message: T,
   mapName: (name: string) => string,
-): AssistantMessage {
+): T {
   return {
     ...message,
     content: message.content.map((block) =>
@@ -175,17 +170,18 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
     if ("toolChoice" in providerOptions) {
       providerOptions.toolChoice = mapToolChoice(providerOptions.toolChoice, mapName);
     }
-    const maybeStream = underlying(model, wireContext, {
-      ...providerOptions,
-      onPayload: wrapProviderPayloadHook(options?.onPayload, (payload, replacement) => {
+    providerOptions.onPayload = wrapProviderPayloadHook(
+      options?.onPayload,
+      (payload, replacement) => {
         const request = replacement === undefined ? payload : replacement;
         // OpenAI-compatible callers can choose a function through a payload hook.
         if (isRecord(request) && "tool_choice" in request) {
           request.tool_choice = mapToolChoice(request.tool_choice, mapName);
         }
         return replacement;
-      }),
-    });
+      },
+    );
+    const maybeStream = underlying(model, wireContext, providerOptions);
     const fromWire = new Map([...toWire].map(([name, alias]) => [alias, name]));
     return mapAssistantMessageStream(maybeStream, (stream) => restoreStreamNames(stream, fromWire));
   };

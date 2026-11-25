@@ -23,7 +23,6 @@ struct ChatReplyPreview: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(String(localized: "Cancel reply"))
-            .help(String(localized: "Cancel reply"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

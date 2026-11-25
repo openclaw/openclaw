@@ -1,13 +1,13 @@
 import { serialize } from "node:v8";
-import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
+import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
-import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
+import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
+import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-row.js";
 import {
   boundSessionEntryMetadataReceipts,
   captureSessionEntryMetadataReceipts,
@@ -61,7 +61,7 @@ import {
 import { executeSessionMaintenance } from "./session-manager-maintenance.worker.js";
 import { runWithMetadataMessageAdmission } from "./session-manager-message-admission.worker.js";
 import type { SessionManagerAuthorityPublication } from "./session-manager-publication.js";
-import { readSessionManagerReload } from "./session-manager-reload.js";
+import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 
 /** Borrow the canonical actor's connection; this domain never opens or closes a database. */
 export function bindSqliteWorkerBackend(
@@ -79,14 +79,21 @@ export function bindSqliteWorkerBackend(
       withoutSqliteDatabaseWriteScope(nativeContext.database, () =>
         requestSqliteWorkerOperationAdmission({ stage: "prepare", facts }),
       ),
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) {
+    admit(stage: "transaction" | "commit", domainRestriction?: AgentDatabaseAdmissionRestriction) {
+      const restriction = domainRestriction;
       const transcriptPublication =
         stage === "commit"
           ? (readStagedSessionTranscriptAuthority({ db: context.database }) ?? [])
           : [];
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
-      if (!transcriptPublication.length && !entryPublication.length) {
+      const conversationPublication =
+        stage === "commit" ? readStagedConversationPublications({ db: context.database }) : [];
+      if (
+        !transcriptPublication.length &&
+        !entryPublication.length &&
+        !conversationPublication.length
+      ) {
         withoutSqliteDatabaseWriteScope(context.database, () =>
           nativeContext.admit(stage, restriction),
         );
@@ -96,6 +103,7 @@ export function bindSqliteWorkerBackend(
         kind: "session-manager-authority",
         transcriptPublication,
         entryPublication,
+        conversationPublication,
       };
       boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);
@@ -170,9 +178,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -207,9 +212,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(
@@ -277,38 +279,21 @@ export function bindSqliteWorkerBackend(
     bindSqliteWorkerDatabase<SessionMetadataWorkerOperations>(context.database, {
       execute(command) {
         try {
-          const cliWriter =
-            command.type === "session.transcript.appendMessage" ||
-            command.type === "session.metadata.append"
-              ? command.input.cliWriter
-              : undefined;
-          return runWithCliHistoryWriter(
-            cliWriter
-              ? {
-                  ...cliWriter,
-                  target: { ...command.input.scope, storePath: context.databasePath },
-                  // Host liveness is composed into both transaction and commit grants.
-                  assertCurrent: backend.assertOpen,
-                  assertReadable: backend.assertOpen,
-                }
-              : undefined,
-            () =>
-              captureSessionRowChanges(context.database, (changes) => {
-                entryChanges = changes;
-                try {
-                  return withSqliteDatabaseWriteScope(
-                    context.database,
-                    [
-                      command.input.scope.sessionKey,
-                      sqliteSessionIdWriteScope(command.input.scope.sessionId),
-                    ],
-                    () => execute(command),
-                  );
-                } finally {
-                  entryChanges = [];
-                }
-              }).result,
-          );
+          return captureSessionRowChanges(context.database, (changes) => {
+            entryChanges = changes;
+            try {
+              return withSqliteDatabaseWriteScope(
+                context.database,
+                [
+                  command.input.scope.sessionKey,
+                  sqliteSessionIdWriteScope(command.input.scope.sessionId),
+                ],
+                () => execute(command),
+              );
+            } finally {
+              entryChanges = [];
+            }
+          }).result;
         } catch (error) {
           if (error instanceof SessionTranscriptWriterClaimReboundError) {
             const refusal = parseTranscriptAppendRefusal(error.cause);

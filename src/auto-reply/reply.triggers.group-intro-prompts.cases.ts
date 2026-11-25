@@ -8,7 +8,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
+import { buildSourceConversationContext, buildGroupIntro } from "./reply/groups.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 type InboundMessage = Parameters<GetReplyFromConfig>[0];
@@ -174,7 +174,7 @@ export function registerGroupIntroPromptCases(): void {
         const cfg = makeCfg(`/tmp/group-intro-${testCase.name}`);
         testCase.setup?.(cfg);
         const extraSystemPrompt = [
-          buildGroupChatContext({
+          buildSourceConversationContext({
             sessionCtx: testCase.message,
           }),
           buildGroupIntro({

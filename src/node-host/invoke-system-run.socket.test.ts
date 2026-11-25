@@ -5,7 +5,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import * as runtimeConfig from "../config/config.js";
 import {
   saveExecApprovals,
   testing as approvalsTesting,
@@ -16,8 +17,9 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 
-describe.runIf(process.platform !== "win32")("enforced exec host transport boundary", () => {
-  it("does not replay locally when a completed execution loses its socket response", async () => {
+it.runIf(process.platform !== "win32")(
+  "does not replay locally when a completed execution loses its socket response",
+  async () => {
     await withTestDir({ prefix: "oc-run-", parentDir: "/tmp" }, async (dir) => {
       await withEnvAsync(
         { OPENCLAW_HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, "state") },
@@ -27,13 +29,7 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
           const socketPath = path.join(dir, "host.sock");
           const token = "enforced-exec-host-test-token";
           const marker = path.join(dir, "executions");
-          const command = [
-            "/bin/sh",
-            "-c",
-            'printf "START\\nCOMPLETE\\n" >> "$1"',
-            "exec-proof",
-            marker,
-          ];
+          const command = ["/bin/sh", "-c", 'printf "START\\nCOMPLETE\\n" >> "$1"', "_", marker];
           const order: string[] = [];
           const sockets: net.Socket[] = [];
           const closes: Promise<void>[] = [];
@@ -98,11 +94,12 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             const runCommand = vi.fn<Parameters<typeof handleSystemRunInvoke>[0]["runCommand"]>();
             const sendInvokeResult = vi.fn();
             const sendNodeEvent = vi.fn();
+            const config = vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({});
+            onTestFinished(() => config.mockRestore());
             await handleSystemRunInvoke({
               params: { command, cwd: dir, sessionKey: "agent:main:proof" },
               skillBins: { current: async () => [] },
               preferMacAppExecHost: true,
-              getRuntimeConfig: () => ({}),
               runCommand,
               sendInvokeResult,
               sendNodeEvent,
@@ -139,5 +136,5 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
         },
       );
     });
-  });
-});
+  },
+);

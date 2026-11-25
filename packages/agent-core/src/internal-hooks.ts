@@ -1,46 +1,83 @@
 import type {
   AgentLoopConfig,
-  AfterToolOutcomeContext,
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchResult,
-  ToolLoopWarning,
-  ToolLoopIntervention,
-  ToolLoopRecoveryState,
   ToolResultContentSource,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
+type RepetitionGuardPolicy = (model: AgentLoopConfig["model"]) => boolean;
+const repetitionGuardByAgent = new WeakMap<object, RepetitionGuardPolicy>();
 
-const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
+/** Host policy only: no plugin-facing option or user setting. */
+export function setInternalRepetitionGuard(agent: object, policy: RepetitionGuardPolicy): void {
+  repetitionGuardByAgent.set(agent, policy);
+}
 
-export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+export function getInternalRepetitionGuard(agent: object): RepetitionGuardPolicy | undefined {
+  return repetitionGuardByAgent.get(agent);
+}
+
+type InternalToolRepeatPolicy = {
+  enabled: boolean;
+  onVerdict?: NonNullable<AgentLoopConfig["onToolRepeat"]>;
+};
+const toolRepeatPolicyByAgent = new WeakMap<object, InternalToolRepeatPolicy>();
+
+/** Host policy: `tools.loopDetection.enabled: false` disables the repeat guard for one Agent. */
+export function setInternalToolRepeatPolicy(agent: object, policy: InternalToolRepeatPolicy): void {
+  toolRepeatPolicyByAgent.set(agent, policy);
+}
+
+export function getInternalToolRepeatPolicy(agent: object): InternalToolRepeatPolicy | undefined {
+  return toolRepeatPolicyByAgent.get(agent);
+}
+
+export type InternalBeforeRequestHook = (
+  signal?: AbortSignal,
+) => Promise<AgentMessage[] | undefined>;
+
+const beforeRequestByOwner = new WeakMap<object, InternalBeforeRequestHook>();
+
+/** Adopt already committed host messages before any initial or continuation request. */
+export function setInternalBeforeRequest(
+  owner: object,
+  hook: InternalBeforeRequestHook | undefined,
+): void {
+  if (hook) {
+    beforeRequestByOwner.set(owner, hook);
+  } else {
+    beforeRequestByOwner.delete(owner);
+  }
+}
+
+export function getInternalBeforeRequest(owner: object): InternalBeforeRequestHook | undefined {
+  return beforeRequestByOwner.get(owner);
+}
+
+type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
+const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
 
-type InternalReadyToolCall = { toolCallId: string; args: unknown };
+/** Keep the accepted input identity across same-input Agent.continue() calls. */
+export function getInternalToolTurnInputScope(hook: InternalToolTurnCompletionHook): object {
+  let scope = toolTurnInputScopeByHook.get(hook);
+  if (!scope) {
+    scope = {};
+    toolTurnInputScopeByHook.set(hook, scope);
+  }
+  return scope;
+}
 
-export type InternalToolBatchLifecycle = {
-  /**
-   * Commit admitted calls in assistant order as they launch: prepared calls just
-   * before their implementations start, argument-validation rejections when the
-   * launch reaches them. May throw before launch.
-   */
-  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
-  /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
-  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
-  /** Observe settled outcomes in assistant order, before warning text changes their identity. */
-  observeOutcome?: (
-    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
-    state: ToolLoopRecoveryState,
-  ) => ToolLoopIntervention | undefined;
-};
-
-const toolBatchLifecycleByResult = new WeakMap<
-  InternalBeforeToolBatchResult,
-  InternalToolBatchLifecycle
->();
+/** Queueing, cancellation and context-only updates do not commit a new input. */
+export function commitInternalToolTurnInput(
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnInputScopeByHook.set(hook, {});
+  }
+}
 
 type InternalSteeringGetter = NonNullable<AgentLoopConfig["getSteeringMessages"]>;
 type InternalSyncSteeringGetter = () => AgentMessage[];
@@ -53,7 +90,8 @@ export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
-  subscribe: (listener: () => void) => () => void;
+  onChange?: () => void;
+  subscribe?: (listener: () => void) => () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,
@@ -90,20 +128,12 @@ const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultA
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
-/** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
-export function setInternalBeforeToolBatch(
-  agent: object,
-  hook: InternalBeforeToolBatchHook | undefined,
-): void {
-  if (hook) {
-    beforeToolBatchByAgent.set(agent, hook);
-  } else {
-    beforeToolBatchByAgent.delete(agent);
+/** Copy present private state without clearing a target's existing slot. */
+function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
+  const value = slots.get(source);
+  if (value) {
+    slots.set(target, value);
   }
-}
-
-export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
-  return beforeToolBatchByAgent.get(agent);
 }
 
 export function setInternalToolTurnCompletion(
@@ -123,23 +153,6 @@ export function getInternalToolTurnCompletion(
   return toolTurnCompletionByAgent.get(agent);
 }
 
-/** Attach scheduler lifecycle ownership without widening the public admission result. */
-export function attachInternalToolBatchLifecycle(
-  result: InternalBeforeToolBatchResult,
-  lifecycle: InternalToolBatchLifecycle,
-): InternalBeforeToolBatchResult {
-  toolBatchLifecycleByResult.set(result, lifecycle);
-  return result;
-}
-
-export function takeInternalToolBatchLifecycle(
-  result: InternalBeforeToolBatchResult,
-): InternalToolBatchLifecycle | undefined {
-  const lifecycle = toolBatchLifecycleByResult.get(result);
-  toolBatchLifecycleByResult.delete(result);
-  return lifecycle;
-}
-
 /** Attach Agent-owned synchronous draining to the exact public async callback identity. */
 export function attachInternalSyncSteeringGetter(
   callback: InternalSteeringGetter,
@@ -147,10 +160,18 @@ export function attachInternalSyncSteeringGetter(
   observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  attachInternalSteeringQueueObserver(callback, observer);
+  return callback;
+}
+
+/** Wrapping a getter must retain observation of its exact underlying queue. */
+export function attachInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter,
+  observer: InternalSteeringQueueObserver | undefined,
+): void {
   if (observer) {
     steeringQueueObserverByCallback.set(callback, observer);
   }
-  return callback;
 }
 
 export function getInternalSteeringQueueObserver(
@@ -182,10 +203,7 @@ export function getInternalToolExecutionPreparer(
 
 /** Preserve private execution ownership when an adapter replaces a tool object. */
 export function copyInternalToolExecutionPreparer<T extends object>(source: object, target: T): T {
-  const preparer = toolExecutionPreparerByTool.get(source);
-  if (preparer) {
-    toolExecutionPreparerByTool.set(target, preparer);
-  }
+  copyInternalSlot(toolExecutionPreparerByTool, source, target);
   return target;
 }
 
@@ -236,40 +254,10 @@ export function getInternalToolResultContentSource(
 
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
-  const acknowledge = toolResultAcknowledgementByValue.get(source);
-  if (acknowledge) {
-    toolResultAcknowledgementByValue.set(target, acknowledge);
-  }
-  const provenance = toolResultProvenanceByValue.get(source);
-  if (provenance) {
-    toolResultProvenanceByValue.set(target, provenance);
-  }
-  const contentSource = toolResultContentSourceByValue.get(source);
-  if (contentSource) {
-    toolResultContentSourceByValue.set(target, contentSource);
-  }
+  copyInternalSlot(toolResultAcknowledgementByValue, source, target);
+  copyInternalSlot(toolResultProvenanceByValue, source, target);
+  copyInternalSlot(toolResultContentSourceByValue, source, target);
   return target;
-}
-
-/**
- * Feedback must not change no-progress hashes: call only after raw outcome
- * recording, or for rejected calls whose validation result admission captured.
- */
-export function appendToolLoopWarning<T extends AgentToolResult<unknown>>(
-  result: T,
-  warning: ToolLoopWarning,
-): T {
-  return copyInternalToolResultState(result, {
-    ...result,
-    content: [
-      // Match transcript normalization for tools that omit display content.
-      ...(result.content ?? []),
-      {
-        type: "text",
-        text: `[System note: Tool-loop warning after ${warning.count} repeated calls. Change your approach or stop if you are not making progress.]`,
-      },
-    ],
-  });
 }
 
 /** Commit one tool result after its owning message has attached. */

@@ -1,9 +1,8 @@
 import path from "node:path";
 import * as timers from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -13,12 +12,12 @@ import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
+  openOpenClawAgentDatabase as openDatabase,
+  resolveOpenClawAgentSqlitePath as databasePathFor,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -30,20 +29,28 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot } from "./session-transcript-reconcile-pool.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
-import { getSessionTranscriptReconcileWorkerPoolSnapshot } from "./session-transcript-reconcile-pool.js";
 import {
-  isSessionTranscriptIndexReconcileRunning,
-  reconcileSessionTranscriptIndexes,
-  startSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptIndexReconcile,
-  waitForSessionTranscriptIndexReconcilesInStateDir,
-  waitForSessionTranscriptProjection,
+  markRebuild as markDirty,
+  observeCanonicalWriterLeases,
+  readAgentDatabaseLeaseIds,
+  rebuildState,
+  seedTranscript as seed,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
+import {
+  isSessionTranscriptIndexReconcileRunning as isReconciling,
+  reconcileSessionTranscriptIndexes as reconcile,
+  startSessionTranscriptIndexReconcile as startReconcile,
+  waitForSessionTranscriptIndexReconcile as waitForReconcile,
+  waitForSessionTranscriptIndexReconcilesInStateDir as drainStateDirectory,
+  waitForSessionTranscriptProjection as waitForProjection,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+import {
+  holdReconcileAck,
+  useReconcileWorkerObserver,
+} from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -60,7 +67,50 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
-beforeEach(() => setRuntimeConfigSnapshot({}));
+async function closeDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
+
+async function withFakeClockState(label: string, run: () => Promise<void>) {
+  const stateDir = tempDirs.make(label);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    setRuntimeConfigSnapshot({});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await run();
+    } finally {
+      try {
+        await closeDatabases();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+}
+
+function scopeFor(sessionId: string, options: OpenClawAgentDatabaseOptions = { agentId: "main" }) {
+  return {
+    ...options,
+    agentId: options.agentId ?? "main",
+    sessionId,
+    sessionKey: `agent:${options.agentId ?? "main"}:${sessionId}`,
+  };
+}
+
+function expectLeases(databasePath: string, ...expected: Array<string | undefined>) {
+  expect(readAgentDatabaseLeaseIds(databasePath)).toEqual(
+    expected.toSorted((a, b) => String(a).localeCompare(String(b))),
+  );
+}
+
+const settledOutcome = <T>(operation: Promise<T>) =>
+  operation.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (error: unknown) => ({ status: "rejected" as const, error }),
+  );
 
 type TerminalType = Extract<
   SessionTranscriptReconcileWorkerMessage,
@@ -79,44 +129,12 @@ function countAgentDatabaseLeases(pathname: string, env?: NodeJS.ProcessEnv): nu
   return row.count;
 }
 
-function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.ProcessEnv): string[] {
-  return openOpenClawStateDatabase({ env })
-    .db.prepare(
-      "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
-    )
-    .all(process.pid, pathname)
-    .map((row) => String(row.lease_id));
-}
-
-function observeCanonicalWriterLeases() {
-  const leases = new Map<string, string>();
-  const spy = workerProbe.admission(admission, (request, grant, admit) => {
-    const facts = request.facts;
-    if (
-      request.stage === "open" &&
-      isRecord(facts) &&
-      typeof facts.databasePath === "string" &&
-      typeof facts.leaseId === "string"
-    ) {
-      leases.set(facts.databasePath, facts.leaseId);
-    }
-    admit(request, grant);
-  });
-  return { leases, restore: () => spy.mockRestore() };
-}
-
 function createCleanupFenceProbe() {
   const stateDatabase = openOpenClawStateDatabase();
   let lockHeld = false;
   let plannerLeaseId: string | undefined;
-  let resolvePlanStarted!: () => void;
-  let resolveTerminal!: (type: TerminalType) => void;
-  const planStarted = new Promise<void>((resolve) => {
-    resolvePlanStarted = resolve;
-  });
-  const terminal = new Promise<TerminalType>((resolve) => {
-    resolveTerminal = resolve;
-  });
+  const planStarted = createDeferred();
+  const terminal = createDeferred<TerminalType>();
   observer.onTask = ({ input, observeMessage }) => {
     if (input.mode === "disk") {
       plannerLeaseId = input.leaseId;
@@ -127,16 +145,16 @@ function createCleanupFenceProbe() {
       if (message.type === "plan-start" && !lockHeld) {
         stateDatabase.db.exec("BEGIN IMMEDIATE;");
         lockHeld = true;
-        resolvePlanStarted();
+        planStarted.resolve();
       }
       if (message.type === "done" || message.type === "failed") {
-        resolveTerminal(message.type);
+        terminal.resolve(message.type);
       }
     });
   };
 
   return {
-    planStarted,
+    planStarted: planStarted.promise,
     plannerLeaseId: () => plannerLeaseId,
     release(): void {
       if (!lockHeld) {
@@ -145,14 +163,11 @@ function createCleanupFenceProbe() {
       stateDatabase.db.exec("ROLLBACK;");
       lockHeld = false;
     },
-    terminal,
+    terminal: terminal.promise,
   };
 }
 
-function readProjectedTranscript(
-  database: ReturnType<typeof openOpenClawAgentDatabase>,
-  sessionId: string,
-) {
+function readProjectedTranscript(database: ReturnType<typeof openDatabase>, sessionId: string) {
   return database.db
     .prepare(`SELECT active.active_position, events.event_json
     FROM session_transcript_active_events active JOIN transcript_events events
@@ -161,55 +176,11 @@ function readProjectedTranscript(
     .all(sessionId);
 }
 
-function createPlanFinishFence(sessionId: string) {
-  const paused = createDeferred();
-  let worker: Worker | undefined;
-  let releaseAcknowledgement: (() => void) | undefined;
-  let released = false;
-  const plannerLeases = new Map<string, string>();
-  observer.onTask = ({ input, worker: created, port, observeMessage }) => {
-    if (input.mode === "disk") {
-      plannerLeases.set(input.path, input.leaseId);
-    }
-    worker = created;
-    const postMessage = port.postMessage.bind(port);
-    let finishingTarget = false;
-    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
-      finishingTarget = message.type === "plan-finish" && message.sessionId === sessionId;
-    });
-    // The projection is committed before this ACK; pause the real worker without racing writes.
-    port.postMessage = (message: unknown, transferList) => {
-      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-      if (finishingTarget && !released) {
-        finishingTarget = false;
-        releaseAcknowledgement = () => postMessage(message, options);
-        paused.resolve();
-        return;
-      }
-      postMessage(message, options);
-    };
-  };
-
-  return {
-    paused: paused.promise,
-    plannerLeases,
-    threadId: () => worker?.threadId,
-    release(): void {
-      released = true;
-      releaseAcknowledgement?.();
-    },
-  };
-}
-
 async function waitForCurrentProjection(databasePath: string, sessionId: string): Promise<void> {
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+  const database = openDatabase({ agentId: "main", path: databasePath });
   await vi.waitFor(
     () => {
-      expect(
-        database.db
-          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-          .get(sessionId),
-      ).toEqual({ needs_rebuild: 0 });
+      expect(rebuildState(database.db, sessionId)).toEqual({ needs_rebuild: 0 });
     },
     { interval: 10, timeout: 5_000 },
   );
@@ -247,39 +218,34 @@ describe("session transcript reconcile worker lifecycle", () => {
       );
     try {
       for (const options of agents) {
-        await persistSessionTranscriptTurn(
+        await seed(
           { ...options, sessionId, sessionKey: `agent:${options.agentId}:fleet` },
-          {
-            messages: [
-              transcriptMessage(options.agentId, null, { role: "user", content: options.agentId }),
-            ],
-            touchSessionEntry: false,
-          },
+          options.agentId,
+          options.agentId,
+          null,
         );
-        await waitForSessionTranscriptIndexReconcile(options);
+        await waitForReconcile(options);
         // Leave only the native fixture lease before queuing cold publication workers.
-        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
-        openOpenClawAgentDatabase(options)
+        await closeDatabase(databasePathFor(options));
+        openDatabase(options)
           .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
           .run();
       }
       for (const options of agents) {
-        const leases = readAgentDatabaseLeaseIds(resolveOpenClawAgentSqlitePath(options), env);
+        const leases = readAgentDatabaseLeaseIds(databasePathFor(options), env);
         expect(leases).toHaveLength(1);
         hostLeases.push(...leases);
       }
-      const before = getSessionTranscriptReconcileWorkerPoolSnapshot();
-      const fence = createPlanFinishFence(sessionId);
+      const before = poolSnapshot();
+      const fence = holdReconcileAck(observer, "plan-finish", sessionId);
       for (const options of agents) {
-        startSessionTranscriptIndexReconcile(options);
+        startReconcile(options);
       }
-      const completion = Promise.all(
-        agents.map((agent) => waitForSessionTranscriptIndexReconcile(agent)),
-      );
+      const completion = Promise.all(agents.map((agent) => waitForReconcile(agent)));
       try {
         await fence.paused;
         await allQueued.promise;
-        expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
+        expect(poolSnapshot()).toMatchObject({
           maxWorkers: 1,
           workers: 1,
           workersCreated: before.workersCreated + 1,
@@ -289,7 +255,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         fence.release();
         await completion;
       }
-      expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
+      expect(poolSnapshot()).toMatchObject({
         maxWorkers: 1,
         workers: 1,
         workersCreated: before.workersCreated + 1,
@@ -298,7 +264,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       });
       const retainedLeases: string[] = [];
       for (const options of agents) {
-        const database = openOpenClawAgentDatabase(options);
+        const database = openDatabase(options);
         expect(
           database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
         ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
@@ -323,11 +289,8 @@ describe("session transcript reconcile worker lifecycle", () => {
     } finally {
       operationSpy.mockRestore();
       canonical.restore();
-      await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await drainStateDirectory(stateDir);
+      await closeDatabases();
     }
   }, 30_000);
 
@@ -352,13 +315,13 @@ describe("session transcript reconcile worker lifecycle", () => {
           return run(operation);
         }, owner),
       );
-      startSessionTranscriptIndexReconcile(options);
+      startReconcile(options);
       return release;
     };
     const releaseFirst = startDeferred(first);
     const releaseUnrelated = startDeferred(unrelated);
     let settled = false;
-    const scopedWait = waitForSessionTranscriptIndexReconcilesInStateDir(stateDir).then(() => {
+    const scopedWait = drainStateDirectory(stateDir).then(() => {
       settled = true;
     });
     // This owner did not exist in the waiter's initial snapshot, and no owner
@@ -366,19 +329,19 @@ describe("session transcript reconcile worker lifecycle", () => {
     const releaseLater = startDeferred(later);
     try {
       releaseFirst.resolve();
-      await waitForSessionTranscriptIndexReconcile(first);
+      await waitForReconcile(first);
       await timers.setImmediate();
       expect(settled).toBe(false);
-      expect(isSessionTranscriptIndexReconcileRunning(later)).toBe(true);
+      expect(isReconciling(later)).toBe(true);
 
       releaseLater.resolve();
-      await waitForSessionTranscriptIndexReconcile(later);
+      await waitForReconcile(later);
       // A checkpoint makes a wrongly global wait fail here, while finally can
       // still release the unrelated owner instead of deadlocking the test.
       await timers.setImmediate();
       expect(settled).toBe(true);
-      expect(isSessionTranscriptIndexReconcileRunning(unrelated)).toBe(true);
-      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(unrelated))).toBe(false);
+      expect(isReconciling(unrelated)).toBe(true);
+      expect(isOpenClawAgentDatabaseOpen(databasePathFor(unrelated))).toBe(false);
     } finally {
       operationSpy.mockRestore();
       releaseFirst.resolve();
@@ -386,10 +349,10 @@ describe("session transcript reconcile worker lifecycle", () => {
       releaseUnrelated.resolve();
       await Promise.all([
         scopedWait,
-        ...[first, later, unrelated].map((agent) => waitForSessionTranscriptIndexReconcile(agent)),
+        ...[first, later, unrelated].map((agent) => waitForReconcile(agent)),
       ]);
       for (const options of [first, later, unrelated]) {
-        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
+        await closeDatabase(databasePathFor(options));
       }
       for (const options of [first, unrelated]) {
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(options.env));
@@ -409,39 +372,26 @@ describe("session transcript reconcile worker lifecycle", () => {
     try {
       const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
       for (const target of [scope, secondScope]) {
-        await persistSessionTranscriptTurn(target, {
-          messages: [
-            transcriptMessage(`${target.sessionId}-seed`, null, {
-              role: "user",
-              content: target.sessionId,
-            }),
-          ],
-          touchSessionEntry: false,
-        });
+        await seed(target, `${target.sessionId}-seed`, target.sessionId, null);
       }
       const databaseOptions = { agentId: scope.agentId, env: scope.env };
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      const markDirty = database.db.prepare(
-        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-      );
-      markDirty.run(scope.sessionId);
-      markDirty.run(secondScope.sessionId);
+      const database = openDatabase(databaseOptions);
 
-      const probe = createPlanFinishFence(scope.sessionId);
+      markDirty(database.db, scope.sessionId);
+      markDirty(database.db, secondScope.sessionId);
+
+      const probe = holdReconcileAck(observer, "plan-finish", scope.sessionId);
       const changes = vi.fn(() => database.db.isTransaction);
       const unsubscribe = sessionChanges.subscribe(changes);
       const facts = vi.fn();
       const unsubscribeFacts = sessionChanges.subscribeFacts(facts);
-      startSessionTranscriptIndexReconcile({
-        ...databaseOptions,
-        preferredSessionId: scope.sessionId,
-      });
+      startReconcile({ ...databaseOptions, preferredSessionId: scope.sessionId });
       let allReconciled = false;
-      const allReconciliation = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
+      const allReconciliation = waitForReconcile(databaseOptions).then(() => {
         allReconciled = true;
       });
       let targetOutcome: { ready: true } | { error: unknown } | undefined;
-      const targetReconciliation = waitForSessionTranscriptProjection(scope).then(
+      const targetReconciliation = waitForProjection(scope).then(
         () => {
           targetOutcome = { ready: true };
         },
@@ -451,19 +401,12 @@ describe("session transcript reconcile worker lifecycle", () => {
       );
 
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           probe.paused,
-          allReconciliation.then(() => {
-            throw new Error("reconciliation completed without the target acknowledgement gate");
-          }),
-        ]);
-        expect(
-          database.db
-            .prepare(
-              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(scope.sessionId),
-        ).toEqual({ needs_rebuild: 0 });
+          allReconciliation,
+          "reconciliation completed without the target acknowledgement gate",
+        );
+        expect(rebuildState(database.db, scope.sessionId)).toEqual({ needs_rebuild: 0 });
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
@@ -478,13 +421,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
         expect(allReconciled).toBe(false);
-        expect(
-          database.db
-            .prepare(
-              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(secondScope.sessionId),
-        ).toEqual({ needs_rebuild: 1 });
+        expect(rebuildState(database.db, secondScope.sessionId)).toEqual({ needs_rebuild: 1 });
       } finally {
         probe.release();
         try {
@@ -499,10 +436,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         [{ storePath: database.path, sessionKey: secondScope.sessionKey, scope: "transcript" }],
       ]);
     } finally {
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeDatabases();
     }
   }, 30_000);
 
@@ -511,11 +445,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     setRuntimeConfigSnapshot({});
     const databaseOptions = { agentId: "main", env };
-    const scope = {
-      ...databaseOptions,
-      sessionId: "reconcile-backoff",
-      sessionKey: "agent:main:reconcile-backoff",
-    };
+    const scope = scopeFor("reconcile-backoff", databaseOptions);
     const readyScope = { ...scope, sessionId: "ready-sibling", sessionKey: "agent:main:ready" };
     const paused = createDeferred();
     const resume = createDeferred();
@@ -527,22 +457,15 @@ describe("session transcript reconcile worker lifecycle", () => {
     const sleepSpy = vi.spyOn(timers, "setTimeout");
     try {
       for (const target of [scope, readyScope]) {
-        await persistSessionTranscriptTurn(target, {
-          messages: [
-            { eventId: `${target.sessionId}-seed`, message: { role: "user", content: "seed" } },
-          ],
-          touchSessionEntry: false,
-        });
+        await seed(target, `${target.sessionId}-seed`, "seed");
       }
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
-      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(databaseOptions));
-      const database = openOpenClawAgentDatabase(databaseOptions);
+      await waitForReconcile(databaseOptions);
+      await closeDatabase(databasePathFor(databaseOptions));
+      const database = openDatabase(databaseOptions);
       // Each active pass additionally retains the canonical publication actor until idle retirement.
       const baselineLeaseCount = countAgentDatabaseLeases(database.path, env);
-      const markDirty = database.db.prepare(
-        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-      );
-      markDirty.run(scope.sessionId);
+
+      markDirty(database.db, scope.sessionId);
       observer.onTask = ({ worker, observeMessage }) => {
         workers.add(worker);
         tasks += 1;
@@ -550,12 +473,9 @@ describe("session transcript reconcile worker lifecycle", () => {
           if (message.type !== "done" || !injectPending || injectedPending >= 6) {
             return;
           }
-          markDirty.run(scope.sessionId);
+          markDirty(database.db, scope.sessionId);
           injectedPending += 1;
-          startSessionTranscriptIndexReconcile({
-            ...databaseOptions,
-            preferredSessionId: scope.sessionId,
-          });
+          startReconcile({ ...databaseOptions, preferredSessionId: scope.sessionId });
         });
       };
       sleepSpy.mockClear();
@@ -566,105 +486,63 @@ describe("session transcript reconcile worker lifecycle", () => {
         }
         return await realSleep(ms, value, options);
       });
-      startSessionTranscriptIndexReconcile({
-        ...databaseOptions,
-        preferredSessionId: scope.sessionId,
-      });
-      const completed = waitForSessionTranscriptIndexReconcile(databaseOptions);
-      await Promise.race([
+      startReconcile({ ...databaseOptions, preferredSessionId: scope.sessionId });
+      const completed = waitForReconcile(databaseOptions);
+      await awaitGateBeforeSettlement(
         paused.promise,
-        completed.then(() => {
-          throw new Error("reconciliation completed without awaiting backoff");
-        }),
-      ]);
+        completed,
+        "reconciliation completed without awaiting backoff",
+      );
       expect(tasks).toBe(2);
       expect(workers.size).toBe(1);
       expect(countAgentDatabaseLeases(database.path, env)).toBe(baselineLeaseCount + 1);
-      startSessionTranscriptIndexReconcile({
-        ...databaseOptions,
-        preferredSessionId: readyScope.sessionId,
-      });
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          { eventId: "during-backoff", message: { role: "user", content: "queued while paused" } },
-        ],
-        touchSessionEntry: false,
-      });
-      await waitForSessionTranscriptProjection(readyScope);
+      startReconcile({ ...databaseOptions, preferredSessionId: readyScope.sessionId });
+      await seed(scope, "during-backoff", "queued while paused");
+      await waitForProjection(readyScope);
       expect(tasks).toBe(2);
-      expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(true);
+      expect(isReconciling(databaseOptions)).toBe(true);
       resume.resolve();
       await completed;
       expect(tasks).toBe(7);
       expect(workers.size).toBe(1);
       expect(injectedPending).toBe(6);
       expect(sleepSpy.mock.calls).toEqual([[0], [50], [200], [500], [1_000], [1_000]]);
-      expect(
-        database.db
-          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-          .get(scope.sessionId),
-      ).toEqual({ needs_rebuild: 0 });
+      expect(rebuildState(database.db, scope.sessionId)).toEqual({ needs_rebuild: 0 });
       expect(readProjectedTranscript(database, scope.sessionId)).toHaveLength(2);
       expect([...workers].every((worker) => worker.threadId > 0)).toBe(true);
-      expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
+      expect(isReconciling(databaseOptions)).toBe(false);
       expect(countAgentDatabaseLeases(database.path, env)).toBe(baselineLeaseCount + 1);
     } finally {
       injectPending = false;
       resume.resolve();
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await waitForReconcile(databaseOptions);
       sleepSpy.mockRestore();
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeDatabases();
     }
   }, 30_000);
 
   it.each([false, true])(
     "keeps canonical publication distinct from parent cache eviction (explicit close: %s)",
-    async (explicitClose) => {
-      const stateDir = tempDirs.make("openclaw-reconcile-retained-");
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        setRuntimeConfigSnapshot({});
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    (explicitClose) =>
+      withFakeClockState("openclaw-reconcile-retained-", async () => {
         const databaseOptions = { agentId: "main" };
-        const scope = {
-          ...databaseOptions,
-          sessionId: "retained-primary",
-          sessionKey: "agent:main:retained-primary",
-        };
+        const scope = scopeFor("retained-primary", databaseOptions);
         const canonical = observeCanonicalWriterLeases();
         try {
-          await persistSessionTranscriptTurn(scope, {
-            messages: [
-              {
-                eventId: "retained-message",
-                message: { role: "user", content: "Retained transcript" },
-              },
-            ],
-            touchSessionEntry: false,
-          });
-          await waitForSessionTranscriptIndexReconcile(databaseOptions);
-          const database = openOpenClawAgentDatabase(databaseOptions);
+          await seed(scope, "retained-message", "Retained transcript");
+          await waitForReconcile(databaseOptions);
+          const database = openDatabase(databaseOptions);
           const expected = readProjectedTranscript(database, scope.sessionId);
           expect(expected).toHaveLength(1);
-          database.db
-            .prepare(
-              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-            )
-            .run(scope.sessionId);
-          const probe = createPlanFinishFence(scope.sessionId);
-          const outcome = reconcileSessionTranscriptIndexes(databaseOptions).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (error: unknown) => ({ status: "rejected" as const, error }),
-          );
+          markDirty(database.db, scope.sessionId);
+          const probe = holdReconcileAck(observer, "plan-finish", scope.sessionId);
+          const outcome = settledOutcome(reconcile(databaseOptions));
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               probe.paused,
-              outcome.then(() => {
-                throw new Error("worker settled before the final acknowledgement");
-              }),
-            ]);
+              outcome,
+              "worker settled before the final acknowledgement",
+            );
             expect(probe.threadId()).toBeGreaterThan(0);
             const canonicalLeaseId = canonical.leases.get(database.path);
             const plannerLeaseId = probe.plannerLeases.get(database.path);
@@ -683,11 +561,7 @@ describe("session transcript reconcile worker lifecycle", () => {
               // Ordinary cache eviction must not revoke the separately retained publication owner.
               closeCachedOpenClawAgentDatabase(database);
               expect(database.db.isOpen).toBe(false);
-              expect(readAgentDatabaseLeaseIds(database.path)).toEqual(
-                [canonicalLeaseId, plannerLeaseId].toSorted((a, b) =>
-                  String(a).localeCompare(String(b)),
-                ),
-              );
+              expectLeases(database.path, canonicalLeaseId, plannerLeaseId);
             }
           } finally {
             probe.release();
@@ -698,7 +572,7 @@ describe("session transcript reconcile worker lifecycle", () => {
             value: { reconciledSessions: 1 },
           });
           if (explicitClose) {
-            await closeOpenClawAgentDatabaseByPathAsync(database.path);
+            await closeDatabase(database.path);
             expect(readAgentDatabaseLeaseIds(database.path)).toEqual([]);
           } else {
             expect(readAgentDatabaseLeaseIds(database.path)).toEqual([
@@ -708,115 +582,74 @@ describe("session transcript reconcile worker lifecycle", () => {
             // Timer dispatch starts native retirement; settlement must join its asynchronous close.
             await vi.waitFor(() => expect(readAgentDatabaseLeaseIds(database.path)).toEqual([]));
           }
-          const settled = openOpenClawAgentDatabase(databaseOptions);
+          const settled = openDatabase(databaseOptions);
           expect(settled).not.toBe(database);
           // Retirement after the final commit cannot discard its acknowledged projection.
           expect(readProjectedTranscript(settled, scope.sessionId)).toEqual(expected);
         } finally {
           canonical.restore();
-          try {
-            await closeOpenClawAgentDatabasesAsync();
-            closeOpenClawAgentDatabasesForTest();
-            await closeOpenClawStateDatabaseAsync();
-            closeOpenClawStateDatabaseForTest();
-          } finally {
-            vi.useRealTimers();
-          }
         }
-      });
-    },
+      }),
     30_000,
   );
 
   it.each(["clean", "worker-create", "preflight-transaction", "preflight-commit"] as const)(
     "releases its handle for idle retirement after %s preflight/worker startup",
-    async (mode) => {
-      const stateDir = tempDirs.make("openclaw-reconcile-startup-release-");
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        setRuntimeConfigSnapshot({});
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    (mode) =>
+      withFakeClockState("openclaw-reconcile-startup-release-", async () => {
         const options = { agentId: "main" };
-        const scope = {
-          ...options,
-          sessionId: "startup-release",
-          sessionKey: "agent:main:startup-release",
-        };
-        try {
-          await persistSessionTranscriptTurn(scope, {
-            messages: [
-              { eventId: "startup-message", message: { role: "user", content: "Startup release" } },
-            ],
-            touchSessionEntry: false,
-          });
-          await waitForSessionTranscriptIndexReconcile(options);
-          const database = openOpenClawAgentDatabase(options);
-          if (mode === "clean") {
-            // Admit the initial status once; the measured clean read needs no write grants.
-            await reconcileSessionTranscriptIndexes(options);
-          } else {
-            database.db
-              .prepare(
-                "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-              )
-              .run(scope.sessionId);
-          }
-          const admissions: string[] = [];
-          const admissionSpy = workerProbe.admission(admission, (request, grant, admit) => {
-            if (request.stage === "transaction" || request.stage === "commit") {
-              admissions.push(request.stage);
-              if (mode === `preflight-${request.stage}`) {
-                throw new Error(mode);
-              }
-            }
-            admit(request, grant);
-          });
-          const createWorker = vi.fn().mockImplementationOnce(() => {
-            throw new Error("worker-create");
-          });
-          observer.beforeCreate = createWorker;
-          try {
-            const operation = reconcileSessionTranscriptIndexes(options);
-            if (mode === "clean") {
-              await expect(operation).resolves.toEqual({ reconciledSessions: 0 });
-            } else {
-              await expect(operation).rejects.toThrow(mode);
-            }
-            expect(createWorker).toHaveBeenCalledTimes(mode === "worker-create" ? 2 : 0);
-            expect(admissions).toEqual(
-              mode === "clean"
-                ? []
-                : mode === "preflight-transaction"
-                  ? ["transaction"]
-                  : ["transaction", "commit"],
-            );
-            expect(database.db.isTransaction).toBe(false);
-            expect(
-              database.db
-                .prepare(
-                  "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-                )
-                .get(scope.sessionId),
-            ).toEqual({ needs_rebuild: mode === "clean" ? 0 : 1 });
-          } finally {
-            admissionSpy.mockRestore();
-            observer.beforeCreate = undefined;
-          }
-          expect(database.db.isOpen).toBe(true);
-          await vi.advanceTimersByTimeAsync(30 * 60_000);
-          expect(database.db.isOpen).toBe(false);
-          await vi.waitFor(() => expect(countAgentDatabaseLeases(database.path)).toBe(0));
-        } finally {
-          try {
-            await closeOpenClawAgentDatabasesAsync();
-            closeOpenClawAgentDatabasesForTest();
-            await closeOpenClawStateDatabaseAsync();
-            closeOpenClawStateDatabaseForTest();
-          } finally {
-            vi.useRealTimers();
-          }
+        const scope = scopeFor("startup-release", options);
+        await seed(scope, "startup-message", "Startup release");
+        await waitForReconcile(options);
+        const database = openDatabase(options);
+        if (mode === "clean") {
+          // Admit the initial status once; the measured clean read needs no write grants.
+          await reconcile(options);
+        } else {
+          markDirty(database.db, scope.sessionId);
         }
-      });
-    },
+        const admissions: string[] = [];
+        const admissionSpy = workerProbe.admission(admission, (request, grant, admit) => {
+          if (request.stage === "transaction" || request.stage === "commit") {
+            admissions.push(request.stage);
+            if (mode === `preflight-${request.stage}`) {
+              throw new Error(mode);
+            }
+          }
+          admit(request, grant);
+        });
+        const createWorker = vi.fn().mockImplementationOnce(() => {
+          throw new Error("worker-create");
+        });
+        observer.beforeCreate = createWorker;
+        try {
+          const operation = reconcile(options);
+          if (mode === "clean") {
+            await expect(operation).resolves.toEqual({ reconciledSessions: 0 });
+          } else {
+            await expect(operation).rejects.toThrow(mode);
+          }
+          expect(createWorker).toHaveBeenCalledTimes(mode === "worker-create" ? 2 : 0);
+          expect(admissions).toEqual(
+            mode === "clean"
+              ? []
+              : mode === "preflight-transaction"
+                ? ["transaction"]
+                : ["transaction", "commit"],
+          );
+          expect(database.db.isTransaction).toBe(false);
+          expect(rebuildState(database.db, scope.sessionId)).toEqual({
+            needs_rebuild: mode === "clean" ? 0 : 1,
+          });
+        } finally {
+          admissionSpy.mockRestore();
+          observer.beforeCreate = undefined;
+        }
+        expect(database.db.isOpen).toBe(true);
+        await vi.advanceTimersByTimeAsync(30 * 60_000);
+        expect(database.db.isOpen).toBe(false);
+        await vi.waitFor(() => expect(countAgentDatabaseLeases(database.path)).toBe(0));
+      }),
     30_000,
   );
 
@@ -825,64 +658,24 @@ describe("session transcript reconcile worker lifecycle", () => {
     { expectedTerminal: "failed" as const, failAfterFirstPlan: true },
   ])(
     "keeps the operation pending until lease release after $expectedTerminal",
-    async ({ expectedTerminal, failAfterFirstPlan }) => {
-      const stateDir = tempDirs.make("openclaw-transcript-worker-cleanup-");
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        setRuntimeConfigSnapshot({});
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    ({ expectedTerminal, failAfterFirstPlan }) =>
+      withFakeClockState("openclaw-transcript-worker-cleanup-", async () => {
         const primarySessionId = "cleanup-primary";
-        const primaryScope = {
-          agentId: "main",
-          sessionId: primarySessionId,
-          sessionKey: "agent:main:cleanup-primary",
-        };
+        const primaryScope = scopeFor(primarySessionId);
         const canonical = observeCanonicalWriterLeases();
         try {
-          await persistSessionTranscriptTurn(primaryScope, {
-            messages: [
-              {
-                eventId: "primary-message",
-                message: { role: "user", content: "primary" },
-              },
-            ],
-            touchSessionEntry: false,
-          });
+          await seed(primaryScope, "primary-message", "primary");
           if (failAfterFirstPlan) {
-            await persistSessionTranscriptTurn(
-              {
-                agentId: "main",
-                sessionId: "cleanup-malformed",
-                sessionKey: "agent:main:cleanup-malformed",
-              },
-              {
-                messages: [
-                  {
-                    eventId: "malformed-message",
-                    message: { role: "user", content: "malformed" },
-                  },
-                ],
-                touchSessionEntry: false,
-              },
-            );
+            await seed(scopeFor("cleanup-malformed"), "malformed-message", "malformed");
           }
-          await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
-          await closeOpenClawAgentDatabaseByPathAsync(
-            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-          );
+          await waitForReconcile({ agentId: "main" });
+          await closeDatabase(databasePathFor({ agentId: "main" }));
 
-          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          const database = openDatabase({ agentId: "main" });
           const databasePath = database.path;
-          database.db
-            .prepare(
-              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-            )
-            .run(primarySessionId);
+          markDirty(database.db, primarySessionId);
           if (failAfterFirstPlan) {
-            database.db
-              .prepare(
-                "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-              )
-              .run("cleanup-malformed");
+            markDirty(database.db, "cleanup-malformed");
             database.db
               .prepare(
                 "UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1",
@@ -894,12 +687,8 @@ describe("session transcript reconcile worker lifecycle", () => {
           expect(baselineLeases).toHaveLength(1);
           const probe = createCleanupFenceProbe();
           let settled = false;
-          const outcome = reconcileSessionTranscriptIndexes({
-            agentId: "main",
-            preferredSessionId: primarySessionId,
-          }).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (error: unknown) => ({ status: "rejected" as const, error }),
+          const outcome = settledOutcome(
+            reconcile({ agentId: "main", preferredSessionId: primarySessionId }),
           );
 
           void outcome.then(() => {
@@ -910,23 +699,21 @@ describe("session transcript reconcile worker lifecycle", () => {
             expect(canonical.leases.get(databasePath)).toMatch(/^[a-f0-9-]+$/u);
             expect(probe.plannerLeaseId()).toMatch(/^[a-f0-9-]+$/u);
             expect(canonical.leases.get(databasePath)).not.toBe(probe.plannerLeaseId());
-            expect(readAgentDatabaseLeaseIds(databasePath)).toEqual(
-              [
-                ...baselineLeases,
-                canonical.leases.get(databasePath),
-                probe.plannerLeaseId(),
-              ].toSorted((a, b) => String(a).localeCompare(String(b))),
+            expectLeases(
+              databasePath,
+              ...baselineLeases,
+              canonical.leases.get(databasePath),
+              probe.plannerLeaseId(),
             );
             await waitForCurrentProjection(databasePath, primarySessionId);
             await expect(probe.terminal).resolves.toBe(expectedTerminal);
             await timers.setTimeout(25);
             expect(settled).toBe(false);
-            expect(readAgentDatabaseLeaseIds(databasePath)).toEqual(
-              [
-                ...baselineLeases,
-                canonical.leases.get(databasePath),
-                probe.plannerLeaseId(),
-              ].toSorted((a, b) => String(a).localeCompare(String(b))),
+            expectLeases(
+              databasePath,
+              ...baselineLeases,
+              canonical.leases.get(databasePath),
+              probe.plannerLeaseId(),
             );
           } finally {
             probe.release();
@@ -934,16 +721,9 @@ describe("session transcript reconcile worker lifecycle", () => {
 
           const result = await outcome;
           await expect(probe.terminal).resolves.toBe(expectedTerminal);
-          expect(readAgentDatabaseLeaseIds(databasePath)).toEqual(
-            [...baselineLeases, canonical.leases.get(databasePath)].toSorted((a, b) =>
-              String(a).localeCompare(String(b)),
-            ),
-          );
+          expectLeases(databasePath, ...baselineLeases, canonical.leases.get(databasePath));
           if (expectedTerminal === "done") {
-            expect(result).toEqual({
-              status: "fulfilled",
-              value: { reconciledSessions: 1 },
-            });
+            expect(result).toEqual({ status: "fulfilled", value: { reconciledSessions: 1 } });
           } else {
             expect(result.status).toBe("rejected");
           }
@@ -953,17 +733,8 @@ describe("session transcript reconcile worker lifecycle", () => {
           await vi.waitFor(() => expect(countAgentDatabaseLeases(databasePath)).toBe(0));
         } finally {
           canonical.restore();
-          try {
-            await closeOpenClawAgentDatabasesAsync();
-            closeOpenClawAgentDatabasesForTest();
-            await closeOpenClawStateDatabaseAsync();
-            closeOpenClawStateDatabaseForTest();
-          } finally {
-            vi.useRealTimers();
-          }
         }
-      });
-    },
+      }),
     20_000,
   );
 });

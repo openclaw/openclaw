@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
+import { compareSessionActiveSteerInput } from "../../config/sessions/session-active-steer.js";
+import type { SessionPendingInputEndCause } from "../../config/sessions/session-pending-input-end-cause.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -17,10 +20,27 @@ export type ChatSendRetryComparison = {
   lifecycleRevision: string | undefined;
   clientRunId: string;
   submitted: Awaited<ReturnType<typeof readSessionSubmittedInput>>;
+  source?: "pending" | "transcript";
+  messageSeq?: number;
+  state?: string;
+  endCause?: SessionPendingInputEndCause;
+  completion?: import("../../agents/agent-run-terminal-outcome.types.js").AgentRunTerminalOutcome;
 };
 
+export function chatSendRequestConflictError(unverifiable = false, activeSteer = false) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    unverifiable && activeSteer
+      ? "The original steering delivery cannot be established. Keep the original message ID; do not submit the correction with a new message ID, which could deliver it twice."
+      : unverifiable
+        ? "The previous mention selections cannot be verified. Check the conversation history and use a new message ID to send again."
+        : "This message ID was already used for different input. Check the conversation history and use a new message ID to send again.",
+    { details: { reason: "chat-request-conflict" } },
+  );
+}
+
 /** Submitted bytes compare input; the caller's current owner still decides replay. */
-export function readChatSendRetryComparison(session: ComparisonSession) {
+export function readChatSendRetryComparison(session: ComparisonSession, includeCompletion = false) {
   if (!session.entry?.sessionId) {
     return undefined;
   }
@@ -29,15 +49,35 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
   return readSessionSubmittedInput(
     { agentId, storePath, sessionKey, sessionId },
     `${clientRunId}:user`,
+    { includeSource: true, includeCompletion },
   ).then((submitted): ChatSendRetryComparison => {
-    return { agentId, storePath, sessionKey, sessionId, lifecycleRevision, clientRunId, submitted };
+    return {
+      agentId,
+      storePath,
+      sessionKey,
+      sessionId,
+      lifecycleRevision,
+      clientRunId,
+      submitted: submitted?.message,
+      source: submitted?.source,
+      messageSeq: submitted?.messageSeq,
+      state: submitted?.state,
+      endCause: submitted?.endCause,
+      completion: submitted?.completion,
+    };
   });
 }
 
 export function compareChatSendSubmittedInput(
   request: Pick<
     NormalizedChatSendRequest,
-    "requestIdentity" | "rawMessage" | "mentions" | "workContext"
+    | "requestIdentity"
+    | "rawMessage"
+    | "mentions"
+    | "workContext"
+    | "appContext"
+    | "activeSteer"
+    | "p"
   >,
   session: ComparisonSession,
   comparison?: ChatSendRetryComparison,
@@ -59,7 +99,23 @@ export function compareChatSendSubmittedInput(
   }
   const submitted = comparison?.submitted;
   if (!submitted) {
-    return request.mentions?.length || request.workContext ? "unverifiable" : false;
+    return request.activeSteer ||
+      request.mentions?.length ||
+      request.workContext ||
+      request.appContext
+      ? "unverifiable"
+      : false;
+  }
+  const activeComparison = compareSessionActiveSteerInput({
+    submitted,
+    intent: request.activeSteer
+      ? { ...request.activeSteer, sessionId: request.p.sessionId }
+      : undefined,
+    requestIdentity: request.requestIdentity,
+    message: request.p.message,
+  });
+  if (activeComparison !== undefined) {
+    return activeComparison;
   }
   const storedIdentity = submitted["__openclaw"]?.chatRequestIdentity;
   if (typeof storedIdentity === "string") {
@@ -68,22 +124,30 @@ export function compareChatSendSubmittedInput(
   // Pre-fingerprint transcripts retain their existing annotation comparison contract.
   const storedMentions = submitted["__openclaw"]?.humanMentions;
   const storedContext = submitted["__openclaw"]?.workContext;
-  if (
-    !request.mentions?.length &&
-    !storedMentions?.length &&
-    !request.workContext &&
-    !storedContext
-  ) {
-    return false;
-  }
   const storedText =
     extractTextFromChatContent(submitted.content, {
       joinWith: "\n",
       normalizeText: (text) => text,
     }) ?? "";
+  // Legacy pending inputs have no raw-request fingerprint. A transformed legacy
+  // message is therefore unverifiable; only identical retained text can acknowledge it.
+  if (comparison?.source === "pending" && storedText !== request.rawMessage) {
+    return "unverifiable";
+  }
+  if (
+    !request.mentions?.length &&
+    !storedMentions?.length &&
+    !request.workContext &&
+    !storedContext &&
+    !request.appContext &&
+    !submitted["__openclaw"]?.appContext
+  ) {
+    return false;
+  }
   return (
     storedText !== request.rawMessage ||
     !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||
-    !isDeepStrictEqual(storedContext, request.workContext)
+    !isDeepStrictEqual(storedContext, request.workContext) ||
+    !isDeepStrictEqual(submitted["__openclaw"]?.appContext, request.appContext)
   );
 }

@@ -6,16 +6,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
+import { prepareReplyRunContext } from "./get-reply-run-context.js";
+import { baseParams } from "./get-reply-run.test-support.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
-  formatActiveGoalContext,
   refreshActiveGoalContext,
-  resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 
 const EMPTY_CFG = {} as OpenClawConfig;
@@ -207,41 +206,49 @@ describe("buildInboundUserContextPrefix", () => {
       suffix:
         'Current message:\n[Replying to: "Planning the picnic next month."]\n#42: Can you pick a date?',
     },
-  ])("keeps refreshed goals before the thread marker: %j", ({ provider, previousGoal, suffix }) => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "Can you pick a date?",
-      Provider: provider,
-      ChatType: "channel",
-      MessageSid: "42",
-      ReplyToBody: "Planning the picnic next month.",
-    });
-    const previousEntry = previousGoal ? createGoalSessionEntry("active", previousGoal) : undefined;
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "Can you pick a date?",
-      hasUserBody: true,
-      inboundUserContext: buildInboundUserContextPrefix(sessionCtx, undefined, previousEntry),
-      inboundUserContextPromptJoiner: resolveInboundUserContextPromptJoiner(sessionCtx),
-      activeGoalContext: formatActiveGoalContext(previousEntry),
-      isBareSessionReset: false,
-      startupAction: "new",
-      threadContextNote: "[Thread starter - for context]\nPlanning the picnic next month.",
-    });
-    const context = refreshActiveGoalContext(
-      envelope.currentInboundContext,
-      createGoalSessionEntry("active", "Pick a picnic date"),
-    );
-    const prompt = buildCurrentInboundPrompt({ context, prompt: envelope.prefixedCommandBody });
+  ])(
+    "keeps refreshed goals before the thread marker: %j",
+    async ({ provider, previousGoal, suffix }) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "Can you pick a date?",
+        Provider: provider,
+        ChatType: "channel",
+        MessageSid: "42",
+        ReplyToBody: "Planning the picnic next month.",
+      });
+      const previousEntry = previousGoal
+        ? createGoalSessionEntry("active", previousGoal)
+        : undefined;
+      const prepared = await prepareReplyRunContext(
+        baseParams({
+          ctx: sessionCtx,
+          sessionCtx,
+          sessionEntry: previousEntry,
+          isNewSession: false,
+        }),
+      );
+      if (prepared.kind !== "ready") {
+        throw new Error("Expected prepared reply context");
+      }
+      const envelope = prepared.buildPromptBodies({
+        prefixedBody: prepared.prefixedBodyBase,
+        threadContextNote: "[Thread starter - for context]\nPlanning the picnic next month.",
+      });
+      const context = refreshActiveGoalContext(
+        envelope.currentInboundContext,
+        createGoalSessionEntry("active", "Pick a picnic date"),
+      );
+      const prompt = buildCurrentInboundPrompt({ context, prompt: envelope.prefixedCommandBody });
 
-    expect(prompt).toContain("Active goal: Pick a picnic date");
-    expect(prompt.indexOf("Active goal: Pick a picnic date")).toBeLessThan(
-      prompt.indexOf("[Current message - respond to this]"),
-    );
-    expect(prompt).not.toContain("Active goal: Previous goal");
-    expect(prompt.endsWith(suffix)).toBe(true);
-    expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
-  });
+      expect(prompt).toContain("Active goal: Pick a picnic date");
+      expect(prompt.indexOf("Active goal: Pick a picnic date")).toBeLessThan(
+        prompt.indexOf("[Current message - respond to this]"),
+      );
+      expect(prompt).not.toContain("Active goal: Previous goal");
+      expect(prompt.endsWith(suffix)).toBe(true);
+      expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
+    },
+  );
 
   it.each<{
     name: string;

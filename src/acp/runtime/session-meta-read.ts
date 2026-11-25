@@ -2,7 +2,7 @@ import {
   withSessionEntryReadOnlyInWorker,
   type SessionEntryReadWorkerOwner,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { prepareMemoryAcpSessionEntryRead } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
@@ -42,7 +42,11 @@ export async function withAcpSessionEntryRead<T>(
     entry: AcpSessionStoreEntry | null,
     owner: SessionEntryReadWorkerOwner | undefined,
   ) => T | Promise<T>,
-  options: { currentMetadata?: true } = {},
+  options: {
+    currentMetadata?: true;
+    /** Skip the join when the consuming projection cannot use ACP metadata. */
+    includeMetadata?: (entry: SessionEntry | undefined) => boolean;
+  } = {},
 ): Promise<T> {
   const input = { ...params };
   const sessionKey = input.sessionKey.trim();
@@ -69,15 +73,18 @@ export async function withAcpSessionEntryRead<T>(
     assertCurrent,
     async (read, owner) => {
       const entry = read.ok ? read.value : undefined;
-      const [acp] = await readAcpSessionMetaForEntries(
-        {
-          entries: [{ sessionKey: storeSessionKey, agentId: target.agentId, entry }],
-          cfg,
-          env,
-          databasePath,
-        },
-        { current: options.currentMetadata },
-      );
+      const [acp] =
+        options.includeMetadata?.(entry) === false
+          ? []
+          : await readAcpSessionMetaForEntries(
+              {
+                entries: [{ sessionKey: storeSessionKey, agentId: target.agentId, entry }],
+                cfg,
+                env,
+                databasePath,
+              },
+              { current: options.currentMetadata },
+            );
       assertCurrent();
       return consume(
         {

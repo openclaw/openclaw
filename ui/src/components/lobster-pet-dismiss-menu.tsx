@@ -1,4 +1,4 @@
-import { createUniqueId, onCleanup } from "solid-js";
+import { createUniqueId, onSettled } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
@@ -14,11 +14,15 @@ export function LobsterPetDismissMenu(params: {
   const id = createUniqueId();
   let menu!: MenuHandle;
   let removeListeners: (() => void) | undefined;
-  onCleanup(() => removeListeners?.());
+  // Menu supplies its handle during settled setup; this owner retires its listeners.
+  onSettled(() => () => removeListeners?.());
   return (
     <div
       class="lobster-pet-dismiss-menu__position"
-      style={`--lobster-pet-menu-x: ${params.position.x}px; --lobster-pet-menu-y: ${params.position.y}px;`}
+      style={{
+        "--lobster-pet-menu-x": `${params.position.x}px`,
+        "--lobster-pet-menu-y": `${params.position.y}px`,
+      }}
     >
       <Menu
         id={id}

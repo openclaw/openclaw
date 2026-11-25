@@ -9,7 +9,7 @@ import type { MantisVisualDriverOptions, MantisVisualTaskOptions } from "./visua
 
 type MantisDiscordSmokeCommanderOptions = Omit<
   MantisDiscordSmokeOptions,
-  "env" | "now" | "redactPublicMetadata" | "token"
+  "env" | "redactPublicMetadata" | "token"
 >;
 
 type MantisBeforeAfterCommanderOptions = Omit<
@@ -38,7 +38,7 @@ type MantisSlackDesktopSmokeCommanderOptions = Omit<
 
 type MantisVisualTaskCommanderOptions = Omit<
   MantisVisualTaskOptions,
-  "commandRunner" | "env" | "now" | "settleMs" | "visionTimeoutMs"
+  "commandRunner" | "env" | "settleMs" | "visionTimeoutMs"
 > & {
   class?: string;
   settleMs?: string;

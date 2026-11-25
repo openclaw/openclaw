@@ -1,15 +1,14 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
-import { createNativeCatalogPerformanceFixture } from "./session-catalog-native-performance.test-support.js";
 import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-} from "./session-catalog.test-helpers.js";
+  createNativeCatalogPerformanceFixture,
+  startNativeCatalogPerformanceClient,
+} from "./session-catalog-native-performance.test-support.js";
+import { catalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks } from "./session-catalog.test-helpers.js";
 
 it("keeps exact-millisecond ties resident and applies real native title notifications", async () => {
   const root = await fs.realpath(process.env.OPENCLAW_STATE_DIR!);
@@ -25,22 +24,8 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
     const mtime = i === 0 ? 1_789_520_400 : 1_735_689_600;
     await fs.utimes(file, mtime, mtime);
   }
-  const child = spawn(state.command, ["app-server"], {
-    cwd: state.cwd,
-    env: state.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = await startNativeCatalogPerformanceClient(state);
   try {
-    await client.initialize();
-    const baseline = await client.request<CodexThreadListResponse>("thread/list", {
-      limit: 100,
-      archived: false,
-      modelProviders: [],
-      sortKey: "updated_at",
-      sortDirection: "desc",
-    });
-    expect(baseline.data).toHaveLength(81);
     const batches: string[][] = [];
     commandRpcMocks.codexControlRequest.mockImplementation(
       async (_plugin, method, request, options) => {
@@ -53,11 +38,7 @@ it("keeps exact-millisecond ties resident and applies real native title notifica
         return response;
       },
     );
-    const factory = createCodexSessionCatalogControlFactory({
-      env: state.env,
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
-    });
+    const factory = catalogFactory({ env: state.env });
     const source = (await factory.homesForAgent("main"))[0]!;
     await observeCodexCatalogClient(client, {
       startOptions: source.appServer.start,

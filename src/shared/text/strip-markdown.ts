@@ -21,21 +21,6 @@ type StripMarkdownOptions = {
   stripHtml?: boolean;
 };
 
-function collectLinkInsertions(ir: MarkdownIR, options: StripMarkdownOptions): MarkdownTextEdit[] {
-  const insertions: MarkdownTextEdit[] = [];
-  if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
-    for (const link of ir.links) {
-      const href = link.href.trim();
-      const label = ir.text.slice(link.start, link.end).trim();
-      const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-      if (href && label && label !== href && label !== comparableHref) {
-        insertions.push({ start: link.end, end: link.end, text: ` (${href})` });
-      }
-    }
-  }
-  return insertions;
-}
-
 function collectAssistantTranscriptRoleInsertions(
   source: string | MarkdownIR,
   options: StripMarkdownOptions,
@@ -105,8 +90,19 @@ export function stripMarkdown(
       ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
       : profile;
   const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
+  const insertions: MarkdownTextEdit[] = [];
+  if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
+    for (const link of projectedIr.links) {
+      const href = link.href.trim();
+      const label = projectedIr.text.slice(link.start, link.end).trim();
+      const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+      if (href && label && label !== href && label !== comparableHref) {
+        insertions.push({ start: link.end, end: link.end, text: ` (${href})` });
+      }
+    }
+  }
   const plainText = applyMarkdownTextEdits(projectedIr.text, [
-    ...collectLinkInsertions(projectedIr, options),
+    ...insertions,
     ...collectAssistantTranscriptRoleInsertions(projectedIr, options),
   ]).text.trim();
   const projected = applyMarkdownTextEdits(

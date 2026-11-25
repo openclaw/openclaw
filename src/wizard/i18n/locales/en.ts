@@ -51,6 +51,9 @@ export const en = {
       modelAlias: "Model alias (optional)",
       modelAliasPlaceholder: "e.g. local, ollama",
       modelId: "Model ID",
+      modelIdManual: "Enter a model ID manually",
+      modelDiscoveryUnavailable:
+        "Could not discover models from this endpoint. Check the base URL and credentials, or enter a model ID manually.",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
       noAuthConfirm:
@@ -204,6 +207,8 @@ export const en = {
       installedPlugin: "Installed {plugin} plugin",
       installingPlugin: "Installing {plugin} plugin…",
       installTitle: "Plugin install",
+      invalidInteger: "Enter a JSON integer.",
+      invalidNumber: "Enter a valid JSON number.",
       noRemoteInstallSource:
         "No remote install source is available for {plugin}. Returning to selection.",
       officialInstall: "Install optional plugins",
@@ -228,8 +233,11 @@ export const en = {
       currentNotInCatalog: "current (not in catalog)",
       allowed: "allowed",
       allowedNotInCatalog: "allowed (not in catalog)",
+      fallbackText: "Fallback models (comma-separated provider/model; blank to keep current)",
+      fallbackPicker: "Fallback models (multi-select)",
       allowlistPicker: "Models in /model picker (multi-select)",
       allowlistText: "Allowlist models (comma-separated provider/model; blank to keep current)",
+      clearFallbacks: "Remove these models from fallbacks?",
       clearAllowlist: "Clear the model allowlist? (shows all models)",
       configured: "configured",
       configuredNotInCatalog: "configured (not in catalog)",
@@ -330,16 +338,16 @@ export const en = {
       laneQuickHint: "Find AI access, choose a connection to verify, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
+      quickstartKeepRunningQuestion: "Keep OpenClaw running in the background?",
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
-      quickstartBackground:
-        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartBackground: "To keep the Gateway running in the background later: {command}",
       quickstartReopen:
-        "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
+        "Run {tuiCommand} to open the TUI, or {dashboardCommand} to reopen the web dashboard.",
       quickstartBrowserUnavailable:
         "The browser handoff did not finish. The Gateway is still running; open the dashboard when you are ready.",
       quickstartGatewayPending:
-        "The Gateway is not reachable yet. Keep this terminal open and run openclaw gateway status to check startup.",
+        "The Gateway is not reachable yet. Keep this terminal open and run {statusCommand} to check startup.",
       accessFullHint:
         "I find AI apps and keys on this machine; you choose which connection to test.",
       accessFullLabel: "Full access — find everything automatically",
@@ -403,7 +411,7 @@ export const en = {
       nextSteps:
         "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsWithoutAi:
-        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
+        "Workspace: {workspace}\nAdd AI later: re-run `{onboardCommand}`\nAfter AI connects, add a channel: `{channelsCommand}`\nOpen the dashboard: `{dashboardCommand}`",
       nextStepsTitle: "Next steps",
       noInferenceOptions:
         "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",
@@ -483,6 +491,8 @@ export const en = {
       testAiProgress: "Testing AI access with a live completion…",
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
+      utilityOnlyNote: "Pick a provider for your agent's conversations, or Skip for now.",
+      utilityOnlyTitle: "Choose your agent's model",
       whatSetup: "What do you want to set up?",
       workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
       workspaceConflictNotice:
@@ -1127,6 +1137,8 @@ export const en = {
     channelsPrimer: {
       approveWith: "Approve with: {command}",
       docs: "Docs: {link}",
+      credentialStorage:
+        "Entering a supported credential saves it in the shared secret store. If you run the CLI while the Gateway is running, this requires local Gateway admin access. Without that access, use an existing secret reference where supported, or stop the Gateway before entering the credential.",
       inboundSafety:
         "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
       multiUserDm:
@@ -1194,8 +1206,8 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
-      daemonRuntimeBun: "Bun 1.4.3+",
-      daemonRuntimeBunHint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
+      daemonRuntimeBun: "Bun 1.4.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

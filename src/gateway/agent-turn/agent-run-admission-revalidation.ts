@@ -37,8 +37,15 @@ export async function releaseFailedAgentRunAdmission(
   userTurn: PreparedAgentRunUserTurn,
   error: unknown,
   cleanupPreaccept: () => Promise<void>,
+  signal: AbortSignal,
+  accepted: boolean,
 ): Promise<never> {
-  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error, "interrupted");
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+    userTurn,
+    error,
+    signal,
+    accepted,
+  );
   try {
     await cleanupPreaccept();
   } catch (cleanupError) {
@@ -85,12 +92,11 @@ export function createAgentRunAdmissionRevalidator(options: {
         keys: params.getOwnedAgentDedupeKeys(),
         agentId: params.admissionAgentId(),
         runId: params.runId,
-        stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
+        stopReason: activeRunAbort.entry?.adapter.abortStopReason ?? "rpc",
       });
     }
   };
   return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
-    const disposition = parentResume ? "cancelled" : "interrupted";
     try {
       const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
@@ -108,7 +114,11 @@ export function createAgentRunAdmissionRevalidator(options: {
     } catch (err) {
       return (async () => {
         const failure = userTurn
-          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, disposition)
+          ? await releasePreparedAgentRunUserTurnAfterFailure(
+              userTurn,
+              err,
+              activeRunAbort.controller.signal,
+            )
           : err;
         if (failure === err) {
           publishAborted();
@@ -122,7 +132,13 @@ export function createAgentRunAdmissionRevalidator(options: {
     return (async () => {
       try {
         if (userTurn) {
-          await releasePreparedAgentRunUserTurn(userTurn, disposition);
+          await releasePreparedAgentRunUserTurn(
+            userTurn,
+            "cancelled",
+            activeRunAbort.controller.signal,
+            undefined,
+            false,
+          );
         }
         // Abort replay must not publish before pending input has durably settled.
         publishAborted();

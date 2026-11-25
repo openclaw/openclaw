@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 import {
+  assertColdTranscriptRows,
   gatewayCall,
   readTranscriptRows,
   runCli,
@@ -34,7 +35,7 @@ if (phase === "seed") {
   await writeFile(fixturePath, JSON.stringify({ ...fixture, rows }));
 } else if (phase === "recall") {
   const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
-  // Do not read history before chat.send: that would restore it ahead of the model path.
+  // Let chat.send be the first path that loads the archived conversation.
   await waitForArchives(context, [fixture.sessionId]);
   // The HTTP case supplies get_weather externally; the agent recall uses no tools.
   const config = await gatewayCall(context, "config.get", {});
@@ -44,7 +45,7 @@ if (phase === "seed") {
     replacePaths: ["tools.allow"],
   });
   assert.equal(policy.restart, undefined);
-  assert.equal(readTranscriptRows(stateDir, fixture.sessionId).length, 0);
+  assertColdTranscriptRows(stateDir, fixture);
 
   const message =
     "What recall code did I give you earlier? Reply with only that code. Do not use tools.";

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.types.js";
 import { logWarn } from "../logger.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
@@ -45,6 +46,10 @@ type StreamResult = {
 const REPLACEMENT_ERROR =
   "Assistant output cannot be represented as an append-only response stream.";
 
+function incompleteTurnError(text: string): StreamError {
+  return { message: text, type: "api_error", code: "incomplete_turn" };
+}
+
 export async function prepareOpenAiCompatibleHttpRequest<T extends z.ZodType>(
   req: IncomingMessage,
   res: ServerResponse,
@@ -78,15 +83,30 @@ export async function sendOpenAiCompatibleJsonResponse(params: {
   complete: (
     result: Omit<StreamResult, "delta" | "lifecycleError"> & { toolChoiceError?: string },
   ) => void;
-  fail?: (error: ReturnType<typeof resolveOpenAiCompatibleAgentError>) => void;
+  fail?: (
+    error: ReturnType<typeof resolveOpenAiCompatibleAgentError>,
+    result?: unknown,
+    incompleteTurnText?: string,
+  ) => void;
 }): Promise<true> {
+  const fail: NonNullable<typeof params.fail> =
+    params.fail ?? ((error) => sendJson(params.res, error.status, { error: error.error }));
   try {
     const result = await params.run();
     if (params.signal.aborted) {
       return true;
     }
-    const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+    const { runFailed, stopReason, pendingToolCalls, incompleteTurnText } =
+      readOpenAiHttpRunTerminal(result);
     if (runFailed) {
+      if (incompleteTurnText !== undefined) {
+        fail(
+          { status: 500, error: incompleteTurnError(incompleteTurnText) },
+          result,
+          incompleteTurnText,
+        );
+        return true;
+      }
       throw new Error("agent run failed");
     }
     params.complete({
@@ -100,12 +120,7 @@ export async function sendOpenAiCompatibleJsonResponse(params: {
   } catch (error) {
     if (!params.signal.aborted) {
       logWarn(`${params.failureLabel}: ${String(error)}`);
-      const mapped = resolveOpenAiCompatibleAgentError(error);
-      if (params.fail) {
-        params.fail(mapped);
-      } else {
-        sendJson(params.res, mapped.status, { error: mapped.error });
-      }
+      fail(resolveOpenAiCompatibleAgentError(error));
     }
   }
   return true;
@@ -121,7 +136,7 @@ export function startOpenAiCompatibleStream(params: {
   run: () => Promise<unknown>;
   writeDelta: (delta: string) => void;
   complete: (result: StreamResult) => void;
-  fail: (error: StreamError, result?: unknown) => void;
+  fail: (error: StreamError, result?: unknown, incompleteTurnText?: string) => void;
 }): void {
   if (params.signal.aborted) {
     return;
@@ -147,12 +162,12 @@ export function startOpenAiCompatibleStream(params: {
     writeDone(res);
     res.end();
   };
-  const fail = (error: StreamError, result?: unknown) => {
+  const fail = (error: StreamError, result?: unknown, incompleteTurnText?: string) => {
     if (closed) {
       return;
     }
     close();
-    params.fail(error, result);
+    params.fail(error, result, incompleteTurnText);
     finish();
   };
   const requestFinalize = () => {
@@ -194,12 +209,12 @@ export function startOpenAiCompatibleStream(params: {
       finish();
     });
   };
-  const unsubscribe = onAgentEventForRun(runId, (evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt: AgentEventRuntimePayload) => {
     if (closed) {
       return;
     }
     if (evt.stream === "assistant") {
-      const { delta, replacement } = textStream.update(evt.data);
+      const { delta, replacement } = textStream.update(evt.data, evt.assistantProjection?.rawDelta);
       if (chat && replacement === "unrepresentable") {
         streamError ??= { message: REPLACEMENT_ERROR, type: "api_error" };
         return;
@@ -243,9 +258,20 @@ export function startOpenAiCompatibleStream(params: {
       if (closed) {
         return;
       }
-      const { runFailed, stopReason, pendingToolCalls } = readOpenAiHttpRunTerminal(result);
+      const { runFailed, stopReason, pendingToolCalls, incompleteTurnText } =
+        readOpenAiHttpRunTerminal(result);
       if (runFailed) {
         terminalPhase = "error";
+        if (incompleteTurnText !== undefined) {
+          const delta = incompleteTurnText.startsWith(textStream.streamedText)
+            ? incompleteTurnText.slice(textStream.streamedText.length)
+            : "";
+          if (delta && !params.constraint) {
+            params.writeDelta(delta);
+          }
+          fail(incompleteTurnError(incompleteTurnText), result, incompleteTurnText);
+          return;
+        }
         fail({ message: "internal error", type: "api_error" }, result);
         return;
       }

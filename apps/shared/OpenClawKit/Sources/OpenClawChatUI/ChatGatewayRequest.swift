@@ -277,9 +277,13 @@ public enum OpenClawChatGatewayRequests {
         label: String?,
         parentSessionKey: String?,
         worktree: Bool?,
-        worktreeBaseRef: String? = nil) -> OpenClawChatGatewayRequest
+        worktreeBaseRef: String? = nil,
+        category: String? = nil,
+        cwd: String? = nil) -> OpenClawChatGatewayRequest
     {
         var params = ["key": AnyCodable(key)]
+        self.add(cwd, to: &params, key: "cwd")
+        self.add(category, to: &params, key: "category")
         self.add(agentID, to: &params, key: "agentId")
         self.add(label, to: &params, key: "label", trim: false)
         self.add(parentSessionKey, to: &params, key: "parentSessionKey", trim: false)
@@ -584,11 +588,15 @@ public enum OpenClawChatGatewayRequests {
         limit: Int? = nil,
         maxChars: Int? = nil,
         inputRunIDs: [String]? = nil,
+        cursor: String? = nil,
+        maxBytes: Int? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["limit"] = limit.map(AnyCodable.init)
         params["maxChars"] = maxChars.map(AnyCodable.init)
+        params["cursor"] = cursor.map(AnyCodable.init)
+        params["maxBytes"] = maxBytes.map(AnyCodable.init)
         if let inputRunIDs, !inputRunIDs.isEmpty {
             params["inputRunIds"] = AnyCodable(inputRunIDs)
         }
@@ -698,12 +706,13 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionRoutingContract: String?,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         supportsSessionSettingsCAS: Bool = false,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000) -> OpenClawChatGatewayRequest
+        requestTimeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
             "sessionKey": AnyCodable(sessionKey),
@@ -716,6 +725,7 @@ public enum OpenClawChatGatewayRequests {
             to: &params,
             key: "expectedSessionRoutingContract")
         self.add(thinking, to: &params, key: "thinking")
+        self.add(queueMode?.rawValue, to: &params, key: "queueMode")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode
                 .map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull())
@@ -737,7 +747,16 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "chat.send",
             params: params,
-            timeoutMs: Double(requestTimeoutMs))
+            timeoutMs: Double(requestTimeoutMs ?? self.sendTimeoutMs(attachments)))
+    }
+
+    private static func sendTimeoutMs(_ attachments: [OpenClawChatAttachmentPayload]) -> Int {
+        // Admission includes audio transcription; zero waits until the
+        // captured connection closes, the caller cancels, or the ACK arrives.
+        if attachments.contains(where: { $0.mimeType.lowercased().hasPrefix("audio/") }) { return 0 }
+        // URLSession completes a WebSocket send once the frame is buffered, so the
+        // deadline also covers the upload: allow 32 bytes/ms (256 kbit/s) for it.
+        return 30000 + attachments.reduce(0) { $0 + $1.content.utf8.count } / 32
     }
 
     public static func agentWait(

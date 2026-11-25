@@ -47,9 +47,15 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
     const family = () =>
       ["", "-wal", "-shm", "-journal"].map((suffix) => {
         const file = `${database.path}${suffix}`;
-        return fs.existsSync(file)
-          ? { suffix, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }
-          : { suffix, absent: true };
+        if (!fs.existsSync(file)) {
+          return { suffix, absent: true };
+        }
+        const bytes = fs.readFileSync(file);
+        if (suffix === "-shm") {
+          // Snapshot preparation and backup may update SQLite's WAL read marks.
+          bytes.fill(0, 100, 120);
+        }
+        return { suffix, sha256: createHash("sha256").update(bytes).digest("hex") };
       });
     const before = family();
     const shmBefore = fs.readFileSync(`${database.path}-shm`);
@@ -57,7 +63,7 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
     const tokenSql: string[] = [];
     // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its original native receiver.
     const execute = sqlite.DatabaseSync.prototype.exec;
-    const observer = vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+    vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
       this: DatabaseSync,
       sql: string,
     ) {
@@ -66,13 +72,12 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       }
       return execute.call(this, sql);
     });
-    let beforeBackup: ReturnType<typeof family> | undefined;
-    let afterBackup: ReturnType<typeof family> | undefined;
+    const backupFamilies: ReturnType<typeof family>[] = [];
     const nativeBackup = sqlite.backup.bind(sqlite);
     const backup = vi.spyOn(sqlite, "backup").mockImplementation(async (...args) => {
-      beforeBackup = family();
+      backupFamilies.push(family());
       const result = await nativeBackup(...args);
-      afterBackup = family();
+      backupFamilies.push(family());
       return result;
     });
     try {
@@ -95,21 +100,17 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       expect(database.db.isOpen).toBe(true);
       const after = family();
       const shmAfter = fs.readFileSync(`${database.path}-shm`);
-      const changedOffsets = [...shmBefore.keys()].filter(
-        (offset) => shmBefore[offset] !== shmAfter[offset],
-      );
-      expect(beforeBackup).toEqual(before);
-      expect(after).toEqual(afterBackup);
+      expect(backupFamilies).toEqual([before, after]);
       expect(after.filter((entry) => entry.suffix !== "-shm")).toEqual(
         before.filter((entry) => entry.suffix !== "-shm"),
       );
       // The retained native backup may update only SQLite's documented WAL read marks.
       expect(shmAfter.length).toBe(shmBefore.length);
-      expect(changedOffsets.every((offset) => offset >= 100 && offset < 120)).toBe(true);
+      expect(shmAfter.subarray(0, 100)).toEqual(shmBefore.subarray(0, 100));
+      expect(shmAfter.subarray(120)).toEqual(shmBefore.subarray(120));
       expect(tokenSql).toEqual([]);
     } finally {
-      observer.mockRestore();
-      backup.mockRestore();
+      vi.restoreAllMocks();
       await closeOpenClawStateDatabaseAsync();
       await cleanupSnapshotOperations();
     }

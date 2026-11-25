@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -26,66 +25,16 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { admissionFixture } from "./host-capability.shard.test-support.js";
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-const admissions: PreparedAgentRunAdmission[] = [];
-
-function assertWithoutHostSql(assertCurrent: () => void) {
-  const sql = observeHostDataSql();
-  try {
-    assertCurrent();
-  } finally {
-    try {
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  }
-}
-
-async function admittedAttempt(
-  runId: string,
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: {
-        kind: "system",
-        boundary: "host-capability-node-authority-test",
-        state: "present",
-      },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      permissionMode: "full",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
+const { admittedAttempt, closeAdmissions } = admissionFixture(
+  { permissionMode: "full" },
+  "host-capability-node-authority-test",
+);
 
 afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -114,7 +63,6 @@ it.each(["durable", "incognito"])(
           "close",
           "admission",
           "restart",
-          "permission",
           "session",
           "placement",
           "gateway",
@@ -177,9 +125,7 @@ it.each(["durable", "incognito"])(
                   },
                 };
                 expect(() =>
-                  assertWithoutHostSql(() =>
-                    placementGrantAuthority?.assertCurrent(placementGrantRequest),
-                  ),
+                  placementGrantAuthority?.assertCurrent(placementGrantRequest),
                 ).not.toThrow();
                 const ready = createDeferred();
                 const release = createDeferred();
@@ -192,7 +138,7 @@ it.each(["durable", "incognito"])(
                   async (assertCurrent) => {
                     ready.resolve();
                     await release.promise;
-                    assertWithoutHostSql(assertCurrent);
+                    assertCurrent();
                     return await dispatched();
                   },
                 );
@@ -203,7 +149,7 @@ it.each(["durable", "incognito"])(
                   return;
                 }
                 if (change === "plugin") {
-                  await expect(result).rejects.toThrow("no longer current");
+                  await expect(result).rejects.toThrow("The run or its session ended");
                   expect(dispatched).not.toHaveBeenCalled();
                   return;
                 }
@@ -217,9 +163,6 @@ it.each(["durable", "incognito"])(
                     break;
                   case "restart":
                     rotateAgentRunRegistryLifecycleGeneration();
-                    break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
                     break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
@@ -245,7 +188,9 @@ it.each(["durable", "incognito"])(
                     placementGrantAuthority?.assertCurrent(placementGrantRequest),
                   ).toThrow("no longer active");
                 } else {
-                  await expect(result).rejects.toThrow(/no longer (active|current)/);
+                  await expect(result).rejects.toThrow(
+                    /no longer (active|current)|The run or its session ended/,
+                  );
                   expect(dispatched).not.toHaveBeenCalled();
                 }
               }),

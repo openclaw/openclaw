@@ -8,6 +8,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
@@ -197,11 +198,26 @@ export function createSessionHistoryBudgetFixture(
   }
   return {
     createHistoricalTranscript,
+    createTrajectoryEvent,
     database,
     settlePhysicalUsage,
     setSessionUpdatedAt,
     addRouteReference,
     sessionExists,
     readArchiveNames,
+  };
+}
+
+function createTrajectoryEvent(sessionId: string, sessionKey: string): TrajectoryEvent {
+  return {
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: sessionId,
+    source: "runtime",
+    type: "history.test",
+    ts: "2026-07-18T00:00:00.000Z",
+    seq: 1,
+    sessionId,
+    sessionKey,
   };
 }

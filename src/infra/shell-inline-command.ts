@@ -293,7 +293,6 @@ export function isPowerShellInlineEncodedCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
-/** Detect POSIX interactive startup before an inline command flag. */
 export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
@@ -301,7 +300,6 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   return hasPosixStartupModeBeforeInlineCommand(argv, flags, "--interactive", "i");
 }
 
-/** Detect POSIX login startup before an inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,

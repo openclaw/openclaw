@@ -1,5 +1,8 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ModelCatalogRef as ModelRoute,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -13,11 +16,12 @@ import {
   resolveAgentConfig,
   resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import {
   resolveDefaultModelForAgent,
+  resolveEffectiveModelFallbacks,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-config.js";
 import {
@@ -32,11 +36,6 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CODEX_PLUGIN_ID = "codex";
 const OPENAI_PROVIDER_ID = "openai";
-
-type ModelRoute = {
-  provider: string;
-  modelId: string;
-};
 
 function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
   for (const [pluginId, entry] of Object.entries(cfg.plugins?.entries ?? {})) {
@@ -251,13 +250,15 @@ function configuredModelRefsNeedCodex(params: {
       agentId,
       manifestPlugins: [],
     });
+    const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
-      defaultProvider: primary.provider,
+      defaultProvider,
       manifestPlugins: [],
     });
     for (const ref of refs) {
       if (
+        ref.capability === "decision" ||
         !configuredRefIsEffectiveForAgent({
           cfg: params.cfg,
           sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
@@ -272,7 +273,7 @@ function configuredModelRefsNeedCodex(params: {
       const resolved = resolveModelRefFromString({
         cfg: params.cfg,
         raw: ref.value,
-        defaultProvider: primary.provider,
+        defaultProvider,
         aliasIndex,
         allowManifestNormalization: false,
       });

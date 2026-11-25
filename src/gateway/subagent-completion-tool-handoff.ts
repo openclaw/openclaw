@@ -102,7 +102,6 @@ export function consumeSubagentCompletionToolHandoff(params: {
   idempotencyKey?: string;
   provider?: string;
   model?: string;
-  nowMs?: number;
 }): TrustedSubagentCompletionHandoff | undefined {
   const handoffId = normalizeOptionalString(params.handoffId);
   const registration = normalizeRegistration(params);
@@ -113,7 +112,7 @@ export function consumeSubagentCompletionToolHandoff(params: {
   }
   const { sourceSessionKey, sourceSessionId, targetSessionKey, targetSessionId, idempotencyKey } =
     registration;
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   pruneExpired(nowMs);
   const entry = handoffs.get(handoffId);
   if (

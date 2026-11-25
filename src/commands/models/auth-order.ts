@@ -2,10 +2,11 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -29,17 +30,9 @@ function describeOrder(store: AuthProfileStore, provider: string, cfg: OpenClawC
   );
 }
 
-function describeOrderFallback(cfg: OpenClawConfig, provider: string): string {
-  const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
-  const configuredOrder =
-    findNormalizedProviderValue(cfg.auth?.order, authProvider) ??
-    findNormalizedProviderValue(cfg.auth?.order, provider);
-  if (configuredOrder === undefined) {
-    return "selecting automatically";
-  }
-  return configuredOrder.length > 0
-    ? `using order from config: ${configuredOrder.join(", ")}`
-    : "config selects no profiles";
+function describeEffectiveOrder(store: AuthProfileStore, cfg: OpenClawConfig, provider: string) {
+  const order = resolveAuthProfileOrder({ cfg, store, provider, readinessMode: "read-only" });
+  return `effective order: ${order.length > 0 ? order.join(", ") : "none"}`;
 }
 
 async function resolveAuthOrderContext(
@@ -64,7 +57,7 @@ export async function modelsAuthOrderGetCommand(
   runtime: RuntimeEnv,
 ) {
   const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime, "read");
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
   const order = describeOrder(store, provider, cfg);
@@ -86,7 +79,7 @@ export async function modelsAuthOrderGetCommand(
   runtime.log(
     order.length > 0
       ? `Auth profile order override: ${order.join(", ")}`
-      : `Auth profile order override: none (${describeOrderFallback(cfg, provider)})`,
+      : `Auth profile order override: none (${describeEffectiveOrder(store, cfg, provider)})`,
   );
 }
 
@@ -100,7 +93,7 @@ export async function modelsAuthOrderUpdateCommand(
   const store =
     opts.order === null
       ? null
-      : ensureAuthProfileStore(agentDir, {
+      : await ensureAuthProfileStoreAsync(agentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
         });
   const providerKey = resolveProviderIdForAuth(provider, { config: cfg });
@@ -142,10 +135,15 @@ export async function modelsAuthOrderUpdateCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
+  const effectiveStore = requested
+    ? updated
+    : await ensureAuthProfileStoreAsync(agentDir, {
+        externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
+      });
   runtime.log(
     requested
       ? `Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`
-      : `Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`,
+      : `Auth profile order override cleared; ${describeEffectiveOrder(effectiveStore, cfg, provider)}.`,
   );
   await refreshRunningGatewayAuthState(agentId, "update", runtime);
 }

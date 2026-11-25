@@ -8,8 +8,8 @@ import {
   type ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
+import { getMaxChatHistoryMessagesBytes } from "./chat-history-budget.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
-import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import {
   paginateSessionMessages,
   readChatHistoryMessageSeq as resolveMessageSeq,

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { WorkspaceConflictNotice } from "./chat-workspace-conflict.ts";
+import { ChatComposerNoticesContent } from "../chat-view-notices-content.tsx";
 
 const conflict = {
   paths: ["src/local.ts"],
@@ -42,9 +42,13 @@ describe("workspace conflict copy actions", () => {
     await i18n.setLocale("pt-BR");
     const container = document.body.appendChild(document.createElement("div"));
 
-    mountSolid(() => createComponent(WorkspaceConflictNotice, { conflict }), {
-      container,
-    });
+    mountSolid(
+      () =>
+        createComponent(ChatComposerNoticesContent, { messages: [], workspaceConflict: conflict }),
+      {
+        container,
+      },
+    );
 
     expect(container.querySelector(".chat-composer-neighbor-card__copy")?.textContent).toContain(
       "Versoes locais mantidas.",
@@ -55,8 +59,8 @@ describe("workspace conflict copy actions", () => {
   });
 
   it.each([
-    { copied: true, expected: "Copied!" },
-    { copied: false, expected: "Copy failed" },
+    { copied: true, expected: "Copied" },
+    { copied: false, expected: "Couldn’t copy. Try again." },
   ])("shows visible feedback when clipboard success is $copied", async ({ copied, expected }) => {
     const writeText = copied
       ? vi.fn().mockResolvedValue(undefined)
@@ -67,12 +71,16 @@ describe("workspace conflict copy actions", () => {
       value: vi.fn(() => false),
     });
     const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(() => createComponent(WorkspaceConflictNotice, { conflict }), {
-      container,
-    });
+    mountSolid(
+      () =>
+        createComponent(ChatComposerNoticesContent, { messages: [], workspaceConflict: conflict }),
+      {
+        container,
+      },
+    );
 
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
-      candidate.textContent?.includes("Inspect the first cloud version"),
+      candidate.textContent?.includes("Review the first cloud version"),
     );
     button?.click();
 

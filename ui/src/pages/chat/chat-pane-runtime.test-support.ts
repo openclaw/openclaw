@@ -1,15 +1,29 @@
 import { render as renderSolid } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
+import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
+import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,
   context: ApplicationContext,
 ) => R;
+
+export type PaneTestLifecycle = {
+  awaitDomCommit(): Promise<boolean>;
+  prepareRender(): void;
+  commitRender(): void;
+  connectedCallback(): void;
+  disconnectedCallback(): void;
+};
 
 const paneTestRuntimes = new WeakMap<HTMLElement, ChatPaneRuntime>();
 
@@ -18,7 +32,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
   tag: string,
   Runtime: PaneRuntimeConstructor<R>,
   createContext: () => ApplicationContext,
-): R & HTMLElement {
+): R & HTMLElement & PaneTestLifecycle {
   if (!customElements.get(tag)) {
     customElements.define(
       tag,
@@ -34,8 +48,17 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
             return;
           }
           this.runtime.isConnected = false;
+          const runtime = this.runtime;
+          // The fixture forwards protected runtime fields; match the production bridge's context.
+          const context = Reflect.get(runtime, "context") as ApplicationContext;
           this.dispose = renderSolid(
-            () => createComponent(ChatPaneRuntimeView, { runtime: this.runtime }),
+            () =>
+              createComponent(ApplicationProvider, {
+                value: context,
+                get children() {
+                  return createChatPaneView(runtime);
+                },
+              }),
             this,
           );
         }
@@ -44,7 +67,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
             this.dispose();
             this.dispose = undefined;
           } else {
-            this.runtime.disconnectedCallback();
+            this.runtime.dispose();
           }
         }
       },
@@ -54,10 +77,36 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
   const runtime = paneTestRuntimes.get(element)!;
   const bound = new WeakMap<object, unknown>();
   const lifecycle = new Set(["connectedCallback", "disconnectedCallback"]);
+  const inputs = new Set<string>(chatPanePropertyKeys);
   const owner = (key: PropertyKey) =>
     !lifecycle.has(String(key)) && (key in runtime || !(key in element)) ? runtime : element;
   const pane = new Proxy(element, {
     get(_target, key) {
+      if (key === "willUpdate") {
+        return (changes: Map<PropertyKey, unknown>) =>
+          runtime.synchronizeInputs({
+            sessionKey: changes.has("sessionKey"),
+            inputRegion: changes.has("inputRegion"),
+            draft: changes.has("draft"),
+          });
+      }
+      if (key === "updated") {
+        return (changes?: Map<PropertyKey, unknown>) =>
+          runtime.afterRender(changes?.has("focusComposer") ?? false);
+      }
+      if (key === "prepareRender") {
+        return () => {
+          runtime.chatState.publishPendingRunState();
+          runtime.chatState.captureRenderChanges();
+          runtime.synchronizeInputs({});
+        };
+      }
+      if (key === "commitRender") {
+        return () => {
+          runtime.afterRender(false);
+          runtime.chatState.commitRender();
+        };
+      }
       const source = owner(key);
       const value: unknown = Reflect.get(source, key);
       if (typeof value !== "function" || vi.isMockFunction(value)) {
@@ -69,7 +118,25 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return bound.get(value);
     },
     set(_target, key, value) {
-      return Reflect.set(owner(key), key, value);
+      const source = owner(key);
+      const previous = Reflect.get(source, key);
+      if (inputs.has(String(key)) && !Object.is(previous, value)) {
+        runtime.chatState.publishPendingRunState();
+      }
+      const applied = Reflect.set(source, key, value);
+      if (applied && inputs.has(String(key)) && !Object.is(previous, value)) {
+        if (runtime.isConnected) {
+          void runtime.awaitDomCommit();
+          runtime.synchronizeInputs({
+            sessionKey: key === "sessionKey",
+            inputRegion: key === "inputRegion",
+            draft: key === "draft",
+            focusComposer: key === "focusComposer",
+          });
+          runtime.refreshBoardSubscriptions();
+        }
+      }
+      return applied;
     },
     defineProperty(_target, key, descriptor) {
       return Reflect.defineProperty(owner(key), key, descriptor);
@@ -91,8 +158,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return key in runtime || key in element;
     },
   });
-  // SAFETY: This test adapter forwards controller members and native DOM access to their owners.
-  return pane as R & HTMLElement;
+  // SAFETY: This test adapter forwards runtime members and native DOM access to their owners.
+  return pane as R & HTMLElement & PaneTestLifecycle;
 }
 
 export function getPaneTestRuntime(pane: { element: HTMLElement }): ChatPaneRuntime {
@@ -102,10 +169,65 @@ export function getPaneTestRuntime(pane: { element: HTMLElement }): ChatPaneRunt
 /** Render-cadence tests use the real view with only its base connection lifecycle. */
 export function connectPaneTestView(pane: { element: HTMLElement }) {
   const runtime = getPaneTestRuntime(pane);
-  runtime.connectedCallback = () => ChatPaneBase.prototype.connectedCallback.call(runtime);
-  runtime.disconnectedCallback = () => ChatPaneBase.prototype.disconnectedCallback.call(runtime);
+  runtime.start = () => ChatPaneStateOwner.prototype.start.call(runtime);
+  runtime.dispose = () => ChatPaneStateOwner.prototype.dispose.call(runtime);
   const connect: unknown = Reflect.get(pane.element, "connectedCallback");
   if (typeof connect === "function") {
     connect.call(pane.element);
   }
+}
+
+export function configureGatewayBoardPane<
+  TPane extends { state: ChatPageHost; context: ApplicationContext },
+>(
+  pane: TPane,
+  params: {
+    sessionKey: string;
+    methods?: readonly string[];
+    scopes?: readonly string[];
+    capabilities?: readonly string[];
+    lifecycleConnected?: boolean;
+    sharingRole?: GatewaySessionRow["sharingRole"];
+  },
+) {
+  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
+  const removeListener = vi.fn();
+  const request = vi.fn<
+    (
+      method: string,
+      params: { sessionKey: string; agentId?: string },
+    ) => Promise<BoardProvider["snapshot$"]["value"]>
+  >(async () => snapshot);
+  const addEventListener = vi.fn(() => removeListener);
+  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
+  pane.state.sessionKey = params.sessionKey;
+  pane.state.client = client;
+  if (params.sharingRole) {
+    pane.state.sessionsResult = {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: params.sessionKey, kind: "direct", sharingRole: params.sharingRole }],
+    };
+  }
+  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
+  pane.context = {
+    ...pane.context,
+    gateway: {
+      snapshot: {
+        client,
+        phase: "connected",
+        hello: {
+          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
+          features: {
+            methods: params.methods ?? ["board.get"],
+            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+          },
+        },
+      },
+    },
+  } as unknown as ApplicationContext;
+  pane.context.connectionBootstrap.synchronize({ client, connected: true });
+  return { pane, snapshot, client, request, addEventListener, removeListener };
 }

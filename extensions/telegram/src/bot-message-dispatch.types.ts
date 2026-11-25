@@ -16,9 +16,9 @@ import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
+import type { deliverReplies } from "./bot/delivery.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
@@ -39,7 +39,6 @@ export type DispatchTelegramMessageParams = {
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
-  telegramDeps?: TelegramBotDeps;
   opts: Pick<
     TelegramBotOptions,
     "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
@@ -80,7 +79,7 @@ type TelegramAnswerBlockDelivery = {
   buttons: import("./button-types.js").TelegramInlineButtons | undefined;
 };
 
-export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "telegramDeps"> & {
+export type TelegramDispatchTurnConfig = DispatchTelegramMessageParams & {
   allowProviderPreview: boolean;
   chunkMode: TextChunkMode;
   dispatchStartedAt: number;
@@ -97,8 +96,7 @@ export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "te
   /** Resolved once per turn by the rich-messages owner; never re-read from telegramCfg. */
   richMessages: boolean;
   statusReactionController: TelegramMessageContext["statusReactionController"];
-  tableMode: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]["tableMode"];
-  telegramDeps: TelegramBotDeps;
+  tableMode: Parameters<typeof deliverReplies>[0]["tableMode"];
 };
 
 export type TelegramSplitLaneSegmentsResult = {
@@ -181,6 +179,11 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
-    progressContinuationAdopted?: boolean;
+    /**
+     * Another owner now delivers this turn's final: a follow-up adopted the progress card,
+     * or the delivery queue holds a flood-refused final and resends it. Either way the
+     * turn must not send a failure fallback or ask the user to resend.
+     */
+    finalHandoff?: "progress-continuation" | "delivery-queue";
     dispatchError?: unknown;
   };

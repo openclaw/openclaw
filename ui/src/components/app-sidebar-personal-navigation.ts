@@ -4,38 +4,47 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type {
-  SessionConnectionScope,
-  SessionListSnapshot,
-} from "../lib/sessions/session-capability.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
+import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
+import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
+import {
+  buildReconciledSidebarZone,
+  findSidebarSessionRow,
+} from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
+  type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
-  readonly pinnedSessions: SidebarPinnedSessions;
+  readonly sessionData: Pick<SessionDataOwner, "sessionResultsByAgent">;
+  readonly pinnedSessions: ReturnType<typeof createSidebarPinnedSessions>;
   readonly sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  expandedAgentId(): string;
   readonly sessionDataContext:
     | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
     | undefined;
-  readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
+  sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
-  findSidebarSessionByKey(key: string): SidebarRecentSession | undefined;
+  findSidebarSessionByKey(
+    key: string,
+    navigationState?: SidebarSessionNavigationState,
+  ): SidebarRecentSession | undefined;
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
 
@@ -70,15 +79,14 @@ export function hidePersonalSidebarCatalog(
   recoveryLink.className = "session-link";
   recoveryLink.href = recoveryHref;
   recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  recoveryLink.addEventListener("click", (event) => {
-    if (!shouldHandleNavigationClick(event)) {
-      return;
-    }
-    event.preventDefault();
-    host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
-  });
+  listen(recoveryLink, "click", (event) =>
+    handleNavigationClick(event, () =>
+      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
+    ),
+  );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
+    severity: "success",
     message,
     actionLabel: t("common.undo"),
     onAction: () => setStoredSessionCatalogHidden(catalogId, false),
@@ -86,151 +94,264 @@ export function hidePersonalSidebarCatalog(
   });
 }
 
-/** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export class SidebarPinnedSessions implements SolidController {
-  private source?: ApplicationContext["sessions"];
-  private scope: SessionConnectionScope | null = null;
-  private readonly requested = new Map<string, "pending" | "settled">();
-  private readonly rows = new Map<string, GatewaySessionRow>();
-
-  constructor(
-    private readonly host: SolidControllerHost & {
-      readonly isConnected: boolean;
-      readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-      readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
-    },
-  ) {
-    host.addController(this);
+/** Personal references observe the session owner; seeds only bridge presentation. */
+export function createSidebarPinnedSessions(
+  host: Pick<
+    PersonalNavigationHost,
+    | "sessionDataContext"
+    | "findSidebarSessionByKey"
+    | "sidebarEntries"
+    | "sessionNavigationAgentId"
+    | "getSessionNavigationState"
+    | "getRouteSessionKey"
+  > & {
+    readonly isConnected: boolean;
+    readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+  },
+) {
+  let source: ApplicationContext["sessions"] | undefined;
+  let scope: SessionConnectionScope | null = null;
+  type Read = {
+    observation?: ReturnType<ApplicationContext["sessions"]["observeRow"]>;
+    settled: boolean;
+  };
+  const reads = new Map<string, Read | "invalidated">();
+  const seeds = new Map<string, () => SidebarRecentSession>();
+  function retire(key: string, keepSeed = false) {
+    const read = reads.get(key);
+    if (read && read !== "invalidated") {
+      read.observation?.dispose();
+    }
+    reads.delete(key);
+    if (!keepSeed) {
+      seeds.delete(key);
+    }
   }
-
-  hostConnected(): void {
-    this.host.requestUpdate();
+  function dispose() {
+    for (const key of reads.keys()) {
+      retire(key);
+    }
+    seeds.clear();
+    source = undefined;
+    scope = null;
   }
-
-  hostUpdate(): void {
-    this.synchronize();
-  }
-
-  private synchronize() {
-    const source = this.host.sessionDataContext?.sessions;
-    if (source !== this.source || !this.scope || !source?.isConnectionScopeCurrent(this.scope)) {
-      this.clear();
-      this.source = source;
-      this.scope = source?.captureConnectionScope() ?? null;
+  function synchronizeSource() {
+    const nextSource = host.sessionDataContext?.sessions;
+    if (nextSource !== source || !scope || !nextSource?.isConnectionScopeCurrent(scope)) {
+      dispose();
+      source = nextSource;
+      scope = source?.captureConnectionScope() ?? null;
     }
     return source;
   }
-
-  seed(rows: SidebarSnapshotModel["pinnedSessions"]): void {
-    this.synchronize();
-    if (!this.scope) {
+  function synchronize() {
+    synchronizeSource();
+    const keys = new Set(
+      host.sidebarEntries.flatMap((value) => {
+        const entry = parseSidebarEntry(value);
+        return entry?.type === "session" ? [entry.key] : [];
+      }),
+    );
+    for (const key of reads.keys()) {
+      if (!keys.has(key)) {
+        retire(key);
+      }
+    }
+    for (const key of seeds.keys()) {
+      if (!keys.has(key)) {
+        seeds.delete(key);
+      }
+    }
+    return source;
+  }
+  function seed(snapshot: readonly SidebarRecentSession[]): void {
+    synchronizeSource();
+    if (!scope) {
       return;
     }
-    for (const row of rows) {
-      if (!this.rows.has(row.key) && this.requested.get(row.key) !== "settled") {
-        this.rows.set(row.key, {
-          key: row.key,
-          kind: "direct",
-          updatedAt: null,
-          agentId: row.agentId,
-          label: row.label,
-          icon: row.icon,
-          color: row.color,
-          pinned: row.pinned,
-          archived: row.archived,
-          boardFace: row.boardFace,
-        });
+    for (const row of snapshot) {
+      const read = reads.get(row.key);
+      // Keep the latest visible projection for an observed row, so a refresh can
+      // retain it without projecting again inside an event handler.
+      if (!seeds.has(row.key) || (read !== "invalidated" && read?.observation?.row)) {
+        seeds.set(row.key, () => ({
+          ...row,
+          active: row.key === host.getRouteSessionKey(),
+          visuallyActive: row.key === host.getRouteSessionKey(),
+        }));
       }
     }
   }
-
-  get(key: string): GatewaySessionRow | undefined {
-    const context = this.host.sessionDataContext;
-    const source = this.synchronize();
-    const scope = this.scope;
-    if (!this.host.isConnected || !source || !scope || !context) {
+  function readReference(key: string): Read | undefined {
+    const context = host.sessionDataContext;
+    const currentSource = synchronizeSource();
+    const currentScope = scope;
+    if (!host.isConnected || !currentSource || !currentScope || !context) {
       return undefined;
     }
-    if (!this.requested.has(key)) {
-      this.requested.set(key, "pending");
+    let read = reads.get(key);
+    if (!read || read === "invalidated") {
+      const refresh = read === "invalidated";
+      const owned: Read = { settled: false };
+      read = owned;
+      reads.set(key, owned);
       const current = () =>
-        this.source === source &&
-        this.host.sessionDataContext === context &&
-        this.scope === scope &&
-        source.isConnectionScopeCurrent(scope);
-      const publish = (row?: GatewaySessionRow | null) => {
+        reads.get(key) === owned &&
+        source === currentSource &&
+        host.sessionDataContext === context &&
+        scope === currentScope &&
+        currentSource.isConnectionScopeCurrent(currentScope);
+      const publish = () => {
         if (!current()) {
           return;
         }
-        this.requested.set(key, "settled");
-        if (row) {
-          this.rows.set(key, row);
-        } else if (!this.rows.delete(key)) {
+        if (owned.observation?.isCurrent() === false) {
+          invalidate();
+        } else if (host.isConnected) {
+          host.sessionData.requestSessionDataUpdate();
+        }
+      };
+      const invalidate = () => {
+        if (!current()) {
           return;
         }
-        if (this.host.isConnected) {
-          this.host.sessionData.requestSessionDataUpdate();
+        retire(key, Boolean(owned.observation?.row));
+        reads.set(key, "invalidated");
+        if (host.isConnected) {
+          host.sessionData.requestSessionDataUpdate();
         }
       };
       const describe = async () => {
+        // Register outside the render read phase: a held row can publish immediately.
+        await Promise.resolve();
         if (!current()) {
           return;
         }
-        if (!this.host.isConnected) {
-          this.requested.delete(key);
+        if (!host.isConnected || host.findSidebarSessionByKey(key)) {
+          if (refresh) {
+            reads.set(key, "invalidated");
+          } else {
+            reads.delete(key);
+          }
           return;
         }
-        await source.describe({ key }).then(
-          (result) => publish(result.session),
-          () => {
-            /* Missing or failed pins stay saved, invisible, and silent. */
-            publish();
+        const observation = currentSource.observeRow(
+          { key, agentId: host.sessionNavigationAgentId({ key }) },
+          publish,
+          {
+            onInvalidate: invalidate,
+            onEvent: (event, result) => {
+              if (
+                !result.generationRejected &&
+                event.event === "sessions.changed" &&
+                !readSessionChangedEvent(event.payload)
+              ) {
+                invalidate();
+              }
+            },
           },
         );
+        owned.observation = observation;
+        const reconcile = observation.captureReconcile();
+        const accept = (row?: GatewaySessionRow | null) => {
+          if (!current()) {
+            return;
+          }
+          owned.settled = true;
+          if (!row) {
+            seeds.delete(key);
+          }
+          reconcile(row ?? undefined);
+          publish();
+        };
+        // A supplemental read can retire the row without clearing its old descriptor.
+        const description = refresh
+          ? currentSource.describe({ key }, { refresh: true })
+          : currentSource.describe({ key });
+        await description.then(
+          (result) => accept(result.session),
+          () => accept(),
+        );
       };
-      // Cached pins can paint while the selected conversation takes the request budget.
       void context.connectionBootstrap.run(describe, describe, { background: true });
     }
-    return this.rows.get(key);
+    return read;
   }
+  function get(key: string): SidebarRecentSession | undefined {
+    const read = readReference(key);
+    if (!read) {
+      return undefined;
+    }
+    const row = read.observation?.row;
+    return row
+      ? host.getSessionNavigationState().toSidebarSession(row)
+      : read.settled
+        ? undefined
+        : seeds.get(key)?.();
+  }
+  return { synchronize, seed, get, dispose };
+}
 
-  private clear(): void {
-    this.source = undefined;
-    this.scope = null;
-    this.requested.clear();
-    this.rows.clear();
-  }
+function resolvePinnedSession(
+  host: PersonalNavigationHost,
+  key: string,
+  navigationState: SidebarSessionNavigationState,
+) {
+  const row = findSidebarSessionRow({
+    sessionKey: key,
+    navigationState,
+    sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
+  });
+  return row ? navigationState.toSidebarSession(row) : host.pinnedSessions.get(key);
+}
+
+function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {
+  return (
+    host.sidebarAgentsMode === "roster" ||
+    host.sessionNavigationAgentId({ key }) === host.expandedAgentId()
+  );
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
-    const entry = parseSidebarEntry(value);
-    if (entry?.type !== "session") {
+  let navigationState: SidebarSessionNavigationState | undefined;
+  const keys = host.sidebarSnapshot
+    ? []
+    : host.sidebarEntries.flatMap((value) => {
+        const entry = parseSidebarEntry(value);
+        return entry?.type === "session" ? [entry.key] : [];
+      });
+  const canonical = new Map(rows.map((row) => [row.key, row]));
+  const pins = [...new Set(keys)].flatMap((key) => {
+    // Query replacement may retain a descriptor; a known deletion may not.
+    if (host.sessionDataContext?.sessions.deletionState(key)) {
       return [];
     }
-    const loaded = host.findSidebarSessionByKey(entry.key);
-    const snapshot = loaded
-      ? undefined
-      : (host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key) ??
-        host.pinnedSessions.get(entry.key));
+    const projected = canonical.get(key);
     const row =
-      loaded ??
-      (snapshot ? host.getSessionNavigationState().toSidebarSession(snapshot) : undefined);
+      projected ??
+      resolvePinnedSession(host, key, (navigationState ??= host.getSessionNavigationState()));
     return row ? [row] : [];
   });
-  return buildReconciledSidebarZone({
+  if (pins.length) {
+    // Visible references bridge query replacement until their owner observations settle.
+    host.pinnedSessions.seed(pins);
+  }
+  const zone = buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],
     pluginNavigation: host.pluginNavigation(),
     pluginTabs: host.sessionDataContext?.gateway.snapshot.hello?.controlUiTabs,
-    snapshot: host.sidebarSnapshot
-      ? { model: host.sidebarSnapshot, selectedKey: host.getRouteSessionKey() }
-      : undefined,
     pendingPlugins:
       host.sessionDataContext?.plugins.registryStatus !== "complete"
         ? host.sidebarPluginSnapshot
         : null,
   });
+  // Scope sidebar pins without removing saved references or global rail shortcuts.
+  zone.entries = zone.entries.filter(
+    (entry) =>
+      entry.type !== "session" || entry.rail || personalSessionMatchesAgent(host, entry.key),
+  );
+  return zone;
 }
 
 export function projectUnpinnedSessionRows(
@@ -245,9 +366,7 @@ export function projectUnpinnedSessionRows(
 
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
-    readonly sidebarAgentsMode: "chip" | "roster";
-    readonly sessionOwnerFilter: SessionOwnerFilterController;
-    expandedAgentId(): string;
+    readonly sessionOwnerFilter: SessionOwnerFilter;
   },
 ): string | null {
   if (host.sidebarSnapshot) {
@@ -255,7 +374,7 @@ export function personalSidebarOwnerFilterId(
   }
   const agentId = host.sidebarAgentsMode === "roster" ? "*" : host.expandedAgentId();
   const hasMultipleOwners = host.sessionOwnerFilter.hasMultipleOwners(agentId);
-  const ownerId = host.sessionOwnerFilter.ownerId;
+  const ownerId = host.sessionOwnerFilter.read().ownerId;
   const context = host.sessionDataContext;
   // Solo installs must include legacy sessions without owner metadata.
   return ownerId ===
@@ -273,11 +392,48 @@ export function personalSidebarOwnerProjection(
 ) {
   const context = host.sessionDataContext;
   const self = context ? gatewayPresentationScope(context.gateway).displayUser : null;
+  const selectedOwnerId = host.sessionOwnerFilterId;
   return applySidebarSessionOwnerFilter({
     projected,
     ownerFacet,
-    selectedOwnerId: host.sessionOwnerFilterId,
-    selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
+    selectedOwnerId,
+    selectedProfileId: selectedOwnerId === self?.id ? self.id : undefined,
     self,
   });
+}
+
+/** Rendering and selection share visibility for saved personal references. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  now = Date.now(),
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row &&
+      row.archived !== true &&
+      !archiveVisibility?.(row.key) &&
+      !isSessionSnoozed(row, now)
+      ? [row]
+      : [];
+  });
+}
+
+export function sidebarVisibleRowsInOrder(
+  zone: SidebarPinZone,
+  visibleRows: SidebarRecentSession[],
+  host: {
+    readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly sessionDataContext?: {
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
+): SidebarRecentSession[] {
+  const pins = host.collapsedSessionSections.has("pinned")
+    ? []
+    : sidebarPinnedSessionRows(zone, (key) =>
+        host.sessionDataContext?.sessions.archiveVisibility(key),
+      );
+  return [...pins, ...visibleRows];
 }

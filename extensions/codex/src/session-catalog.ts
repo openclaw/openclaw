@@ -1,5 +1,6 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
@@ -8,6 +9,9 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
@@ -20,6 +24,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import { CodexCatalogNodeSnapshots } from "./session-catalog-node-snapshot.js";
 import {
   CatalogParamsError,
@@ -30,6 +35,7 @@ import {
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
   readGatewayParams,
+  toCatalogSession,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -48,6 +54,12 @@ import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
 } from "./session-upstream-marker.js";
+
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
+const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
+const loadCatalogArchive = createLazyRuntimeModule(() => import("./session-catalog-archive.js"));
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
@@ -140,18 +152,29 @@ function withCatalogListScope(
   };
 }
 
+function permitsLocalCatalogExport(home: CodexCatalogHome) {
+  return Boolean(
+    home.localSessionsRoot &&
+    home.appServer.start.transport === "stdio" &&
+    home.appServer.start.commandSource === "managed" &&
+    !isCodexAppServerProxyLaunch(home.appServer.start.args),
+  );
+}
+
 function catalogHostMapper(
   localTerminalAvailable: boolean,
   localHomes: readonly CodexCatalogHome[],
+  supervisionEnabled: boolean,
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
     const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
+      const home = localHomes.find((candidate) => candidate.hostId === host.hostId);
       const localSourceAvailable =
-        localTerminalAvailable &&
-        localHomes.some(
-          (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-        );
+        localTerminalAvailable && home?.appServer.start.transport === "stdio";
+      // A stdio proxy forwards to a daemon selected by its socket. An arbitrary
+      // command also cannot attest that it reads the selected native home.
+      const exportHomeId = home && permitsLocalCatalogExport(home) ? home.sourceHomeId : undefined;
       const local = isLocalCodexCatalogHost(host.hostId);
       return {
         hostId: host.hostId,
@@ -169,6 +192,18 @@ function catalogHostMapper(
           const name = session.name ?? session.fallbackName;
           return {
             threadId: session.threadId,
+            ...(exportHomeId && exportHomeId === session.sourceHomeId
+              ? {
+                  exportPolicy: {
+                    origin: "native-local" as const,
+                    automatic: true,
+                    // Every home can switch between primary and qualified host aliases.
+                    // Its pre-existing publication cannot be identified from this row.
+                  },
+                }
+              : host.kind === "node" || home?.appServer.connectionClass === "remote"
+                ? { exportPolicy: { origin: "federated" as const, automatic: false } }
+                : {}),
             ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
             ...(name ? { name } : {}),
             ...(session.cwd ? { cwd: session.cwd } : {}),
@@ -182,7 +217,9 @@ function catalogHostMapper(
             ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
             archived: session.archived,
             ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-            canContinue: (local || host.canContinueCodex === true) && continuable,
+            // Local adoption opens a supervised binding, which the runtime refuses unless enabled.
+            canContinue:
+              (local ? supervisionEnabled : host.canContinueCodex === true) && continuable,
             canArchive: local && continuable,
             canOpenTerminal:
               interactive && (local ? localSourceAvailable : host.canOpenTerminalCodex === true),
@@ -209,6 +246,8 @@ export function registerCodexSessionCatalog(params: {
   getRuntimeConfig: () => OpenClawConfig | undefined;
   resolveRuntimeOptions: CodexTerminalConfigSources["resolveRuntimeOptions"];
 }): void {
+  const supervisionEnabled = () =>
+    readCodexPluginConfig(params.getPluginConfig()).supervision?.enabled === true;
   const catalogHomes = async (agentId: string, allowProcessHomeFallback?: boolean) => {
     const homes = await params.control.homesForAgent(agentId);
     return allowProcessHomeFallback === false
@@ -267,6 +306,8 @@ export function registerCodexSessionCatalog(params: {
       const mapHost = catalogHostMapper(
         resolveLocalCodexTerminalExecutable() !== undefined,
         localHomes,
+        // Local homes exist only after this config generation parsed; node-only lists skip it.
+        localHomes.length > 0 && supervisionEnabled(),
       );
       const operation = createCodexSessionCatalogListOperation({
         agentId,
@@ -296,13 +337,55 @@ export function registerCodexSessionCatalog(params: {
     id: "codex",
     label: "Codex",
     supportsProcessHomeIsolation: true,
+    automaticExportHosts: async ({ agentId, allowProcessHomeFallback }) =>
+      (await catalogHomes(agentId, allowProcessHomeFallback))
+        .filter(permitsLocalCatalogExport)
+        .map((home) => home.hostId),
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
         params.api.runtime.modelConfig,
         params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
         agentId,
       ),
-    list: (query) => runCatalogListInline(createListOperation(query)),
+    list: async ({ exportSource, ...query }) => {
+      if (!exportSource) {
+        return runCatalogListInline(createListOperation(query));
+      }
+      const { control, source } = await bindLocalRequest({
+        ...exportSource,
+        agentId: query.agentId,
+        allowProcessHomeFallback: query.allowProcessHomeFallback,
+      });
+      if (
+        !exportSource.sourceHomeId ||
+        !permitsLocalCatalogExport(source) ||
+        !query.hostIds?.includes(source.hostId)
+      ) {
+        return [];
+      }
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      // The existing native action guard validates the managed marker, exact rollout
+      // metadata and archive status on the pinned home without enumerating other threads.
+      const thread = await control.requireEligibleThread(exportSource.threadId);
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      const session = toCatalogSession(prepared, prepared.preview);
+      if (!session || session.threadId !== exportSource.threadId) {
+        return [];
+      }
+      const mapHost = catalogHostMapper(false, [source], false);
+      return [
+        mapHost({
+          hostId: source.hostId,
+          label: source.label,
+          kind: "gateway",
+          connected: true,
+          sessions: [{ ...session, sourceHomeId: source.sourceHomeId }],
+        }),
+      ];
+    },
     createListOperation,
     read: async (request) => {
       const { agentId, source, control } = await bindRequest(request);
@@ -325,7 +408,7 @@ export function registerCodexSessionCatalog(params: {
       }
       if (request.hostId.startsWith("node:")) {
         const agentId = resolveRequestAgentId(request.agentId);
-        const { continueNodeCodexSession } = await import("./session-catalog-node-continue.js");
+        const { continueNodeCodexSession } = await loadNodeContinue();
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
@@ -341,8 +424,13 @@ export function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
+      if (!supervisionEnabled()) {
+        throw new CatalogParamsError(
+          "Codex supervision is disabled; enable plugins.entries.codex.config.supervision.enabled to continue local sessions",
+        );
+      }
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
-      const { continueLocalCodexSession } = await import("./session-catalog-adoption.js");
+      const { continueLocalCodexSession } = await loadCatalogAdoption();
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
@@ -388,7 +476,7 @@ export function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
-      const { archiveLocalCodexSession } = await import("./session-catalog-archive.js");
+      const { archiveLocalCodexSession } = await loadCatalogArchive();
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,

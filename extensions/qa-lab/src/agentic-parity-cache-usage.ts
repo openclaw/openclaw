@@ -1,6 +1,6 @@
 import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
-import type { RuntimeParityUsage } from "./runtime-parity.js";
+import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 
 export type QaRuntimeParityCacheUsage = ReturnType<typeof summarizeRuntimeParityCacheUsage>;
 

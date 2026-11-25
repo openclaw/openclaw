@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -61,7 +62,7 @@ function RunStep(props: { step: UpdateRunStep; label?: string }) {
   const status = () => t(`updates.run.step.${props.step.status}`);
   return (
     <li
-      class={`update-run-view__step update-run-view__step--${props.step.status}`}
+      class={["update-run-view__step", `update-run-view__step--${props.step.status}`]}
       data-step={props.step.step}
       data-status={props.step.status}
       title={props.step.step}
@@ -83,31 +84,29 @@ function RunStep(props: { step: UpdateRunStep; label?: string }) {
   );
 }
 
-export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: boolean }) {
+export function UpdateRunView(props: {
+  run: UpdateRunRecord | null;
+  connected: boolean;
+  serving?: UpdateRunServingIdentity;
+}) {
   let details: HTMLPreElement | undefined;
   let steps: HTMLOListElement | undefined;
   const identity = () => props.run?.runId;
   const logFollow = useStreamAutoFollow({
     container: () => details,
+    content: () => props.run,
     identity,
     enabled: () => true,
   });
   const stepsFollow = useStreamAutoFollow({
     container: () => steps,
+    content: () => props.run,
     identity,
     enabled: () => Boolean(steps?.parentElement?.hasAttribute("open")),
   });
-  createEffect(
-    () => props.run,
-    (run, previous) => {
-      const changedRun = run?.runId !== previous?.runId;
-      logFollow.schedule(changedRun);
-      stepsFollow.schedule(changedRun);
-    },
-  );
   const view = createMemo(() => {
     i18nRevision();
-    return props.run ? projectUpdateRun(props.run, props.connected) : null;
+    return props.run ? projectUpdateRun(props.run, props.connected, props.serving) : null;
   });
   return (
     <openclaw-update-run-view>
@@ -146,9 +145,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
               >
                 <summary>{t("updates.run.steps")}</summary>
                 <ol
-                  ref={(element) => {
-                    steps = element;
-                  }}
+                  ref={(element) => (steps = element)}
                   class="update-run-view__step-scroll"
                   tabindex={0}
                   aria-label={t("updates.run.steps")}
@@ -162,7 +159,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
             </Show>
             <details
               class="update-run-view__diagnostics"
-              open
+              open={!current().terminal}
               onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
             >
               <summary>
@@ -172,9 +169,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
                 </Show>
               </summary>
               <pre
-                ref={(element) => {
-                  details = element;
-                }}
+                ref={(element) => (details = element)}
                 class="update-run-view__details"
                 tabindex={0}
                 aria-label={t("updates.run.details")}
@@ -189,13 +184,22 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
               </pre>
             </details>
             <Show when={current().oracles.length}>
-              <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
+              <Show when={current().historicalVerificationLabel}>
+                {(label) => <strong>{label()}</strong>}
+              </Show>
+              <ul
+                class="update-run-view__oracles"
+                aria-label={current().historicalVerificationLabel ?? t("updates.run.verification")}
+              >
                 <For each={current().oracles}>
                   {(oracle) => (
                     <li
                       data-oracle={oracle.name}
                       data-state={oracle.state}
-                      class={`update-run-view__oracle update-run-view__oracle--${oracle.state}`}
+                      class={[
+                        "update-run-view__oracle",
+                        `update-run-view__oracle--${oracle.state}`,
+                      ]}
                     >
                       <span aria-hidden="true">{ORACLE_MARKS[oracle.state]}</span>
                       <span>{t(`updates.run.oracle.${oracle.name}`)}</span>
@@ -206,13 +210,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
               </ul>
             </Show>
             <Show when={current().terminal}>
-              <section
-                class={[
-                  "update-run-view__report",
-                  { [`update-run-view__report--${props.run?.status}`]: !current().reconciled },
-                ]}
-                aria-label={t("updates.run.report")}
-              >
+              <section class="update-run-view__report" aria-label={t("updates.run.report")}>
                 <h4>
                   <ReportHeadline headline={current().report.headline} />
                 </h4>

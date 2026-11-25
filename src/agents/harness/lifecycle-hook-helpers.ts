@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { BeforeAgentFinalizeResultWithRetryCandidates } from "../../plugins/hook-runner-types.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
@@ -27,7 +28,6 @@ type AgentHarnessHookParams<Event> = {
 };
 type FinalizeRetryBudget = Map<string, number>;
 
-/** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
 }
@@ -69,13 +69,15 @@ export function runAgentHarnessLlmOutputHook(
 async function executeAgentHarnessAgentEndHook(
   params: AgentHarnessHookParams<PluginHookAgentEndEvent> & { unrefTimeout?: boolean },
 ): Promise<void> {
-  const loadMessages = takeHookMessageLoader(params.event);
+  let loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end")) {
     return;
   }
   try {
     const event = loadMessages ? { ...params.event, messages: await loadMessages() } : params.event;
+    // Loaders can capture the whole attempt; pending hooks only need their hydrated messages.
+    loadMessages = undefined;
     await hookRunner.runAgentEnd(event, buildAgentHookContext(params.ctx), {
       unrefTimeout: params.unrefTimeout ?? false,
     });
@@ -98,17 +100,23 @@ export async function awaitAgentHarnessAgentEndHook(
   await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
-/** Normalized before-finalize hook decision consumed by harness loops. */
 type AgentHarnessBeforeAgentFinalizeOutcome =
-  | { action: "continue" }
+  | {
+      action: "continue";
+      finalPresentation?: PluginHookBeforeAgentFinalizeResult["finalPresentation"];
+    }
   | { action: "revise"; reason: string }
-  | { action: "finalize"; reason?: string };
+  | {
+      action: "finalize";
+      reason?: string;
+      finalPresentation?: PluginHookBeforeAgentFinalizeResult["finalPresentation"];
+    };
 
 /** Runs before-finalize hooks and normalizes finalize/revise/continue decisions. */
 export async function runAgentHarnessBeforeAgentFinalizeHook(
   params: AgentHarnessHookParams<PluginHookBeforeAgentFinalizeEvent>,
 ): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
-  const loadMessages = takeHookMessageLoader(params.event);
+  let loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_agent_finalize")) {
     return { action: "continue" };
@@ -119,6 +127,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
       runId: params.event.runId ?? params.ctx.runId,
       ...(loadMessages ? { messages: await loadMessages() } : {}),
     };
+    loadMessages = undefined;
     return normalizeBeforeAgentFinalizeResult(
       await hookRunner.runBeforeAgentFinalize(
         eventForNormalization,
@@ -133,26 +142,35 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
 }
 
 function normalizeBeforeAgentFinalizeResult(
-  result: PluginHookBeforeAgentFinalizeResult | undefined,
+  result: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
   event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
+  const finalPresentation =
+    event?.supportsFinalPresentation === true && result?.action !== "revise"
+      ? normalizeMessagePresentation(result?.finalPresentation)
+      : undefined;
   if (result?.action === "finalize") {
     const reason = normalizeTrimmedString(result.reason);
-    return reason ? { action: "finalize", reason } : { action: "finalize" };
+    return {
+      action: "finalize",
+      ...(reason ? { reason } : {}),
+      ...(finalPresentation ? { finalPresentation } : {}),
+    };
   }
   if (result?.action !== "revise") {
-    return { action: "continue" };
+    return { action: "continue", ...(finalPresentation ? { finalPresentation } : {}) };
   }
-  const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
+  const retryCandidates = result.retryCandidates?.length
+    ? result.retryCandidates
+    : result.retry
+      ? [result.retry]
+      : [];
   const reason = normalizeTrimmedString(result.reason);
   if (retryCandidates.length === 0) {
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
   for (const retry of retryCandidates) {
-    const retryInstruction = normalizeTrimmedString(retry.instruction);
-    if (!retryInstruction) {
-      continue;
-    }
+    const retryInstruction = retry.instruction;
     const maxAttempts =
       typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
         ? Math.max(1, Math.floor(retry.maxAttempts))
@@ -179,24 +197,4 @@ function normalizeBeforeAgentFinalizeResult(
     return { action: "revise", reason: revisedReason };
   }
   return { action: "continue" };
-}
-
-function readBeforeAgentFinalizeRetryCandidates(
-  result: PluginHookBeforeAgentFinalizeResult,
-): NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>[] {
-  const candidateList = (
-    result as {
-      retryCandidates?: unknown;
-    }
-  ).retryCandidates;
-  if (Array.isArray(candidateList) && candidateList.length > 0) {
-    return candidateList.filter(isBeforeAgentFinalizeRetry);
-  }
-  return isBeforeAgentFinalizeRetry(result.retry) ? [result.retry] : [];
-}
-
-function isBeforeAgentFinalizeRetry(
-  value: unknown,
-): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
-  return isRecord(value);
 }

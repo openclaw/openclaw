@@ -57,6 +57,11 @@ export default function (api) {
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
 
+Message inputs to registered plugin engines are writable, isolated copies. An
+engine can edit nested content during `assemble()`, `afterTurn()`, `ingest()`,
+`ingestBatch()`, or `commitTurn()` without changing the host's retained transcript.
+Return the assembled messages from `assemble()` to use those edits as model context.
+
 The host completes registered async memory prompt preparation before calling a
 non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
 synchronous and reads that immutable run snapshot while `assemble()` is active.
@@ -71,6 +76,15 @@ the epoch after the engine's semantic context changes, such as after an
 engine-owned compaction pass. Hosts may preserve tool-call metadata, input
 shape, and tool results in a thread-bootstrap projection so fresh backend
 threads retain tool continuity. Tool-result text is not secret-masked.
+
+Engines that keep their own message store follow the host transcript with
+`readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Persist the returned
+opaque cursor as the engine's watermark, so each `bootstrap` reads only new
+entries, and pass `start: "reset-window"` so a fresh drain begins at the latest
+same-session reset. See
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)
+for reset reasons and fence behavior.
 
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:

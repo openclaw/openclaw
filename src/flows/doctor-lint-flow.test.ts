@@ -1,208 +1,144 @@
-// Doctor lint flow tests cover lint diagnostics surfaced by doctor.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
-import {
-  clearHealthChecksForTest,
-  listHealthChecks,
-  registerHealthCheck,
-} from "./health-check-registry.js";
-import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
+import * as registry from "./health-check-registry.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
+const noop = () => {};
 const ctx: HealthCheckContext = {
   mode: "lint",
-  runtime: {
-    log() {},
-    error() {},
-    exit() {},
-  },
+  runtime: { log: noop, error: noop, exit: noop },
   cfg: {},
 };
 
 function check(id: string, detect: HealthCheck["detect"]): HealthCheck {
-  return {
-    id,
-    kind: "core",
-    description: id,
-    detect: detect ?? (async () => []),
-  };
+  return { id, kind: "core", description: id, detect };
 }
 
-describe("runDoctorLintChecks", () => {
-  it("filters selected checks and reports skipped count", async () => {
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("a", async () => [{ checkId: "a", severity: "warning", message: "warn" }]),
-        check("b", async () => [{ checkId: "b", severity: "error", message: "err" }]),
-      ],
-      onlyIds: ["a"],
-    });
+function errorFinding(checkId: string, message: string): HealthFinding {
+  return { checkId, severity: "error", message };
+}
 
-    expect(result.checksRun).toBe(1);
-    expect(result.checksSkipped).toBe(1);
-    expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
+function selectionFinding(path: string, message: string): HealthFinding {
+  return { ...errorFinding("core/doctor/lint-selection", message), path };
+}
+
+function throwingCheck(id: string, error: Error): HealthCheck {
+  return check(id, async () => {
+    throw error;
   });
+}
 
-  it("reports conflicting selectors for a registered health check", async () => {
-    const checkId = "plugin/example/critical";
-    let detections = 0;
-    const existingChecks = listHealthChecks();
-    registerHealthCheck(
-      check(checkId, async () => {
+it("reports conflicting selectors for a registered health check", async () => {
+  const ids = ["plugin/example/first", "plugin/example/second"];
+  let detections = 0;
+  const existingChecks = registry.listHealthChecks();
+  for (const id of ids) {
+    registry.registerHealthCheck(
+      check(id, async () => {
         detections += 1;
-        return [{ checkId, severity: "error", message: "critical failure" }];
+        return [{ checkId: id, severity: "error", message: "critical failure" }];
       }),
     );
+  }
 
-    try {
-      const selectors = new Set([checkId]);
-      const result = await runDoctorLintChecks(ctx, {
-        onlyIds: selectors,
-        skipIds: selectors,
-      });
+  try {
+    const selectors = new Set(ids);
+    const result = await runDoctorLintChecks(ctx, { onlyIds: selectors, skipIds: selectors });
 
-      expect(detections).toBe(0);
-      expect(result.checksRun).toBe(0);
-      expect(result.checksSkipped).toBe(1);
-      expect(result.findings).toEqual([
-        {
-          checkId: "core/doctor/lint-selection",
-          severity: "error",
-          message: `Health check ${checkId} cannot be selected by --only and excluded by --skip.`,
-          path: checkId,
-        },
-      ]);
-      expect(exitCodeFromFindings(result.findings)).toBe(1);
-    } finally {
-      clearHealthChecksForTest();
-      for (const existingCheck of existingChecks) {
-        registerHealthCheck(existingCheck);
-      }
-    }
-  });
-
-  it("retains every overlap diagnostic when exclusion removes all selected checks", async () => {
-    const ids = ["plugin/example/first", "plugin/example/second"];
-    const result = await runDoctorLintChecks(ctx, {
-      checks: ids.map((id) => check(id, async () => [])),
-      onlyIds: ids,
-      skipIds: ids,
+    expect(detections).toBe(0);
+    expect(result).toEqual({
+      checksRun: 0,
+      checksSkipped: 2,
+      findings: ids.map((id) =>
+        selectionFinding(
+          id,
+          `Health check ${id} cannot be selected by --only and excluded by --skip.`,
+        ),
+      ),
     });
-
-    expect(result.checksRun).toBe(0);
-    expect(result.checksSkipped).toBe(2);
-    expect(result.findings).toEqual(
-      ids.map((id) => ({
-        checkId: "core/doctor/lint-selection",
-        severity: "error",
-        message: `Health check ${id} cannot be selected by --only and excluded by --skip.`,
-        path: id,
-      })),
-    );
     expect(exitCodeFromFindings(result.findings)).toBe(1);
+  } finally {
+    registry.clearHealthChecksForTest();
+    for (const existingCheck of existingChecks) {
+      registry.registerHealthCheck(existingCheck);
+    }
+  }
+});
+
+it("keeps unknown-only diagnostics without treating partial overlap as an error", async () => {
+  const skippedId = "plugin/example/skipped";
+  const selectedId = "plugin/example/selected";
+  const unknownId = "plugin/future/not-loaded";
+  const detections: string[] = [];
+  const result = await runDoctorLintChecks(ctx, {
+    checks: [skippedId, selectedId].map((id) =>
+      check(id, async () => {
+        detections.push(id);
+        return [];
+      }),
+    ),
+    onlyIds: [skippedId, unknownId, selectedId],
+    skipIds: [skippedId, "plugin/future/ignored"],
   });
 
-  it("keeps unknown-only diagnostics without treating partial overlap as an error", async () => {
-    const skippedId = "plugin/example/skipped";
-    const selectedId = "plugin/example/selected";
-    const unknownId = "plugin/future/not-loaded";
-    const detections: string[] = [];
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [skippedId, selectedId].map((id) =>
-        check(id, async () => {
-          detections.push(id);
-          return [];
+  expect(result).toMatchObject({ checksRun: 1, checksSkipped: 1 });
+  expect(detections).toEqual([selectedId]);
+  expect(result.findings).toEqual([
+    selectionFinding(unknownId, `Unknown health check id selected by --only: ${unknownId}.`),
+  ]);
+  expect(exitCodeFromFindings(result.findings)).toBe(1);
+});
+
+it("records acquisition cancellation without diagnosing a failed inspection", async () => {
+  const result = await runDoctorLintChecks(ctx, {
+    checks: [
+      throwingCheck(
+        "cancelled",
+        new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+          kind: "aborted",
+          reason: "caller-signal",
+          elapsedMs: 250,
         }),
       ),
-      onlyIds: [skippedId, unknownId, selectedId],
-      skipIds: [skippedId, "plugin/future/ignored"],
-    });
+      check("next", async () => [{ checkId: "next", severity: "info", message: "inspected" }]),
+    ],
+  });
 
-    expect(result.checksRun).toBe(1);
-    expect(result.checksSkipped).toBe(1);
-    expect(detections).toEqual([selectedId]);
-    expect(result.findings).toEqual([
+  expect(result).toEqual({
+    checksRun: 2,
+    checksSkipped: 0,
+    findings: [
       {
-        checkId: "core/doctor/lint-selection",
-        severity: "error",
-        message: `Unknown health check id selected by --only: ${unknownId}.`,
-        path: unknownId,
+        checkId: "cancelled",
+        severity: "info",
+        message:
+          "state lease inspection not performed: aborted after 250 ms by the caller's signal",
+        errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
       },
-    ]);
-    expect(exitCodeFromFindings(result.findings)).toBe(1);
+      { checkId: "next", severity: "info", message: "inspected" },
+    ],
   });
+  expect(exitCodeFromFindings(result.findings)).toBe(0);
+});
 
-  it("records acquisition cancellation without diagnosing a failed inspection", async () => {
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("cancelled", async () => {
-          throw new OpenClawStateLeaseAcquisitionError("state lease fixture", {
-            kind: "aborted",
-            reason: "caller-signal",
-            elapsedMs: 250,
-          });
-        }),
-        check("next", async () => [{ checkId: "next", severity: "info", message: "inspected" }]),
-      ],
-    });
-
-    expect(result).toEqual({
-      checksRun: 2,
-      checksSkipped: 0,
-      findings: [
-        {
-          checkId: "cancelled",
-          severity: "info",
-          errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
-          message:
-            "state lease inspection not performed: aborted after 250 ms by the caller's signal",
-        },
-        { checkId: "next", severity: "info", message: "inspected" },
-      ],
-    });
-    expect(exitCodeFromFindings(result.findings)).toBe(0);
-  });
-
-  it.each([
-    new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+it.each([
+  {
+    name: "held leases",
+    error: new OpenClawStateLeaseAcquisitionError("state lease fixture", {
       kind: "held",
       holder: { owner: "another-owner", epoch: 1 },
     }),
-  ])("retains ordinary, operation and storage failures as errors: %s", async (error) => {
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("boom", async () => {
-          throw error;
-        }),
-      ],
-    });
-
-    expect(result.findings).toEqual([
-      {
-        checkId: "boom",
-        severity: "error",
-        message: `health check threw: ${error.message}`,
-      },
-    ]);
-    expect(exitCodeFromFindings(result.findings)).toBe(1);
-  });
-
-  it("keeps truncated thrown error messages UTF-16 safe", async () => {
-    const emoji = "\u{1F600}";
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("emoji-boom", async () => {
-          throw new Error(`${"A".repeat(252)}${emoji}${"B".repeat(10)}`);
-        }),
-      ],
-    });
-
-    expect(result.findings).toEqual([
-      {
-        checkId: "emoji-boom",
-        severity: "error",
-        message: `health check threw: ${"A".repeat(252)}...`,
-      },
-    ]);
-  });
+  },
+  {
+    name: "UTF-16 truncation",
+    error: new Error(`${"A".repeat(252)}\u{1F600}${"B".repeat(10)}`),
+    expected: `${"A".repeat(252)}...`,
+  },
+])("reports $name as errors", async ({ error, expected }) => {
+  const result = await runDoctorLintChecks(ctx, { checks: [throwingCheck("boom", error)] });
+  expect(result.findings).toEqual([
+    errorFinding("boom", `health check threw: ${expected ?? error.message}`),
+  ]);
+  expect(exitCodeFromFindings(result.findings)).toBe(1);
 });

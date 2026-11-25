@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { Minimatch, type MinimatchOptions } from "minimatch";
+import { runWithConcurrency } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
@@ -15,7 +17,6 @@ import {
   statRegularFile,
   walkDirectory,
 } from "./fs-utils.js";
-import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./markdown-chunks.js";
 import {
   buildMemoryMultimodalLabel,
@@ -30,7 +31,7 @@ import {
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
-export { hashText } from "./hash.js";
+export const hashText: (value: string) => string = sha256Hex;
 export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
@@ -95,7 +96,13 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
+
+// Parsed patterns live only as long as their configured scan/read entry.
+const extraMemoryPathMatchers = new WeakMap<
+  NormalizedExtraMemoryPath,
+  { file: Minimatch; directories?: Minimatch[] }
+>();
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -108,6 +115,9 @@ export function normalizeExtraMemoryPathEntries(
     };
     if (typeof entry !== "string") {
       normalized.pattern = entry.pattern?.replaceAll("\\", "/");
+      if (entry.evergreen === true) {
+        normalized.evergreen = true;
+      }
     }
     return normalized;
   });
@@ -139,24 +149,40 @@ export function matchesExtraMemoryPathEntry(
       return false;
     }
     const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
-    if (!options?.directory) {
-      return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
+    let matchers = extraMemoryPathMatchers.get(entry);
+    if (!matchers || matchers.file.pattern !== entry.pattern) {
+      const matcherOptions: MinimatchOptions = {
+        dot: false,
+        nonegate: true,
+        nocomment: true,
+        windowsPathsNoEscape: true,
+        optimizationLevel: 2,
+        // Configured globs use slash-separated relative paths on every host.
+        platform: "linux",
+        nocase: process.platform === "win32" || process.platform === "darwin",
+        nocaseMagicOnly: true,
+      };
+      const segments = entry.pattern.split("/");
+      const conservative =
+        /[{[(]/.test(entry.pattern) ||
+        segments.some((segment) => segment === "." || segment === "..");
+      const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
+      matchers = {
+        file: new Minimatch(entry.pattern, matcherOptions),
+        // Prefix matches preserve dot rules; partial matches can enter hidden directories.
+        directories: conservative
+          ? undefined
+          : Array.from(
+              { length: parentCount },
+              (_, index) => new Minimatch(segments.slice(0, index + 1).join("/"), matcherOptions),
+            ),
+      };
+      extraMemoryPathMatchers.set(entry, matchers);
     }
-    const segments = entry.pattern.split("/");
-    // Keep complex patterns conservative; the leaf matcher owns their semantics.
-    if (
-      /[{[(]/.test(entry.pattern) ||
-      segments.some((segment) => segment === "." || segment === "..")
-    ) {
-      return true;
-    }
-    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
-    for (let length = 1; length <= parentCount; length += 1) {
-      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
-        return true;
-      }
-    }
-    return false;
+    return options?.directory
+      ? !matchers.directories ||
+          matchers.directories.some((matcher) => matcher.match(normalizedRelativePath))
+      : matchers.file.match(normalizedRelativePath);
   } catch {
     return false;
   }
@@ -333,13 +359,15 @@ export async function listMemoryFiles(
   if (result.length <= 1) {
     return result;
   }
+  // Bound filesystem pressure; deduplicate in discovery order, not completion order.
+  const canonicalPaths = await runWithConcurrency(
+    result.map((entry) => () => fs.realpath(entry).catch(() => entry)),
+    4,
+  );
   const seen = new Set<string>();
   const deduped: string[] = [];
-  for (const entry of result) {
-    let key = entry;
-    try {
-      key = await fs.realpath(entry);
-    } catch {}
+  for (const [index, entry] of result.entries()) {
+    const key = canonicalPaths[index]!;
     if (seen.has(key)) {
       continue;
     }
@@ -396,7 +424,7 @@ export async function buildFileEntry(
     }
     const contentText = buildMemoryMultimodalLabel(modality, normalizedPath);
     const dataHash = sha256Hex(buffer);
-    const chunkHash = hashText(
+    const chunkHash = sha256Hex(
       JSON.stringify({
         path: normalizedPath,
         contentText,
@@ -422,7 +450,7 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: hashText(buffer.toString("utf-8")),
+    hash: sha256Hex(buffer.toString("utf-8")),
     kind: "markdown",
   };
 }
@@ -484,4 +512,4 @@ export {
   stripMemoryAnnotationCarriers,
 } from "./curated-annotations.js";
 
-export { runWithConcurrency } from "./concurrency.js";
+export { runWithConcurrency };

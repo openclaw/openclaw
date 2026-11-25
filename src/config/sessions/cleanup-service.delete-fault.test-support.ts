@@ -1,4 +1,16 @@
 import type { WorkerOptions } from "node:worker_threads";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
+
+export function cleanupFaultWorker(actual: typeof import("node:worker_threads")) {
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        super(filename, withCleanupDeleteFault(options));
+      }
+    },
+  };
+}
 
 type CleanupDeleteFault = { databasePath: string; sessionId: string; message: string };
 let fault: CleanupDeleteFault | undefined;
@@ -7,9 +19,7 @@ export function setCleanupDeleteFault(value: CleanupDeleteFault | undefined): vo
   fault = value;
 }
 
-export function withCleanupDeleteFault(
-  options: WorkerOptions | undefined,
-): WorkerOptions | undefined {
+function withCleanupDeleteFault(options: WorkerOptions | undefined): WorkerOptions | undefined {
   if (!fault) {
     return options;
   }
@@ -30,12 +40,5 @@ export function withCleanupDeleteFault(
       return prepare.call(this, sql);
     };
   `;
-  return {
-    ...options,
-    execArgv: [
-      ...(options?.execArgv ?? []),
-      "--import",
-      `data:text/javascript,${encodeURIComponent(preload)}`,
-    ],
-  };
+  return withWorkerPreload(options, preload);
 }

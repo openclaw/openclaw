@@ -144,9 +144,6 @@ export function startSessionCatalogListDiagnostics(
             ...(timing.admittedStepMs === undefined
               ? {}
               : { admittedStepMs: Math.round(timing.admittedStepMs) }),
-            ...(timing.continuationWaitMs === undefined
-              ? {}
-              : { continuationWaitMs: Math.round(timing.continuationWaitMs) }),
             ...(timing.settledAt === undefined
               ? {}
               : { completionDelayMs: Math.round(finishedAt - timing.settledAt) }),

@@ -63,6 +63,12 @@ later messages can update its idle delay within the original maximum deadline.
 Explicit transport timing overrides remain fixed. Telegram's forwarded-message
 collection window remains separate.
 
+Once a message is adopted, its dispatch remains owned by the Gateway until
+completion, even after the webhook request or durable ingress acknowledgment
+returns. Telegram's spooled dispatch includes draft cleanup and fallback delivery.
+Suspension refuses new requests while admitted turns finish; restart draining
+still blocks new agent work.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.
@@ -72,6 +78,10 @@ Sessions are owned by the gateway, not by clients.
 - The session store and transcripts live on the gateway host.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
+
+If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
+
+If an accepted chat message never starts its own turn, a later turn can still read it from history. Recovering that input keeps the original message visible without rewriting it into the next message or rebuilding history just to replace it. Provider retries preserve that input alongside the current message. Providers that require alternating roles receive the combined text only when the request is sent; the stored messages remain separate. Deliberately sending the same text again creates another user turn.
 
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
@@ -139,6 +149,10 @@ Channel plugins may preserve ordering, debounce input, and apply transport backp
 Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
 A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
+
+Successful local message-tool sends retain the delivered answer in the source session transcript, including sends prepared by channel plugins for core delivery. When the send belongs to an admitted source turn, `final=true` (or omitted `final` under the normal default) makes the answer available to accepted-turn context capture and prevents unchanged answered requests from being injected again as recent channel history. Progress replies (`final=false`, or omitted `final` when the run disables final-by-default), failed or partial sends, dry runs, and deliveries to other conversations do not mark that source turn answered.
+
+Images delivered to the current conversation through a local message-tool send or a plugin's `toolContext.delivery.send()` are retained as managed attachments for Control UI history and reload. Attachment preparation uses the send's authorized media reader and does not resend the image. Existing filename-only history is not backfilled.
 
 When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
 
@@ -208,7 +222,9 @@ still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies
 
-The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is uppercase `NO_REPLY`, ignoring surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
+Silent maintenance turns suppress streamed text, attachments, locations, and interactive controls. Errors, actual voice messages, and system notices explicitly marked for delivery keep their normal delivery rules.
+
+The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
 
 Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
 
@@ -216,14 +232,14 @@ A truncated response or an unfinished tool turn is not a successful silent endin
 
 An explicit reply expectation selected by trusted input handling takes precedence over these session defaults. For example, a late peer result can be optional even in WebChat, so consuming it does not demand another acknowledgment or repeat an answer already delivered.
 
-`NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. It does not retract delivered messages or cancel pending work. A literal leading `NO_REPLY\n` removes that one control line and delivers the remaining text unchanged; the remainder stays visible even if it is another `NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered. Whitespace around that final line is allowed; lowercase or punctuated tokens are ordinary text. Pending tool media, such as generated TTS audio, still delivers after the silent model text is removed.
+`NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. It does not retract delivered messages or cancel pending work. A leading `NO_REPLY\n` removes that one control line and delivers the remaining text unchanged; the remainder stays visible even if it is another `NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered. Casing and whitespace around that final line are ignored; punctuated tokens are ordinary text. Pending tool media, such as generated TTS audio, still delivers after the silent model text is removed.
 
-The terminal producer prepares the reply once and records whether it is visible or silent. Delivery and clients consume that fact and the full prepared payload without interpreting the text again; an explicit visible fact stays visible even when its text is `NO_REPLY`. Lowercase `no_reply`, `NO_REPLY.`, `"NO_REPLY"`, `{"action":"NO_REPLY"}`, and tokens attached to or trailing ordinary prose on the same line are visible text, not silent endings. Stored assistant history uses existing display and final-result facts first, then the same exact check on raw assistant text; user text is never treated as a silence instruction.
+The terminal producer prepares the reply once and records whether it is visible or silent. Delivery and clients consume that fact and the full prepared payload without interpreting the text again; an explicit visible fact stays visible even when its text is `NO_REPLY`. `NO_REPLY.`, `"NO_REPLY"`, `{"action":"NO_REPLY"}`, and tokens attached to or trailing ordinary prose on the same line are visible text, not silent endings. Stored assistant history uses existing display and final-result facts first, then the same exact check on raw assistant text; user text is never treated as a silence instruction.
 
 Conversation policy still controls admission and default reply expectations:
 
-- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
-- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
+- Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently. The legacy `HEARTBEAT_OK` marker does not request silence: presentation removes it, so it cannot satisfy a required reply.
+- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`. In `message_tool` mode, optional bot messages get quiet-room participation guidance: stay silent unless there is something useful to add. Explicit bot mentions and required replies keep their normal delivery guidance.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

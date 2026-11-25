@@ -1,10 +1,11 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeSkillsWatchers, prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -16,25 +17,19 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 const run = vi.hoisted(() => vi.fn());
 // mock-isolation: Keep host processes outside this command-lifecycle fixture.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: run }));
-const roots: string[] = [];
-beforeEach(() => {
-  run.mockReset();
-});
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const roots = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => run.mockReset());
+afterEach(() => closeSkillsWatchers(true));
+const protectedRoots = { autoreview: "/guest/repo/skills/autoreview" };
+const preferred = { model: "fixture/preferred", explicit: false };
 
 function sandboxFixture(source = "openclaw-managed") {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sandbox-"));
-  roots.push(root);
+  const root = roots.make("openclaw-plugin-sandbox-");
   const skillDir = path.join(root, "skills", "autoreview");
   fs.mkdirSync(skillDir, { recursive: true });
   const sourceFile = "/managed/autoreview/SKILL.md";
   const sandbox = createAgentToolsSandboxContext({
     workspaceDir: root,
-    agentWorkspaceDir: root,
     containerWorkdir: "/guest/repo",
     workspaceAccess: "none",
   });
@@ -64,17 +59,10 @@ function sandboxFixture(source = "openclaw-managed") {
     finalizeExec: finalize,
     prepareProcessCleanup: (env) => ({ env, terminate, interrupt: async () => false }),
   };
+  const selectedSource = { filePath: sourceFile, fileHost: "gateway" as const };
   const snapshot: SkillSnapshot = {
     prompt: "",
-    skills: [
-      {
-        name: "autoreview",
-        source: {
-          filePath: sourceFile,
-          fileHost: source === "openclaw-managed" ? "gateway" : "workspace",
-        },
-      },
-    ],
+    skills: [{ name: "autoreview", source: selectedSource }],
     resolvedSkills: [
       {
         name: "autoreview",
@@ -82,86 +70,101 @@ function sandboxFixture(source = "openclaw-managed") {
         baseDir: "/managed/autoreview",
         filePath: sourceFile,
         source,
-        fileHost: source === "openclaw-managed" ? "gateway" : "workspace",
+        fileHost: "gateway",
         sourceInfo: { path: sourceFile, source, scope: "user", origin: "top-level" },
         disableModelInvocation: false,
       },
     ],
   };
-  return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize };
+  const capabilities = (skillsSnapshot = snapshot) =>
+    preparePluginToolExecutionCapabilities({ sandbox, skillsSnapshot })(() => {});
+  const installedRoots = (skillsSnapshot = snapshot) =>
+    capabilities(skillsSnapshot).sandbox?.installedSkillRoots;
+  return { sandbox, snapshot, build, terminate, finalize, capabilities, installedRoots };
 }
 
-it("exposes only the selected installed skill inside the actual protected sandbox mount", () => {
-  const fixture = sandboxFixture();
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(capability.sandbox?.workspaceDir).toBe("/guest/repo");
-  expect(capability.sandbox?.installedSkillRoots).toEqual({
-    autoreview: "/guest/repo/skills/autoreview",
-  });
-  fixture.snapshot.resolvedSkills![0]!.source = "openclaw-workspace";
-  const shadow = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(shadow.sandbox?.installedSkillRoots).toEqual({});
-  fixture.snapshot.resolvedSkills![0]!.source = "openclaw-managed";
-  fixture.sandbox.docker.binds = ["/untrusted:/guest/repo/skills/autoreview/scripts:rw"];
-  const overlaid = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
-});
+function modelExecution(
+  models: string[],
+  options: {
+    allow?: string[];
+  } = {},
+) {
+  const caller = {
+    model: "fixture/default",
+    ...(options.allow ? { modelPolicy: { allow: options.allow } } : {}),
+  };
+  return preparePluginToolExecutionCapabilities({
+    agentId: "caller",
+    config: { agents: { entries: { caller } } },
+    authority: createTestOperatorAuthority({
+      profileId: "caller",
+      scopes: [],
+      modelPolicy: {
+        models: models.map((model) => ({ provider: "fixture", model })),
+        allows: (ref) => ref.provider === "fixture" && models.includes(ref.model),
+      },
+    }),
+  })(() => {}).modelExecution!;
+}
 
-it("retains selected installation identity after sandbox prompt remapping and budgeting", () => {
-  const fixture = sandboxFixture();
-  fixture.snapshot.discoverySkills = fixture.snapshot.resolvedSkills;
-  fixture.snapshot.resolvedSkills = [];
+it("retains selected installation identity after sandbox prompt remapping and budgeting without synchronous filesystem work", async () => {
+  const { sandbox, snapshot, installedRoots, capabilities } = sandboxFixture();
+  sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
+  expect(capabilities().sandbox?.workspaceDir).toBe("/guest/repo");
+  snapshot.discoverySkills = snapshot.resolvedSkills;
+  snapshot.resolvedSkills = [];
   const prepared = resolveSandboxSkillRuntimeInputs({
-    sandbox: fixture.sandbox,
-    skillsAnchorWorkspace: fixture.sandbox.workspaceDir,
-    skillsSnapshot: fixture.snapshot,
+    sandbox,
+    skillsAnchorWorkspace: sandbox.workspaceDir,
+    skillsSnapshot: snapshot,
   });
   expect(prepared.skillsSnapshot?.discoverySkills?.[0]?.filePath).toBe(
     "/guest/repo/skills/autoreview/SKILL.md",
   );
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: prepared.skillsSnapshot,
-  })(() => {});
-  expect(capability.sandbox?.installedSkillRoots).toEqual({
-    autoreview: "/guest/repo/skills/autoreview",
-  });
-  fixture.snapshot.skills[0]!.source!.fileHost = "workspace";
-  const shadow = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: prepared.skillsSnapshot,
-  })(() => {});
-  expect(shadow.sandbox?.installedSkillRoots).toEqual({});
+  const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+  const probes = (
+    [
+      "accessSync",
+      "existsSync",
+      "statSync",
+      "lstatSync",
+      "realpathSync",
+      "readdirSync",
+      "openSync",
+      "readFileSync",
+    ] as const
+  ).map((name) => vi.spyOn(fs, name));
+  try {
+    sandbox.fsBridge = createSandboxFsBridge({
+      sandbox: { ...sandbox, backend: sandbox.backend! },
+    });
+    expect(installedRoots(prepared.skillsSnapshot)).toEqual(protectedRoots);
+    for (const probe of [...probes, nativeRealpath]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  } finally {
+    for (const probe of probes) {
+      probe.mockRestore();
+    }
+    nativeRealpath.mockRestore();
+  }
+  snapshot.skills[0]!.source!.fileHost = "workspace";
+  expect(installedRoots(prepared.skillsSnapshot)).toEqual({});
 });
 
 it("withholds protected installations on the SSH backend's mutable upload view", async () => {
   const fixture = sandboxFixture();
+  const cfg = resolveSandboxConfigForAgent();
+  cfg.backend = "ssh";
+  cfg.ssh.target = "unused";
+  cfg.ssh.workspaceRoot = "/remote";
   fixture.sandbox.backend = await createRemoteShellSandboxBackend(
     {
       sessionKey: "review-fixture",
       scopeKey: "review-fixture",
       workspaceDir: fixture.sandbox.workspaceDir,
       agentWorkspaceDir: fixture.sandbox.agentWorkspaceDir,
-      cfg: resolveSandboxConfigForAgent({
-        agents: {
-          defaults: {
-            sandbox: {
-              backend: "ssh",
-              workspaceAccess: "none",
-              ssh: { target: "unused", workspaceRoot: "/remote" },
-            },
-          },
-        },
-      }),
+      cfg,
     },
     {
       createSession: async () => {
@@ -170,78 +173,58 @@ it("withholds protected installations on the SSH backend's mutable upload view",
       preprovisionedWorkdir: { runtimeId: "review-fixture", remoteWorkspaceDir: "/guest/repo" },
     },
   );
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(capability.sandbox?.installedSkillRoots).toEqual({});
+  expect(fixture.installedRoots()).toEqual({});
 });
 
-it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
-  "withholds a protected installation hidden by tmpfs at %s",
-  (overlay) => {
-    const fixture = sandboxFixture();
-    fixture.sandbox.docker.tmpfs = [`${overlay}:rw`];
-    const capability = preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {});
-    expect(capability.sandbox?.installedSkillRoots).toEqual({});
-  },
-);
-
-it("rejects a writable workspace alias while preserving a read-only alias", () => {
+it.each([
+  ["tmpfs", "/guest/repo/skills:rw"],
+  ["tmpfs", "/guest/repo/skills/autoreview/scripts:rw"],
+  ["binds", "/untrusted:/guest/repo/skills/autoreview/scripts:rw"],
+] as const)("withholds a protected installation hidden by %s at %s", async (kind, overlay) => {
   const fixture = sandboxFixture();
-  const source = fixture.sandbox.workspaceDir;
-  const installedRoots = () =>
-    preparePluginToolExecutionCapabilities({
-      sandbox: fixture.sandbox,
-      skillsSnapshot: fixture.snapshot,
-    })(() => {}).sandbox?.installedSkillRoots;
-  fixture.sandbox.docker.binds = [`${source}:/alias:rw`];
-  expect(installedRoots()).toEqual({});
-  fixture.sandbox.docker.binds = [`${source}:/alias:ro`];
-  expect(installedRoots()).toEqual({ autoreview: "/guest/repo/skills/autoreview" });
+  fixture.sandbox.docker[kind] = [overlay];
+  fixture.sandbox.fsPreparation = await prepareSandboxFsContext(fixture.sandbox);
+  expect(fixture.installedRoots()).toEqual({});
 });
 
-it("refuses a retained command if invocation closes during backend preparation", async () => {
+it.each([
+  { kind: "retired", error: "retired" },
+  { kind: "cancelled", error: "signal" },
+  { kind: "stdin", error: "does not support piped" },
+])("finalizes owned command resources after $kind rejection", async ({ kind, error }) => {
   const fixture = sandboxFixture();
   const prepared = createDeferred();
   let active = true;
-  fixture.build.mockImplementation(async () => {
-    await prepared.promise;
-    return { argv: ["fixed-sandbox-transport"], env: {}, stdinMode: "pipe-closed" };
-  });
+  if (kind === "retired") {
+    const build = fixture.build.getMockImplementation()!;
+    fixture.build.mockImplementation(async () => {
+      await prepared.promise;
+      return build();
+    });
+  }
+  if (kind === "cancelled") {
+    run.mockResolvedValue({ termination: "signal", code: null, stdout: "", stderr: "" });
+  }
   const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {
     if (!active) {
       throw new Error("retired");
     }
   });
-  const pending = capability.sandbox!.run({ argv: ["trusted-helper", "literal; argument"] });
-  active = false;
-  prepared.resolve();
-  await expect(pending).rejects.toThrow("retired");
-  expect(run).not.toHaveBeenCalled();
-  expect(fixture.terminate).toHaveBeenCalledOnce();
-  expect(fixture.finalize).toHaveBeenCalledOnce();
-});
-
-it("joins only its owned sandbox cleanup when a command is cancelled", async () => {
-  const fixture = sandboxFixture();
-  run.mockResolvedValue({ termination: "signal", code: null, stdout: "", stderr: "" });
-  const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {});
-  await expect(capability.sandbox!.run({ argv: ["trusted-helper"] })).rejects.toThrow("signal");
-  expect(fixture.terminate).toHaveBeenCalledOnce();
-  expect(fixture.finalize).toHaveBeenCalledOnce();
-});
-
-it("does not send input to a backend that explicitly closes stdin", async () => {
-  const fixture = sandboxFixture();
-  const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {});
-  await expect(
-    capability.sandbox!.run({ argv: ["trusted-helper"], input: "complete response" }),
-  ).rejects.toThrow("does not support piped");
-  expect(run).not.toHaveBeenCalled();
+  const pending = capability.sandbox!.run({
+    argv: ["trusted-helper", "literal; argument"],
+    ...(kind === "stdin" ? { input: "complete response" } : {}),
+  });
+  if (kind === "retired") {
+    active = false;
+    prepared.resolve();
+  }
+  await expect(pending).rejects.toThrow(error);
+  if (kind !== "cancelled") {
+    expect(run).not.toHaveBeenCalled();
+  }
+  if (kind !== "stdin") {
+    expect(fixture.terminate).toHaveBeenCalledOnce();
+  }
   expect(fixture.finalize).toHaveBeenCalledOnce();
 });
 
@@ -259,7 +242,7 @@ it("releases managed workspace admission while the helper waits for exchange com
   let admitted = false;
   let retained = 0;
   fixture.sandbox.fsBridge = createSandboxFsBridge({
-    sandbox: { ...fixture.sandbox, backend: fixture.backend },
+    sandbox: { ...fixture.sandbox, backend: fixture.sandbox.backend! },
   });
   bindLocalSandboxWorkspace(fixture.sandbox, {
     workspaceDir: fixture.sandbox.workspaceDir,
@@ -282,6 +265,9 @@ it("releases managed workspace admission while the helper waits for exchange com
         admitted = false;
       }
     },
+    async terminate(action) {
+      await action();
+    },
     async checkpoint() {},
     [Symbol.dispose]() {},
   });
@@ -301,98 +287,36 @@ it("releases managed workspace admission while the helper waits for exchange com
   expect(retained).toBe(0);
 });
 
-it("selects the permitted default before execution and holds its current authority", async () => {
-  let allowed = true;
-  let changed: (() => void) | undefined;
-  const authority = createAdmittedRunOperatorAuthority({
-    profileId: "caller",
-    scopes: [],
-    assertCurrent() {},
-    modelPolicy: {
-      models: [{ provider: "fixture", model: "default" }],
-      allows: (model) => allowed && model.model === "default",
-    },
-    onModelPolicyChanged: (callback) => {
-      changed = callback;
-      return () => {
-        changed = undefined;
-      };
-    },
-  });
-  const capability = preparePluginToolExecutionCapabilities({
-    authority,
-    agentId: "caller",
-    config: { agents: { entries: { caller: { model: "fixture/default" } } } },
-  })(() => {});
-  expect(capability.modelExecution?.cliEntryPath).toBe(
-    path.resolve(import.meta.dirname, "../../openclaw.mjs"),
-  );
+it("selects the permitted default before execution", async () => {
+  const execution = modelExecution(["default"]);
+  expect(execution.cliEntryPath).toBe(path.resolve(import.meta.dirname, "../../openclaw.mjs"));
   const action = vi.fn(async ({ model, agentId }: { model: string; agentId: string }) => ({
     model,
     agentId,
   }));
-  await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: true }, action),
-  ).rejects.toThrow("cannot use this model");
+  await expect(execution.run({ ...preferred, explicit: true }, action)).rejects.toThrow(
+    "cannot use this model",
+  );
   expect(action).not.toHaveBeenCalled();
-  await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: false }, action),
-  ).resolves.toEqual({ model: "fixture/default", agentId: "caller" });
-  await expect(
-    capability.modelExecution!.run({ model: null, explicit: false }, async ({ signal, model }) => {
-      expect(model).toBe("fixture/default");
-      allowed = false;
-      changed?.();
-      expect(signal.aborted).toBe(true);
-      return "discarded";
-    }),
-  ).rejects.toThrow("cannot use this model");
-  expect(changed).toBeUndefined();
-  await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: false }, action),
-  ).rejects.toThrow("cannot use this model");
+  await expect(execution.run(preferred, action)).resolves.toEqual({
+    model: "fixture/default",
+    agentId: "caller",
+  });
 });
 
 it("keeps an allowed canonical model and refuses an empty permitted selection", async () => {
-  const make = (models: { provider: string; model: string }[], allow?: string[]) =>
-    preparePluginToolExecutionCapabilities({
-      agentId: "caller",
-      config: {
-        agents: {
-          entries: {
-            caller: { model: "fixture/default", ...(allow ? { modelPolicy: { allow } } : {}) },
-          },
-        },
-      },
-      authority: createAdmittedRunOperatorAuthority({
-        profileId: "caller",
-        scopes: [],
-        assertCurrent() {},
-        modelPolicy: {
-          models,
-          allows: (ref) =>
-            models.some((model) => model.provider === ref.provider && model.model === ref.model),
-        },
-      }),
-    })(() => {}).modelExecution!;
   await expect(
-    make([{ provider: "fixture", model: "preferred" }]).run(
-      { model: "fixture/preferred", explicit: false },
-      async ({ model }) => model,
-    ),
+    modelExecution(["preferred"]).run(preferred, async ({ model }) => model),
   ).resolves.toBe("fixture/preferred");
   await expect(
-    make(
-      [
-        { provider: "fixture", model: "preferred" },
-        { provider: "fixture", model: "default" },
-      ],
-      ["fixture/default"],
-    ).run({ model: "fixture/preferred", explicit: false }, async ({ model }) => model),
+    modelExecution(["preferred", "default"], { allow: ["fixture/default"] }).run(
+      preferred,
+      async ({ model }) => model,
+    ),
   ).resolves.toBe("fixture/default");
   const action = vi.fn(async () => "must not execute");
-  await expect(
-    make([]).run({ model: "fixture/preferred", explicit: false }, action),
-  ).rejects.toThrow("No permitted reviewer model");
+  await expect(modelExecution([]).run(preferred, action)).rejects.toThrow(
+    "No permitted reviewer model",
+  );
   expect(action).not.toHaveBeenCalled();
 });

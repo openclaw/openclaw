@@ -202,13 +202,10 @@ export async function revokeDeviceBootstrapToken(params: {
 }
 
 /** Restore an uncorrelated bootstrap bearer after an undelivered credential response. */
-export async function restoreGenericDeviceBootstrapToken(
-  params: BootstrapParams<"bootstrap.restore">,
-): Promise<DeviceBootstrapOperations["bootstrap.restore"]["output"]> {
-  const { baseDir, ...input } = params;
-  return await runBootstrapMutation("bootstrap.restore", (nowMs) => ({ ...input, nowMs }), {
-    baseDir,
-  });
+export async function restoreGenericDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+}): Promise<DeviceBootstrapOperations["bootstrap.restore"]["output"]> {
+  return await runBootstrapMutation("bootstrap.restore", (nowMs) => ({ ...params, nowMs }), {});
 }
 
 /** Record one role/scope leg of a multi-role bootstrap handoff. */

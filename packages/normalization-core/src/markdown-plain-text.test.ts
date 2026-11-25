@@ -1,16 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
+import { flattenMarkdownToPlainText, stripInlineLinks } from "./markdown-plain-text.js";
 
 describe("flattenMarkdownToPlainText", () => {
   it.each([
-    ["fenced code blocks", "Before\n```ts\nconst hidden = true;\n```\nAfter", "Before After"],
-    ["inline code", "Use `pnpm test` now", "Use pnpm test now"],
+    ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
+    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0``\0`a`` ````z````", "_i_ **/* [x](y)\0\0`a `"],
     [
-      "links",
-      "Read the [deployment guide](https://example.com/deploy)",
-      "Read the deployment guide",
+      "links and escaped image markers",
+      String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
+      String.raw`Read the deployment guide, \!important, \\diagram`,
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
+    [
+      "linked code followed by code",
+      "Use [`dict`](https://docs.python.org/3/library/stdtypes.html#dict)`.get()` and [`list`](https://docs.python.org/3/library/stdtypes.html#list)`.append()`.",
+      "Use dict.get() and list.append().",
+    ],
+    [
+      "code beside linked code with literal backticks",
+      "`prefix`[`**/*`](url)[`.ts`](other) and ``a`b``",
+      "prefix**/*.ts and a`b",
+    ],
     [
       "nested link label brackets",
       "Read the [Report [Q3 [draft]]](https://example.com/r) and then deploy.",
@@ -70,24 +80,92 @@ describe("flattenMarkdownToPlainText", () => {
       "Keep [this](https://example.com/open( text",
     ],
     [
-      "heading and list markers",
-      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote",
-      "Heading bullet plus star numbered quote",
+      "block markers, nested quotes, line boundaries, and inline comparisons",
+      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote\n>quoted\n>> deep\n>>>tight\n> > spaced\n> >>mixed\n>\r\n    > literal\nNext a > b\n\\>escaped\n#Heading\n-bullet",
+      "Heading bullet plus star numbered quote quoted deep tight spaced mixed > literal Next a > b \\>escaped #Heading -bullet",
     ],
+    [
+      "table headers, alignment delimiters, and cells",
+      "# Homepage Review\n| Navigation | Feature |\n| :--- | ---: |\n| **Home** | [Search](https://example.com) |\n\nAfter | prose",
+      "Homepage Review Navigation Feature Home Search After | prose",
+    ],
+    [
+      "tables without outer pipes and literal pipes inside cells",
+      "Command | Meaning\n--- | ---\n`a|b` | a\\|b\n\nDone",
+      "Command Meaning a|b a|b Done",
+    ],
+    [
+      "non-table pipes and mismatched delimiters",
+      "Keep a | b\n\nA | B\n--- | --- | ---",
+      "Keep a | b A | B --- | --- | ---",
+    ],
+    [
+      "block boundaries after a table",
+      "| A | B |\n| --- | --- |\n| x | y |\n# Choose a | b\n- Keep c | d\n1. Keep e | f\n> Quote g | h",
+      "A B x y Choose a | b Keep c | d Keep e | f Quote g | h",
+    ],
+    [
+      "block markers do not establish table headers",
+      "# Choose a | b\n--- | ---\n- Keep c | d\n--- | ---",
+      "Choose a | b --- | --- Keep c | d --- | ---",
+    ],
+    ["indented table-shaped code", "    A | B\n    --- | ---\n    a | b", "A | B --- | --- a | b"],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
+    ["wider opener preference", "__a_ _b__", "a_ _b"],
+    ["shorter opener fallback", "__a_", "_a"],
+    ["unmatched closing marker", "_a__", "a_"],
+    ["unconsumed emphasis markers", "___a___ ***b***", "_a_ *b*"],
+    ["adjacent underscore spans", "_a__b_", "a_b_"],
+    ["internal underscores", "_a_b_", "a_b"],
+    [
+      "whitespace beside emphasis markers",
+      "_ x_ _x _ * x* *x * ~~ x~~",
+      "_ x_ _x _ * x* *x * ~~ x~~",
+    ],
+    ["multiline emphasis", "_a\nb_ **c\nd** ~~e\nf~~", "a b c d e f"],
+    ["astral letter boundaries", "𐐀_x_ _x_𐐀", "𐐀_x_ _x_𐐀"],
+    ["emoji emphasis boundaries", "🦞_x_🦞", "🦞x🦞"],
+    ["combining mark boundaries", "e\u0301_x_", "e\u0301x"],
+    ["Unicode whitespace boundaries", "_\u00a0x_ _x\ufeff_", "_ x_ _x _"],
+    ["literal backslashes before emphasis", "\\_x_", "\\x"],
     [
       "literal underscores and tildes",
       "Use foo_bar_baz from ~/.openclaw",
       "Use foo_bar_baz from ~/.openclaw",
     ],
-    ["multiline whitespace", "First\n\n  second\t third", "First second third"],
+    ["multiline whitespace", "a\n\n b\tc\n````\nx", "a b c ` x"],
   ])("flattens %s", (_label, input, expected) => {
     expect(flattenMarkdownToPlainText(input)).toBe(expected);
+  });
+
+  it.each(["*", "_", "~~"])("preserves repeated unmatched %s openers", (marker) => {
+    const text = ` ${marker}field`.repeat(8_192);
+    expect(flattenMarkdownToPlainText(text)).toBe(text.trim());
   });
 
   it("flattens deeply nested links without exhausting the stack", () => {
     const depth = 20_000;
     const input = `${"[".repeat(depth)}deep${"](https://example.com)".repeat(depth)} end`;
     expect(flattenMarkdownToPlainText(input)).toBe("deep end");
+  });
+});
+
+describe("stripInlineLinks", () => {
+  // Baseline outputs for the existing linked-image, escaped-bang and empty-label
+  // cases when composed, plus a nested image that contains edits of its own.
+  it.each([
+    [
+      String.raw`[![build](https://example.com/badge[.svg)](https://ci.example.com)\![important](note.md)\\![diagram](image.png)[](https://example.com)`,
+      String.raw`build\!important\\diagram[](https://example.com)`,
+      String.raw`\!important\\[](https://example.com)`,
+    ],
+    [
+      "![Check [docs](guide.md) and ![badge](build.svg)](checks.png)[next](guide.md)",
+      "Check docs and badgenext",
+      "next",
+    ],
+  ])("preserves label and omit output for %s", (input, labels, omitted) => {
+    expect(stripInlineLinks(input)).toBe(labels);
+    expect(stripInlineLinks(input, { images: "omit" })).toBe(omitted);
   });
 });

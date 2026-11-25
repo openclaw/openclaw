@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
@@ -8,6 +7,7 @@ import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-sta
 import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import { resolveOfficialExternalProviderContractPluginIds } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeLowercaseStringSet } from "../../../shared/normalized-string-set.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import {
   collectConfiguredWebFetchPluginIds,
@@ -121,11 +121,7 @@ export function collectEffectiveConfiguredChannelOwnerPluginIds(params: {
   configuredChannelIds: ReadonlySet<string>;
 }): Map<string, Set<string>> {
   const owners = new Map<string, Set<string>>();
-  const configuredChannelIds = new Set(
-    [...params.configuredChannelIds]
-      .map((channelId) => normalizeOptionalLowercaseString(channelId))
-      .filter((channelId): channelId is string => Boolean(channelId)),
-  );
+  const configuredChannelIds = normalizeLowercaseStringSet(params.configuredChannelIds);
   if (configuredChannelIds.size === 0) {
     return owners;
   }

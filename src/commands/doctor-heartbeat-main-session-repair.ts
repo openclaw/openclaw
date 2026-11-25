@@ -133,13 +133,12 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
 function resolveHeartbeatMainRecoveryKey(params: {
   mainKey: string;
   isSessionKeyOccupied: (sessionKey: string) => boolean;
-  nowMs?: number;
 }): string | null {
   const parsed = parseAgentSessionKey(params.mainKey);
   if (!parsed) {
     return null;
   }
-  const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
+  const stamp = formatSessionArchiveTimestamp().toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
   for (let index = 1; index <= 100; index += 1) {
     const candidate = index === 1 ? base : `${base}-${index}`;

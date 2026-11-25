@@ -1,21 +1,9 @@
-import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 
-export const page = definePage({
-  ...routePageSpec("device"),
-  component: () =>
-    import("./device-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: () => createComponent(module.DevicePage, {}),
-    })),
-});
+export const page = defineSolidPage("device", () =>
+  import("./device-page.tsx").then((module) => module.DevicePage),
+);
 
-export const permissionsPage = definePage({
-  ...routePageSpec("device-permissions"),
-  component: () =>
-    import("./permissions-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: () => createComponent(module.DevicePermissionsPage, {}),
-    })),
-});
+export const permissionsPage = defineSolidPage("device-permissions", () =>
+  import("./permissions-page.tsx").then((module) => module.DevicePermissionsPage),
+);

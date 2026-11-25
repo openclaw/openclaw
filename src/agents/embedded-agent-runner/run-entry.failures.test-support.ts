@@ -10,6 +10,78 @@ import {
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
 
+type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
+const fallback = { provider: "fallback-provider", model: "fallback-model" };
+function runEntry(runCandidate: EntryParams["runCandidate"], overrides: Partial<EntryParams> = {}) {
+  return runEmbeddedAgentEntry({
+    selection: { cfg: {}, provider: "provider", model: "model" },
+    identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
+    harness: createDirectHarness(),
+    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+    sessionOverride: { kind: "preserve" },
+    ...overrides,
+    runCandidate,
+  });
+}
+
+async function requesterFixture(runId: string, childId: string) {
+  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+  const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+  const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
+  const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
+  const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
+  const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
+    await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
+  const fixture = await createOpenClawTestState({ label: "entry-requester-settlement" });
+  setRuntimeConfigSnapshot({});
+  const identity = {
+    runId,
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+  };
+  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "entry-requester-test");
+  const child = createSubagentRunRecord({
+    runId: childId,
+    requesterSessionKey: identity.sessionKey,
+    requesterAgentId: identity.agentId,
+    requesterTurnRunId: runId,
+    expectsCompletionMessage: true,
+    completion: { required: true },
+    delivery: { status: "pending" },
+  });
+  return {
+    identity,
+    admission,
+    child,
+    subagentRuns,
+    readChild: () => loadSubagentRegistryFromSqlite().get(childId),
+    expectSettled() {
+      const expected = { runId: childId, requesterTurnRunId: undefined };
+      expect(subagentRuns.get(childId)).toMatchObject(expected);
+      expect(loadSubagentRegistryFromSqlite().get(childId)).toMatchObject(expected);
+    },
+    acceptChild: () =>
+      mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, [
+        {
+          runId: childId,
+          childSessionKey: child.childSessionKey,
+          expectsCompletionMessage: true,
+        },
+      ]),
+    async seed() {
+      subagentRuns.set(childId, child);
+      saveSubagentRegistryChangesToSqlite(subagentRuns, [childId]);
+      await admission.admit("embedded");
+    },
+    async [Symbol.asyncDispose]() {
+      subagentRuns.delete(childId);
+      admission.close();
+      await fixture.cleanup();
+    },
+  };
+}
+
 /** Failure scenarios share the parent suite's runtime mocks and per-case reset. */
 export function registerRunEntryFailureTests(state: {
   runWithModelFallback: Mock;
@@ -22,59 +94,19 @@ export function registerRunEntryFailureTests(state: {
   ] as const)(
     "classifies retained children before candidate acceptance ($runtime, revoked=$revokeAtCleanup, error=$errorResult)",
     async ({ runtime, revokeAtCleanup, errorResult }) => {
-      const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-      const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-      const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
-      const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
-      const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-      const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
-        await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
       const { withLocalSessionPlacementTurnSettlement } =
         await import("../session-placement-admission.js");
-      const fixture = await createOpenClawTestState({ label: "entry-cli-acceptance" });
-      setRuntimeConfigSnapshot({});
-      const identity = {
-        runId: "retained-parent",
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      };
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        identity.runId,
-        "main",
-        "entry-cli-test",
-      );
-      const child = createSubagentRunRecord({
-        runId: "retained-child",
-        requesterSessionKey: identity.sessionKey,
-        requesterAgentId: identity.agentId,
-        requesterTurnRunId: identity.runId,
-        expectsCompletionMessage: true,
-        completion: { required: true },
-        delivery: { status: "pending" },
-      });
+      await using f = await requesterFixture("retained-parent", "retained-child");
+      const { identity, admission, child, subagentRuns } = f;
       const error = new Error("first provider failed after spawning");
       let placementReleased = false;
       let restoreCleanup: (() => void) | undefined;
       try {
-        subagentRuns.set(child.runId, child);
-        saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
-        await admission.admit("embedded");
-        const runCandidate = vi.fn(
-          async (
-            provider: string,
-            model: string,
-            options: Parameters<Parameters<typeof runEmbeddedAgentEntry>[0]["runCandidate"]>[2],
-          ) => {
+        await f.seed();
+        const runCandidate = vi.fn<EntryParams["runCandidate"]>(
+          async (provider, model, options) => {
             if (!options.isFallbackRetry) {
-              mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, [
-                {
-                  runId: child.runId,
-                  childSessionKey: child.childSessionKey,
-                  expectsCompletionMessage: true,
-                },
-              ]);
+              f.acceptChild();
               throw error;
             }
             if (revokeAtCleanup) {
@@ -95,17 +127,15 @@ export function registerRunEntryFailureTests(state: {
               classification: "empty",
               meta: {
                 executionTrace: { runner: runtime, attempts: [], fallbackUsed: true },
-                ...(errorResult
-                  ? {
-                      error: {
-                        kind: "incomplete_turn" as const,
-                        message: "candidate incomplete",
-                        fallbackSafe: true,
-                      },
-                    }
-                  : {}),
               },
             });
+            if (errorResult) {
+              candidate.meta.error = {
+                kind: "incomplete_turn",
+                message: "candidate incomplete",
+                fallbackSafe: true,
+              };
+            }
             const result = await withLocalSessionPlacementTurnSettlement(
               identity,
               async () => {
@@ -128,39 +158,20 @@ export function registerRunEntryFailureTests(state: {
               isFinalFallbackAttempt: false,
             }),
           ).rejects.toBe(error);
-          const result = await params.run("fallback-provider", "fallback-model", {
+          const result = await params.run(fallback.provider, fallback.model, {
             ...fallbackAttemptOptions(params, "server_error"),
             isFinalFallbackAttempt: false,
           });
-          const classification = await params.classifyResult?.({
-            result,
-            provider: "fallback-provider",
-            model: "fallback-model",
-            attempt: 2,
-            total: 3,
-          });
-          expect(classification).toBeNull();
+          expect(
+            await params.classifyResult?.({ result, ...fallback, attempt: 2, total: 3 }),
+          ).toBeNull();
           expect(child.requesterTurnRunId).toBe(identity.runId);
-          return {
-            outcome: "completed",
-            result,
-            provider: "fallback-provider",
-            model: "fallback-model",
-            attempts: [],
-          };
+          return { outcome: "completed", result, ...fallback, attempts: [] };
         });
-        const run = runEmbeddedAgentEntry({
-          preparedRunAdmission: admission,
-          selection: { cfg: {}, provider: "provider", model: "model" },
-          identity,
-          harness: createDirectHarness(),
-          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-          sessionOverride: { kind: "preserve" },
-          runCandidate,
-        });
+        const run = runEntry(runCandidate, { preparedRunAdmission: admission, identity });
         if (revokeAtCleanup) {
           await expect(run).rejects.toThrow("settlement is closed");
-          expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
+          expect(f.readChild()).toMatchObject({
             requesterTurnRunId: identity.runId,
           });
           return;
@@ -169,104 +180,39 @@ export function registerRunEntryFailureTests(state: {
         expect(placementReleased).toBe(true);
         expect(runCandidate).toHaveBeenCalledTimes(2);
         expect(result.result.acceptedSessionSpawns).toHaveLength(1);
-        expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
-          runId: child.runId,
-          requesterTurnRunId: undefined,
-        });
+        f.expectSettled();
       } finally {
         restoreCleanup?.();
-        subagentRuns.delete(child.runId);
-        admission.close();
-        await fixture.cleanup();
       }
     },
   );
 
   it("settles terminal failure when later candidates are skipped", async () => {
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-    const { mergeAcceptedSessionSpawnsForRun } = await import("../accepted-session-spawn.js");
-    const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
-    const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
-    const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
-      await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
-    const fixture = await createOpenClawTestState({ label: "entry-failure-settlement" });
-    setRuntimeConfigSnapshot({});
-    const identity = {
-      runId: "failed-entry",
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-    };
-    const admission = prepareSystemAgentRunAdmission(
-      {},
-      identity.runId,
-      "main",
-      "entry-failure-test",
-    );
-    const child = createSubagentRunRecord({
-      runId: "entry-failure-child",
-      requesterSessionKey: identity.sessionKey,
-      requesterAgentId: identity.agentId,
-      requesterTurnRunId: identity.runId,
-      expectsCompletionMessage: true,
-      completion: { required: true },
-      delivery: { status: "pending" },
+    await using f = await requesterFixture("failed-entry", "entry-failure-child");
+    const { identity, admission, child } = f;
+    await f.seed();
+    const providerError = new Error("provider failed");
+    const exhausted = new Error("all candidates failed or were skipped");
+    const runCandidate = vi.fn(async () => {
+      f.acceptChild();
+      throw providerError;
     });
-    try {
-      subagentRuns.set(child.runId, child);
-      saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
-      await admission.admit("embedded");
-      const providerError = new Error("provider failed");
-      const exhausted = new Error("all candidates failed or were skipped");
-      const runCandidate = vi.fn(async () => {
-        mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, [
-          {
-            runId: child.runId,
-            childSessionKey: child.childSessionKey,
-            expectsCompletionMessage: true,
-          },
-        ]);
-        throw providerError;
-      });
-      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-        await expect(
-          params.run(params.provider, params.model, {
-            ...initialAttemptOptions(params),
-            isFinalFallbackAttempt: false,
-          }),
-        ).rejects.toBe(providerError);
-        expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterTurnRunId).toBe(
-          identity.runId,
-        );
-        throw exhausted;
-      });
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await expect(
-        runEmbeddedAgentEntry({
-          preparedRunAdmission: admission,
-          selection: { cfg: {}, provider: "provider", model: "model" },
-          identity,
-          harness: createDirectHarness(),
-          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-          sessionOverride: { kind: "preserve" },
-          runCandidate,
+        params.run(params.provider, params.model, {
+          ...initialAttemptOptions(params),
+          isFinalFallbackAttempt: false,
         }),
-      ).rejects.toBe(exhausted);
-      expect(runCandidate).toHaveBeenCalledOnce();
-      expect(child.requesterTurnRunId).toBe(identity.runId);
-      expect(subagentRuns.get(child.runId)).toMatchObject({
-        runId: child.runId,
-        requesterTurnRunId: undefined,
-      });
-      expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
-        runId: child.runId,
-        requesterTurnRunId: undefined,
-      });
-    } finally {
-      subagentRuns.delete(child.runId);
-      admission.close();
-      await fixture.cleanup();
-    }
+      ).rejects.toBe(providerError);
+      expect(f.readChild()?.requesterTurnRunId).toBe(identity.runId);
+      throw exhausted;
+    });
+    await expect(
+      runEntry(runCandidate, { preparedRunAdmission: admission, identity }),
+    ).rejects.toBe(exhausted);
+    expect(runCandidate).toHaveBeenCalledOnce();
+    expect(child.requesterTurnRunId).toBe(identity.runId);
+    f.expectSettled();
   });
 
   it("does not finalize any candidate when fallback is exhausted", async () => {
@@ -277,50 +223,42 @@ export function registerRunEntryFailureTests(state: {
         initialAttemptOptions(params),
       );
       const latestResult = await params.run(
-        "fallback-provider",
-        "fallback-model",
+        fallback.provider,
+        fallback.model,
         fallbackAttemptOptions(params, "unknown"),
       );
       return {
         outcome: "exhausted" as const,
         result: params.mergeExhaustedResult?.({ latestResult, preferredResult }) ?? latestResult,
-        provider: "fallback-provider",
-        model: "fallback-model",
+        ...fallback,
         attempts: [],
       };
     });
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model, options) => {
-        recordTurnAttempt(options.onContextEngineTurnCandidate, provider);
-        return makeResult({
-          provider,
-          model,
-          classification: "empty",
-          meta: {
-            error: { kind: "incomplete_turn", message: `${provider} failed` },
-            agentMeta: {
+    const result = await runEntry(async (provider, model, options) => {
+      recordTurnAttempt(options.onContextEngineTurnCandidate, provider);
+      return makeResult({
+        provider,
+        model,
+        classification: "empty",
+        meta: {
+          error: { kind: "incomplete_turn", message: `${provider} failed` },
+          agentMeta: {
+            sessionId: "session-1",
+            provider,
+            model,
+            terminalReceipt: {
+              runId: "settle-exhausted",
               sessionId: "session-1",
-              provider,
-              model,
-              terminalReceipt: {
-                runId: "settle-exhausted",
-                sessionId: "session-1",
-                turnId: provider,
-                requested: { provider, model },
-                effective: { provider, model, responseModel: model },
-                successfulToolNames: [],
-                rerouted: false,
-                assistantTranscriptIdempotencyKey: `saved-${provider}`,
-              },
+              turnId: provider,
+              requested: { provider, model },
+              effective: { provider, model, responseModel: model },
+              successfulToolNames: [],
+              rerouted: false,
+              assistantTranscriptIdempotencyKey: `saved-${provider}`,
             },
           },
-        });
-      },
+        },
+      });
     });
 
     expect(result.result.meta.error?.message).toBe("provider failed");
@@ -333,9 +271,7 @@ export function registerRunEntryFailureTests(state: {
   it("does not replay a thrown channel-delivery attempt that already delivered its reply (#113788)", async () => {
     const failure = new Error("insufficient quota");
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      // Mirror the fallback loop's thrown-error exit: the attempt error bypasses
-      // result classification, so the error-path backstop is the only guard that
-      // can stop the next candidate from replaying the delivered turn.
+      // Thrown attempts bypass classification; the error backstop must block replay.
       await expect(
         params.run(params.provider, params.model, initialAttemptOptions(params)),
       ).rejects.toBe(failure);
@@ -349,22 +285,15 @@ export function registerRunEntryFailureTests(state: {
       expect(allowed).toBe(false);
       throw failure;
     });
-    const runCandidate = vi.fn(
-      async (
-        _provider: string,
-        _model: string,
-        options: Parameters<Parameters<typeof runEmbeddedAgentEntry>[0]["runCandidate"]>[2],
-      ) => {
-        recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        throw failure;
-      },
-    );
+    const runCandidate = vi.fn<EntryParams["runCandidate"]>(async (_provider, _model, options) => {
+      recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
+      throw failure;
+    });
 
     await expect(
-      runEmbeddedAgentEntry({
+      runEntry(runCandidate, {
         selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
         identity: { runId: "channel-throw", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
         behavior: {
           kind: "channel-delivery",
           readDeliveryEvidence: () => ({
@@ -373,8 +302,6 @@ export function registerRunEntryFailureTests(state: {
             hasRetryBlockedDelivery: false,
           }),
         },
-        sessionOverride: { kind: "preserve" },
-        runCandidate,
       }),
     ).rejects.toBe(failure);
 

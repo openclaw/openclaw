@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
@@ -28,17 +29,13 @@ const A2aOutboundResponseSchema = z.object({
     .optional(),
 });
 
-type A2aOutboundSendParams = {
+export async function sendA2aChannelText(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   text: string;
   assertDirectAdapterHandoff?: () => void;
-};
-
-export async function sendA2aChannelText(
-  params: A2aOutboundSendParams,
-): Promise<{ to: string; messageId: string }> {
+}): Promise<{ to: string; messageId: string }> {
   const account = resolveA2aChannelAccount({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -46,13 +43,20 @@ export async function sendA2aChannelText(
   const peerName = params.to.replace(/^a2a:/i, "").trim();
   const peer = account.config.peers?.[peerName];
   if (!peer?.url) {
-    throw new Error(`peer ${peerName} has no url configured for outbound A2A`);
+    // Both guards below depend only on loaded config, so no retry can succeed;
+    // the typed non-retryable rejection lets the delivery queue settle the send
+    // permanently instead of minting replay turns for a deterministic failure.
+    throw new PlatformMessageNotDispatchedError(
+      `peer ${peerName} has no url configured for outbound A2A`,
+      { cause: undefined, retryable: false },
+    );
   }
   if (account.unresolvedOutboundPeers.includes(peerName)) {
     // Fail before any I/O: sending without the authored credential would deliver the
     // message anonymously to a peer that was configured to require authentication.
-    throw new Error(
+    throw new PlatformMessageNotDispatchedError(
       `peer ${peerName} outboundToken reference did not resolve; set the variable and reload before sending`,
+      { cause: undefined, retryable: false },
     );
   }
 

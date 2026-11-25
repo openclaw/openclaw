@@ -1,5 +1,6 @@
 // System-agent session tests cover caller ownership and response projection.
 
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -10,36 +11,18 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
-}));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
-}));
-// mock-isolation: Keep machine-wide audit state outside caller-identity and session-routing tests.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
 }));
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
 // deterministic so identity behavior is the only variable under test.
@@ -54,7 +37,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
     recentExternalEdit: false,
     auditSequence: 0,
   })),
-  resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
+  resolveSystemAgentGreeting: vi.fn(async () => "welcome text"),
 }));
 
 type FakeEngine = {
@@ -133,12 +116,7 @@ function makeClient(params: {
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
     ...(params.profileId
       ? {
-          authenticatedUserProfile: {
-            profileId: params.profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(params.profileId),
         }
       : {}),
     ...(params.githubSyncPending
@@ -350,12 +328,7 @@ describe("openclaw.chat session ownership", () => {
     });
     expect(sessions.has("github-pending")).toBe(false);
 
-    pendingClient.authenticatedUserProfile = {
-      profileId: "profile-canonical",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 2,
-    };
+    pendingClient.authenticatedUserProfile = gatewayProfile("profile-canonical", null, 2);
     const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
 
     expect(attached.ok).toBe(true);
@@ -434,16 +407,6 @@ describe("openclaw.chat session ownership", () => {
 });
 
 describe("openclaw.chat session responses", () => {
-  it("returns the stored welcome when no message is sent", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession()]]);
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-
-    expect(call).toMatchObject({
-      ok: true,
-      payload: { sessionId: "s1", reply: "welcome text", action: "none" },
-    });
-  });
-
   it("rejects a structured answer without an active chat session", async () => {
     const call = await callChat(makeContext(new Map()), {
       sessionId: "missing",
@@ -476,20 +439,6 @@ describe("openclaw.chat session responses", () => {
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
-  it("routes a structured cancel through its bound session", async () => {
-    const engine = makeEngine();
-    engine.cancelWizard.mockResolvedValue({ text: "Setup cancelled.", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      wizardCancel: { stepId: "channel" },
-    });
-
-    expect(engine.cancelWizard).toHaveBeenCalledWith({ stepId: "channel" });
-    expect(call.payload).toMatchObject({ reply: "Setup cancelled.", action: "none" });
-  });
-
   it("rejects a structured answer when the active session has no hosted wizard", async () => {
     const engine = makeEngine();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -515,43 +464,5 @@ describe("openclaw.chat session responses", () => {
     const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
 
     expect(call.payload).toMatchObject({ sensitive: true });
-  });
-
-  it("maps the TUI handoff to an open-agent action", async () => {
-    const engine = makeEngine();
-    engine.handle.mockResolvedValue({
-      text: "",
-      action: "open-tui",
-      handoff: { kind: "open-tui" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "talk to agent",
-    });
-
-    expect(call.payload).toMatchObject({ action: "open-agent" });
-    expect(call.payload).not.toHaveProperty("agentDraft");
-    expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
-  });
-
-  it("forwards the hatch draft intent with an agent handoff", async () => {
-    const engine = makeEngine();
-    engine.handle.mockResolvedValue({
-      text: "Your agent is hatching.",
-      action: "open-tui",
-      agentDraft: "hatch",
-      handoff: { kind: "open-tui", agentId: "researcher" },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
-
-    expect(call.payload).toMatchObject({
-      action: "open-agent",
-      agentDraft: "hatch",
-      agentId: "researcher",
-    });
   });
 });

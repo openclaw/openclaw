@@ -6,7 +6,10 @@ import { markAuthProfileSuccess } from "./auth-profiles/profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 import { markAuthProfileFailure } from "./auth-profiles/usage.js";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "./embedded-agent-helpers/assistant-message-failures.js";
 import { resolveAuthProfileFailureReason } from "./embedded-agent-runner/run/auth-profile-failure-policy.js";
 import type { PreparedSimpleCompletionModel } from "./simple-completion.types.js";
 
@@ -58,7 +61,12 @@ export async function completeWithAuthProfileFailover(params: {
     };
     try {
       if (reason) {
-        await markAuthProfileFailure({ ...health, reason, cfg: params.cfg });
+        await markAuthProfileFailure({
+          ...health,
+          reason,
+          cfg: params.cfg,
+          retryAfterMs: buildAssistantFailoverSignal(result).retryAfterMs,
+        });
       } else if (["stop", "length", "toolUse"].includes(result.stopReason)) {
         await markAuthProfileSuccess(health);
       }

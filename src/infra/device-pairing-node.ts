@@ -307,6 +307,7 @@ export async function recordPairedNodeDisconnection(params: {
   nodeId: string;
   connectedAtMs: number;
   disconnectedAtMs: number;
+  hostStats?: NodeHostStats;
   expectedPairingGeneration: NodePairingGeneration;
   baseDir?: string;
 }): Promise<{ recorded: boolean }> {

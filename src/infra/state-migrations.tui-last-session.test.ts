@@ -1,74 +1,72 @@
-// Doctor TUI last-session migration tests cover strict import and source cleanup.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 
-type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
-
 const tempDirs = createTempDirTracker();
-
-function legacyTuiLastSessionPath(stateDir: string): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
+type MigrationOptions = Parameters<typeof migrateLegacyTuiLastSessions>[0];
 
 function writeLegacyStore(stateDir: string, value: unknown): string {
-  const sourcePath = legacyTuiLastSessionPath(stateDir);
+  const sourcePath = path.join(stateDir, "tui", "last-session.json");
   fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
   fs.writeFileSync(sourcePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   return sourcePath;
 }
 
-function migrate(
-  stateDir: string,
-  overrides?: {
-    beforeClaim?: () => void;
-    beforeVerify?: () => void;
-    removeSource?: () => void;
-  },
-) {
-  const sourcePath = legacyTuiLastSessionPath(stateDir);
-  return migrateLegacyTuiLastSessions({
-    detected: { sourcePath, hasLegacy: true },
-    stateDir,
-    ...(overrides?.beforeClaim ? { beforeClaim: overrides.beforeClaim } : {}),
-    ...(overrides?.beforeVerify ? { beforeVerify: overrides.beforeVerify } : {}),
-    ...(overrides?.removeSource ? { removeSource: () => overrides.removeSource?.() } : {}),
-  });
-}
+const pointer = (sessionKey = "agent:main:tui-123", updatedAt = 100) => ({ sessionKey, updatedAt });
 
-function seedPointer(params: {
-  stateDir: string;
-  scopeKey: string;
-  sessionKey: string;
-  updatedAt: number;
-}): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db)
-          .insertInto("config_machine_state")
-          .values({
-            state_key: `tui.lastSession.${params.scopeKey}`,
-            value_json: JSON.stringify(params.sessionKey),
-            updated_at_ms: params.updatedAt,
-          }),
+function fixture(value: unknown = { terminal: pointer() }) {
+  const stateDir = tempDirs.make("openclaw-tui-migration-");
+  const sourcePath = writeLegacyStore(stateDir, value);
+  return {
+    stateDir,
+    sourcePath,
+    run: (overrides: Omit<MigrationOptions, "detected" | "stateDir"> = {}) =>
+      migrateLegacyTuiLastSessions({
+        detected: { sourcePath, hasLegacy: true },
+        stateDir,
+        ...overrides,
+      }),
+    read: (scopeKey = "terminal") => readTuiLastSessionKey({ scopeKey, stateDir }),
+    async check(
+      result: ReturnType<typeof migrateLegacyTuiLastSessions>,
+      session: string | null,
+      warning?: string,
+    ) {
+      if (warning) {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toContain(warning);
+      } else {
+        expect(result.warnings).toEqual([]);
+      }
+      expect(fs.existsSync(sourcePath)).toBe(Boolean(warning));
+      await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+        session,
       );
     },
-    { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+  };
+}
+
+function seedPointer(stateDir: string, updatedAt: number): void {
+  // Seed historical timestamps; the runtime writer stamps Date.now().
+  runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      db
+        .prepare(
+          "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run("tui.lastSession.terminal", JSON.stringify("agent:main:current"), updatedAt),
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
 }
 
@@ -78,15 +76,26 @@ afterEach(() => {
 });
 
 describe("legacy TUI last-session migration", () => {
-  it("runs only through explicit doctor detection and discards heartbeat pointers", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100 },
-      heartbeat: { sessionKey: "agent:main:telegram:direct:123:heartbeat", updatedAt: 200 },
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const state = fixture({ terminal: pointer("utf8-marker") });
+    const bytes = fs.readFileSync(state.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(state.sourcePath, bytes);
+    const result = state.run();
+    await state.check(result, null, "must be valid UTF-8");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(state.sourcePath)).toEqual(bytes);
+  });
+
+  it("requires Doctor opt-in and discards heartbeat pointers", async () => {
+    const state = fixture({
+      terminal: pointer(),
+      heartbeat: pointer("agent:main:telegram:direct:123:heartbeat", 200),
     });
+    const { stateDir, sourcePath, read } = state;
     const runtimeDetection = detectLegacyTuiLastSessions({ stateDir });
     expect(runtimeDetection.hasLegacy).toBe(false);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+    await expect(read()).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(true);
 
     const doctorDetection = detectLegacyTuiLastSessions({
@@ -99,175 +108,63 @@ describe("legacy TUI last-session migration", () => {
       stateDir,
     });
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      "Migrated 1 TUI last-session pointer(s) → shared SQLite state",
-    );
-    expect(result.changes).toContain("Discarded 1 legacy heartbeat TUI restore pointer(s)");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:tui-123",
-    );
+    await state.check(result, "agent:main:tui-123");
     expect(
       readConfigMachineStateWithMetadata<string>("tui.lastSession.terminal", {
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toEqual({ value: "agent:main:tui-123", updatedAtMs: 100 });
-    await expect(readTuiLastSessionKey({ scopeKey: "heartbeat", stateDir })).resolves.toBeNull();
+    await expect(read("heartbeat")).resolves.toBeNull();
     expect(fs.readdirSync(path.dirname(sourcePath))).not.toContain("last-session.json.migrated");
   });
 
   it.each([
-    ["non-object top level", []],
-    ["non-object record", { terminal: "agent:main:tui-123" }],
-    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-  ])("retains malformed source: %s", async (_label, value) => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, value);
-
-    const result = migrate(stateDir);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+    ["non-object top level", [], "must be a JSON object"],
+    ["non-object record", { terminal: "agent:main:tui-123" }, "must be an object"],
+    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }, "invalid timestamp"],
+    ["unexpected field", { terminal: { "": 1, later: 2, ...pointer() } }, 'unexpected field ""'],
+  ])("retains malformed source: %s", async (_label, value, warning) => {
+    const state = fixture(value);
+    await state.check(state.run(), null, warning);
+    expect(fs.readdirSync(path.dirname(state.sourcePath))).toEqual(["last-session.json"]);
   });
 
-  it("rejects an empty unexpected field before claiming or writing", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { "": 1, later: 2, sessionKey: "agent:main:tui-123", updatedAt: 100 },
-    });
-    const result = migrate(stateDir);
-    expect(result.warnings).toEqual([
-      `Failed reading legacy TUI last-session state ${sourcePath}: Error: legacy TUI last-session record terminal has unexpected field ""`,
-    ]);
-    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["last-session.json"]);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+  it.each([
+    [100, "divergent JSON and SQLite pointers at the same timestamp"],
+    [200, undefined],
+  ] as const)("preserves the SQLite pointer at timestamp %s", async (timestamp, warning) => {
+    const state = fixture({ terminal: pointer("agent:main:legacy") });
+    seedPointer(state.stateDir, timestamp);
+    await state.check(state.run(), "agent:main:current", warning);
   });
 
-  it("keeps a newer SQLite pointer and removes its superseded source", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:legacy", updatedAt: 100 },
-    });
-    seedPointer({
-      stateDir,
-      scopeKey: "terminal",
-      sessionKey: "agent:main:current",
-      updatedAt: 200,
-    });
-
-    const result = migrate(stateDir);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.notices).toEqual([
-      "Kept 1 newer shared SQLite TUI last-session pointer(s) over legacy JSON",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:current",
-    );
-  });
-
-  it("fails closed on equal-timestamp divergence", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:legacy", updatedAt: 100 },
-    });
-    seedPointer({
-      stateDir,
-      scopeKey: "terminal",
-      sessionKey: "agent:main:current",
-      updatedAt: 100,
-    });
-
-    const result = migrate(stateDir);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain(
-      "divergent JSON and SQLite pointers at the same timestamp",
-    );
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:current",
-    );
-  });
-
-  it("retains a source that changes before verification", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:first", updatedAt: 100 },
-    });
-
-    const result = migrate(stateDir, {
-      beforeVerify: () => {
+  it.each([
+    ["beforeVerify", "source changed after doctor loaded it"],
+    ["beforeClaim", "source changed before doctor could claim it"],
+    ["removeSource", "simulated unlink failure"],
+  ] as const)("retains sources after %s failure; retries cleanup", async (hook, warning) => {
+    const session = hook === "removeSource" ? "agent:main:tui-123" : "agent:main:first";
+    const state = fixture({ terminal: pointer(session) });
+    const result = state.run({
+      [hook]: () => {
+        if (hook === "removeSource") {
+          throw new Error(warning);
+        }
+        const target =
+          hook === "beforeClaim" ? `${state.sourcePath}.replacement` : state.sourcePath;
         fs.writeFileSync(
-          sourcePath,
-          `${JSON.stringify({ terminal: { sessionKey: "agent:main:second", updatedAt: 200 } })}\n`,
+          target,
+          `${JSON.stringify({ terminal: pointer("agent:main:second", 200) })}\n`,
         );
+        if (hook === "beforeClaim") {
+          fs.renameSync(target, state.sourcePath);
+        }
       },
     });
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("source changed after doctor loaded it");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:first",
-    );
-  });
-
-  it("does not delete a replacement written after verification", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:first", updatedAt: 100 },
-    });
-    const replacement = `${sourcePath}.replacement`;
-
-    const first = migrate(stateDir, {
-      beforeClaim: () => {
-        fs.writeFileSync(
-          replacement,
-          `${JSON.stringify({ terminal: { sessionKey: "agent:main:second", updatedAt: 200 } })}\n`,
-        );
-        fs.renameSync(replacement, sourcePath);
-      },
-    });
-
-    expect(first.changes).toEqual([]);
-    expect(first.warnings.join("\n")).toContain("source changed before doctor could claim it");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:first",
-    );
-
-    const retry = migrate(stateDir);
-    expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:second",
-    );
-  });
-
-  it("retries source cleanup without overwriting the verified row", async () => {
-    const stateDir = tempDirs.make("openclaw-tui-migration-");
-    const sourcePath = writeLegacyStore(stateDir, {
-      terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100 },
-    });
-
-    const first = migrate(stateDir, {
-      removeSource: () => {
-        throw new Error("simulated unlink failure");
-      },
-    });
-    expect(first.warnings.join("\n")).toContain("simulated unlink failure");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-
-    const retry = migrate(stateDir);
-    expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
-      "agent:main:tui-123",
-    );
+    await state.check(result, session, warning);
+    if (hook === "beforeVerify") {
+      return;
+    }
+    await state.check(state.run(), hook === "beforeClaim" ? "agent:main:second" : session);
   });
 });

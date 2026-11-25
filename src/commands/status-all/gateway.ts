@@ -9,10 +9,17 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 
-/** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
+/** Reads a bounded log tail, keeping unavailable files visible in the diagnostic report. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
-  const lines = await readGatewayLogTailLines(filePath).catch(() => []);
+  const lines = await readGatewayLogTailLines(filePath).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      // Logs may not exist before the first service start.
+      return [];
+    }
+    return ["Log unavailable; check this file's path and permissions, then retry."];
+  });
   const out = lines.slice(Math.max(0, lines.length - maxLines));
   return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
 }
@@ -23,14 +30,6 @@ function shorten(message: string, maxLen: number): string {
     return cleaned;
   }
   return `${truncateUtf16Safe(cleaned, Math.max(0, maxLen - 1))}…`;
-}
-
-function normalizeGwsLine(line: string): string {
-  // Remove per-request ids so repeated gateway websocket errors group into one summary.
-  return line
-    .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
-    .replace(/\s+error=Error:.*$/g, "")
-    .trim();
 }
 
 function consumeJsonBlock(
@@ -124,7 +123,11 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       line.includes("errorCode=UNAVAILABLE") &&
       line.includes("OAuth token refresh failed")
     ) {
-      const normalized = normalizeGwsLine(line);
+      // Remove per-request ids so repeated gateway websocket errors group into one summary.
+      const normalized = line
+        .replace(/\s+(?:runId|conn|id)=[^\s]+/g, "")
+        .replace(/\s+error=Error:.*$/g, "")
+        .trim();
       addGroup(`gws:${normalized}`, normalized);
       continue;
     }

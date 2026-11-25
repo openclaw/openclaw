@@ -16,7 +16,6 @@ import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
@@ -54,11 +53,10 @@ describe("core model owner generations", () => {
     const activity = getDiagnosticSessionActivitySnapshot(ref);
     expect(activity.lastProgressAgeMs).toBe(360_000);
     expect(activity.repeatedRequestNoProgressAgeMs).toBeUndefined();
-    expect(activity.activeModelCallRecoveryDeadlineAtMs).toBe(startedAt + 900_000);
     expect(activity.activeModelCallRequestTimeoutMs).toBe(900_000);
     expect(
-      // The unchanged generic guard still honors the full sliding quiet allowance,
-      // even though the separate start-relative eligibility time has expired.
+      // Progress keeps the full sliding quiet allowance, even after the
+      // request's initial allowance has elapsed.
       resolveRunStaleThresholdMs(activity, 360_000, 360_000),
     ).toBe(900_000);
     closeDiagnosticEmbeddedRunOwner(owner);
@@ -186,7 +184,6 @@ describe("core model owner generations", () => {
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
     markDiagnosticEmbeddedRunStarted({ ...later, owner: laterOwner });
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
-    markDiagnosticArgumentChurnObservation({ ...ref, runId: earlier.runId, active: true });
     for (const callId of ["request-1", "request-2"]) {
       emitCoreModelRequestStartedDiagnosticEvent(
         { ...ref, runId: earlier.runId, callId, provider: "core", model: "request-model" },
@@ -198,7 +195,6 @@ describe("core model owner generations", () => {
 
     expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
       activeWorkKind: "model_call",
-      lastProgressReason: "tool_loop:argument_churn",
       lastProgressAgeMs: 30_000,
       repeatedRequestNoProgressAgeMs: 30_000,
     });
@@ -256,7 +252,7 @@ describe("core model owner generations", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       activeWorkKind: "model_call",
       hasActiveEmbeddedRun: true,
-      activeModelCallRecoveryDeadlineAtMs: requestStartedAt + 300_000,
+      activeModelCallRequestTimeoutMs: 300_000,
       lastProgressReason: "model_call:started",
     });
   });
@@ -328,11 +324,11 @@ describe("core model owner generations", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       activeWorkKind: "model_call",
       hasActiveEmbeddedRun: true,
-      activeModelCallRecoveryDeadlineAtMs: currentRequestStartedAt + 420_000,
+      activeModelCallRequestTimeoutMs: 420_000,
     });
   });
 
-  it("projects only the current owner generation request deadline", async () => {
+  it("projects only the current owner generation request timeout", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = Date.parse("2026-10-04T00:00:00.000Z");
     vi.setSystemTime(startedAt);
@@ -394,10 +390,10 @@ describe("core model owner generations", () => {
       );
       await waitForDiagnosticEventsDrained();
 
-      const deadlineAtMs =
-        getDiagnosticSessionActivitySnapshot(ref).activeModelCallRecoveryDeadlineAtMs;
-      expect(deadlineAtMs).toBe(currentRequestStartedAt + 100_000);
-      expect(deadlineAtMs).toBeLessThan(startedAt + 600_000);
+      const requestTimeoutMs =
+        getDiagnosticSessionActivitySnapshot(ref).activeModelCallRequestTimeoutMs;
+      expect(requestTimeoutMs).toBe(100_000);
+      expect(requestTimeoutMs).toBeLessThan(600_000);
     } finally {
       closeDiagnosticEmbeddedRunOwner(oldOwner);
       closeDiagnosticEmbeddedRunOwner(currentOwner);

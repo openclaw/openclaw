@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createStandardCloudProfile } from "../test-helpers/session-placement.ts";
 import {
   WORKSPACE,
   captureUiProof,
@@ -27,17 +28,7 @@ suite.define(() => {
           },
           "environments.list": {
             environments: [],
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                machines: [
-                  { id: "standard", label: "Standard", default: true },
-                  { id: "fast", label: "Fast" },
-                ],
-              },
-              { id: "machine0", providerId: "crabbox" },
-            ],
+            profiles: [createStandardCloudProfile(), { id: "machine0", providerId: "crabbox" }],
           },
           "worktrees.branches": {
             branches: [{ kind: "local", name: "main" }],
@@ -77,7 +68,7 @@ suite.define(() => {
       );
       await pollLocatorText(
         page.locator('.chat-thread .chat-working-indicator[role="status"]'),
-      ).toContain("Provisioning environment…");
+      ).toContain("Provisioning environment");
       expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
       await captureUiProof(suite, page, "cloud-provisioning.png");
     });

@@ -1,16 +1,22 @@
 # Release preparation
 
 Read `docs/reference/RELEASING.md` for current public policy. For regular
-releases, select the cut SHA once: use the operator's exact SHA or fetch
-`origin/main` once and record its full SHA and CI state. Create a clean worktree
-and `release/YYYY.M.PATCH` from it. Never absorb unrelated dirty files.
+releases, resolve patch versus feature lineage through the
+[owner lifecycle](release-owner.md#resolve-the-release-brief) before choosing a
+cut. Only a new beta feature train defaults to a fresh `origin/main` cut.
+Patches retain their selected release-line base; stable feature promotion uses
+the selected beta plus approved hotfixes. Pin the resolved base SHA once and
+record its CI state. Use a clean worktree and the canonical
+`release/YYYY.M.PATCH` branch; reuse an existing owned branch without resetting
+it. A handoff adopts the recorded cut instead of choosing another. Never absorb
+unrelated dirty files.
 
 The release branch is the active queue. Moving main is a workflow/provenance
-source, not an invitation to add fixes. Touch main before publication only for
-an operator-requested change or a critical blocker owned there that cannot be
-fixed or proven on the release branch. Keep that repair bounded, use
-`$openclaw-pr-maintainer`, then return to the release. Defer ordinary
-forward-ports until after publication.
+source, not an invitation to add fixes. Follow
+[backports and new fixes](../SKILL.md#backports-and-new-fixes): apply existing
+main fixes directly, one at a time, and prefer individual main PRs for new
+release fixes before backporting. For urgent release-first repairs, keep the
+change bounded and track an owned forward-port after publication.
 
 ## Version and channel
 
@@ -36,7 +42,8 @@ pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --check
 ```
 
 Shadow is nonmutating. Write aligns the owned root/macOS versions and the
-version-generated metadata DAG; add `--android` only when Android is selected.
+version-generated metadata DAG. Android version defaults are calculated from
+the root package version at build time.
 The controller's manifest is bound to the exact HEAD/worktree.
 Check version-bearing package, app plist/Gradle, updating-doc, and Peekaboo
 project fields against their platform contract. `appcast.xml` is generated at
@@ -44,11 +51,19 @@ macOS publication, not a blanket version-bump target. For fallback correction
 tags `vYYYY.M.PATCH-N`, those source version fields remain `YYYY.M.PATCH`;
 macOS needs a strictly higher numeric `APP_BUILD`.
 
-Android is independently pinned in `apps/android/version.json`. If the stable
-release should include its APK, prepare it before tagging with `--android` or
-`pnpm android:version:pin -- --version YYYY.M.PATCH`.
-An older pin causes candidate/publish to skip Android; an immutable tag cannot
-be repaired later to add that platform.
+Android does not need a separate version pin. Current source has no Android
+version manifest, so Gateway publication skips Android; current Android
+releases use the independent Play workflow. Legacy tagged-source APK recovery
+retains its existing eligibility and protected approval requirements.
+
+## Update and pin bundled Codex (required)
+
+Before freezing **Code SHA** on every release track, update
+`extensions/codex/package.json` to the exact latest stable `@openai/codex`
+version (`npm view @openai/codex dist-tags.latest`). Backport the complete main
+update when available, including matching lockfile, protocol, and version pins;
+run the affected Codex checks. See [PR #200784](https://github.com/openclaw/openclaw/pull/200784).
+If already current, record the check. New versions after freeze do not reopen intake.
 
 ## Selected changes and compatibility
 
@@ -57,8 +72,8 @@ When backport discovery is requested or part of planning, read
 and obtain approval for the categorized ledger before mutating the branch.
 Include its selected-contract closure and CI-optimization dispositions; recheck
 closure against the final candidate before freezing or starting qualification.
-Backports stay optional and operator-selected. An unspecified target means the
-newest open release branch. Extended-stable preparation additionally uses
+Other product backports stay optional and operator-selected. An unspecified
+target means the newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).
 
 Before branching and before final publish, inspect
@@ -77,7 +92,9 @@ Freeze the product-complete tree, including approved versions, fixes and
 complete release notes, as **Code SHA**. If the notes are final, this is also
 **Release SHA**. After this point admit only confirmed
 product, package/provenance, security, or publication-blocking defects; defer
-adjacent improvements. Validate that exact source and its publication bytes.
+adjacent improvements. Explicit operator-approved intake changes follow the
+[owner lifecycle](release-owner.md#prepare-and-admit-hotfixes) and invalidate
+affected evidence. Validate that exact source and its publication bytes.
 
 ## Changelog and release notes
 

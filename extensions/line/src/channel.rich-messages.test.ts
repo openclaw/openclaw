@@ -16,6 +16,11 @@ import {
 } from "./rich-messages.js";
 
 const DIRECT_TARGET = "line:U0123456789abcdef0123456789abcdef";
+type Button = Extract<MessagePresentationBlock, { type: "buttons" }>["buttons"][number];
+const buttonBlock = (...buttons: Button[]): MessagePresentationBlock => ({
+  type: "buttons",
+  buttons,
+});
 const QUESTION_ID = "ask_3d8dbe55be452a9a39add7c909beb119";
 
 function questionPayload({
@@ -63,6 +68,12 @@ function questionPayload({
   };
 }
 
+function expectTextFallback(prepared: ReplyPayload, text: string | undefined) {
+  expect(prepared.presentation).toBeUndefined();
+  expect(prepared.channelData?.line).toBeUndefined();
+  expect(prepared.text).toBe(text);
+}
+
 async function prepareBoth(payload: ReplyPayload, to = DIRECT_TARGET) {
   const outbound = await renderPresentationForDelivery(
     {
@@ -101,9 +112,7 @@ describe("LINE rich-message boundaries", () => {
       payload,
       "line:group:C0123456789abcdef0123456789abcdef",
     )) {
-      expect(prepared.presentation).toBeUndefined();
-      expect(prepared.channelData?.line).toBeUndefined();
-      expect(prepared.text).toBe(payload.text);
+      expectTextFallback(prepared, payload.text);
     }
   });
 
@@ -115,9 +124,7 @@ describe("LINE rich-message boundaries", () => {
       labels: ["Staging", "Production", "Canary", "Sandbox"],
     });
     for (const prepared of await prepareBoth(payload)) {
-      expect(prepared.presentation).toBeUndefined();
-      expect(prepared.channelData?.line).toBeUndefined();
-      expect(prepared.text).toBe(payload.text);
+      expectTextFallback(prepared, payload.text);
     }
   });
 
@@ -181,10 +188,7 @@ describe("LINE rich-message boundaries", () => {
           title,
           blocks: [
             { type: "text", text },
-            {
-              type: "buttons",
-              buttons: [{ label: "Continue", action: { type: "callback", value: "next" } }],
-            },
+            buttonBlock({ label: "Continue", action: { type: "callback", value: "next" } }),
           ],
         },
       });
@@ -274,10 +278,7 @@ describe("LINE rich-message boundaries", () => {
         title: "Deploy",
         blocks: [
           { type: "text", text: "Staging is green." },
-          {
-            type: "buttons",
-            buttons: [{ label: "Deploy", action: { type: "command", command: "/deploy" } }],
-          },
+          buttonBlock({ label: "Deploy", action: { type: "command", command: "/deploy" } }),
           block("env"),
           block("region"),
         ],
@@ -315,36 +316,27 @@ describe("LINE rich-message boundaries", () => {
   });
 
   it.each([
-    {
-      kind: "command",
-      action: { type: "command", command: "/status" },
-      expected: { type: "message", text: "/status" },
-    },
-    {
-      kind: "url",
-      action: { type: "url", url: "https://example.com/status" },
-      expected: { type: "uri", uri: "https://example.com/status" },
-    },
-    {
-      kind: "web-app",
-      action: { type: "web-app", url: "https://example.com/app" },
-      expected: { type: "uri", uri: "https://example.com/app" },
-    },
+    [
+      { type: "command", command: "/status" },
+      { type: "message", text: "/status" },
+    ],
+    [
+      { type: "url", url: "https://example.com/status" },
+      { type: "uri", uri: "https://example.com/status" },
+    ],
+    [
+      { type: "web-app", url: "https://example.com/app" },
+      { type: "uri", uri: "https://example.com/app" },
+    ],
   ] as const)(
-    "preserves 40-character Flex $kind labels while quick replies stay bounded",
-    async ({ action, expected }) => {
+    "preserves 40-character Flex %j labels while quick replies stay bounded",
+    async (action, expected) => {
       const label = "x".repeat(40);
       const result = await lineOutboundAdapter.renderPresentation?.({
         payload: { text: "Choose one" },
         presentation: {
           blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                { label, action },
-                { label: `${label}y`, action },
-              ],
-            },
+            buttonBlock({ label, action }, { label: label + "y", action }),
             {
               type: "select",
               options: [{ label, action: { type: "callback", value: "quick" } }],

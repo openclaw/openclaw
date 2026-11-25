@@ -21,20 +21,6 @@ import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
 
-const googlechatMeta = {
-  id: GOOGLECHAT_CHANNEL_ID,
-  label: "Google Chat",
-  selectionLabel: "Google Chat (Chat API)",
-  docsPath: "/channels/googlechat",
-  docsLabel: "googlechat",
-  blurb: "Google Workspace Chat app with HTTP webhook.",
-  aliases: ["gchat", "google-chat"],
-  order: 55,
-  detailLabel: "Google Chat",
-  systemImage: "message.badge",
-  markdownCapable: true,
-};
-
 export const formatGoogleChatAllowFromEntry = (entry: string) =>
   normalizeLowercaseStringOrEmpty(
     entry
@@ -74,7 +60,19 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
 
 export const googlechatSetupPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
   id: GOOGLECHAT_CHANNEL_ID,
-  meta: { ...googlechatMeta },
+  meta: {
+    id: GOOGLECHAT_CHANNEL_ID,
+    label: "Google Chat",
+    selectionLabel: "Google Chat (Chat API)",
+    docsPath: "/channels/googlechat",
+    docsLabel: "googlechat",
+    blurb: "Google Workspace Chat app with HTTP webhook.",
+    aliases: ["gchat", "google-chat"],
+    order: 55,
+    detailLabel: "Google Chat",
+    systemImage: "message.badge",
+    markdownCapable: true,
+  },
   setupContract: googlechatSetupContract,
   setupWizard: googlechatSetupWizard,
   capabilities: {

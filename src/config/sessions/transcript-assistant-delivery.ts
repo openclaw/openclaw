@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
+import type { AssistantDeliveryTtsFacts, AssistantHistoryMessage } from "../../llm/types.js";
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import { createTextPartCodeRegionResolver } from "../../shared/text/code-regions.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
@@ -19,13 +19,13 @@ type AssistantDirectiveMessage = {
   role?: unknown;
 };
 
-type AssistantDeliveryFacts = NonNullable<AssistantMessage["openclawDelivery"]>;
+type AssistantDeliveryFacts = NonNullable<AssistantHistoryMessage["openclawDelivery"]>;
 
 /** Turn-owned display preparation; source text precedes transcript-only hook rewrites. */
-export type PrepareAssistantTranscriptMessage = (
-  message: AssistantMessage,
+export type PrepareAssistantTranscriptMessage = <T extends AssistantHistoryMessage>(
+  message: T,
   sourceText: string | undefined,
-) => AssistantMessage;
+) => T;
 
 /** Record display ownership without rewriting bytes used by runtime transcript identity. */
 export function recordAssistantManagedMediaUrls<T extends AssistantDirectiveMessage>(
@@ -106,7 +106,7 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
   if (
     textChanged &&
     message.display === undefined &&
-    !original.join("").startsWith(`${SILENT_REPLY_TOKEN}\n`)
+    stripMixedSilentReplyTokens(original.join("")) === null
   ) {
     Object.assign(message, { display: true });
   }

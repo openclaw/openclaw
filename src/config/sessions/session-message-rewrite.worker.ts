@@ -6,6 +6,7 @@ import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
@@ -36,6 +37,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
 import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
@@ -49,7 +51,6 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  readTranscriptMessageByScopedIdempotencyKey,
   replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
@@ -65,10 +66,8 @@ import {
   readSessionActorRewriteFacts,
   type SessionActorRewriteFacts,
 } from "./session-actor-transcript-publication.worker.js";
-import {
-  assertSessionTranscriptHot,
-  readSessionColdTranscript,
-} from "./session-cold-storage-state.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   bindSessionWorkerBackend,
   transferSessionEntryWorkerCandidate,
@@ -83,6 +82,8 @@ import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import type {
   SessionMessageRewriteSelection,
   SessionMessageRewriteSnapshot,
@@ -97,8 +98,8 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 export type SessionMessageRewriteOperations = {
   "session.transcript.lock.cold": {
-    input: { scope: ResolvedTranscriptScope };
-    output: { archive: ReturnType<typeof readSessionColdTranscript> };
+    input: { scope: ResolvedTranscriptScope; readCustody?: readonly SessionStoreReadCustody[] };
+    output: SessionColdMetadataWorkerResult;
   };
   "session.transcript.lock.read": {
     input: { scope: ResolvedTranscriptScope };
@@ -109,7 +110,7 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof prepareLockedTranscriptAppend>;
   };
   "session.transcript.lock.facts": {
-    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[]; sourceRunId?: string };
+    input: LockedTranscriptTarget & Parameters<typeof readTranscriptMirrorFacts>[2];
     output: ReturnType<typeof readTranscriptMirrorFacts>;
   };
   "session.transcript.lock.commit": {
@@ -141,6 +142,10 @@ export type SessionMessageRewriteOperations = {
     input: Parameters<typeof commitSessionMessageRewrite>[0];
     output: ReturnType<typeof commitSessionMessageRewrite>;
   };
+  "session.messageRewrite.modelPrompt": {
+    input: SessionMessageRewriteSelection & { modelPromptProjection: string };
+    output: ReturnType<typeof commitSessionMessageRewrite>;
+  };
 };
 
 /** Borrow the canonical executor connection without extending the released command union. */
@@ -155,7 +160,11 @@ export function bindSqliteWorkerBackend(
     (context, database) => (command) => {
       switch (command.type) {
         case "session.transcript.lock.cold":
-          return { archive: readSessionColdTranscript(database.db, command.input.scope.sessionId) };
+          return readSessionColdMetadataInDatabase(
+            database,
+            command.input.scope.sessionId,
+            command.input.readCustody,
+          );
         case "session.transcript.lock.read":
           return readTranscriptSnapshot(database, command.input.scope.sessionId);
         case "session.transcript.lock.prepare":
@@ -175,6 +184,7 @@ export function bindSqliteWorkerBackend(
         case "session.messageRewrite.prepare":
           return prepareSessionMessageRewrite(command.input, context);
         case "session.messageRewrite.commit":
+        case "session.messageRewrite.modelPrompt":
           return commitSessionMessageRewrite(command.input, context);
       }
       throw new Error("Unknown transcript rewrite domain operation");
@@ -297,12 +307,10 @@ function commitLockedTranscript(
           projectionNeedsReconcile = true;
         },
       };
+      const snapshotRows = input.snapshot?.kind === "current" ? input.snapshot.rows : undefined;
       const snapshotCurrent =
-        input.snapshot?.kind === "current" &&
-        isDeepStrictEqual(
-          input.snapshot.rows,
-          readTranscriptEventRows(database, input.scope.sessionId),
-        );
+        snapshotRows !== undefined &&
+        isDeepStrictEqual(snapshotRows, readTranscriptEventRows(database, input.scope.sessionId));
       let result: TranscriptMessageAppendResult<unknown> | undefined;
       let messageSeq: number | undefined;
       let replacementRows: SqliteTranscriptSnapshotRow[] | undefined;
@@ -382,12 +390,20 @@ function commitLockedTranscript(
             )
           : undefined,
         projectionNeedsReconcile,
-        snapshot:
-          input.snapshot || input.kind === "replace"
-            ? input.kind === "replace" || snapshotCurrent
+        snapshot: replacementRows
+          ? { kind: "current", rows: replacementRows }
+          : input.snapshot
+            ? snapshotCurrent && snapshotRows
               ? {
                   kind: "current",
-                  rows: replacementRows ?? readTranscriptEventRows(database, input.scope.sessionId),
+                  // The checked prefix cannot change during this prepared append.
+                  rows: snapshotRows.concat(
+                    readTranscriptEventRows(
+                      database,
+                      input.scope.sessionId,
+                      snapshotRows.at(-1)?.seq,
+                    ),
+                  ),
                 }
               : { kind: "stale" }
             : undefined,
@@ -502,15 +518,13 @@ export function prepareSessionMessageRewrite(
   { open }: Pick<AgentWorkerOperationContext, "open">,
 ): SessionMessageRewriteSnapshot | null {
   const database = open();
-  return prepareMessageRewrite(
-    input,
+  const facts = readSessionActorRewriteFacts(
     database,
-    readSessionActorRewriteFacts(
-      database,
-      input.scope,
-      input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
-    ),
+    input.scope,
+    input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
   );
+  assertMessageRewriteAllowed(input, database, facts);
+  return prepareMessageRewrite(input, database);
 }
 
 function assertMessageRewriteAllowed(
@@ -557,9 +571,7 @@ function assertMessageRewriteAllowed(
 function prepareMessageRewrite(
   input: SessionMessageRewriteSelection,
   database: OpenClawAgentDatabase,
-  facts: SessionActorRewriteFacts | undefined,
 ): SessionMessageRewriteSnapshot | null {
-  assertMessageRewriteAllowed(input, database, facts);
   const { scope, target } = input;
   let seq: number;
   if (target.kind === "anchor") {
@@ -607,11 +619,14 @@ function prepareMessageRewrite(
   return { seq, eventJson: row.event_json, event };
 }
 
+type SessionMessageRewriteInput = SessionMessageRewriteSelection &
+  (
+    | { expected: SessionMessageRewriteSnapshot; message: unknown }
+    | { modelPromptProjection: string }
+  );
+
 export function commitSessionMessageRewrite(
-  input: SessionMessageRewriteSelection & {
-    expected: SessionMessageRewriteSnapshot;
-    message: unknown;
-  },
+  input: SessionMessageRewriteInput,
   context: AgentWorkerOperationContext,
 ) {
   return applySessionMessageRewrite(input, context, (database, candidate) =>
@@ -620,12 +635,14 @@ export function commitSessionMessageRewrite(
 }
 
 export function applySessionMessageRewrite<T>(
-  input: SessionMessageRewriteSelection & {
-    expected: SessionMessageRewriteSnapshot;
-    message: unknown;
-  },
+  input: SessionMessageRewriteInput,
   { writeTransaction }: AgentWorkerOperationContext,
-  publish: (database: OpenClawAgentDatabase, candidate: SessionMessageRewriteCommitted) => T,
+  publish: (
+    database: OpenClawAgentDatabase,
+    candidate: SessionMessageRewriteCommitted,
+    current: SessionMessageRewriteSnapshot | null,
+  ) => T,
+  options: { touchMutation?: boolean } = {},
 ) {
   return writeTransaction(
     "session.transcript.message-rewrite",
@@ -637,9 +654,15 @@ export function applySessionMessageRewrite<T>(
         input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
       );
       assertMessageRewriteAllowed(input, database, facts);
-      // Changed bytes are checked by the CAS; a no-op can acknowledge its prepared selection.
-      const current = input.expected;
-      const changed = input.message !== undefined;
+      const current = "expected" in input ? input.expected : prepareMessageRewrite(input, database);
+      if (!current) {
+        return publish(database, { kind: "session-message-rewrite", result: null }, null);
+      }
+      const message =
+        "message" in input
+          ? input.message
+          : prepareModelPromptProjection(current.event.message, input.modelPromptProjection);
+      const changed = message !== undefined;
       let generation: string | undefined;
       if (changed) {
         try {
@@ -648,12 +671,12 @@ export function applySessionMessageRewrite<T>(
             input.scope,
             [
               {
-                event: { ...current.event, message: input.message },
+                event: { ...current.event, message },
                 expectedEventJson: current.eventJson,
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined },
+            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {
@@ -668,15 +691,21 @@ export function applySessionMessageRewrite<T>(
       const candidate: SessionMessageRewriteCommitted = {
         kind: "session-message-rewrite",
         result:
-          generation && (changed || input.target.kind === "terminal-assistant")
+          generation &&
+          (changed ||
+            input.target.kind === "terminal-assistant" ||
+            "modelPromptProjection" in input)
             ? {
                 generation,
                 messageId: String(current.event.id),
-                message: changed ? input.message : current.event.message,
+                message: changed ? message : current.event.message,
+                ...(!changed && "modelPromptProjection" in input
+                  ? { unchanged: true as const }
+                  : {}),
               }
             : null,
       };
-      return publish(database, candidate);
+      return publish(database, candidate, current);
     },
   );
 }

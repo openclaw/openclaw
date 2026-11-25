@@ -64,6 +64,20 @@ export function isCodexThreadReadMissingError(error: unknown, threadId: string):
   );
 }
 
+export function isCodexThreadClosingError(
+  error: unknown,
+  threadId: string,
+): error is CodexAppServerRpcError {
+  // Native rejects this resume before acquiring its subscription while teardown is pending.
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.method === "thread/resume" &&
+    error.code === -32_600 &&
+    error.message ===
+      `thread ${threadId} is closing; retry thread/resume after the thread is closed`
+  );
+}
+
 function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string | undefined {
   const record = isJsonObject(data) ? data : undefined;
   const nested = isJsonObject(record?.error) ? record.error : record;

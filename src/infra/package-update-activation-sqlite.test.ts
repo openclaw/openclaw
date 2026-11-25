@@ -34,7 +34,7 @@ it
     const env = { [key]: key === "OPENCLAW_SQLITE_LIBRARY" ? library : root };
     const probe = vi
       .spyOn(runtimePaths, "resolveBunRuntimeInfo")
-      .mockImplementation(async (_runtime, _exec, actualEnv) => ({
+      .mockImplementation(async (_runtime, actualEnv) => ({
         status: actualEnv?.[key] === env[key] ? "supported" : "unsupported",
         version: "1.4.3",
         sqliteVersion: "3.53.4",
@@ -49,7 +49,7 @@ it
     );
     const runtime = { ...capturePackageActivationRuntime("bun", process.execPath), env };
     const prepared = await fixture.prepare(undefined, undefined, runtime);
-    expect(probe).toHaveBeenCalledWith(runtime.path, undefined, env);
+    expect(probe).toHaveBeenCalledWith(runtime.path, env);
     const descriptor = openPackageActivationJournal(prepared.anchor).read().descriptor;
     expect(descriptor.version).toBe(1);
     expect(descriptor).not.toHaveProperty("sqliteLibraryPath");

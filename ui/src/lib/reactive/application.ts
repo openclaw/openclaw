@@ -4,17 +4,15 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { MentionsCapability } from "../../app/mentions.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
 import type { SidebarAttentionStore } from "../../app/sidebar-attention-store.ts";
-import type { WebPushCapability } from "../../app/web-push.ts";
 import { projectOwner, projectSource } from "./projection.ts";
+import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
 /** Connection identity and its snapshot publish through the same owner subscription. */
-export function projectGateway(source: ApplicationGateway) {
-  return projectOwner(source, (gateway) => ({
-    snapshot: gateway.snapshot,
-    connection: gateway.connection,
-    connectionRevision: gateway.connectionRevision,
-  }));
-}
+export const projectGateway = createSharedOwnerProjection((gateway: ApplicationGateway) => ({
+  snapshot: gateway.snapshot,
+  connection: gateway.connection,
+  connectionRevision: gateway.connectionRevision,
+}));
 
 /** Acquiring this projection enables diagnostic capture; the last reader releases it. */
 export function projectGatewayEventLog(source: ApplicationGateway) {
@@ -25,9 +23,9 @@ export function projectGatewayEventLog(source: ApplicationGateway) {
   });
 }
 
-export function projectApplicationConfig(source: ApplicationConfigCapability) {
-  return projectOwner(source, (config) => config.current);
-}
+export const projectApplicationConfig = createSharedOwnerProjection(
+  (config: ApplicationConfigCapability) => config.current,
+);
 
 export function projectAgentSelection(source: AgentSelectionCapability) {
   return projectOwner(source, (selection) => ({
@@ -46,8 +44,4 @@ export function projectMentions(source: MentionsCapability) {
 
 export function projectSidebarAttention(source: SidebarAttentionStore) {
   return projectOwner(source, (attention) => attention.entries);
-}
-
-export function projectWebPush(source: WebPushCapability) {
-  return projectOwner(source, (push) => push.snapshot);
 }

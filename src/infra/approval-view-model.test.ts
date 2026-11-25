@@ -1,16 +1,36 @@
-// Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
-import { normalizeApprovalRequest, resolveApprovalRequestKind } from "./approval-types.js";
+import { resolveApprovalRequestKind } from "./approval-types.js";
 import { buildPendingApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
+const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
+function pluginRequest(
+  request: Partial<PluginApprovalRequest["request"]> = {},
+): PluginApprovalRequest {
+  return {
+    ...approvalRequestBase,
+    id: "plugin-approval",
+    request: {
+      title: "Use protected tool",
+      description: "The plugin needs operator consent.",
+      ...request,
+    },
+  };
+}
+
+function approvalAction(
+  approvalId: string,
+  approvalKind: "exec" | "plugin" | "system-agent",
+  decision: "allow-once" | "deny",
+) {
+  return { type: "approval", approvalId, approvalKind, decision };
+}
+
 describe("buildPendingApprovalView", () => {
   it("passes command analysis through exec approval views", () => {
     const request: ExecApprovalRequest = {
-      id: "approval-id",
-      createdAtMs: 1,
-      expiresAtMs: 2,
+      ...approvalRequestBase,
       request: {
         command: 'ls | grep "stuff" | python -c \'print("hi")\'',
         host: "node",
@@ -33,55 +53,44 @@ describe("buildPendingApprovalView", () => {
 
     const view = buildPendingApprovalView(request);
 
-    expect(view.approvalKind).toBe("exec");
-    if (view.approvalKind !== "exec") {
-      throw new Error("expected exec approval view");
-    }
-    expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
+    expect(view).toMatchObject({
+      approvalKind: "exec",
+      commandAnalysis: { warningLines: ["Contains inline-eval: python -c"] },
+    });
     expect(view.scope).toEqual(request.request.scope);
     expect(view.metadata).toContainEqual({
       label: "Scope",
       value:
         "Send to 3 recipients via email (external): alice@example.com, bob@example.com, +1 more",
     });
-    expect(view.actions[0]?.action).toEqual({
-      type: "approval",
-      approvalId: "approval-id",
-      approvalKind: "exec",
-      decision: "allow-once",
-    });
+    expect(view.actions[0]?.action).toEqual(approvalAction("approval-id", "exec", "allow-once"));
   });
 
-  it("uses the typed request owner instead of approval id spelling", () => {
+  it("preserves plugin ownership, scope, and fail-closed decisions", () => {
     const request: PluginApprovalRequest = {
-      id: "custom-id-without-prefix",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      request: {
-        title: "Use protected tool",
-        description: "The plugin needs operator consent.",
+      ...pluginRequest({
         scope: { kind: "external-post", target: "github", visibility: "public" },
-      },
+        allowedDecisions: ["allow-once"],
+      }),
+      id: "custom-id-without-prefix",
     };
+    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
 
     expect(resolveApprovalRequestKind(request)).toBe("plugin");
     const view = buildPendingApprovalView(request);
     expect(view.approvalKind).toBe("plugin");
     expect(view.scope).toEqual(request.request.scope);
     expect(view.metadata).toContainEqual({ label: "Scope", value: "Post publicly to github" });
-    expect(view.actions[0]?.action).toEqual({
-      type: "approval",
-      approvalId: "custom-id-without-prefix",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
+    expect(view.actions.map((action) => action.action)).toEqual([
+      approvalAction("custom-id-without-prefix", "plugin", "allow-once"),
+      approvalAction("custom-id-without-prefix", "plugin", "deny"),
+    ]);
   });
 
   it("builds system-agent pending views with allow-once and deny only", () => {
     const request = {
+      ...approvalRequestBase,
       id: "system-change-1",
-      createdAtMs: 1,
-      expiresAtMs: 2,
       request: {
         title: "Apply proposed change",
         description: "Rewrite the scheduler to prefer cooperative yields.",
@@ -94,28 +103,15 @@ describe("buildPendingApprovalView", () => {
 
     const view = buildPendingApprovalView(request);
 
-    expect(view.approvalKind).toBe("system-agent");
-    if (view.approvalKind !== "system-agent") {
-      throw new Error("expected system-agent approval view");
-    }
-    expect(view.operationSummary).toBe("Rewrite the scheduler to prefer cooperative yields.");
+    expect(view).toMatchObject({
+      approvalKind: "system-agent",
+      operationSummary: "Rewrite the scheduler to prefer cooperative yields.",
+    });
     expect(view.actions.map((action) => action.action)).toEqual([
-      {
-        type: "approval",
-        approvalId: "system-change-1",
-        approvalKind: "system-agent",
-        decision: "allow-once",
-      },
-      {
-        type: "approval",
-        approvalId: "system-change-1",
-        approvalKind: "system-agent",
-        decision: "deny",
-      },
+      approvalAction("system-change-1", "system-agent", "allow-once"),
+      approvalAction("system-change-1", "system-agent", "deny"),
     ]);
   });
-
-  const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
 
   it.each([
     { request: { ...approvalRequestBase, request: { command: "echo safe" } }, metadata: [] },
@@ -131,51 +127,6 @@ describe("buildPendingApprovalView", () => {
 
     expect(view.metadata).toEqual(metadata);
     expect(view).not.toHaveProperty("scope");
-  });
-
-  it("does not trust conflicting approval kind metadata", () => {
-    const request: PluginApprovalRequest = {
-      id: "plugin-approval",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      request: {
-        title: "Use protected tool",
-        description: "The plugin needs operator consent.",
-      },
-    };
-    Object.defineProperty(request, "approvalKind", { value: "exec", enumerable: true });
-
-    expect(normalizeApprovalRequest(request).approvalKind).toBe("plugin");
-  });
-
-  it("keeps the fail-closed plugin decision in channel-facing actions", () => {
-    const request: PluginApprovalRequest = {
-      id: "plugin-approval",
-      createdAtMs: 1,
-      expiresAtMs: 2,
-      request: {
-        title: "Use protected tool",
-        description: "The plugin needs operator consent.",
-        allowedDecisions: ["allow-once"],
-      },
-    };
-
-    const view = buildPendingApprovalView(request);
-
-    expect(view.actions.map((action) => action.action)).toEqual([
-      {
-        type: "approval",
-        approvalId: "plugin-approval",
-        approvalKind: "plugin",
-        decision: "allow-once",
-      },
-      {
-        type: "approval",
-        approvalId: "plugin-approval",
-        approvalKind: "plugin",
-        decision: "deny",
-      },
-    ]);
   });
 
   it.each([

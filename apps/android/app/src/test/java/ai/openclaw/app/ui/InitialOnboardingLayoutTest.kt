@@ -1227,7 +1227,11 @@ private class OnboardingApprovalGateway(
               check(role == "operator")
               val approvalMethods = if (nativeApproval) ",\"node.pair.list\",\"node.pair.approve\"" else ""
               val approvalScope = if (nativeApproval) ",\"operator.admin\"" else ""
-              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"$approvalMethods]},"auth":{"role":"operator","scopes":["operator.read","operator.write"$approvalScope]},"snapshot":{}}""")
+              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["agents.list","node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"$approvalMethods]},"auth":{"role":"operator","scopes":["operator.read","operator.write"$approvalScope]},"snapshot":{}}""")
+            }
+
+            "agents.list" -> {
+              Json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "node.pair.list" -> {

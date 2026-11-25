@@ -6,7 +6,9 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
 } from "../infra/sqlite-user-version.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -38,6 +40,7 @@ export function assertSupportedAgentSchemaVersion(
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
+      readSqliteWriterAppVersion(db),
     );
   }
   return userVersion;
@@ -74,13 +77,15 @@ export function assertCanonicalAgentPersistenceVersion(
       "This agent store lives in PostgreSQL; set database.engine to postgres and configure database.postgres.connection.",
     );
   }
+  assertSupportedAgentSchemaVersion(db, pathname, userVersion);
   const isNewUnownedDatabase = userVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   if (userVersion < AGENT_MEDIA_SCHEMA_VERSION && !isNewUnownedDatabase) {
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to migrate session identities before using it.`,
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
+      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
     );
   }
 }
@@ -115,6 +120,7 @@ export function assertCurrentAgentSchemaMetadata(
   metadata: ExistingAgentSchemaMeta | null,
   agentId: string,
   pathname: string,
+  expectedVersion = OPENCLAW_AGENT_SCHEMA_VERSION,
 ): void {
   if (!metadata) {
     throw new SqliteSchemaMismatchError(
@@ -122,9 +128,9 @@ export function assertCurrentAgentSchemaMetadata(
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (metadata.schemaVersion !== expectedVersion) {
     throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${expectedVersion}; run openclaw doctor --fix before using it.`,
     );
   }
 }

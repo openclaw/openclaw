@@ -10,10 +10,8 @@ import {
 import type { ModelProviderConfig as ProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
-import {
-  createConfiguredProviderCatalogModelIdNormalizer,
-  type ModelManifestNormalizationContext,
-} from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-selection-normalize.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderModelConfig = NonNullable<
@@ -24,7 +22,7 @@ function normalizeProviderModelsForConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+  if (!provider.models?.length) {
     return provider;
   }
 

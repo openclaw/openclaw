@@ -1,9 +1,13 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { claimResponsesCompactRequest } from "../../../packages/ai/src/transports/openai-responses-compact-request.js";
+import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { createAssistantMessageEventStream } from "../../../packages/ai/src/utils/event-stream.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { makeUserMessage as userMessage } from "../../../test/helpers/user-message.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -19,8 +23,15 @@ import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
+import { attemptServerEndpointCompaction } from "../embedded-agent-runner/server-endpoint-compaction.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { customData, opaqueEntry, sessionScope } from "./session-manager-fixtures.test-support.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -34,10 +45,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 async function openSession(lifecycleRevision?: string) {
   const scope = {
-    agentId: "main",
-    sessionId: "maintenance",
-    sessionKey: "agent:main:maintenance",
-    storePath: path.join(tempDirs.make("session-maintenance-"), "sessions.json"),
+    ...sessionScope(
+      path.join(tempDirs.make("session-maintenance-"), "sessions.json"),
+      "maintenance",
+    ),
     ...(lifecycleRevision ? { expectedLifecycleRevision: lifecycleRevision } : {}),
   };
   await upsertSessionEntryCore(scope, {
@@ -49,35 +60,120 @@ async function openSession(lifecycleRevision?: string) {
 }
 
 async function appendUser(manager: SessionManager, text: string): Promise<string> {
-  return (await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage(text, 1))).entryId;
+  return (await manager.appendMessageWithTranscriptAnchorAsync(userMessage(text, 1))).entryId;
 }
 
-it("shares admitted immutable payloads when preparing and publishing a rewrite", async () => {
-  const manager = SessionManager.inMemory("/synthetic");
+async function prepareUserRewrite(manager: SessionManager, text = "replacement") {
+  const rewrite = await manager.prepareTranscriptRewriteAsync();
+  await rewrite.sessionManager.resetLeafAsync();
+  const replacementId = await appendUser(rewrite.sessionManager, text);
+  return { ...rewrite, replacementId };
+}
+
+function afterWorkerCommand(type: string, after: () => void | Promise<void>) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  const intercept: typeof original = (options, database, assertCurrent, operation, controls) =>
+    original(
+      options,
+      database,
+      assertCurrent,
+      (worker) =>
+        operation({
+          execute: async (command, commandOptions) => {
+            const result = await worker.execute(command, commandOptions);
+            if (command.type === type) {
+              await after();
+            }
+            return result;
+          },
+        }),
+      controls,
+    );
+  return vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(intercept);
+}
+
+it("keeps hydrated endpoint history shared and publishes the same durable checkpoint", async () => {
+  const { scope, manager: seed } = await openSession();
+  await appendUser(seed, "remember this");
+  await seed.appendMessageAsync(
+    makeAgentAssistantMessage({
+      model: "synthetic",
+      content: [{ type: "text", text: "remembered" }],
+    }),
+  );
+  const manager = await SessionManager.openAsync(scope);
+  const original = manager[sessionManagerReadTranscriptBranch]();
+  const payloads = original.map((entry) => entry.type === "message" && entry.message);
+  const bytes = JSON.stringify(original);
+  const model = makeProviderModelFixture({
+    id: "synthetic",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "synthetic" };
+  const result = await attemptServerEndpointCompaction({
+    trigger: "manual",
+    model,
+    sessionManager: manager,
+    extraParams: {},
+    requestOptions: {},
+    context: {
+      systemPrompt: "",
+      messages: (await manager[sessionManagerReadInitialContext]()).messages,
+    },
+    streamFn: (_model, _context, options) => {
+      const request = claimResponsesCompactRequest(options);
+      assert(request);
+      request.resolve({
+        item,
+        output: [item],
+        historyMode: "compacted-prefix",
+        model,
+        usage: { input_tokens: 100, output_tokens: 10 },
+        replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model),
+      });
+      const stream = createAssistantMessageEventStream();
+      void nextTurn().then(() =>
+        stream.end(makeAgentAssistantMessage({ content: [{ type: "text", text: "remembered" }] })),
+      );
+      return stream;
+    },
+  });
+  expect(result).toMatchObject({ item });
+  expect(JSON.stringify(original)).toBe(bytes);
+  for (const [index, entry] of original.entries()) {
+    expect(entry.type === "message" && entry.message).toBe(payloads[index]);
+  }
+  const reopened = await SessionManager.openAsync(scope);
+  expect(manager.getPersistedEntries()).toEqual(reopened.getPersistedEntries());
+  expect(reopened.getLeafEntry()).toMatchObject({
+    message: { providerReplay: { data: "synthetic" } },
+  });
+});
+
+it("shares admitted immutable payloads and opaque aliases when preparing and publishing a rewrite", async () => {
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 4, id: "aliases", cwd: "/synthetic" },
+    { type: "opaque", id: "opaque", parentId: null },
+  ]);
   const id = await manager.appendCustomEntryAsync("large-tool-output", {
     chunks: Array.from({ length: 1024 }, () => ({ text: "x".repeat(1024) })),
+    child: { text: "original" },
   });
+  const data = customData(manager, id);
+  opaqueEntry(manager).alias = data.child;
   const original = manager.getEntry(id);
-  if (original?.type !== "custom" || !isRecord(original.data)) {
-    throw new Error("Missing large transcript payload");
-  }
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   expect(rewrite.sessionManager.getEntry(id)).not.toBe(original);
-  const prepared = rewrite.sessionManager.getEntry(id);
-  if (prepared?.type !== "custom") {
-    throw new Error("Missing prepared transcript payload");
-  }
-  expect(prepared.data).toBe(original.data);
-  expect(Object.isFrozen(original.data)).toBe(true);
-  expect(Reflect.set(original.data, "chunks", [])).toBe(false);
+  expect(customData(rewrite.sessionManager, id)).toBe(data);
+  expect(opaqueEntry(rewrite.sessionManager).alias).toBe(data.child);
+  expect(Object.isFrozen(data)).toBe(true);
+  expect(Reflect.set(data, "chunks", [])).toBe(false);
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
   expect(manager.getEntry(replacementId)).toBeUndefined();
   await rewrite.commit(new Map());
-  const published = manager.getEntry(id);
-  if (published?.type !== "custom") {
-    throw new Error("Missing published transcript payload");
-  }
-  expect(published.data).toBe(original.data);
+  expect(customData(manager, id)).toBe(data);
   expect(manager.getEntry(replacementId)).toMatchObject({
     appendMode: "side",
     message: { content: "replacement" },
@@ -101,57 +197,22 @@ it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", asy
   ]);
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   const entry = rewrite.sessionManager.getEntry("data");
-  if (entry?.type !== "custom" || !isRecord(entry.data)) {
-    throw new Error("Missing custom entry");
-  }
-  const record = rewrite.sessionManager
-    .getPersistedEntries()
-    .find((value) => isRecord(value) && value.type === "opaque");
-  if (!isRecord(record)) {
-    throw new Error("Missing opaque record");
-  }
-  expect(record.shared).toBe(entry.data);
+  const data = customData(rewrite.sessionManager, "data");
+  const record = opaqueEntry(rewrite.sessionManager);
+  expect(record.shared).toBe(data);
   if (opaque) {
-    if (!(record.bytes instanceof Uint8Array)) {
-      throw new Error("Missing opaque bytes");
-    }
+    assert(record.bytes instanceof Uint8Array, "Missing opaque bytes");
     expect(record.bytes.buffer).toBe(record.buffer);
     expect(record.buffer).not.toBe(buffer);
   }
-  entry.data.text = "prepared";
+  data.text = "prepared";
   expect(manager.getEntry("data")).toMatchObject({ data: { text: "original" } });
   await rewrite.commit(new Map());
   const committed = manager.getEntry("data");
   expect(committed).toMatchObject({ data: { text: "prepared" } });
   expect(committed).not.toBe(entry);
-  entry.data.text = "later";
+  data.text = "later";
   expect(committed).toMatchObject({ data: { text: "prepared" } });
-});
-
-it("preserves opaque SDK aliases into an admitted payload during a rewrite", async () => {
-  const manager = SessionManager.fromEntries([
-    { type: "session", version: 4, id: "aliases", cwd: "/synthetic" },
-    { type: "opaque", id: "opaque", parentId: null },
-  ]);
-  const id = await manager.appendCustomEntryAsync("owned", { child: { text: "original" } });
-  const owned = manager.getEntry(id);
-  const opaque = manager
-    .getPersistedEntries()
-    .find((entry) => isRecord(entry) && entry.type === "opaque");
-  if (owned?.type !== "custom" || !isRecord(owned.data) || !isRecord(opaque)) {
-    throw new Error("Missing alias fixture");
-  }
-  opaque.alias = owned.data.child;
-  const rewrite = await manager.prepareTranscriptRewriteAsync();
-  const prepared = rewrite.sessionManager.getEntry(id);
-  const preparedOpaque = rewrite.sessionManager
-    .getPersistedEntries()
-    .find((entry) => isRecord(entry) && entry.type === "opaque");
-  if (prepared?.type !== "custom" || !isRecord(prepared.data) || !isRecord(preparedOpaque)) {
-    throw new Error("Missing prepared aliases");
-  }
-  expect(preparedOpaque.alias).toBe(prepared.data.child);
-  expect(prepared.data).toBe(owned.data);
 });
 
 it("settles queued suffix removals in order and rebuilds the pending branch projection", async () => {
@@ -179,7 +240,7 @@ it("settles queued suffix removals in order and rebuilds the pending branch proj
 });
 
 it.each(["read", "receipt"] as const)(
-  "fences a synchronous navigation change during a suffix %s wait",
+  "fences navigation changes during suffix %s waits",
   async (boundary) => {
     const { scope, manager } = await openSession();
     const seed = await appendUser(manager, "keep");
@@ -191,30 +252,6 @@ it.each(["read", "receipt"] as const)(
     });
     const before = await loadTranscriptEvents(scope);
     const prepareHydration = transcriptHydration.prepareSessionTranscriptHydration;
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
-    const delayedReceipt: typeof withWorker = (
-      options,
-      database,
-      assertCurrent,
-      operation,
-      controls,
-    ) =>
-      withWorker(
-        options,
-        database,
-        assertCurrent,
-        (worker) =>
-          operation({
-            execute: async (command, commandOptions) => {
-              const result = await worker.execute(command, commandOptions);
-              if (command.type === "session.transcript.replaceSuffix") {
-                manager.resetLeaf();
-              }
-              return result;
-            },
-          }),
-        controls,
-      );
     const interception =
       boundary === "read"
         ? vi
@@ -230,15 +267,12 @@ it.each(["read", "receipt"] as const)(
                 },
               };
             })
-        : vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(delayedReceipt);
-    let failure: unknown;
-    try {
-      await manager.removeTrailingEntriesAsync((entry) => entry.id === removed);
-    } catch (error) {
-      failure = error;
-    } finally {
-      interception.mockRestore();
-    }
+        : afterWorkerCommand("session.transcript.replaceSuffix", () => manager.resetLeaf());
+    const failure = await withRestoredMocks([interception], () =>
+      manager
+        .removeTrailingEntriesAsync((entry) => entry.id === removed)
+        .catch((error: unknown) => error),
+    );
     if (boundary === "read") {
       expect(failure).toMatchObject({
         message: "Session transcript navigation changed before publication",
@@ -261,7 +295,7 @@ it.each(["read", "receipt"] as const)(
 );
 
 it.each(["same", "independent"] as const)(
-  "commits an awaited rewrite and refuses a stale rewrite after a %s manager writes",
+  "commits awaited rewrites and fences stale %s writers",
   async (writerKind) => {
     const { scope, manager } = await openSession();
     const sourceId = await manager.appendMessageAsync({
@@ -269,37 +303,38 @@ it.each(["same", "independent"] as const)(
       content: [{ type: "text", text: "original" }],
       timestamp: 1,
     });
-    if (!sourceId) {
-      throw new Error("Missing source message ID");
-    }
+    assert(sourceId, "Missing source message ID");
     await manager.reloadPersistedTranscriptAsync();
     const source = manager.getEntry(sourceId);
-    if (source?.type !== "message" || source.message.role !== "user") {
-      throw new Error("Missing hydrated source message");
-    }
+    assert(source?.type === "message" && source.message.role === "user", "Missing user source");
     expect(Object.isFrozen(source.message.content)).toBe(false);
     vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
       throw new Error("sync compatibility adapter used");
     });
     const rewrite = await manager.prepareTranscriptRewriteAsync();
     const snapshot = rewrite.sessionManager.getEntry(sourceId);
-    if (snapshot?.type !== "message" || snapshot.message.role !== "user") {
-      throw new Error("Missing rewrite source message");
-    }
+    assert(
+      snapshot?.type === "message" && snapshot.message.role === "user",
+      "Missing rewrite user",
+    );
     expect(snapshot).not.toBe(source);
     expect(snapshot.message).not.toBe(source.message);
     expect(snapshot.message.content).not.toBe(source.message.content);
     source.message.content = "local replacement";
     expect(snapshot.message.content).toEqual([{ type: "text", text: "original" }]);
     await rewrite.sessionManager.resetLeafAsync();
-    const replacementId = await appendUser(rewrite.sessionManager, "replacement");
+    const replacementText = "pass: opaque-pass-secret-1234567890";
+    const replacementId = await appendUser(rewrite.sessionManager, replacementText);
     await rewrite.commit(new Map([[sourceId, replacementId]]));
     expect(manager.getLeafId()).toBe(replacementId);
-    expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+    expect(manager.getEntry(replacementId)).toMatchObject({
+      message: { content: replacementText },
+    });
+    const committed = await SessionManager.openAsync(scope);
+    expect(committed.getBranch()).toEqual(manager.getBranch());
+    expect(committed.getEntry(replacementId)).toEqual(manager.getEntry(replacementId));
 
-    const stale = await manager.prepareTranscriptRewriteAsync();
-    await stale.sessionManager.resetLeafAsync();
-    const staleId = await appendUser(stale.sessionManager, "stale");
+    const { replacementId: staleId, ...stale } = await prepareUserRewrite(manager, "stale");
     const writer = writerKind === "same" ? manager : await SessionManager.openAsync(scope);
     const laterId = await writer.appendCustomEntryAsync("later", {});
     await expect(stale.commit(new Map([[replacementId, staleId]]))).rejects.toThrow(
@@ -314,13 +349,9 @@ it.each(["same", "independent"] as const)(
 
 it("preserves a steer acknowledgment committed after rewrite preparation", async () => {
   const { scope, manager } = await openSession();
-  const source = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("steer", 1));
-  if (!source.anchor) {
-    throw new Error("Persisted user message must have a transcript anchor");
-  }
-  const rewrite = await manager.prepareTranscriptRewriteAsync();
-  await rewrite.sessionManager.resetLeafAsync();
-  const replacementId = await appendUser(rewrite.sessionManager, "replacement");
+  const source = await manager.appendMessageWithTranscriptAnchorAsync(userMessage("steer", 1));
+  assert(source.anchor, "Persisted user message must have a transcript anchor");
+  const { replacementId, ...rewrite } = await prepareUserRewrite(manager);
   const acknowledged = await rewritePreparedTranscriptMessageAtAnchor(source.anchor, () => ({
     ...source.message,
     __openclaw: { steerTargetRunId: "steered-run" },
@@ -340,42 +371,12 @@ it("adopts only the submitted rewrite snapshot when the prepared manager changes
   const { scope, manager } = await openSession();
   const sourceId = await appendUser(manager, "original");
   await manager.appendLabelChangeAsync(sourceId, "retained label");
-  const rewrite = await manager.prepareTranscriptRewriteAsync();
-  await rewrite.sessionManager.resetLeafAsync();
-  const replacementId = await appendUser(rewrite.sessionManager, "replacement");
-  const withWorker = metadataRuntime.withSessionMetadataWorker;
+  const { replacementId, ...rewrite } = await prepareUserRewrite(manager);
   let laterPreparedId: string | undefined;
-  const mutateAfterCommit: typeof withWorker = (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) =>
-    withWorker(
-      options,
-      database,
-      assertCurrent,
-      (worker) =>
-        operation({
-          execute: async (command, commandOptions) => {
-            const result = await worker.execute(command, commandOptions);
-            if (command.type === "session.transcript.rewrite") {
-              laterPreparedId = await appendUser(rewrite.sessionManager, "uncommitted later edit");
-            }
-            return result;
-          },
-        }),
-      controls,
-    );
-  const observer = vi
-    .spyOn(metadataRuntime, "withSessionMetadataWorker")
-    .mockImplementation(mutateAfterCommit);
-  try {
-    await rewrite.commit(new Map([[sourceId, replacementId]]));
-  } finally {
-    observer.mockRestore();
-  }
+  const observer = afterWorkerCommand("session.transcript.rewrite", async () => {
+    laterPreparedId = await appendUser(rewrite.sessionManager, "uncommitted later edit");
+  });
+  await withRestoredMocks([observer], () => rewrite.commit(new Map([[sourceId, replacementId]])));
   expect(laterPreparedId).toEqual(expect.any(String));
   expect(rewrite.sessionManager.getLeafId()).toBe(laterPreparedId);
   expect(manager.getLeafId()).toBe(replacementId);
@@ -387,7 +388,7 @@ it("adopts only the submitted rewrite snapshot when the prepared manager changes
 });
 
 it.each(["append", "identity", "label", "leaf"] as const)(
-  "preserves an intervening detached %s mutation when rewrite commit is stale",
+  "preserves detached %s edits when rewrite commit is stale",
   async (mutation) => {
     const manager = SessionManager.inMemory();
     const sourceId = await appendUser(manager, "original");
@@ -458,14 +459,8 @@ it("preserves a committed branch and a later target rebinding", async () => {
   });
   const runExternalRetarget = AsyncLocalStorage.snapshot();
   const original = metadataRuntime.withSessionMetadataWorker;
-  const rebindAfterCommit: typeof original = async (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) => {
-    const result = await original(options, database, assertCurrent, operation, controls);
+  const rebindAfterCommit: typeof original = async (...args) => {
+    const result = await original(...args);
     await runExternalRetarget(() => manager.setSessionTargetAsync(replacementScope));
     return result;
   };
@@ -481,13 +476,9 @@ it("preserves a committed branch and a later target rebinding", async () => {
       });
     }
   });
-  let branchSessionId: string | undefined;
-  try {
-    branchSessionId = await manager.createBranchedSession(selected);
-  } finally {
-    observer.mockRestore();
-    unsubscribe();
-  }
+  const branchSessionId = await withRestoredMocks([{ mockRestore: unsubscribe }, observer], () =>
+    manager.createBranchedSession(selected),
+  );
   const committed = loadSessionEntry(scope);
   expect(committed).toBeDefined();
   expect(committed?.sessionId).not.toBe(scope.sessionId);
@@ -501,25 +492,7 @@ it("preserves a committed branch and a later target rebinding", async () => {
     sessionId: replacementScope.sessionId,
     sessionKey: replacementScope.sessionKey,
   });
-  expect(manager.getBranch()).toEqual([]);
-  expect(manager.buildSessionContext().messages).toEqual([]);
+  expect([manager.getBranch(), manager.buildSessionContext().messages]).toEqual([[], []]);
   const reopened = await SessionManager.openAsync({ ...scope, sessionId: committed!.sessionId });
   expect(reopened.getLeafId()).toBe(selected);
-});
-
-it("preserves source rewrite bytes through the worker commit", async () => {
-  const { scope, manager } = await openSession();
-  const sourceId = await appendUser(manager, "original");
-  const rewrite = await manager.prepareTranscriptRewriteAsync();
-  await rewrite.sessionManager.resetLeafAsync();
-  const replacementId = await appendUser(
-    rewrite.sessionManager,
-    "pass: opaque-pass-secret-1234567890",
-  );
-  await rewrite.commit(new Map([[sourceId, replacementId]]));
-  expect(manager.getEntry(replacementId)).toMatchObject({
-    message: { content: "pass: opaque-pass-secret-1234567890" },
-  });
-  const reopened = await SessionManager.openAsync(scope);
-  expect(reopened.getEntry(replacementId)).toEqual(manager.getEntry(replacementId));
 });

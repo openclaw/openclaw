@@ -1,17 +1,6 @@
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-
-/** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
-const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
-const GEMINI_OPENCLAW_MCP_TOOL_PREFIX = "mcp_openclaw_";
-
-/** Strips the loopback MCP transport prefix so observers see gateway tool names. */
-export function stripOpenClawMcpToolPrefix(toolName: string): string {
-  return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
-    ? toolName.slice(OPENCLAW_MCP_TOOL_PREFIX.length)
-    : toolName.startsWith(GEMINI_OPENCLAW_MCP_TOOL_PREFIX)
-      ? toolName.slice(GEMINI_OPENCLAW_MCP_TOOL_PREFIX.length)
-      : toolName;
-}
+import type { RunCliAgentParams } from "./types.js";
 
 /** Match provider-native names against the canonical tool hook and policy ids. */
 export function normalizeCliToolName(toolName: string): string {
@@ -28,4 +17,23 @@ export function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | u
   return toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
     ? undefined
     : toolsAllow;
+}
+
+/**
+ * Whether a native call may run under the run's exact selection. A completion keeps the
+ * ordinary native list for a stable prefix, but its requester cap is enforced per MCP
+ * call, so a native tool that confers a capability is refused there.
+ */
+export function isCliNativeToolCallable(
+  run: Pick<RunCliAgentParams, "cliToolAvailability" | "trustedInternalHandoff">,
+  toolName: string,
+  backend: Pick<ResolvedCliBackend, "projectNativeToolAuthority">,
+): boolean {
+  if (!run.cliToolAvailability) {
+    return true;
+  }
+  return (
+    run.cliToolAvailability.native.includes(toolName) &&
+    !(run.trustedInternalHandoff && backend.projectNativeToolAuthority?.([toolName]).length)
+  );
 }

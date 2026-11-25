@@ -1,19 +1,28 @@
 import { expect, test, vi } from "vitest";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as sessionMembers from "../config/sessions/session-sharing-store.native.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import {
+  createGuestSandboxSessionConfig,
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -30,24 +39,7 @@ const { createSessionStoreDir } = setupSessionCreateTestHarness();
 test("required operator sandbox follows new session ownership across create, patch, and patchMany", async () => {
   const { storePath } = await createSessionStoreDir();
 
-  const cfg = {
-    ...getRuntimeConfig(),
-    session: { ...getRuntimeConfig().session, store: storePath },
-    gateway: {
-      ...getRuntimeConfig().gateway,
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "view" as const },
-            agents: ["main"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-            sandbox: "required" as const,
-          },
-        },
-      },
-    },
-  };
+  const cfg = createGuestSandboxSessionConfig(storePath, "view");
   const context = { getRuntimeConfig: () => cfg };
 
   for (const [method, suffix, systemActor] of [
@@ -66,13 +58,8 @@ test("required operator sandbox follows new session ownership across create, pat
     }
     const client = {
       ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
-      connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      },
+      connect: gatewayConnect(["operator.read", "operator.write"]),
+      authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     } as never;
     const key = `agent:main:dashboard:role-sandbox-${suffix}`;
     const request =
@@ -134,13 +121,8 @@ test("operator role agent allowlists protect creation without blocking existing 
     },
   };
   const client = {
-    connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as never;
   const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
   const deniedKey = "agent:main:dashboard:role-denied";
@@ -203,6 +185,115 @@ test("operator role agent allowlists protect creation without blocking existing 
   expect(existingPatch.ok).toBe(true);
 });
 
+test.each(
+  [undefined, "admin"].flatMap((defaultRole) =>
+    (["sessions.create", "sessions.reset"] as const).map((method) => ({ defaultRole, method })),
+  ),
+)(
+  "ID member $method keeps its profile agent ceiling with named-role default $defaultRole",
+  async ({ defaultRole, method }) => {
+    const { storePath } = await createSessionStoreDir();
+    const profile = ensureProfileForEmail("linked-member-session-creator@example.test");
+    setUserProfileRole(profile.id, "member");
+    const cfg: OpenClawConfig = {
+      ...getRuntimeConfig(),
+      session: { ...getRuntimeConfig().session, store: storePath },
+      gateway: {
+        ...getRuntimeConfig().gateway,
+        openclawId: { enabled: true },
+        roles: {
+          default: defaultRole,
+          definitions: {
+            admin: { agents: "*", scopes: ["operator.admin"], sessions: { others: "write" } },
+            member: {
+              agents: [],
+              scopes: ["operator.read", "operator.write"],
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const principal: OpenClawIdTunnelPrincipal = {
+      kind: "member",
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "linked-member",
+      role: "admin",
+    };
+    linkOpenClawIdUserProfile(
+      { profileId: profile.id, accountId: principal.accountId, email: null },
+      {},
+    );
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+    setOpenClawIdTunnelPrincipalLookup(() => principal);
+    const localClient = {
+      connect: gatewayConnect(["operator.read", "operator.write"]),
+      authenticatedUserProfile: gatewayProfile(profile.id),
+    };
+    const memberClient = { ...localClient, internal: { openclawIdPrincipal: principal } };
+    const context = { getRuntimeConfig: () => cfg };
+    const key = "agent:main:dashboard:member-agent-denied";
+    try {
+      const denied = await directSessionReq(
+        method,
+        { key },
+        {
+          client: memberClient,
+          context,
+        },
+      );
+      expect(denied).toMatchObject({
+        ok: false,
+        error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+
+      const local = await directSessionReq(
+        method,
+        { key },
+        {
+          client: localClient,
+          context,
+        },
+      );
+      expect(local).toMatchObject({
+        ok: false,
+        error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+
+      await writeSessionStore({
+        entries: {
+          [key]: sessionStoreEntry("existing-member-session", {
+            createdActor: { type: "human", source: "profile", id: profile.id },
+          }),
+        },
+      });
+      const existing = await directSessionReq(method, { key }, { client: memberClient, context });
+      expect(existing.ok, JSON.stringify(existing.error)).toBe(true);
+
+      cfg.gateway!.roles!.definitions.member!.agents = ["main"];
+      const allowedKey = "agent:main:dashboard:member-agent-allowed";
+      const allowed = await directSessionReq(
+        method,
+        { key: allowedKey },
+        {
+          client: memberClient,
+          context,
+        },
+      );
+      expect(allowed.ok, JSON.stringify(allowed.error)).toBe(true);
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: allowedKey, storePath }),
+      ).toBeDefined();
+    } finally {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
+    }
+  },
+);
+
 test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:categorized-adoption";
@@ -255,13 +346,8 @@ test("sessions.create revalidates parent participation before committing a fork 
   );
   const client = {
     authenticatedUserId: "member@example.com",
-    authenticatedUserProfile: {
-      profileId: "member",
-      displayName: "Member",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: { role: "operator", scopes: ["operator.write"] },
+    authenticatedUserProfile: gatewayProfile("member", "Member"),
+    connect: gatewayConnect(["operator.write"]),
   } as never;
   const requestParams = {
     agentId: "main",
@@ -384,7 +470,7 @@ test.each([undefined, "agent:main:dashboard:memory-core-parent"])(
         : { main: sessionStoreEntry("operator-owned-main") },
     });
     const pluginClient = {
-      connect: { scopes: ["operator.write"] },
+      connect: { scopes: ["operator.write"], client: { id: "test" } },
       internal: { pluginRuntimeOwnerId: "memory-core" },
     } as never;
 
@@ -434,7 +520,7 @@ test("sessions.create prevents plugin runtimes from adopting, linking, or forkin
     },
   });
   const pluginClient = {
-    connect: { scopes: ["operator.write"] },
+    connect: { scopes: ["operator.write"], client: { id: "test" } },
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
 

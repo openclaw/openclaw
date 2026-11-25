@@ -1,4 +1,4 @@
-import { isDeepStrictEqual } from "node:util";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
@@ -13,6 +13,10 @@ export function isColdArchivedSessionRow(row: records.Row) {
 /** Archived metadata outlives its bounded, reader-populated materialization cache. */
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
+  indexes: {
+    byParent: ReadonlyMap<string, Set<string>>;
+    byKey: ReadonlyMap<string, Set<string>>;
+  };
   dirty: Set<string>;
   invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
@@ -47,13 +51,23 @@ export function createSessionRowProjectionArchive(params: {
       }
     }
   }
-  function markRelated(
-    row: records.Row,
-    indexes: Parameters<typeof records.markRelated>[1],
-    includeChildren = true,
-  ) {
-    const related = new Set<string>();
-    records.markRelated(row, indexes, related, includeChildren, params.config());
+  function markRelated(row: records.Row, relations: records.RelatedRows = "all") {
+    const { byKey, byParent } = params.indexes;
+    const related = new Set(relations === "parents" ? [] : records.dependents(row, byParent));
+    if (relations !== "parents" && parseAgentSessionKey(row.key)) {
+      // A new literal parent must wake children still indexed under its absent-row alias.
+      const alias = records.parentReference(params.config(), row.key, row.agentId);
+      for (const id of byParent.get(alias) ?? []) {
+        related.add(id);
+      }
+    }
+    if (relations !== "children") {
+      for (const parent of row.parents) {
+        for (const id of byKey.get(parent) ?? []) {
+          related.add(id);
+        }
+      }
+    }
     for (const id of related) {
       const current = params.rows.get(id);
       if (current && isColdArchivedSessionRow(current)) {
@@ -67,10 +81,7 @@ export function createSessionRowProjectionArchive(params: {
           params.context(),
           params.referenced,
         );
-        if (
-          isDeepStrictEqual(current.parents, lineage.parents) &&
-          isDeepStrictEqual(current.entry, lineage.entry)
-        ) {
+        if (current.parents === lineage.parents && current.entry === lineage.entry) {
           continue;
         }
         // Cold children retain metadata/indices; both parents must drop stale child links.
@@ -82,8 +93,8 @@ export function createSessionRowProjectionArchive(params: {
           databaseFactsRevision: current.databaseFactsRevision + 1,
         };
         params.put(next);
-        markRelated(current, indexes, false);
-        markRelated(next, indexes, false);
+        markRelated(current, "parents");
+        markRelated(next, "parents");
       } else if (current) {
         params.dirty.add(id);
       }
@@ -115,12 +126,11 @@ export function createSessionRowProjectionArchive(params: {
               ...row.retainedDatabaseFacts,
               runtimeOwnership: undefined,
               runtimeOwnershipDependencies: undefined,
-              runtimeOwnershipRetryPending: undefined,
             },
           );
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
-          if (!params.dirty.has(records.identity(row))) {
+          if (row.materialized && !params.dirty.has(records.identity(row))) {
             row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
               row.retainedDatabaseFacts,
             )
@@ -136,7 +146,12 @@ export function createSessionRowProjectionArchive(params: {
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
-          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+          // Catalog policy can expire native ownership while retaining ACP and Board facts.
+          if (
+            current.preparedAcpMeta === undefined ||
+            current.preparedRuntimeOwnership === undefined ||
+            current.hasBoard === undefined
+          ) {
             params.dirty.add(records.identity(current));
           }
           continue;
@@ -164,10 +179,15 @@ export function createSessionRowProjectionArchive(params: {
           readPins.delete(pins);
           pins = new Set(ids);
           readPins.add(pins);
+          limit = Math.max(limit, pins.size);
           trim();
         },
         release() {
           readPins.delete(pins);
+          limit = Math.max(
+            DEFAULT_ARCHIVED_MATERIALIZED_ROWS,
+            ...Array.from(readPins, (heldPins) => heldPins.size),
+          );
           trim();
         },
       };

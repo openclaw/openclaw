@@ -26,15 +26,22 @@ deny rules still apply.
 }
 ```
 
-Install a current canonical Auto Review package through the managed skill
-installation or skill library. The sandbox must provide `/usr/bin/python3` and
-a protected, read-only copy of that selected package. A repository-local skill
+Install a current canonical Auto Review package in the Gateway user’s
+`~/.agents/skills/autoreview`, through the managed skill installation, or in a
+skill library. The personal `~/.agents/skills` directory is discovered only when
+the Gateway uses its default state directory; a custom state directory needs a
+managed installation or skill library. The sandbox must provide `/usr/bin/python3`
+and a protected, read-only copy of the selected package. A repository-local skill
 named `autoreview` does not qualify. The tool is unavailable when those bindings
 or the calling user's model authority are absent.
 The backend must enforce read-only resource mounts; SSH sandbox file uploads do
 not qualify. Mounts or tmpfs overlays that replace the selected package also make
 it unavailable.
-Writable aliases of the package's backing files also disqualify it.
+The original selected package must not be writable through the guest's workspace
+or mounts. A read-only synchronized copy does not make a guest-writable source
+trusted. Installer symlinks remain supported when their canonical targets are
+host-only or read-only; writable aliases of either the original or copied package
+disqualify it. Move an affected installation to a host-only or read-only location.
 
 The canonical skill discovers the enabled tool and calls it at its required
 checkpoint. If the tool is unavailable, enable the narrow capability or repair
@@ -50,6 +57,34 @@ OpenClaw release. `mode`, `base`, `commit`, `model`, `thinking`, `maxPriority`,
 and `sourceContextFiles` map to its matching options. File inputs are relative
 to the current sandbox repository. The original session deadline and cancellation
 still apply.
+
+Under Codex, the whole call follows the initiating run's existing execution
+lifetime, covering preparation, every planned pass, and report completion.
+It is not shortened to the generic 90-second tool default or 600-second cap.
+An unlimited initiating run stays unlimited; Stop and authority revocation
+still cancel the review. With an updated helper, an explicit timeout limits each
+reviewer process from launch through exit; OpenClaw owns that timer, and
+preparation and delivery of an exited reviewer's result use the parent lifetime
+instead of starting another copy of the reviewer timer. An explicit timeout also
+bounds the whole call: helper capture, prepared-pass admission, every reviewer
+pass, and delivery. When the budget is exceeded, the call ends with an error
+naming the stalled phase instead of staying pending. An omitted timeout retains
+`openclaw agent exec`'s 600-second default for each pass and adds no such
+whole-call deadline. `/btw` retains its separate ten-minute parent deadline.
+
+Older helpers remain supported with finite limits and keep their existing timeout
+behavior. Their handoff timer can still expire before launch or result delivery
+finishes; update the shared Auto Review helper to remove that race. The tool does
+not refuse an older helper merely because it lacks host-owned timeout support.
+
+Embedded runs, including nested Code Mode calls, publish the parent's finite
+execution deadline as a liveness allowance for the reply watchdog. For an
+unlimited parent, the allowance is the default 48-hour agent budget measured
+from tool execution start. The allowance itself adds no tool abort timer: the
+parent's existing timeout, an explicit `timeoutSeconds`, per-pass limits, Stop,
+and authority revocation still apply. A review that stays quiet beyond its
+allowance plus the watchdog's fifteen-minute quiet window can still be recovered
+as stalled.
 
 An allowed configured reviewer model is preserved. If the caller cannot use that
 configured preference, the Gateway selects the caller's existing permitted

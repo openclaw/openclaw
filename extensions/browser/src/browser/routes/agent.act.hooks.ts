@@ -4,7 +4,7 @@ import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { createTabRouteRegistrar } from "./agent.prepared.js";
-import { requirePwAi } from "./agent.shared.js";
+import { browserNavigationPolicyForProfile, requirePwAi } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -76,7 +76,7 @@ export function registerBrowserAgentActHookRoutes(
         targetId: tab.targetId,
         paths: resolvedPaths,
         timeoutMs,
-        ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+        ...browserNavigationPolicyForProfile(ctx, profileCtx),
         ...(assertCurrent ? { assertCurrent } : {}),
       };
       if (inputRef || element) {

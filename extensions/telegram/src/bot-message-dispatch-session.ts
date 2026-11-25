@@ -1,13 +1,13 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
@@ -18,19 +18,16 @@ import type {
 
 export function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
-  telegramDeps: TelegramBotDeps;
 }): FreshTelegramSessionEntryLoader {
-  const entriesByPathAndKey = new Map<
-    string,
-    ReturnType<TelegramBotDeps["getSessionEntryAsync"]>
-  >();
+  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntryAsync>>();
   const load = async (agentId: string, sessionKey: string) => {
-    const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
-    if (entriesByPathAndKey.has(cacheKey)) {
-      return { storePath, entry: await entriesByPathAndKey.get(cacheKey) };
+    const cached = entriesByPathAndKey.get(cacheKey);
+    if (cached) {
+      return { storePath, entry: await cached };
     }
-    const entry = params.telegramDeps.getSessionEntryAsync({
+    const entry = getSessionEntryAsync({
       storePath,
       sessionKey,
       readConsistency: "latest",
@@ -47,7 +44,10 @@ export async function resolveTelegramReasoningLevel(params: {
   agentId: string;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
 }): Promise<TelegramReasoningLevel> {
-  const configDefault = resolveTelegramConfigReasoningDefault(params.cfg, params.agentId);
+  const configDefault =
+    resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    "off";
   if (!params.sessionKey) {
     return configDefault;
   }

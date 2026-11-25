@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { buildStatusMessage, statusModelRefs } from "./status-message.test-support.js";
 
 it("keeps measured zero counters instead of hydrating historical transcript totals", () => {
@@ -19,7 +21,7 @@ it("keeps measured zero counters instead of hydrating historical transcript tota
       outputTokens: 0,
       totalTokens: 0,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     },
   });
   expect(text).toContain("Tokens: 0 in / 0 out");
@@ -40,26 +42,19 @@ it("shows measured zero from prepared transcript facts when session counters are
     sessionEntry: {
       sessionId: "transcript-zero",
       updatedAt: 0,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
+      contextBudgetStatus: contextBudgetStatusFixture({
         updatedAt: 1,
-        provider: "ollama",
         model: "llama3.2",
-        route: "fits",
-        shouldCompact: false,
         estimatedPromptTokens: 4096,
         contextTokenBudget: 32768,
         promptBudgetBeforeReserve: 30000,
         reserveTokens: 2768,
         effectiveReserveTokens: 2768,
         remainingPromptBudgetTokens: 25904,
-        overflowTokens: 0,
-        toolResultReducibleChars: 0,
         messageCount: 1,
         unwindowedMessageCount: 1,
         sessionId: "transcript-zero",
-      },
+      }),
     },
   });
   expect(text).toContain("Tokens: 0 in / 0 out");

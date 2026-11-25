@@ -17,7 +17,6 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type {
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
-  VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   resolveZaiBaseUrl,
@@ -50,85 +49,18 @@ const MODE_CAPABILITIES: VideoGenerationModeCapabilities = {
   providerOptions: { quality: "string", fps: "number" },
 };
 
-function resolveVideoBaseUrl(configured: string | undefined): string {
-  const baseUrl = normalizeOptionalString(configured)?.replace(/\/+$/u, "") ?? resolveZaiBaseUrl();
-  // Video uses the general API in the same region, even with Coding Plan chat auth.
-  if (baseUrl === ZAI_CODING_CN_BASE_URL) {
-    return resolveZaiBaseUrl("cn");
-  }
-  if (baseUrl === ZAI_CODING_GLOBAL_BASE_URL) {
-    return resolveZaiBaseUrl("global");
-  }
-  return baseUrl;
-}
-
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
-  const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
-  if (model !== DEFAULT_MODEL) {
-    throw new Error(`Z.AI video generation does not support model ${model}. Use ${DEFAULT_MODEL}.`);
-  }
-  if ((req.inputVideos?.length ?? 0) > 0 || (req.inputAudios?.length ?? 0) > 0) {
-    throw new Error("Z.AI video generation does not support video or audio reference inputs.");
-  }
-  if ((req.inputImages?.length ?? 0) > 1) {
-    throw new Error("Z.AI video generation supports at most one input image.");
-  }
-  const quality = req.providerOptions?.quality ?? "speed";
-  if (quality !== "speed" && quality !== "quality") {
-    throw new Error('Z.AI video quality must be "speed" or "quality".');
-  }
-  const fps = req.providerOptions?.fps ?? 30;
-  if (fps !== 30 && fps !== 60) {
-    throw new Error("Z.AI video fps must be 30 or 60.");
-  }
-  const body: Record<string, unknown> = {
-    model,
-    prompt: req.prompt,
-    quality,
-    fps,
-    duration: req.durationSeconds ?? 5,
-    size:
-      resolveClosestSize({
-        requestedSize: req.size,
-        requestedAspectRatio: req.aspectRatio,
-        supportedSizes: SIZES,
-      }) ?? "1280x720",
-    with_audio: req.audio ?? false,
-  };
-  const image = req.inputImages?.[0];
-  if (image) {
-    if (image.role && image.role !== "first_frame") {
-      throw new Error("Z.AI image-to-video supports only an ordinary or first_frame image.");
-    }
-    const url = normalizeOptionalString(image.url);
-    if (url) {
-      body.image_url = url;
-    } else {
-      if (!image.buffer) {
-        throw new Error("Z.AI image-to-video input is missing image data.");
-      }
-      if (image.buffer.length > MAX_IMAGE_BYTES) {
-        throw new Error("Z.AI image-to-video requires a PNG or JPEG image no larger than 5 MB.");
-      }
-      if (image.mimeType && image.mimeType !== "image/png" && image.mimeType !== "image/jpeg") {
-        throw new Error("Z.AI image-to-video requires a PNG or JPEG image.");
-      }
-      body.image_url = toImageDataUrl({
-        ...image,
-        buffer: image.buffer,
-        defaultMimeType: "image/png",
-      });
-    }
-  }
-  return body;
-}
-
-function readTaskStatus(payload: Record<string, unknown>): string {
+function isTaskComplete(payload: Record<string, unknown>): boolean {
   const status = normalizeOptionalString(payload.task_status);
   if (status !== "PROCESSING" && status !== "SUCCESS" && status !== "FAIL") {
     throw new Error("Z.AI video status response missing or unknown task_status");
   }
-  return status;
+  if (status === "FAIL") {
+    throw new Error(
+      normalizeOptionalString(isRecord(payload.error) ? payload.error.message : payload.message) ??
+        "Z.AI video generation failed",
+    );
+  }
+  return status === "SUCCESS";
 }
 
 export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
@@ -145,13 +77,82 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
       videoToVideo: { enabled: false },
     },
     async generateVideo(req) {
-      const body = buildCreateBody(req);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
+      if (model !== DEFAULT_MODEL) {
+        throw new Error(
+          `Z.AI video generation does not support model ${model}. Use ${DEFAULT_MODEL}.`,
+        );
+      }
+      if ((req.inputVideos?.length ?? 0) > 0 || (req.inputAudios?.length ?? 0) > 0) {
+        throw new Error("Z.AI video generation does not support video or audio reference inputs.");
+      }
+      if ((req.inputImages?.length ?? 0) > 1) {
+        throw new Error("Z.AI video generation supports at most one input image.");
+      }
+      const quality = req.providerOptions?.quality ?? "speed";
+      if (quality !== "speed" && quality !== "quality") {
+        throw new Error('Z.AI video quality must be "speed" or "quality".');
+      }
+      const fps = req.providerOptions?.fps ?? 30;
+      if (fps !== 30 && fps !== 60) {
+        throw new Error("Z.AI video fps must be 30 or 60.");
+      }
+      const body: Record<string, unknown> = {
+        model,
+        prompt: req.prompt,
+        quality,
+        fps,
+        duration: req.durationSeconds ?? 5,
+        size:
+          resolveClosestSize({
+            requestedSize: req.size,
+            requestedAspectRatio: req.aspectRatio,
+            supportedSizes: SIZES,
+          }) ?? "1280x720",
+        with_audio: req.audio ?? false,
+      };
+      const image = req.inputImages?.[0];
+      if (image) {
+        if (image.role && image.role !== "first_frame") {
+          throw new Error("Z.AI image-to-video supports only an ordinary or first_frame image.");
+        }
+        const url = normalizeOptionalString(image.url);
+        if (url) {
+          body.image_url = url;
+        } else {
+          if (!image.buffer) {
+            throw new Error("Z.AI image-to-video input is missing image data.");
+          }
+          if (image.buffer.length > MAX_IMAGE_BYTES) {
+            throw new Error(
+              "Z.AI image-to-video requires a PNG or JPEG image no larger than 5 MB.",
+            );
+          }
+          if (image.mimeType && image.mimeType !== "image/png" && image.mimeType !== "image/jpeg") {
+            throw new Error("Z.AI image-to-video requires a PNG or JPEG image.");
+          }
+          body.image_url = toImageDataUrl({
+            ...image,
+            buffer: image.buffer,
+            defaultMimeType: "image/png",
+          });
+        }
+      }
       const providerConfig = req.cfg.models?.providers?.zai;
+      let videoBaseUrl =
+        normalizeOptionalString(providerConfig?.baseUrl)?.replace(/\/+$/u, "") ??
+        resolveZaiBaseUrl();
+      // Video uses the general API in the same region, even with Coding Plan chat auth.
+      if (videoBaseUrl === ZAI_CODING_CN_BASE_URL) {
+        videoBaseUrl = resolveZaiBaseUrl("cn");
+      } else if (videoBaseUrl === ZAI_CODING_GLOBAL_BASE_URL) {
+        videoBaseUrl = resolveZaiBaseUrl("global");
+      }
       const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "Z.AI API key missing",
-          baseUrl: resolveVideoBaseUrl(providerConfig?.baseUrl),
+          baseUrl: videoBaseUrl,
           defaultBaseUrl: resolveZaiBaseUrl(),
           provider: "zai",
           capability: "video",
@@ -189,19 +190,13 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "Z.AI video status request failed",
         timeoutMessage: `Z.AI video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readTaskStatus(payload) === "SUCCESS",
-        getFailureMessage: (payload) =>
-          readTaskStatus(payload) === "FAIL"
-            ? (normalizeOptionalString(
-                isRecord(payload.error) ? payload.error.message : payload.message,
-              ) ?? "Z.AI video generation failed")
-            : undefined,
+        isComplete: isTaskComplete,
       });
       const output = Array.isArray(completed.video_result) ? completed.video_result[0] : undefined;
       const videoUrl = isRecord(output) ? normalizeOptionalString(output.url) : undefined;

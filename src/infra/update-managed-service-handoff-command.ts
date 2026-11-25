@@ -12,6 +12,7 @@ export function resolveUpdateCliArgv(params: {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   execPath?: string;
@@ -23,6 +24,7 @@ export function resolveUpdateCliArgv(params: {
     "--json",
     ...(params.reapplyLocalOverrides ? ["--reapply-local-overrides"] : []),
     ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(params.fullIntegrityCheck ? ["--full-integrity-check"] : []),
     ...(params.admission ? ["--admission", params.admission] : []),
     ...(params.channel ? ["--channel", params.channel] : []),
     ...(params.tag ? ["--tag", params.tag] : []),
@@ -64,11 +66,4 @@ export function formatManagedServiceUpdateCommand(
       .join(" "),
     env,
   );
-}
-
-export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
-  return [
-    "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
-    `Stop the foreground Gateway, run \`${command}\` from a shell, then launch the Gateway again. For a managed deployment, use its host's stop, update, and restart workflow.`,
-  ].join("\n");
 }

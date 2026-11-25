@@ -3,6 +3,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
@@ -24,14 +25,17 @@ export function subscribeFirstRunActivationCleared(
     }
   };
   receiptClearedListeners.add(listener);
-  window.addEventListener("storage", onStorage);
+  const stopStorage = listen(window, "storage", { handleEvent: onStorage });
   return () => {
     receiptClearedListeners.delete(listener);
-    window.removeEventListener("storage", onStorage);
+    stopStorage();
   };
 }
 
-type ActivationContext = Pick<ApplicationContext, "gateway" | "agentSelection">;
+/** The agent is the selection of the surface that started the activation. */
+type ActivationContext = Pick<ApplicationContext, "gateway"> & {
+  agentSelection: { state: { selectedId: string | null } };
+};
 
 export type FirstRunActivationReceipt = {
   version: 1;
@@ -83,7 +87,14 @@ function activationOwner(
       deviceToken ?? "",
       ...(receipt.modelTarget ? [receipt.modelTarget] : []),
       ...(receipt.wizard
-        ? [receipt.wizard.sessionId, receipt.wizard.authChoice, receipt.wizard.authKind ?? ""]
+        ? [
+            receipt.wizard.sessionId,
+            receipt.wizard.authChoice,
+            receipt.wizard.authKind ?? "",
+            ...(receipt.wizard.selectModel === undefined
+              ? []
+              : [String(receipt.wizard.selectModel)]),
+          ]
         : []),
     ];
     const encoder = new TextEncoder();
@@ -135,12 +146,14 @@ export function readFirstRunActivationReceipt(
       (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
       (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
       (receipt.wizard !== undefined &&
-        (receipt.kind !== "provider-auth" ||
+        ((receipt.kind !== "provider-auth" && receipt.kind !== "provider-login") ||
           !receipt.wizard ||
           typeof receipt.wizard.sessionId !== "string" ||
           !receipt.wizard.sessionId ||
           typeof receipt.wizard.authChoice !== "string" ||
           !receipt.wizard.authChoice ||
+          (receipt.wizard.selectModel !== undefined &&
+            typeof receipt.wizard.selectModel !== "boolean") ||
           (receipt.wizard.authKind !== undefined &&
             receipt.wizard.authKind !== "secret" &&
             receipt.wizard.authKind !== "oauth" &&
@@ -213,5 +226,16 @@ export function clearFirstRunActivationReceipt(expected?: FirstRunActivationRece
   const storage = getSafeLocalStorage();
   if (storage) {
     clearReceipt(storage, expected);
+  }
+}
+
+/** A cheap kind check before an owner validates the record against its connection. */
+export function hasFirstRunActivationReceipt(kind: string): boolean {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+    const receipt: { kind?: unknown } | null = raw ? JSON.parse(raw) : null;
+    return receipt?.kind === kind;
+  } catch {
+    return false;
   }
 }

@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import * as chatSession from "./server-methods/chat-send-session.js";
 import {
   dashboardTitleScheduleMocks,
@@ -85,7 +85,7 @@ test.each([
         } finally {
           resume.resolve();
           await request;
-          await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+          await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
         }
       }
     } finally {

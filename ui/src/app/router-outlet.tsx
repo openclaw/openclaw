@@ -1,20 +1,26 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
-import { isSessionRouteId } from "../app-route-paths.ts";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, Errored, onSettled, Show } from "solid-js";
+import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
-import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
-import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
+import {
+  AgentStartupState,
+  LazyViewError,
+  PanelErrorState,
+} from "../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import {
   createRouterOutletPresentation,
   selectRenderedRouteMatch,
-} from "./router-outlet-controller.ts";
+} from "./router-outlet-presentation.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -23,48 +29,41 @@ import {
 
 type ApplicationRouteMatch = ReturnType<ApplicationRouter["getState"]>["matches"][number];
 
-type RouterOutletOptions = {
-  retryContext?: ApplicationContext;
-  presented?: boolean;
-};
-
-/**
- * Shows progress while waiting for the restarting gateway. The state lives on
- * the element rather than in render state because the reload replaces the
- * document; a re-render that resets the label is harmless, since the pending
- * wait still reloads on its own once the gateway answers.
- */
-function markButtonReloading(button: HTMLButtonElement | null): () => void {
-  if (!button) {
-    return () => {};
-  }
-  const label = button.textContent;
-  button.disabled = true;
-  button.textContent = t("lazyView.reloading");
-  return () => {
-    button.disabled = false;
-    button.textContent = label;
-  };
-}
-
 type RouteErrorProps = {
   router: ApplicationRouter;
   retryContext?: ApplicationContext;
   error: unknown;
   routeId: ApplicationRouteMatch["routeId"];
   inline?: boolean;
+  hideDetail?: boolean;
+  reset?: () => void;
 };
 
+type RouteRenderBoundary = Pick<RouteErrorProps, "router" | "retryContext" | "routeId"> & {
+  key: string;
+};
+
+function RouteNotFound(props: { href: string }) {
+  onSettled(() => finishBootFrame());
+  return (
+    <PanelErrorState
+      title={t("routeNotFound.title")}
+      subtitle={t("routeNotFound.description")}
+      actions={
+        <a class="btn" href={props.href}>
+          {t("routeNotFound.goToChat")}
+        </a>
+      }
+    />
+  );
+}
+
 function RouteError(props: RouteErrorProps) {
+  onSettled(() => finishBootFrame());
   const staleChunk = () => isStaleChunkImportError(props.error);
-  createEffect(staleChunk, (stale) => {
-    if (stale) {
-      // Reload also resets failed browser imports and Vite stylesheet preloads.
-      void scheduleStaleChunkReload();
-    }
-  });
   const handleRetry = (event: Event) => {
     if (!staleChunk()) {
+      props.reset?.();
       if (props.retryContext !== undefined) {
         void props.router.revalidate(props.retryContext, props.routeId).catch(() => undefined);
       }
@@ -76,37 +75,90 @@ function RouteError(props: RouteErrorProps) {
     // unreachable gateway would replace the recoverable panel error with a
     // fatal navigation error in app webviews, so the wait is still bounded.
     const button = event.currentTarget instanceof HTMLButtonElement ? event.currentTarget : null;
-    const restoreButton = markButtonReloading(button);
+    const label = button?.textContent ?? null;
+    if (button) {
+      button.disabled = true;
+      button.textContent = t("lazyView.reloading");
+    }
     void retryStaleChunkReloadWhenReachable().then((reloading) => {
-      if (reloading) {
-        return;
+      if (!reloading && button) {
+        // Failed reloads leave this error view available for another attempt.
+        button.disabled = false;
+        button.textContent = label;
       }
-      // Vite marks CSS dependencies seen before loading them. Retrying the
-      // module after a failed or blocked reload can mount it without its styles.
-      restoreButton();
     });
   };
   // Resource errors alone cannot establish that a newer build exists.
   return (
-    <Show
-      when={!isAgentDatabaseInspectionPendingError(props.error)}
-      fallback={<AgentStartupState />}
-    >
-      <LazyViewError
-        error={props.error}
-        onRetry={handleRetry}
-        inline={props.inline}
-        stale={staleChunk()}
-      />
+    <>
+      <Show when={staleChunk()}>
+        {(_stale) => {
+          onSettled(() => {
+            void scheduleStaleChunkReload();
+          });
+          return <></>;
+        }}
+      </Show>
+      <Show
+        when={!isAgentDatabaseInspectionPendingError(props.error)}
+        fallback={<AgentStartupState />}
+      >
+        <LazyViewError
+          error={props.error}
+          onRetry={handleRetry}
+          inline={props.inline}
+          hideDetail={props.hideDetail}
+          stale={staleChunk()}
+        />
+      </Show>
+    </>
+  );
+}
+
+/** A page that throws while rendering fails alone: the shell around the outlet keeps working. */
+function RouteRenderError(props: {
+  boundary: RouteRenderBoundary;
+  error: unknown;
+  loadFailed: boolean;
+  reset: () => void;
+}) {
+  let failed = false;
+  return (
+    <Show when={props.boundary.key} keyed>
+      {(_key) => {
+        // A page outlives navigation between routes that share it and refetches of its data, so
+        // a new destination or a finished load renders it again.
+        const retryDestination = failed;
+        failed = true;
+        onSettled(() => {
+          if (retryDestination) {
+            props.reset();
+          } else {
+            console.error("[openclaw] route render failed", props.error);
+          }
+        });
+        return (
+          <Show when={!props.loadFailed}>
+            <RouteError
+              router={props.boundary.router}
+              retryContext={props.boundary.retryContext}
+              routeId={props.boundary.routeId}
+              error={props.error}
+              hideDetail
+              reset={props.reset}
+            />
+          </Show>
+        );
+      }}
     </Show>
   );
 }
 
 function renderRouterOutlet(
   router: ApplicationRouter,
-  showPending: boolean,
   renderedMatch: ApplicationRouteMatch | undefined,
-  options: RouterOutletOptions = {},
+  retryContext?: ApplicationContext,
+  presented = true,
 ): RouteContent {
   if (
     !renderedMatch ||
@@ -118,12 +170,15 @@ function renderRouterOutlet(
 
   const routeId = renderedMatch.routeId;
   const error = renderedMatch.error
-    ? { router, retryContext: options.retryContext, error: renderedMatch.error, routeId }
+    ? { router, retryContext, error: renderedMatch.error, routeId }
     : undefined;
   if (!renderedMatch.module) {
-    return { state: showPending && !error ? "loading" : "empty", error };
+    return error
+      ? { state: "empty", error }
+      : { state: "loading", composer: renderedMatch.routeId === "chat" };
   }
   const routeModule = renderedMatch.module;
+  const { pathname, search } = renderedMatch.location;
   if (
     error &&
     (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
@@ -135,7 +190,15 @@ function renderRouterOutlet(
     props: {
       data: renderedMatch.data,
       loaderPending: renderedMatch.isFetching === "loader",
-      presented: options.presented !== false,
+      presented,
+    },
+    boundary: {
+      router,
+      retryContext,
+      routeId,
+      key: [routeId, pathname, search, presented, renderedMatch.isFetching, Boolean(error)].join(
+        "\u0000",
+      ),
     },
     error: error ? { ...error, inline: true } : undefined,
   };
@@ -157,9 +220,13 @@ type RouteContent =
   | {
       render: (props: SolidRouteProps) => SolidJSX.Element;
       props: SolidRouteProps;
+      boundary: RouteRenderBoundary;
       error?: RouteErrorProps;
     }
-  | { state: "empty" | "loading" | "startup"; error?: RouteErrorProps };
+  | { state: "empty" | "startup"; error?: RouteErrorProps }
+  | { state: "not-found"; href: string }
+  // A chat route's loading frame keeps the boot composer typeable.
+  | { state: "loading"; composer?: boolean };
 
 type Presentation = { key: string; render: (presented: boolean) => RouteContent };
 
@@ -167,6 +234,7 @@ function RoutePresentation(props: {
   presentation?: boolean;
   presented?: boolean;
   renderValue: () => RouteContent;
+  ref: (element: HTMLElement) => void;
 }) {
   const value = createMemo(() => props.renderValue());
   const native = () => {
@@ -181,6 +249,14 @@ function RoutePresentation(props: {
     const current = value();
     return "state" in current ? current.state : undefined;
   };
+  const composer = () => {
+    const current = value();
+    return "composer" in current && current.composer === true;
+  };
+  const notFound = () => {
+    const current = value();
+    return "state" in current && current.state === "not-found" ? current : undefined;
+  };
   const page = (
     <>
       <Show when={native()}>
@@ -188,43 +264,57 @@ function RoutePresentation(props: {
           <ContentPresentation value={() => props.presented !== false}>
             <Show when={current().render} keyed>
               {(View) => (
-                <View
-                  data={current().props.data}
-                  loaderPending={current().props.loaderPending}
-                  presented={current().props.presented}
-                />
+                <Errored
+                  fallback={(failure, reset) => (
+                    <RouteRenderError
+                      boundary={current().boundary}
+                      error={failure()}
+                      loadFailed={Boolean(error())}
+                      reset={reset}
+                    />
+                  )}
+                >
+                  <View
+                    data={current().props.data}
+                    loaderPending={current().props.loaderPending}
+                    presented={current().props.presented}
+                  />
+                </Errored>
               )}
             </Show>
           </ContentPresentation>
         )}
       </Show>
       <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>
+      <Show when={notFound()}>{(current) => <RouteNotFound href={current().href} />}</Show>
       <Show when={state() === "startup"}>
         <AgentStartupState />
       </Show>
       <Show when={state() === "loading"}>
-        <LoadingState />
+        <LoadingState route composer={composer()} />
       </Show>
     </>
   );
-  return props.presentation ? (
-    <openclaw-route-presentation
-      style={{ display: props.presented ? "contents" : "none" }}
-      hidden={!props.presented}
-      inert={!props.presented}
-      aria-hidden={props.presented ? "false" : "true"}
+  return (
+    <Dynamic
+      component={props.presentation ? "openclaw-route-presentation" : "openclaw-route-fragment"}
+      ref={props.ref}
+      style={{ display: props.presentation && !props.presented ? "none" : "contents" }}
+      hidden={props.presentation ? !props.presented : undefined}
+      inert={props.presentation ? !props.presented : undefined}
+      aria-hidden={props.presentation ? (props.presented ? "false" : "true") : undefined}
     >
       {page}
-    </openclaw-route-presentation>
-  ) : (
-    <openclaw-route-fragment style={{ display: "contents" }}>{page}</openclaw-route-fragment>
+    </Dynamic>
   );
 }
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-router-outlet": HTMLAttributes<HTMLElement>;
+      "openclaw-router-outlet": HTMLAttributes<HTMLElement> & {
+        "onOpenclaw-route-element"?: (event: RouteElementEvent) => void;
+      };
       "openclaw-route-presentation": HTMLAttributes<HTMLElement>;
       "openclaw-route-fragment": HTMLAttributes<HTMLElement>;
     }
@@ -233,7 +323,10 @@ declare module "@solidjs/web" {
 
 /** Solid owns route presentation and retained page lifetimes. */
 export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
+  const elements = new RouteElements();
   let host!: HTMLElement;
+  let retainedRegion: HTMLElement | undefined;
+  let transientRegion: HTMLElement | undefined;
   let disposed = false;
   let generation = 0;
   let committedGeneration = -1;
@@ -259,8 +352,8 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     NonNullable<ApplicationRouteMatch["module"]>
   >(props);
   let committedSnapshot: ReturnType<typeof outlet.snapshot> | undefined;
-  const retainedGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
-  const transientGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
+  const retainedGate = createMcpAppUnmountGate<Presentation | null>(invalidate);
+  const transientGate = createMcpAppUnmountGate<Presentation | null>(invalidate);
   let retainedMatch: ApplicationRouteMatch | undefined;
   let retainedOwnerKey: string | undefined;
   let retainedPresented = false;
@@ -306,19 +399,17 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     // Retire the old scope's loader without changing its destination or history.
     void router
       .navigate(target.routeId, context, { history: "none", revalidate: true }, target.location)
-      .finally(() =>
-        untrack(() => {
-          if (
-            !disposed &&
-            props.router === router &&
-            props.retentionScope === scope &&
-            scopeGeneration === currentGeneration
-          ) {
-            scopeRefreshing = false;
-            invalidate();
-          }
-        }),
-      )
+      .finally(() => {
+        if (
+          !disposed &&
+          scopeRouter === router &&
+          scopeOwner === scope &&
+          scopeGeneration === currentGeneration
+        ) {
+          scopeRefreshing = false;
+          invalidate();
+        }
+      })
       .catch(() => undefined);
   };
 
@@ -374,9 +465,24 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     const retainedKey = `${scopeGeneration}:${retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const retryContext = props.retryContext;
+    const loading: RouteContent = { state: "loading", composer: renderedMatch?.routeId === "chat" };
     const renderTransient = (): RouteContent => {
       if (snapshot.startupPending) {
         return { state: "startup" };
+      }
+      if (snapshot.status === "notFound") {
+        // Single-segment plugin routes need hello's registry before recovery
+        // can decide whether the requested page exists.
+        if (
+          props.notFoundRecoveryReady === false &&
+          pluginSlugCandidate(
+            router.getState().location?.pathname ?? "",
+            retryContext?.basePath ?? "",
+          )
+        ) {
+          return { state: "loading" };
+        }
+        return { state: "not-found", href: pathForRoute("chat", retryContext?.basePath ?? "") };
       }
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined
@@ -389,19 +495,15 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
                 routeId: renderedMatch.routeId,
               },
             }
-          : { state: "loading" };
+          : loading;
       }
       if (module?.retainOnNavigate && waiting) {
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
-          return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, {
-            retryContext,
-          });
+          return renderRouterOutlet(router, snapshot.settled, retryContext);
         }
-        return { state: "loading" };
+        return loading;
       }
-      return renderRouterOutlet(router, snapshot.showPending, renderedMatch, {
-        retryContext,
-      });
+      return renderRouterOutlet(router, renderedMatch, retryContext);
     };
     const retainedValue = retainedGate.render(
       retainedKey,
@@ -409,19 +511,15 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
         retained
           ? {
               key: retainedKey,
-              render: (presented) =>
-                renderRouterOutlet(router, snapshot.showPending, retained, {
-                  retryContext,
-                  presented,
-                }),
+              render: (presented) => renderRouterOutlet(router, retained, retryContext, presented),
             }
           : null,
-      () => (host ? host.querySelectorAll(":scope > openclaw-route-presentation") : []),
+      () => (retainedRegion?.isConnected ? [retainedRegion] : []),
     );
     const transientValue = transientGate.render(
       transientKey,
       () => (presentRetained ? null : { key: transientKey, render: renderTransient }),
-      () => (host ? host.querySelectorAll(":scope > openclaw-route-fragment") : []),
+      () => (transientRegion?.isConnected ? [transientRegion] : []),
       {
         retainRenderedValue:
           !module?.retainOnNavigate &&
@@ -440,6 +538,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     };
   });
 
+  // Readiness must observe the DOM commit, not just the preceding presentation calculation.
   createEffect(presentation, (value) => {
     committedSnapshot = value.snapshot;
     committedSettled = value.settled;
@@ -478,7 +577,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
   };
 
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     notify();
   });
@@ -487,18 +586,29 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     <openclaw-router-outlet
       inert={props.inert}
       aria-disabled={props["aria-disabled"]}
+      onOpenclaw-route-element={elements.register}
       ref={(element) => {
         host = element;
         const readinessHost = Object.defineProperties(element, {
           presentationSettled: { configurable: true, get: isSettled },
           settlePresentation: { configurable: true, value: settlePresentation },
+          renderedElement: {
+            configurable: true,
+            value: elements.renderedElement.bind(elements),
+          },
+          renderedElements: {
+            configurable: true,
+            value: elements.renderedElements.bind(elements),
+          },
         }) as ControlUiReadinessOutlet; // SAFETY: These descriptors define the outlet contract.
-        untrack(() => props.ref?.(readinessHost));
+        // Publish this mount's element contract once, with its original ref callback.
+        props.ref?.(readinessHost);
       }}
     >
       <Show when={presentation().retained?.key} keyed>
         {(_ownerKey) => (
           <RoutePresentation
+            ref={(element) => (retainedRegion = element)}
             presentation
             presented={presentation().presented}
             renderValue={() =>
@@ -509,12 +619,13 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       </Show>
       <Show when={Boolean(presentation().transient)}>
         <RoutePresentation
+          ref={(element) => (transientRegion = element)}
           renderValue={() => presentation().transient?.render(true) ?? { state: "empty" }}
         />
       </Show>
       <Show when={presentation().waiting}>
         <openclaw-route-fragment style={{ display: "contents" }}>
-          <LoadingState />
+          <LoadingState route />
         </openclaw-route-fragment>
       </Show>
     </openclaw-router-outlet>

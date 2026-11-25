@@ -1,4 +1,3 @@
-// Policy doctor strictness comparisons for scoped policy overlays.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {

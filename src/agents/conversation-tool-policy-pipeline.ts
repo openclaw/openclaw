@@ -1,5 +1,6 @@
-import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { participationToolPolicy } from "./participation-ceiling.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -11,7 +12,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
 ): TPolicy | undefined {
-  if (isFrozenClawToolAllowPolicy(policy)) {
+  if (isFrozenTemplateToolAllowPolicy(policy)) {
     return policy;
   }
   return mergeAlsoAllowPolicy(policy, alsoAllow ? [...alsoAllow] : undefined);
@@ -22,7 +23,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
  * diverge on profile `alsoAllow`, sender, sandbox, delegation, or runtime-cap semantics.
  */
 export function resolveConversationToolPolicies(params: {
-  capabilityProfile: ResolvedConversationCapabilityProfile;
+  capabilityProfile: Pick<ResolvedConversationCapabilityProfile, "policy">;
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];
@@ -65,7 +66,6 @@ export function resolveConversationToolPolicies(params: {
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   policies: ReturnType<typeof resolveConversationToolPolicies>;
-  additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
@@ -99,12 +99,20 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
     step(params.policies.sandboxPolicy, "sandbox tools.allow"),
-    ...(params.additionalStepsAfterSandbox ?? []),
     step(params.policies.subagentPolicy, "subagent tools.allow"),
     ...(params.includeRuntimeToolPolicy
       ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]
       : []),
     step(params.policies.inheritedToolPolicy, "inherited tools"),
+    ...(profile.operatorAuthority?.participationCeiling
+      ? [
+          step(
+            participationToolPolicy(profile.operatorAuthority.participationCeiling),
+            "participation ceiling",
+            "runtime",
+          ),
+        ]
+      : []),
   ];
 }
 
@@ -112,7 +120,7 @@ export function buildConversationToolPolicyPipelineSteps(params: {
 export function projectConversationToolNames<TName extends string>(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   toolNames: readonly TName[];
-  toolMeta?: (tool: { name: TName }) => { pluginId: string } | undefined;
+  toolMeta?: (tool: { name: TName }) => { pluginId: string; ownerUnverified?: boolean } | undefined;
   warn: (message: string) => void;
 }): TName[] {
   const policies = resolveConversationToolPolicies({
@@ -134,7 +142,7 @@ export function projectConversationToolNames<TName extends string>(params: {
 export function isConversationToolAllowed(
   capabilityProfile: ResolvedConversationCapabilityProfile,
   toolName: string,
-  toolMeta?: { pluginId: string },
+  toolMeta?: { pluginId: string; ownerUnverified?: boolean },
 ): boolean {
   return (
     projectConversationToolNames({

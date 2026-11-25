@@ -20,7 +20,7 @@ Adds OpenRouter model provider support to OpenClaw.
 ## Surface
 
 - Providers: `openrouter`
-- Contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
+- Contracts: `decisionProviders`, `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

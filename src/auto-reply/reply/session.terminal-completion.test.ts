@@ -21,39 +21,22 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 describe("terminal completion session reuse", () => {
   it.each(["failed", "timeout", "killed"] as const)(
-    "recovers a %s completion before admitting a later channel source",
+    "reuses a %s session without changing its transcript when a later channel source arrives",
     async (status) => {
       const storePath = path.join(tempDirs.make("openclaw-terminal-completion-"), "sessions.json");
       const sessionKey = "agent:main:slack:fixture:direct:requester";
       const sessionId = "completion-session";
       const sourceRunId = "announce:child:succeeded";
-      const harnessCompletion = {
-        taskId: "child",
-        taskRunId: "child",
-        taskStatus: "succeeded" as const,
-        sourceRunId,
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
+      const retained = {
         sessionId,
         lifecycleRevision: "completion-revision",
       };
-      const deliveryContext = { channel: "slack", to: "D123", accountId: "fixture" };
       await writeSessionStoreFast(storePath, {
-        [sessionKey]: {
-          sessionId,
-          lifecycleRevision: harnessCompletion.lifecycleRevision,
-          updatedAt: Date.now(),
-          status,
-          abortedLastRun: true,
-          restartRecoveryDeliveryRunId: sourceRunId,
-          restartRecoveryDeliverySourceRunId: sourceRunId,
-          restartRecoverySourceIngress: "internal",
-          restartRecoveryDeliveryContext: deliveryContext,
-          restartRecoveryHarnessCompletion: harnessCompletion,
-        },
+        [sessionKey]: { ...retained, status, abortedLastRun: true, updatedAt: Date.now() },
       });
+      const scope = { agentId: "main", storePath, sessionId };
       await appendTranscriptMessage(
-        { agentId: "main", storePath, sessionKey, sessionId },
+        { ...scope, sessionKey },
         {
           eventId: "completion-input",
           message: {
@@ -70,32 +53,19 @@ describe("terminal completion session reuse", () => {
           },
         },
       );
-      const transcriptBefore = await loadTranscriptEvents({
-        agentId: "main",
-        storePath,
-        sessionId,
-      });
+      const transcriptBefore = await loadTranscriptEvents(scope);
       const result = await initSessionState({
         cfg: { session: { store: storePath } },
         ctx: { Body: "Are you there?", SessionKey: sessionKey, Provider: "slack" },
       });
       const entry = readSessionStoreFast(storePath)[sessionKey];
       expect(result.isNewSession).toBe(false);
-      expect(result.abortedLastRun).toBe(true);
-      expect(entry?.status).toBe(status);
-      expect(entry).toMatchObject({
-        sessionId,
-        lifecycleRevision: harnessCompletion.lifecycleRevision,
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: sourceRunId,
-        restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoverySourceIngress: "internal",
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoveryHarnessCompletion: harnessCompletion,
-      });
-      expect(await loadTranscriptEvents({ agentId: "main", storePath, sessionId })).toEqual(
-        transcriptBefore,
-      );
+      expect(result.sessionId).toBe(sessionId);
+      expect(result.abortedLastRun).toBe(false);
+      expect(entry).toMatchObject(retained);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.abortedLastRun).toBeUndefined();
+      expect(await loadTranscriptEvents(scope)).toEqual(transcriptBefore);
     },
   );
 });

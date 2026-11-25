@@ -19,7 +19,7 @@ import {
   withSessionTranscriptReadSource,
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -49,6 +49,12 @@ export async function readSessionTranscriptAnchorsAsync(
     const facts = memory.missing
       ? {
           anchors: [],
+          // Like the SQLite reader, an absent transcript has only the empty root on its path.
+          ...(selection.activePathEntryId !== undefined
+            ? {
+                onActivePath: selection.activePathEntryId === null,
+              }
+            : {}),
           ...(selection.includeMetadata
             ? { metadata: { present: false, observedAt: null, updatedAt: null } }
             : {}),
@@ -118,13 +124,12 @@ export async function readSessionTranscriptAnchorsAsync(
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const request = structuredClone(selection);
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
-    ...(request.includeMetadata
+    ...(selection.includeMetadata
       ? { metadata: { present: false, observedAt: null, updatedAt: null } }
       : {}),
-    ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
+    ...(selection.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
   return withSessionTranscriptReadSource(
@@ -137,17 +142,17 @@ export async function readSessionTranscriptAnchorsAsync(
       return readSessionTranscriptAnchorsFromSource(
         {
           ...source,
-          preparedReads: request.afterSeq === undefined ? source.preparedReads : undefined,
+          preparedReads: selection.afterSeq === undefined ? source.preparedReads : undefined,
           scope: { ...source.scope, sessionKey: captured.sessionKey },
         },
-        request,
+        selection,
         signal,
         onRead ? consume : undefined,
       );
     },
     signal,
     // Callback acceptance retains writer admission through reader failure and cleanup.
-    onRead ? targetDiscoveryLane : undefined,
+    onRead ? sessionStoreLane : undefined,
   );
 }
 

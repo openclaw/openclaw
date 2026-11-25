@@ -1,6 +1,7 @@
 import type { Message } from "openclaw/plugin-sdk/llm";
 import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { convertToOllamaMessages } from "./stream-messages.js";
 
 const opening = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";
@@ -41,6 +42,21 @@ describe("native Ollama messages", () => {
     expect(messages).toEqual(original);
   });
 
+  it.each([
+    { label: "allowlist", options: { availableToolNames: new Set(["exec"]) } },
+    { label: "default prefix strip", options: undefined },
+  ])("normalizes functions.exec tool results with $label", ({ options }) => {
+    const messages: Message[] = [
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-1", name: "functions.exec", arguments: {} }],
+      }),
+      makeTextToolResult("call-1", "functions.exec", "ok", false, 0),
+    ];
+    const converted = convertToOllamaMessages(messages, undefined, options);
+    expect(converted[0]?.tool_calls?.[0]?.function.name).toBe("exec");
+    expect(converted[1]?.tool_name).toBe("exec");
+  });
+
   it("preserves the request prefix through a tool round and a later user turn", () => {
     const initial = [makeAgentUserMessage({ content: "Inspect the file." })];
     const toolRound: Message[] = [
@@ -48,14 +64,7 @@ describe("native Ollama messages", () => {
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "note" } }],
       }),
-      {
-        role: "toolResult",
-        toolCallId: "read-1",
-        toolName: "read",
-        content: [{ type: "text", text: "File contents." }],
-        isError: false,
-        timestamp: 0,
-      },
+      makeTextToolResult("read-1", "read", "File contents.", false, 0),
     ];
     const followup = [
       ...toolRound,

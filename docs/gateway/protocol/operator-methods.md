@@ -16,6 +16,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
+  - `projectId` is optional and only valid without `sessionKey`. It previews
+    the skills of a registered project selected before a session exists. The
+    Gateway reads that project's `skills/` and `.agents/skills/` only when the
+    client could create a session there for the agent, including sandbox
+    containment; otherwise the agent catalog is returned unchanged.
   - `scope` controls which surface the primary `name` targets: `text` returns
     the primary text command token without the leading `/`; `native` and the
     default `both` path return provider-aware native names when available.
@@ -30,6 +35,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.
@@ -41,11 +51,27 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     authority, credentials, discovery, and final run policy can change which
     tools are offered. Absence from this preview does not establish that a tool
     is disabled, and inclusion does not guarantee execution access.
+    See [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn)
+    for supported checks and their limits.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - Managed sessions using an OpenClaw tool runtime can include the GitHub
+    identity and publication tools when saved tool policy permits, without
+    waiting for credential discovery. ACP and unsupported runtimes do not
+    acquire them. GitHub action descriptions mark
+    sandbox-dependent actions as conditional: the preview does not prepare a
+    workspace, inspect credentials, or grant publication or merge authority.
+    Codex-specific exclusions apply when Codex is the selected runtime; switching
+    runtimes selects the matching GitHub preview instead of reusing the other one.
+    Older Codex plugins without preview metadata omit these two rows with an
+    update notice; other tools remain visible and execution access is unchanged.
   - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
     this override selects the matching preview instead of reusing the other
     state's cached inventory.
+  - Saved sandbox policy filters both core tools and warm MCP catalogs. A session
+    that requires a sandbox keeps that policy even when local sandbox mode is
+    off. A matching active remote-exec placement also applies sandbox policy.
+    Previewing tools does not provision a sandbox or grant execution authority.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -62,6 +88,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy
@@ -71,7 +100,14 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `agentId` is optional; omit it to read the default agent workspace.
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
-- `skills.search` and `skills.detail` (`operator.read`) return ClawHub
+- `skills.files.get({ agentId?, path })` (`operator.read`) reads the current
+  `SKILL.md` of an installed skill. `path` is absolute, home-relative, or relative
+  to the selected agent's workspace; it must match a discovered skill. The
+  response contains `path`, `name`, and full UTF-8 `content`. Reads stay inside
+  that skill's directory and use the configured skill-file byte limit. Unknown
+  agents, unavailable files, paths outside the installed inventory, and oversized
+  files return `INVALID_REQUEST`. The method does not read arbitrary host files.
+- `skills.categories`, `skills.search`, and `skills.detail` (`operator.read`) return ClawHub
   discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
   `installRef` from search and reads that release's card and scan summary. See
   [Skill registry details](/gateway/protocol/operator-methods#skill-registry-details).
@@ -151,15 +187,15 @@ connections retain the previous row shape. Generic client libraries do not opt
 in: a proxy forwarding a capable connection must support its negotiated row
 shape, or use a capless context for an older closed-schema consumer.
 
-Ordinary requests read the published catalog without starting provider discovery.
-Views select rows; they do not decide whether discovery runs. If the owner is not
+Ordinary requests read the published catalog while the owner acquires native
+inventory in the background. If the owner is not
 published yet, the request reports that the model catalog is not ready. A result
 whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
 `retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
 catalog consumers, retaining cancellation and any explicit request deadline.
 
-- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
-  are passive with or without this flag.
+- `preparedOnly: true` and the `"provider-config"` view do not request native
+  inventory acquisition.
 - `refresh: true` requests provider acquisition before reading the new published
   generation. Concurrent refreshes share the owner build. A failed acquisition
   retains compatible rows and reports its `providerOutcomes`; successful empty
@@ -168,9 +204,31 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
   Omit the filter or run `openclaw models list --all` to list models and their
   provider IDs.
-- `includeDetails: true` includes available input modalities, effective
-  `contextTokens`, and a `local` endpoint classification. It does not expose
-  endpoint URLs, headers, credentials, costs or runtime request parameters.
+- Rows include `contextWindow` (the model's maximum) and the effective
+  `contextTokens` budget when those values are known, so pickers can show the
+  active budget without session metadata.
+- `includeDetails: true` also includes available input modalities and a `local`
+  endpoint classification. It does not expose endpoint URLs, headers,
+  credentials, costs or runtime request parameters.
+
+An unchanged catalog renewal emits `chat.metadata.changed` with
+`modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
+refreshes only cached receipts that still contain `pendingProviders`; settled
+catalogs remain reusable. Inventory, availability, and account changes still
+invalidate affected catalogs. Agent-specific metadata publications include
+`agentId`, so other agents retain their catalog and auth receipts. Configuration,
+plugin, and owner replacement changes still invalidate all agents. Discovery
+settlements can accompany scoped changes as a separate pending-only notification.
+
+The Control UI shares the initial `models.snapshot` with matching configured
+catalog readers. If bootstrap does not deliver it within one second, readers
+fall back to `models.list`. A late bootstrap snapshot can still settle a pending
+read, but cannot overwrite a completed fallback result. This wait precedes
+the ordinary per-RPC timeout; explicit refreshes and sub-second timeout budgets
+bypass it. Cached catalogs, including pending discovery results,
+remain reusable until a catalog or session-model change invalidates their scope
+or a reported cooldown expires. A different session or account requires its own
+projection; returning to a cached scope does not fetch it again.
 
 For a conversation picker, pass `sessionKey` to read the session's saved
 agent and saved account selection. A conflicting `agentId` is rejected. The
@@ -191,11 +249,22 @@ an in-flight metadata read.
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
-account selection. `refreshFailed: true` reports a failed acquisition while
+account selection. `refreshFailures` identifies failed discovery scopes with
+`acquisition: "provider" | "native"` and an optional `provider` identifier. The
+provider is omitted when the acquisition scope is unknown or outside the requested
+catalog view. These diagnostics never include raw errors, endpoints, credentials,
+or account/profile identifiers and do not replace authentication outcomes. Clients
+should retain usable model choices and distinguish a partially available catalog
+from an empty one; older responses may have `refreshFailed` without diagnostics.
+`refreshFailed: true` reports a failed acquisition while
 compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
+Before the first prepared metadata publication, `chat.metadata` and passive
+`models.list` reads return `UNAVAILABLE` with `retryable: true` and a starting
+message. Retry after startup progresses. Publication failures and retired metadata
+owners remain errors; conversation startup still omits unavailable optional metadata.
 `chat.metadata` remains available to legacy clients. Clients that read models
 directly can pass `includeModels: false` to skip the duplicate catalog, account
 selection, and runtime-selection projection. Commands and swarm availability
@@ -264,6 +333,30 @@ or restart, not a silent local fallback. The model CLI uses this contract for
 `models list` and `models list --refresh`.
 
 ## Skill registry details
+
+`skills.categories({})` reads `GET /api/v1/skills/-/categories` from the configured
+ClawHub registry. It returns `{ categories: [{ slug, label, description?, icon? }] }` in registry order.
+A registry without this endpoint (HTTP 404) returns an empty category list; other
+registry failures are errors. Clients can check whether the Gateway advertises
+`skills.categories` before offering category filters.
+
+`skills.search({ query?, category?, cursor?, limit? })` returns
+`{ results, nextCursor? }`. The optional `limit` is 1–100.
+
+| Request                          | Registry read                                                        |
+| -------------------------------- | -------------------------------------------------------------------- |
+| No query or category             | Existing cross-source trending feed (`/api/v1/trending?kind=skills`) |
+| Category only                    | Native skills listed by `/api/v1/skills?category=<slug>`             |
+| Text, optionally with a category | `/api/v1/search?q=<text>` with the selected `category`, if any       |
+
+Trending results can include `categories`, an array of registry category slugs.
+Use `skills.categories` for their display labels. When a row has no membership
+metadata, keep it in the ranked feed without assigning it a category.
+
+Pass the returned opaque `nextCursor` back as `cursor` with the same browse filter
+for the next page. No cursor means there is no next page. Text search is not
+paginated. A failed or unavailable category filter never retries as unfiltered
+discovery.
 
 Use the exact `installRef` from `skills.search` when requesting details. For example:
 

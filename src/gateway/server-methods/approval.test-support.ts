@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { vi, type TestContext } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
@@ -7,21 +9,41 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
-import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handleApprovalResolve as handleOwnedApprovalResolve } from "./approval-shared.js";
 import type { createApprovalHandlers } from "./approval.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "./session-mutation-guards.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
+
+export async function createApprovalSessionFixture(
+  test: TestContext,
+  sessionKey = "agent:main:approval-fixture",
+  creatorProfileId = "session-creator",
+) {
+  const state = await createOpenClawTestState({
+    label: "approval-session",
+    prepareProfileCatalog: true,
+  });
+  test.onTestFinished(() => state.cleanup());
+  setRuntimeConfigSnapshot({});
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: "approval-session",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: creatorProfileId },
+    },
+  );
+  return { ...state, sessionKey };
+}
 
 export function getOperatorApproval(
   params: Parameters<typeof getOperatorApprovalDetailedInDatabase>[0],
@@ -34,10 +56,10 @@ export function deleteDurableApproval(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
   );
 }
@@ -46,10 +68,10 @@ export function corruptDurableApprovalPresentation(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb
       .updateTable("operator_approvals")
       .set({ presentation_json: "{}" })
@@ -60,6 +82,7 @@ export function corruptDurableApprovalPresentation(
 export function createClient(params: {
   scopes?: string[];
   deviceId?: string;
+  profileId?: string;
   internal?: boolean;
   connId?: string;
 }): GatewayWsClient {
@@ -69,6 +92,9 @@ export function createClient(params: {
     clientInfo: { id: "approval-test", mode: "backend" },
   });
   client.connect.client.displayName = "Approval Test";
+  if (params.profileId) {
+    client.authenticatedUserProfile = dispatchProfile(params.profileId);
+  }
   if (params.deviceId) {
     client.connect.device = {
       id: params.deviceId,
@@ -107,22 +133,13 @@ export function createContext(
 type ApprovalInvocationParams = {
   handlers: ReturnType<typeof createApprovalHandlers>;
   method:
-    | "approval.get"
-    | "approval.history"
-    | "approval.resolve"
-    | "exec.approval.get"
-    | "exec.approval.list"
-    | "exec.approval.grants.list"
-    | "exec.approval.grants.revoke"
-    | "exec.approval.resolve"
-    | "exec.approval.waitDecision"
-    | "plugin.approval.list"
-    | "plugin.approval.resolve";
+    | `approval.${"get" | "history" | "resolve"}`
+    | `exec.approval.${"get" | "list" | "grants.list" | "grants.revoke" | "resolve" | "waitDecision"}`
+    | `plugin.approval.${"list" | "resolve"}`;
   body: Record<string, unknown>;
   client: GatewayWsClient | null;
   context?: GatewayRequestHandlerOptions["context"];
   sessionMutationCommitGuard?: () => void;
-  transport?: "websocket" | "sdk";
 };
 
 export function createApprovalInvocation(params: ApprovalInvocationParams) {
@@ -146,13 +163,6 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
       ? { sessionMutationCommitGuard: params.sessionMutationCommitGuard }
       : {}),
   };
-  if (client && params.transport !== "sdk") {
-    bindWebSocketRequestMutationAuthority(
-      request,
-      client,
-      new SharedGatewaySessionGenerationState({ current: undefined, required: null }).reader,
-    );
-  }
   const options = bindGatewayRequestHandlerMutationAuthority(
     request,
     { ...request, params: params.body },
@@ -163,15 +173,12 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
     respond,
     invoke: async () => {
       try {
-        await expectDefined(
-          params.handlers[params.method],
-          "params.handlers[params.method] test invariant",
-        )(options);
-        const response = respond.mock.calls[0];
-        if (!response) {
-          throw new Error("approval handler did not respond");
-        }
-        return { ok: response[0], result: response[1], error: response[2], context };
+        await expectDefined(params.handlers[params.method], "approval handler")(options);
+        const [ok, result, error] = expectDefined(
+          respond.mock.calls[0],
+          "approval handler did not respond",
+        );
+        return { ok, result, error, context };
       } finally {
         capture.release();
       }
@@ -189,11 +196,7 @@ export async function handleApprovalResolve<
     getApprovalClientConnIds: params.context.getApprovalClientConnIds,
   };
   const options: GatewayRequestHandlerOptions = {
-    req: {
-      id: "shared-approval-test",
-      type: "req",
-      method: `${params.approvalKind}.approval.resolve`,
-    },
+    req: { id: "req", type: "req", method: `${params.approvalKind}.approval.resolve` },
     params: { id: params.inputId, decision: params.decision },
     context,
     client: params.client,

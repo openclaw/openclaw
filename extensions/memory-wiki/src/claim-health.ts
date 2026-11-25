@@ -21,10 +21,6 @@ export type WikiFreshness = {
 
 export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
 
-export type WikiClaimContradictionCluster = ReturnType<
-  typeof buildClaimContradictionClusters
->[number];
-
 export type WikiPageContradictionCluster = {
   key: string;
   label: string;
@@ -41,9 +37,7 @@ function normalizeClaimTextKey(text: string): string {
 }
 
 function normalizeTextKey(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
-    .replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(text).replace(/[^\p{L}\p{N}\p{M}]+/gu, " ");
 }
 
 function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date }): WikiFreshness {

@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -85,7 +85,7 @@ export function selectDelegatedToolPolicy(params: {
   const continuation = params.floor?.continuation;
   const requesterSessionKey = continuation?.requesterSessionKey ?? params.requesterSessionKey;
   if (
-    params.inheritedToolPolicySource === "sender" ||
+    params.inheritedToolPolicySource !== undefined ||
     (continuation &&
       (params.requesterAgentId !== continuation.targetAgentId ||
         params.targetAgentId !== continuation.targetAgentId)) ||
@@ -148,10 +148,8 @@ export function readDelegatedToolPolicy(value: unknown): DelegatedToolPolicy | u
     typeof value.requesterSessionKey !== "string" ||
     !parseAgentSessionKey(value.requesterSessionKey) ||
     typeof value.targetAgentId !== "string" ||
-    !Array.isArray(value.deny) ||
-    value.deny.some((entry) => typeof entry !== "string") ||
-    !Array.isArray(value.requesterDeny) ||
-    value.requesterDeny.some((entry) => typeof entry !== "string") ||
+    !isStringArray(value.deny) ||
+    !isStringArray(value.requesterDeny) ||
     Object.keys(value).some(
       (key) => !["requesterSessionKey", "targetAgentId", "deny", "requesterDeny"].includes(key),
     )
@@ -179,7 +177,7 @@ export function resolveDelegatedExecutionToolPolicy(params: {
   if (
     !params.config ||
     !floor ||
-    params.inheritedToolPolicySource === "sender" ||
+    params.inheritedToolPolicySource !== undefined ||
     !child ||
     !(child.rest.startsWith("subagent:") || child.rest.startsWith("dashboard:")) ||
     child.agentId !== floor.targetAgentId ||

@@ -3,10 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import { ScratchFileExpiredError } from "../infra/scratch-expiry.js";
 import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import {
   assertArtifactDownloadGrantCurrent,
-  getArtifactDownloadGrant,
+  resolveArtifactDownloadGrant,
   retainArtifactDownloadStream,
 } from "./artifact-download-grants.js";
 import type { ArtifactDownloadResponse } from "./artifact-download-projection.js";
@@ -42,16 +43,16 @@ export async function handleArtifactDownloadHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const [connection, ticket, extra] = pathname.slice(ARTIFACT_DOWNLOAD_PATH.length).split("/");
-  const client = [...opts.clients].find(
-    (candidate) => candidate.connId && encodeURIComponent(candidate.connId) === connection,
+  const selected = resolveArtifactDownloadGrant(
+    opts.clients,
+    pathname.slice(ARTIFACT_DOWNLOAD_PATH.length),
   );
-  const grant =
-    client && ticket && extra === undefined ? getArtifactDownloadGrant(client, ticket) : undefined;
-  if (!client || !grant || !ticket) {
+  if (!selected || selected.grant.source.kind !== "bytes") {
     respondNotFound(res);
     return true;
   }
+  const { client, grant, ticket } = selected;
+  const grantSource = selected.grant.source;
   let assertGrantCurrent = () =>
     assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   const assertCurrent = () => {
@@ -67,11 +68,11 @@ export async function handleArtifactDownloadHttpRequest(
     assertGrantCurrent();
   };
   let prepared: ArtifactDownloadResponse | undefined;
-  const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
+  const thumbnail = grantSource.image && url.searchParams.get("variant") === "thumbnail";
   try {
     assertCurrent();
-    prepared = await grant.read({
-      expectedDigest: grant.digest,
+    prepared = await grantSource.read({
+      expectedDigest: grantSource.digest,
       method: thumbnail ? "GET" : req.method,
       headers: thumbnail
         ? {}
@@ -92,13 +93,14 @@ export async function handleArtifactDownloadHttpRequest(
       const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
       const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
       // Preview failures are unavailable, never an implicit full-image download.
-      const bytes = new Uint8Array(
-        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
+      const image = await resolveManagedImageThumbnail(cacheKey, () =>
+        encodeImageThumbnail(source, width),
       );
+      const bytes = new Uint8Array(image.data);
       prepared.artifact = {
         ...prepared.artifact,
-        mimeType: "image/webp",
-        title: `${prepared.artifact.title}-preview.webp`,
+        mimeType: image.mimeType,
+        title: `${prepared.artifact.title}-preview${image.extension}`,
       };
       const response = resolveByteResponse({
         file: { size: bytes.byteLength },
@@ -116,7 +118,16 @@ export async function handleArtifactDownloadHttpRequest(
             : bytes;
       assertCurrent();
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof ScratchFileExpiredError) {
+      assertCurrent();
+      res.writeHead(410, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(error.message);
+      return true;
+    }
     prepared = undefined;
   }
   if (!prepared) {

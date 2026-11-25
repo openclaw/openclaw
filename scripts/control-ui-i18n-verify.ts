@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   loadControlUiTranslationMemory,
   materializePreparedControlUiLocaleCatalog,
@@ -386,7 +386,7 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
 }
 
 export async function verifyRuntimeLocaleConfig() {
-  const registryPath = path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts");
+  const registryPath = path.join(ROOT, "src", "shared", "control-ui-locale.ts");
   const registry = (await import(pathToFileURL(registryPath).href)) as {
     SUPPORTED_LOCALES: readonly string[];
   };

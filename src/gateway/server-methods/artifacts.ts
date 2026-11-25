@@ -1,20 +1,41 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import pMap from "p-map";
 import {
   ErrorCodes,
   errorShape,
   type ArtifactsGetParams,
   type ArtifactsListParams,
+  type ArtifactsListResult,
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
 import { normalizeChatImageRenditionWidth } from "../../shared/chat-image-renditions.js";
-import { canCreateArtifactDownload, createArtifactDownload } from "../artifact-download-grants.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
+import {
+  canCreateArtifactDownload,
+  createArtifactDownload,
+  createManagedArtifactDownload,
+} from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
+import {
+  type ArtifactLookup,
+  type ArtifactRecord,
+  toArtifactSummary,
+  resolveArtifactAvailability,
+} from "../artifacts-content.js";
+import {
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -23,18 +44,13 @@ import {
 import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
+  type ManagedImageThumbnail,
 } from "../managed-image-thumbnail-cache.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  type ArtifactRecord,
-  toArtifactSummary,
-} from "./artifacts-content.js";
-import { readArtifactImagePage } from "./artifacts-image-page.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -42,9 +58,9 @@ import {
   type ArtifactQuery,
   type ArtifactSessionAccess,
   createArtifactSessionAccess,
-  prepareArtifactSessionResolution,
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
+import { sessionFilesError } from "./session-files-errors.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -52,10 +68,32 @@ import { assertValidParams } from "./validation.js";
 type ArtifactCollectionOptions = {
   includeDownloadData?: boolean;
   downloadArtifactId?: string;
+  includeAttachments?: boolean;
 };
 
 type ArtifactDownloadLookup = ArtifactLookup &
   ({ download: PreparedArtifactDownload; release: () => void } | { download?: undefined });
+
+const CURSOR_TTL_MS = 15 * 60_000;
+type ImageCursor = {
+  binding: string;
+  beforeSeq: number;
+  imageOffset: number;
+  readWindow: TranscriptReadWindow;
+  expiresAt: number;
+};
+
+// Connection-owned continuation facts are bounded, ephemeral, and never confer access.
+const cursors = new WeakMap<object, Map<string, ImageCursor>>();
+const internalCaller = {};
+
+function invalidImageCursor(message: string) {
+  return new ArtifactSessionResolutionError(
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: { type: "artifact_cursor_invalid" },
+    }),
+  );
+}
 
 const queuedArtifactDownloads = new Map<
   string,
@@ -65,34 +103,31 @@ const queuedArtifactDownloads = new Map<
   }
 >();
 
-function createArtifactRequestAccess(request: GatewayRequestHandlerOptions) {
+function createArtifactRequestAccess(request: GatewayRequestHandlerOptions, release?: () => void) {
   const { assertCurrent } = readGatewayRequestMutationAuthority(request);
   const { context, respond } = request;
-  assertCurrent();
-  return Object.assign(
-    createArtifactSessionAccess({
-      client: request.client,
-      projection: getSessionRowProjection(context),
-      getRuntimeConfig: () => {
-        assertCurrent();
-        return context.getRuntimeConfig();
-      },
-    }),
-    {
-      assertCurrent,
-      respond: (...args: Parameters<RespondFn>) => {
-        assertCurrent();
-        respond(...args);
-      },
+  const access = createArtifactSessionAccess({
+    client: request.client,
+    projection: getSessionRowProjection(context),
+    getRuntimeConfig: () => {
+      assertCurrent();
+      return context.getRuntimeConfig();
     },
-  );
-}
-
-function artifactError(type: string, message: string, details?: Record<string, unknown>) {
-  return errorShape(ErrorCodes.INVALID_REQUEST, message, {
-    details: {
-      type,
-      ...details,
+  });
+  if (release) {
+    access.retain(release);
+  }
+  try {
+    assertCurrent();
+  } catch (error) {
+    access[Symbol.dispose]();
+    throw error;
+  }
+  return Object.assign(access, {
+    assertCurrent,
+    respond: (...args: Parameters<RespondFn>) => {
+      assertCurrent();
+      respond(...args);
     },
   });
 }
@@ -105,6 +140,7 @@ async function loadArtifacts(
   artifacts: ArtifactRecord[];
   sessionKey?: string;
   nextCursor?: string;
+  attachments?: ArtifactsListResult["attachments"];
   omittedOversized?: boolean;
   assertCurrent?: () => void;
 }> {
@@ -115,23 +151,59 @@ async function loadArtifacts(
   const { sessionKey, scope, assertCurrent } = selected;
   const { storePath, sessionId, sessionEntry: entry } = scope;
   if (query.type === "image") {
-    const page = await readArtifactImagePage({
-      scope,
-      binding: JSON.stringify([
-        sessionKey,
-        scope.agentId,
-        sessionId,
-        query.runId,
-        query.messageRole,
-      ]),
-      client: access.client,
-      cursor: query.cursor,
-      limit: query.limit ?? 4,
+    const binding = JSON.stringify([
       sessionKey,
-      filters: { runId: query.runId, messageRole: query.messageRole },
+      scope.agentId,
+      sessionId,
+      query.runId,
+      query.messageRole,
+    ]);
+    const state = getOrCreateWeakOwnerMap(cursors, access.client ?? internalCaller);
+    const now = Date.now();
+    for (const [key, value] of state) {
+      if (value.expiresAt <= now) {
+        state.delete(key);
+      }
+    }
+    const cursor = query.cursor ? state.get(query.cursor) : undefined;
+    if (query.cursor && (!cursor || cursor.binding !== binding)) {
+      throw invalidImageCursor(
+        "Image cursor expired or belongs to another session; restart artifacts.list",
+      );
+    }
+    const page = await readSessionArtifacts(scope, {
+      kind: "image-page",
+      sessionKey,
+      runId: query.runId,
+      messageRole: query.messageRole,
+      limit: query.limit ?? 4,
+      beforeSeq: cursor?.beforeSeq,
+      imageOffset: cursor?.imageOffset,
+      readWindow: cursor?.readWindow,
+    }).catch((error: unknown) => {
+      if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
+        throw invalidImageCursor("Chat history changed; restart artifacts.list");
+      }
+      throw error;
     });
+    let nextCursor: string | undefined;
+    if (page.next) {
+      nextCursor = randomUUID();
+      state.set(nextCursor, {
+        ...page.next,
+        binding,
+        expiresAt: now + CURSOR_TTL_MS,
+      });
+      pruneMapToMaxSize(state, 128);
+    }
     assertCurrent();
-    return { ...page, sessionKey, assertCurrent };
+    return {
+      artifacts: await pMap(page.artifacts, resolveArtifactAvailability, { concurrency: 8 }),
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(page.omittedOversized ? { omittedOversized: true } : {}),
+      sessionKey,
+      assertCurrent,
+    };
   }
   const downloadIds = opts.downloadArtifactId ? new Set([opts.downloadArtifactId]) : undefined;
   const queuedKey =
@@ -160,15 +232,20 @@ async function loadArtifacts(
     if (queuedKey) {
       queuedArtifactDownloads.delete(queuedKey);
     }
-    const { artifacts } = await readSessionArtifacts(scope, {
+    const { artifacts, attachments } = await readSessionArtifacts(scope, {
       kind: "list",
       sessionKey,
       runId: query.runId,
       messageRole: query.messageRole,
       includeDownloadData: opts.includeDownloadData,
+      includeAttachments: opts.includeAttachments,
       downloadArtifactIds: downloadIds ? [...downloadIds] : undefined,
     });
-    return { sessionKey, artifacts };
+    return {
+      sessionKey,
+      ...(attachments ? { attachments } : {}),
+      artifacts: await pMap(artifacts, resolveArtifactAvailability, { concurrency: 8 }),
+    };
   };
   const result = queuedKey && downloadIds ? Promise.resolve().then(collect) : collect();
   if (queuedKey && downloadIds) {
@@ -187,7 +264,7 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   respond(
     false,
     undefined,
-    artifactError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
+    sessionFilesError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
   );
   return false;
 }
@@ -196,7 +273,7 @@ function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string
   respond(
     false,
     undefined,
-    artifactError("artifact_not_found", "artifact not found", {
+    sessionFilesError("artifact_not_found", "artifact not found", {
       artifactId: requestedArtifactId,
     }),
   );
@@ -258,35 +335,60 @@ async function prepareDownload(
   };
   return selection?.kind === "prepared"
     ? { ...result, artifact: selection.download.artifact, download: selection.download }
-    : { ...result, artifact: selection?.artifact };
+    : {
+        ...result,
+        artifact: selection?.artifact && (await resolveArtifactAvailability(selection.artifact)),
+      };
 }
 
 async function respondManagedArtifactDownload(
   query: ArtifactsGetParams,
-  access: ArtifactSessionAccess,
+  request: GatewayRequestHandlerOptions,
   respond: RespondFn,
   matched?: ArtifactRecord,
 ): Promise<void> {
+  // A managed URL outlives this RPC; each GET is new work and admits against the issuing device.
+  const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
+  const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+  using access = createArtifactRequestAccess(request, releaseDevice);
   await runArtifactSessionOperation(respond, async () => {
-    const resolveSession = await prepareArtifactSessionResolution(query, access.projection);
-    const resolved = await resolveSession(access);
+    const selected = await prepareArtifactSessionRead(query, access);
+    const scope = selected?.scope;
     const cfg = access.getRuntimeConfig();
-    const defaultAgentId = resolved
-      ? tryResolveSessionCompatibilityOwnerAgentId(cfg, resolved.sessionKey)
+    const defaultAgentId = selected
+      ? tryResolveSessionCompatibilityOwnerAgentId(cfg, selected.sessionKey)
       : undefined;
     const managed =
-      resolved && (!matched || matched.sessionKey === resolved.sessionKey)
+      selected && scope && (!matched || matched.sessionKey === selected.sessionKey)
         ? await resolveManagedOutgoingMediaArtifactDownload({
-            sessionKey: resolved.sessionKey,
-            ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+            sessionKey: selected.sessionKey,
+            ...(scope.agentId ? { agentId: scope.agentId } : {}),
             ...(defaultAgentId ? { defaultAgentId } : {}),
             artifactId: query.artifactId,
           })
         : null;
-    resolved?.readCurrent();
-    if (!managed) {
+    selected?.assertCurrent();
+    if (!managed || !selected) {
       respondArtifactNotFound(respond, query.artifactId);
       return;
+    }
+    const download = createManagedArtifactDownload({
+      client: access.client,
+      path: managed.url,
+      assertCurrent: () => {
+        if (sourceCurrent?.() === false) {
+          throw new Error("Artifact download expired");
+        }
+        selected.assertCurrent();
+      },
+      release: () => {
+        selected.release();
+        releaseDevice?.();
+      },
+    });
+    access.detach(selected.release);
+    if (releaseDevice) {
+      access.detach(releaseDevice);
     }
     respond(true, {
       artifact: {
@@ -301,8 +403,7 @@ async function respondManagedArtifactDownload(
         source: "session-transcript",
         download: { mode: "url" as const },
       },
-      url: managed.url,
-      expiresAt: managed.expiresAt,
+      ...download,
     });
   });
 }
@@ -322,29 +423,36 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_query_unsupported", "limit and cursor require type image"),
+        sessionFilesError("artifact_query_unsupported", "limit and cursor require type image"),
       );
       return;
     }
     const query = { ...params };
     const loaded = await runArtifactSessionOperation(respond, () =>
-      loadArtifacts(query, access, { includeDownloadData: false }),
+      loadArtifacts(query, access, {
+        includeDownloadData: false,
+        includeAttachments: Boolean(
+          query.sessionKey && !query.type && !query.runId && !query.messageRole,
+        ),
+      }),
     );
     if (!loaded.ok) {
       return;
     }
     const { artifacts, sessionKey, nextCursor, omittedOversized } = loaded.value;
+    const attachments = "attachments" in loaded.value ? loaded.value.attachments : undefined;
     if (!sessionKey && query.runId) {
       respond(
         false,
         undefined,
-        artifactError("artifact_scope_not_found", "no session found for artifact query"),
+        sessionFilesError("artifact_scope_not_found", "no session found for artifact query"),
       );
       return;
     }
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
         artifacts: artifacts.map(toArtifactSummary),
+        ...(attachments ? { attachments } : {}),
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });
@@ -395,7 +503,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       !query.messageRole &&
       parseManagedOutgoingArtifactId(query.artifactId)
     ) {
-      await respondManagedArtifactDownload(query, access, respond);
+      await respondManagedArtifactDownload(query, request, respond);
       return;
     }
     let found = await runArtifactSessionOperation<ArtifactDownloadLookup>(respond, () =>
@@ -421,16 +529,20 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (parseManagedOutgoingArtifactId(artifact.id)) {
       // Filters prove transcript membership; the managed ID still owns the bytes.
       // Never retarget a stale ID through inline data or another block URL.
-      await respondManagedArtifactDownload(query, access, respond, artifact);
+      await respondManagedArtifactDownload(query, request, respond, artifact);
       return;
     }
     if (artifact.download.mode === "unsupported") {
       respond(
         false,
         undefined,
-        artifactError("artifact_download_unsupported", "artifact download is unsupported", {
-          artifactId: artifact.id,
-        }),
+        sessionFilesError(
+          artifact.expired ? "artifact_file_expired" : "artifact_download_unsupported",
+          artifact.expired ? SCRATCH_EXPIRED_MESSAGE : "artifact download is unsupported",
+          {
+            artifactId: artifact.id,
+          },
+        ),
       );
       return;
     }
@@ -471,7 +583,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const managedUrl =
+    const managedSource =
       artifact.download.mode === "url" && artifact.url && artifact.sessionKey
         ? await resolveManagedOutgoingMediaUrlDownload({
             sessionKey: artifact.sessionKey,
@@ -481,8 +593,43 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!artifactResponseIsCurrent(found.value, respond)) {
       return;
     }
+    let managedUrl: { url: string; expiresAt: string } | undefined;
+    if (managedSource) {
+      const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
+      const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+      using managedAccess = createArtifactRequestAccess(request, releaseDevice);
+      const selected = await runArtifactSessionOperation(respond, () =>
+        prepareArtifactSessionRead(query, managedAccess),
+      );
+      if (!selected.ok) {
+        return;
+      }
+      if (!selected.value || selected.value.sessionKey !== managedSource.sessionKey) {
+        respondArtifactNotFound(respond, query.artifactId);
+        return;
+      }
+      const selection = selected.value;
+      managedUrl = createManagedArtifactDownload({
+        client,
+        path: managedSource.url,
+        assertCurrent: () => {
+          if (sourceCurrent?.() === false) {
+            throw new Error("Artifact download expired");
+          }
+          selection.assertCurrent();
+        },
+        release: () => {
+          selection.release();
+          releaseDevice?.();
+        },
+      });
+      managedAccess.detach(selection.release);
+      if (releaseDevice) {
+        managedAccess.detach(releaseDevice);
+      }
+    }
     if (query.previewWidth !== undefined && !managedUrl) {
-      let preview: Buffer | undefined;
+      let preview: ManagedImageThumbnail | undefined;
       if (
         artifact.type === "image" &&
         artifact.download.mode === "bytes" &&
@@ -503,9 +650,11 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError("artifact_preview_unavailable", "artifact image preview is unavailable", {
-            artifactId: artifact.id,
-          }),
+          sessionFilesError(
+            "artifact_preview_unavailable",
+            "artifact image preview is unavailable",
+            { artifactId: artifact.id },
+          ),
         );
         return;
       }
@@ -514,9 +663,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       artifact = {
         ...artifact,
         image: undefined,
-        mimeType: "image/webp",
-        sizeBytes: preview.byteLength,
-        data: preview.toString("base64"),
+        mimeType: preview.mimeType,
+        sizeBytes: preview.data.byteLength,
+        data: preview.data.toString("base64"),
       };
     }
     const payload = {
@@ -549,7 +698,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError(
+          sessionFilesError(
             "artifact_download_unsupported",
             'artifact is too large for inline transfer; request transport: "http"',
             { artifactId: artifact.id },

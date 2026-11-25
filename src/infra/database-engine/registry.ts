@@ -52,23 +52,9 @@ export function selectDatabaseEngine(
   );
 }
 
-export function getMixedPostgresAgentError(config: DatabaseEngineConfig): string | undefined {
-  if (
-    (config.database?.families?.agent?.engine ?? config.database?.engine) === "postgres" &&
-    stores.some((store) => store.postgres && selectDatabaseEngine(store, config) !== "postgres")
-  ) {
-    return "DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED: Agent PostgreSQL with mixed engines requires the mixed-pair conformance in PR3; select SQLite for agents or use PostgreSQL for every configurable family.";
-  }
-  return undefined;
-}
-
 export function resolveDatabaseFamilyEngines(
   config: DatabaseEngineConfig,
 ): Record<DatabaseEngineFamily, DatabaseEngineId> {
-  const agentError = getMixedPostgresAgentError(config);
-  if (agentError) {
-    throw new Error(agentError);
-  }
   const effectiveEngines: Record<DatabaseEngineFamily, DatabaseEngineId> = {
     state: "sqlite",
     agent: "sqlite",
@@ -83,19 +69,4 @@ export function resolveDatabaseFamilyEngines(
     effectiveEngines[store.id] = selectDatabaseEngine(store, config);
   }
   return effectiveEngines;
-}
-
-/** Fixed-local stores do not turn the existing PostgreSQL default into a mixed installation. */
-export function assertHomogeneousDatabaseEngines(
-  config: DatabaseEngineConfig,
-  operation: "port" | "backup" | "restore" | "update",
-): void {
-  const engines = new Set(
-    stores.filter((store) => store.postgres).map((store) => selectDatabaseEngine(store, config)),
-  );
-  if (engines.size > 1) {
-    throw new Error(
-      `${operation} for mixed-engine installs is not supported yet; use a single engine for PostgreSQL-capable families, or wait for family-scoped port, backup, and update support. Changing an engine does not migrate existing data.`,
-    );
-  }
 }

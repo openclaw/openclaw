@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import * as handoff from "./update-command-handoff.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -10,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   readState: vi.fn<() => Promise<GatewayServiceState>>(),
   revalidate: vi.fn<() => Promise<ManagedGatewayUpdateVerdict>>(),
 }));
+const serviceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
+const inspectedService = { inspected: true, runtimeInspected: true, serviceEnv };
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
@@ -32,7 +36,60 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function prepare(
+  input: Partial<Parameters<typeof prepareUpdateRestart>[0]>,
+  snapshot = createTestConfigSnapshot({}, {}, "/managed/state/openclaw.json"),
+) {
+  return prepareUpdateRestart(
+    {
+      root: "/installed",
+      result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+      shouldRestart: true,
+      updateStepTimeoutMs: 1000,
+      assertCurrent: () => {},
+      ...input,
+    },
+    snapshot,
+  );
+}
+
 describe("prepareUpdateRestart", () => {
+  it.each(["outside", "inside", "managed handoff", "invalid config"] as const)(
+    "selects native Git activation only outside the owned service with signals disabled: %s",
+    async (caller) => {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", caller === "managed handoff" ? "1" : undefined);
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        runtime: { status: "running", pid: 1234 },
+        env: serviceEnv,
+        command: { programArguments: ["node", "/installed/openclaw-launcher.mjs"] },
+      };
+      mocks.readState.mockResolvedValue(state);
+      mocks.revalidate.mockResolvedValue({
+        kind: "owned",
+        root: "/installed",
+        fingerprint: "unit",
+        refreshDefinition: false,
+      });
+      using membership = vi
+        .spyOn(handoff, "gatewayMaintenanceBlock")
+        .mockReturnValue(
+          caller === "inside" ? createUpdatePreflightFailure("inside-gateway-service") : undefined,
+        );
+      const snapshot = createTestConfigSnapshot({ commands: { restart: false } });
+      const prepared = await prepare(
+        { result: { status: "ok", mode: "git", steps: [], durationMs: 0 } },
+        { ...snapshot, valid: caller !== "invalid config" },
+      );
+      expect(prepared.gitReleaseRestartMode).toBe(caller === "outside" ? "native" : "observe");
+      if (caller === "outside" || caller === "inside") {
+        expect(membership).toHaveBeenCalledWith(state, "/installed");
+      }
+    },
+  );
+
   it.each(["masked", "masked-runtime-refresh", "ownership", "unknown"] as const)(
     "keeps verified service holds separate from stopped-service ownership failure (%s)",
     async (scenario) => {
@@ -48,35 +105,14 @@ describe("prepareUpdateRestart", () => {
             ? new GatewayServiceUpdateOwnershipError("Service owner changed", undefined)
             : new Error("Service inspection unavailable"),
       );
-      const prepared = prepareUpdateRestart(
-        {
-          root: "/installed",
-          result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-          shouldRestart: true,
-          updateStepTimeoutMs: 1000,
-          assertCurrent: () => {},
-          preManagedServiceStop: {
-            stopped: true,
-            inspected: true,
-            runtimeInspected: true,
-            running: true,
-            serviceEnv: { OPENCLAW_STATE_DIR: "/managed/state" },
-          },
-          serviceRuntimeRefreshRequired: scenario === "masked-runtime-refresh",
+      const prepared = prepare({
+        preManagedServiceStop: {
+          ...inspectedService,
+          stopped: true,
+          running: true,
         },
-        createConfigFileSnapshot({
-          path: "/managed/state/openclaw.json",
-          exists: true,
-          raw: "{}",
-          parsed: {},
-          sourceConfig: {},
-          runtimeConfig: {},
-          valid: true,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        }),
-      );
+        serviceRuntimeRefreshRequired: scenario === "masked-runtime-refresh",
+      });
       if (!held) {
         await expect(prepared).rejects.toBeInstanceOf(GatewayServiceUpdateOwnershipError);
         return;
@@ -94,74 +130,18 @@ describe("prepareUpdateRestart", () => {
   );
 
   it.each([
-    {
-      mode: "npm",
-      installed: true,
-      loaded: false,
-      stopped: false,
-      owned: true,
-      prepare: true,
-      captured: true,
-    },
-    {
-      mode: "npm",
-      installed: false,
-      loaded: false,
-      stopped: false,
-      owned: true,
-      prepare: false,
-      captured: true,
-    },
-    {
-      mode: "git",
-      installed: true,
-      loaded: false,
-      stopped: false,
-      owned: true,
-      prepare: false,
-      captured: true,
-    },
-    {
-      mode: "git",
-      installed: true,
-      loaded: true,
-      stopped: false,
-      owned: false,
-      prepare: false,
-      captured: true,
-    },
-    {
-      mode: "git",
-      installed: true,
-      loaded: true,
-      stopped: false,
-      owned: true,
-      prepare: true,
-      captured: true,
-    },
-    {
-      mode: "git",
-      installed: true,
-      loaded: false,
-      stopped: true,
-      owned: true,
-      prepare: true,
-      captured: true,
-    },
-    {
-      mode: "git",
-      installed: true,
-      loaded: true,
-      stopped: false,
-      owned: true,
-      prepare: true,
-      captured: false,
-    },
+    // mode, installed, loaded, stopped, owned, prepare, captured
+    ["npm", true, false, false, true, true, true],
+    ["npm", false, false, false, true, false, true],
+    ["git", true, false, false, true, false, true],
+    ["git", true, true, false, false, false, true],
+    ["git", true, true, false, true, true, true],
+    ["git", true, false, true, true, true, true],
+    ["git", true, true, false, true, true, false],
   ] as const)(
-    "prepares the native install environment for $mode (installed=$installed, loaded=$loaded, stopped=$stopped, owned=$owned)",
-    async ({ mode, installed, loaded, stopped, owned, prepare, captured }) => {
+    "prepares native install environment: mode=%s installed=%s loaded=%s stopped=%s owned=%s prepare=%s captured=%s",
+    async (mode, installed, loaded, stopped, owned, shouldPrepare, captured) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/caller/state");
-      const serviceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
       const verdict: ManagedGatewayUpdateVerdict = owned
         ? { kind: "owned", root: "/installed", fingerprint: "fixture", refreshDefinition: true }
         : { kind: "unresolved", root: "/installed", fingerprint: "fixture" };
@@ -173,35 +153,16 @@ describe("prepareUpdateRestart", () => {
         command: { programArguments: ["node", "/installed/entry.js"], environment: serviceEnv },
       });
       mocks.revalidate.mockResolvedValue(verdict);
-      const result = await prepareUpdateRestart(
-        {
-          root: "/installed",
-          result: { status: "ok", mode, steps: [], durationMs: 0 },
-          shouldRestart: true,
-          updateStepTimeoutMs: 1000,
-          assertCurrent: () => {},
-          preManagedServiceStop: {
-            stopped,
-            inspected: true,
-            runtimeInspected: true,
-            running: false,
-            serviceEnv: captured ? serviceEnv : undefined,
-            serviceUpdateVerdict: verdict,
-          },
+      const result = await prepare({
+        result: { status: "ok", mode, steps: [], durationMs: 0 },
+        preManagedServiceStop: {
+          ...inspectedService,
+          stopped,
+          running: false,
+          serviceEnv: captured ? serviceEnv : undefined,
+          serviceUpdateVerdict: verdict,
         },
-        createConfigFileSnapshot({
-          path: "/managed/state/openclaw.json",
-          exists: true,
-          raw: "{}",
-          parsed: {},
-          sourceConfig: {},
-          runtimeConfig: {},
-          valid: true,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        }),
-      );
+      });
       expect(mocks.readState).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -211,9 +172,9 @@ describe("prepareUpdateRestart", () => {
         expect.objectContaining({ assertCurrent: expect.any(Function) }),
       );
       expect(result.gatewayServiceInstallEnv?.OPENCLAW_STATE_DIR).toBe(
-        prepare ? "/managed/state" : undefined,
+        shouldPrepare ? "/managed/state" : undefined,
       );
-      expect(result.refreshGatewayServiceEnv).toBe(prepare);
+      expect(result.refreshGatewayServiceEnv).toBe(shouldPrepare);
     },
   );
 });

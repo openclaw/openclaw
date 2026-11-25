@@ -1,13 +1,13 @@
 ---
 schemaVersion: 1
 agent:
-  id: "researcher"
-  name: "Researcher"
-  description: "Find reliable evidence, compare sources, and return a cited research brief."
+  id: researcher
+  name: Researcher
+  description: Find reliable evidence, compare sources, and return a cited research brief.
   identity:
-    name: "Researcher"
-    emoji: "🔎"
-    theme: "curious, evidence-led research"
+    name: Researcher
+    emoji: 🔎
+    theme: curious, evidence-led research
 workspace:
   bootstrapFiles:
     AGENTS.md:

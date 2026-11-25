@@ -5,6 +5,10 @@ import { prepareRepositoryWorkerProjectSource } from "./repository-project-admis
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
+export type WorkerProviderRepositorySource = Awaited<
+  ReturnType<typeof prepareRepositoryWorkerProjectSource>
+>;
+
 export async function prepareWorkerProviderProject(params: {
   project: WorkerProjectSnapshot;
   preparation: WorkerProjectPreparationIdentity | undefined;
@@ -13,11 +17,13 @@ export async function prepareWorkerProviderProject(params: {
   getConfig: () => OpenClawConfig;
   requireCurrent: () => void;
   signal?: AbortSignal;
+  repositorySource?: WorkerProviderRepositorySource;
 }) {
   const { project, preparation, record } = params;
   const repository =
     "source" in project
-      ? await prepareRepositoryWorkerProjectSource({
+      ? (params.repositorySource ??
+        (await prepareRepositoryWorkerProjectSource({
           expected: project,
           namespace: params.namespace,
           getConfig: params.getConfig,
@@ -26,7 +32,7 @@ export async function prepareWorkerProviderProject(params: {
           knownRecipe: preparation
             ? () => ({ setupRecipe: preparation.setupRecipe, recipe: preparation.recipe })
             : undefined,
-        })
+        })))
       : undefined;
   params.requireCurrent();
   if (repository && preparation && repository.setupRecipe !== preparation.setupRecipe) {

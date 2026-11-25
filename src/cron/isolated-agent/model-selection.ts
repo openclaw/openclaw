@@ -2,19 +2,18 @@ import { raceWithTimeout } from "@openclaw/retry";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
 import { normalizeThinkingCatalogProviders } from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
-/** Resolves provider/model precedence for isolated cron runs. */
+/** Resolves provider/model precedence for scheduled runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../types.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
@@ -48,7 +47,7 @@ type ResolveCronModelSelectionParams = {
   owner?: CronModelSelectionOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
   sessionEntry: CronSessionModelOverrides;
-  payload: CronJob["payload"];
+  payloadModel?: string;
   isGmailHook: boolean;
   agentId?: string;
   agentDir: string;
@@ -62,6 +61,8 @@ type ResolveCronModelSelectionResult =
       provider: string;
       model: string;
       modelSource: CronModelSelectionSource;
+      useSubagentFallbacks: boolean;
+      inheritDefaultFallbacksForAgentStringModel: boolean;
       configuredProfileId?: string;
       cfgWithAgentDefaults: OpenClawConfig;
       owner: CronModelSelectionOwner;
@@ -197,7 +198,7 @@ export async function resolveCronThinkingSelection(params: {
   };
 }
 
-/** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */
+/** Resolves the effective scheduled model across defaults, agents, hooks, payload, and session state. */
 export async function resolveCronModelSelection(
   params: ResolveCronModelSelectionParams,
 ): Promise<ResolveCronModelSelectionResult> {
@@ -228,18 +229,22 @@ export async function resolveCronModelSelection(
     cfg: cfgWithAgentDefaults,
     agentId: ownerAgentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
     manifestPlugins: owner.metadataSnapshot,
   });
   // Overrides keep the owner's agent policy; flattened defaults only select the default model.
   const selectionParams = {
     cfg: owner.config,
     catalog: owner.modelCatalog.entries,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault,
+    defaultProvider: resolvedDefault?.provider ?? DEFAULT_PROVIDER,
+    ...(resolvedDefault ? { defaultModel: resolvedDefault } : {}),
     agentId: ownerAgentId,
     manifestPlugins: owner.metadataSnapshot,
   };
+  const ownerAgentConfig = resolveAgentConfig(owner.config, ownerAgentId);
+  const matchesDefaultFallbackAgentStringModel =
+    typeof ownerAgentConfig?.model === "string" &&
+    resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
+      resolveAgentModelPrimaryValue(owner.config.agents?.defaults?.model);
   const selection = (
     ref: { provider: string; model: string },
     modelSource: CronModelSelectionSource,
@@ -251,6 +256,10 @@ export async function resolveCronModelSelection(
       provider: ref.provider,
       model: ref.model,
       modelSource,
+      useSubagentFallbacks: modelSource === "subagent",
+      inheritDefaultFallbacksForAgentStringModel:
+        matchesDefaultFallbackAgentStringModel &&
+        (modelSource === "default" || modelSource === "agent"),
       ...(configuredProfileId ? { configuredProfileId } : {}),
       cfgWithAgentDefaults,
       owner,
@@ -281,9 +290,8 @@ export async function resolveCronModelSelection(
       : undefined;
   };
 
-  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
   const payloadSelection = override(
-    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
+    typeof params.payloadModel === "string" ? params.payloadModel.trim() : undefined,
     "payload",
   );
   if (payloadSelection) {
@@ -307,7 +315,7 @@ export async function resolveCronModelSelection(
   const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
   const sessionSelection = override(
     sessionModelOverride
-      ? `${params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider}/${sessionModelOverride}`
+      ? `${params.sessionEntry.providerOverride?.trim() || selectionParams.defaultProvider}/${sessionModelOverride}`
       : undefined,
     "session",
   );
@@ -325,10 +333,12 @@ export async function resolveCronModelSelection(
       normalizeModelSelection(subagentSelection?.raw),
       subagentSelection?.source === "agent" ? "agent" : "subagent",
     ) ??
-    selection(
-      resolvedDefault,
-      "default",
-      resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
-    )
+    (resolvedDefault
+      ? selection(
+          resolvedDefault,
+          "default",
+          resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model),
+        )
+      : { ok: false, error: NO_MODEL_CONFIGURED_MESSAGE })
   );
 }

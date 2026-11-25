@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -21,12 +17,14 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { stagePendingWorkerWorkspaceResult } from "./workspace-recovery.test-support.js";
+import * as workspaceResults from "./workspace-result-staging.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
@@ -109,14 +107,59 @@ describe("worker placement result recovery", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "staged-claim",
-      runId: "staged-run",
-      owner: placementTurnOwner(active),
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "staged-claim", "staged-run"),
+    );
     return { active, claim };
   }
+
+  it("retires an oversized unapplied result while preserving its staged ref", async () => {
+    const workspacePath = path.join(root, "rejected-staged-result");
+    const harness = await createHarness(database, placementStore, { workspacePath });
+    const { active, claim } = await seedWorkerTurn(harness);
+    harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    const staged = await stagePendingWorkerWorkspaceResult({
+      store: placementStore,
+      claim,
+      workspacePath,
+      base: "base\n",
+      current: "worker\n",
+    });
+    await placementStore.handoffWorkspaceResultRecovery(claim);
+    const refusal = Object.assign(
+      new Error("Workspace result changes 65000 files (limit 50000)."),
+      {
+        code: "WORKSPACE_RESULT_LIMIT",
+      },
+    );
+    const admission = vi
+      .spyOn(workspaceResults, "applyStagedWorkerWorkspaceResult")
+      .mockRejectedValueOnce(refusal);
+    await harness.service.reconcile();
+    admission.mockRestore();
+    expect(harness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringContaining("65000 files"),
+      }),
+    );
+    expect(placementStore.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      recoveryError: expect.stringContaining("65000 files"),
+    });
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+    await harness.service.reconcile();
+    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(
+      await workspaceResults.hasWorkerWorkspaceResultRef({
+        root: workspacePath,
+        stagedResultRef: staged.stagedResultRef,
+      }),
+    ).toBe(true);
+    expect(harness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledOnce();
+  });
 
   it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");
@@ -244,10 +287,7 @@ describe("worker placement result recovery", () => {
       });
       support.testState.prepareInstallation = async () => ({
         ...support.BUNDLE_ARTIFACT,
-        protocolFeatures: [
-          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-        ],
+        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
       });
       const environments = support.createService(support.createProvider({ destroy }), {
         tunnelManager: tunnels,
@@ -475,15 +515,11 @@ describe("worker placement result recovery", () => {
       expect(restartedHarness.log).not.toContain("placement:failed");
       if (preserved) {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
-        if (sameGatewayInstance) {
-          expect(restartedHarness.environments.stopTunnel).not.toHaveBeenCalled();
-        } else {
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
-            active.environmentId,
-            active.activeOwnerEpoch,
-          );
-        }
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
+          active.environmentId,
+          active.activeOwnerEpoch,
+        );
         expect(restartedHarness.placements.current()).toMatchObject({
           environmentId: active.environmentId,
           activeOwnerEpoch: active.activeOwnerEpoch,
@@ -511,16 +547,7 @@ describe("worker placement result recovery", () => {
       const claimId = preservesNode
         ? "remote-exec-restart-node-turn"
         : `reclaim-remote-exec-restart-${placementState}`;
-      const claimInput = {
-        ...REQUEST,
-        claimId,
-        runId: claimId,
-        owner: {
-          kind: "local" as const,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      };
+      const claimInput = makeClaimInput(active, claimId);
       const drain = async () => {
         expect(
           await placementStore.startDrain({

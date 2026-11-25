@@ -2,15 +2,21 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Client } from "pg";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
-  inspectDatabasePort,
   materializeDatabasePort,
+  inspectDatabasePort,
+  readDatabasePortAllocations,
 } from "../infra/database-engine/port.worker.js";
 import { sha256File } from "../infra/directory-durability.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
+import type { GitBackupIdentity } from "./git-backup-codec.js";
+import { createGitBackupRowTransform } from "./git-backup-sanitizer.js";
+import { fingerprintPostgresGeneration, inspectPostgresGeneration } from "./postgres-generation.js";
 
 type Anchor = Pick<PostgresExportEnvelope["source"], "engine" | "storeId" | "namespace">;
 
@@ -46,6 +52,7 @@ export async function exportPostgresBackup(params: {
   directory: string;
   profile: PostgresExportEnvelope["profile"];
   assertCurrent: () => void;
+  gitIdentity?: GitBackupIdentity;
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
   const raw = path.join(params.directory, ".export.sqlite");
@@ -57,13 +64,25 @@ export async function exportPostgresBackup(params: {
     // The private artifact must exist before the host admits a worker's native open.
     await fs.writeFile(raw, "", { flag: "wx", mode: 0o600 });
     using db = openNodeSqliteDatabase(raw, { readBigInts: true });
+    const source = { engine: "postgres" as const, db: client, namespace: anchor.namespace };
+    // Allocations are read inside the export snapshot so they cover every captured row ID.
     verification = await materializeDatabasePort({
-      source: { engine: "postgres", db: client, namespace: anchor.namespace },
+      source,
       destination: { engine: "sqlite", db },
       descriptor,
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
+      transformRow: params.gitIdentity
+        ? createGitBackupRowTransform(
+            params.gitIdentity,
+            descriptor.id,
+            new Set(descriptor.tables.map(({ name }) => name)),
+          )
+        : undefined,
     });
+    // The portable image uses SQLite allocation, while a matched PG restore retains its sequence.
+    // Sequences are not transactional; a later read can only leave gaps above captured rows.
+    verification.allocations = await readDatabasePortAllocations(source, descriptor);
   }
   const sanitizedDifferences: string[] = [];
   params.assertCurrent();
@@ -76,15 +95,24 @@ export async function exportPostgresBackup(params: {
     await createVerifiedSqliteSnapshot({
       sourcePath: raw,
       targetPath: image,
+      // This worker created and closed the private export; no live source locks need isolation.
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: params.directory,
+        preserveSourceArtifacts: true,
+      },
       preserveRowIds: true,
       async transform(db) {
+        if (params.gitIdentity) {
+          sanitizedDifferences.push("git-exclude-secrets");
+        }
         const before = /* sqlite-allow-raw: count the sanitizer's native changes. */ db
           .prepare("SELECT total_changes() AS n")
           .get()?.n;
         sanitizeOpenClawGlobalStateSnapshot(db);
-        const { embedSessionColdArchivesInSnapshot } =
-          await import("../config/sessions/session-cold-storage-backup.js");
-        await embedSessionColdArchivesInSnapshot({
+        const { embedSessionColdArchivesInSnapshotInWorker } =
+          await import("../config/sessions/session-cold-storage-backup.worker.js");
+        await embedSessionColdArchivesInSnapshotInWorker({
           database: db,
           sourceStorePath: params.sourcePath,
         });
@@ -93,6 +121,12 @@ export async function exportPostgresBackup(params: {
           .get()?.n;
         if (after !== before) {
           sanitizedDifferences.push("transient-state");
+        }
+        if (params.gitIdentity) {
+          // Publish hashes of redacted rows, never fingerprints of omitted credentials.
+          verification.tables = (
+            await inspectDatabasePort({ engine: "sqlite", db }, descriptor)
+          ).tables;
         }
       },
     });
@@ -118,6 +152,87 @@ export async function exportPostgresBackup(params: {
   return manifest;
 }
 
+/** One verified server-side copy, shared by frozen captures and private upgrade anchors. */
+export async function clonePostgresSchema(params: {
+  client: Client;
+  descriptor: PortDescriptor;
+  anchor: Anchor;
+  assertCurrent: () => void;
+}) {
+  const namespace = `restore_${randomUUID().replaceAll("-", "")}`;
+  try {
+    const verification = await materializeDatabasePort({
+      source: { engine: "postgres", db: params.client, namespace: params.anchor.namespace },
+      destination: { engine: "postgres", db: params.client, namespace },
+      descriptor: params.descriptor,
+      storeId: params.anchor.storeId,
+      assertCurrent: params.assertCurrent,
+    });
+    return { namespace, verification };
+  } catch (error) {
+    await discardPostgresNamespace(params.client, namespace);
+    throw error;
+  }
+}
+
+/** Capture into a frozen schema on the source server; only the anchor is written locally. */
+export async function capturePostgresSchema(params: {
+  client: Client;
+  descriptor: PortDescriptor;
+  anchor: Anchor;
+  directory: string;
+  prune?: { directoryPrefix: string; captureId: string };
+  assertCurrent: () => void;
+}): Promise<PostgresExportEnvelope> {
+  const { client, descriptor, anchor } = params;
+  let schema: string | undefined;
+  // Schema comments are visible across database roles. Keep local custody paths private.
+  const marker = params.prune
+    ? JSON.stringify({
+        openclawCapture: {
+          prefixHash: createHash("sha256").update(params.prune.directoryPrefix).digest("hex"),
+          captureId: params.prune.captureId,
+        },
+      })
+    : undefined;
+  try {
+    const copied = await clonePostgresSchema({
+      ...params,
+      // Commit the prune marker with the capture so a lost client cannot leave an
+      // unmarked schema behind. Ordinary restores keep their unmarked descriptor.
+      descriptor: {
+        ...descriptor,
+        postgresPostData: (namespace) =>
+          `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
+          (marker ? `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(marker)}` : ""),
+      },
+    });
+    schema = copied.namespace;
+    const manifest: PostgresExportEnvelope = {
+      schemaVersion: 2,
+      snapshotId: path.basename(params.directory),
+      createdAt: new Date().toISOString(),
+      profile: "exact",
+      source: { ...anchor, owner: descriptor.id, schemaVersion: descriptor.version },
+      exportSchemaVersion: descriptor.version,
+      activeFragments: [...descriptor.activeFragments!],
+      verification: copied.verification,
+      carrier: "postgres-schema",
+      schema,
+      artifacts: { "anchor.sqlite": await artifact(path.join(params.directory, "anchor.sqlite")) },
+      sanitizedDifferences: [],
+    };
+    params.assertCurrent();
+    await writePostgresExportEnvelope(params.directory, manifest);
+    return manifest;
+  } catch (error) {
+    if (schema) {
+      await discardPostgresNamespace(client, schema);
+    }
+    throw error;
+  }
+}
+
 /** Restore an already verified capture; the caller owns its client and publication. */
 export async function restorePostgresBackup(params: {
   client: Client;
@@ -136,56 +251,109 @@ export async function restorePostgresBackup(params: {
     throw new Error("PostgreSQL backup requires its matching family schema version.");
   }
   const namespace = `restore_${randomUUID().replaceAll("-", "")}`;
-  using image = openNodeSqliteDatabase(path.join(params.directory, "database.sqlite"), {
-    readOnly: true,
-    readBigInts: true,
-  });
-  params.assertCurrent();
-  const verified = await materializeDatabasePort({
-    source: { engine: "sqlite", db: image },
-    destination: { engine: "postgres", db: client, namespace },
-    descriptor,
-    storeId: manifest.source.storeId,
-    sourceAllocations: manifest.verification.allocations,
-    activeFragments: manifest.activeFragments,
-    assertCurrent: params.assertCurrent,
-  });
-  if (params.profile === "exact" && !isDeepStrictEqual(verified, manifest.verification)) {
-    throw new Error("Exact PostgreSQL export verification differs from its manifest.");
+  try {
+    // A schema capture stays frozen: restore copies it, so a retry can start again from it.
+    using image = manifest.schema
+      ? undefined
+      : openNodeSqliteDatabase(path.join(params.directory, "database.sqlite"), {
+          readOnly: true,
+          readBigInts: true,
+        });
+    params.assertCurrent();
+    const verified = await materializeDatabasePort({
+      source: image
+        ? { engine: "sqlite", db: image }
+        : { engine: "postgres", db: client, namespace: manifest.schema! },
+      destination: { engine: "postgres", db: client, namespace },
+      descriptor,
+      storeId: manifest.source.storeId,
+      sourceAllocations: manifest.verification.allocations,
+      activeFragments: manifest.activeFragments,
+      assertCurrent: params.assertCurrent,
+      legacyDigest: !manifest.verification.digest,
+    });
+    if (params.profile === "exact" && !isDeepStrictEqual(verified, manifest.verification)) {
+      throw new Error("Exact PostgreSQL export verification differs from its manifest.");
+    }
+    params.assertCurrent();
+    await fs.copyFile(
+      path.join(params.directory, "anchor.sqlite"),
+      params.anchorPath,
+      fs.constants.COPYFILE_EXCL,
+    );
+    if (
+      !isDeepStrictEqual(await artifact(params.anchorPath), manifest.artifacts["anchor.sqlite"])
+    ) {
+      throw new Error("PostgreSQL restore anchor changed during preparation.");
+    }
+    {
+      using anchor = openNodeSqliteDatabase(params.anchorPath);
+      anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(namespace);
+    }
+    return { namespace };
+  } catch (error) {
+    await discardPostgresNamespace(client, namespace);
+    throw error;
   }
-  params.assertCurrent();
-  await fs.copyFile(
-    path.join(params.directory, "anchor.sqlite"),
-    params.anchorPath,
-    fs.constants.COPYFILE_EXCL,
-  );
-  if (!isDeepStrictEqual(await artifact(params.anchorPath), manifest.artifacts["anchor.sqlite"])) {
-    throw new Error("PostgreSQL restore anchor changed during preparation.");
-  }
-  {
-    using anchor = openNodeSqliteDatabase(params.anchorPath);
-    anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(namespace);
-  }
-  return { namespace };
 }
 
-export async function fingerprintPostgresDatabase(params: {
-  client: Client;
-  descriptor: PortDescriptor;
-  anchor: Anchor;
-}) {
-  const { client, descriptor, anchor } = params;
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        ...anchor,
-        version: descriptor.version,
-        ...(await inspectDatabasePort(
-          { engine: "postgres", db: client, namespace: anchor.namespace },
-          descriptor,
-          anchor.storeId,
-        )),
-      }),
-    )
-    .digest("hex");
+/** Only namespaces allocated by this restore owner may be discarded. */
+export async function discardPostgresNamespace(client: Client, namespace: string) {
+  if (!/^restore_[a-f0-9]{32}$/.test(namespace)) {
+    throw new Error("Refusing to discard a namespace not allocated by PostgreSQL restore.");
+  }
+  await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
+}
+
+/** Drop marked captures of this store whose directory under the prefix is gone. */
+export async function pruneOrphanedPostgresCaptures(
+  client: Client,
+  params: { storeId: string; directoryPrefix: string },
+) {
+  // Installs sharing a database may run as separate roles; only schemas this role may drop are read.
+  const marked = await client.query<{ schema: string; note: string }>(
+    "SELECT nspname AS schema, obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname ~ '^restore_[a-f0-9]{32}$' AND pg_has_role(nspowner, 'USAGE') AND obj_description(oid, 'pg_namespace') IS NOT NULL",
+  );
+  const dropped: string[] = [];
+  const prefixHash = createHash("sha256").update(params.directoryPrefix).digest("hex");
+  for (const { schema, note } of marked.rows) {
+    let marker: unknown;
+    try {
+      marker = JSON.parse(note);
+    } catch {
+      continue;
+    }
+    const capture = isRecord(marker) ? marker.openclawCapture : undefined;
+    if (
+      !isRecord(capture) ||
+      capture.prefixHash !== prefixHash ||
+      typeof capture.captureId !== "string" ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(capture.captureId)
+    ) {
+      continue;
+    }
+    // Only a generated ID may extend the trusted local prefix; comments never select a path.
+    const directory = `${params.directoryPrefix}${capture.captureId}.postgres.bak`;
+    if (await fs.lstat(directory).catch(ignoreMissingPath)) {
+      continue;
+    }
+    const meta = await client.query<{ store_id: string }>(
+      `SELECT store_id FROM "${schema}".openclaw_schema_meta`,
+    );
+    if (meta.rows.length === 1 && meta.rows[0]!.store_id === params.storeId) {
+      await discardPostgresNamespace(client, schema);
+      dropped.push(schema);
+    }
+  }
+  return dropped;
+}
+
+export async function fingerprintPostgresDatabase(params: { client: Client; anchor: Anchor }) {
+  const { client, anchor } = params;
+  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  try {
+    return fingerprintPostgresGeneration(anchor, await inspectPostgresGeneration(client, anchor));
+  } finally {
+    await client.query("ROLLBACK");
+  }
 }

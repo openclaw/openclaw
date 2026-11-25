@@ -3,26 +3,18 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setPluginEnabledInConfig } from "../plugins/toggle-config.js";
 
 describe("setPluginEnabledInConfig", () => {
-  it.each([
-    {
-      name: "ordered duplicates",
-      policy: {
-        allow: [" GOOGLE-GEMINI-CLI ", "alpha", "google", " "],
-        deny: [" omega ", "OMEGA", ""],
-      },
-      expected: { allow: ["google", "alpha", "google"], deny: ["omega", "omega"] },
-    },
-  ])("preserves raw siblings and $name policy properties", ({ policy, expected }) => {
+  it("preserves raw siblings and ordered duplicate policy properties", () => {
+    const policy = {
+      allow: [" GOOGLE-GEMINI-CLI ", "alpha", "google", " "],
+      deny: [" omega ", "OMEGA", ""],
+    };
+    const expected = { allow: ["google", "alpha", "google"], deny: ["omega", "omega"] };
     const alpha = { enabled: false, custom: "kept", llm: { allowedModels: [" model "] } };
     const omega = { config: { optional: undefined, nested: { kept: true } } };
     const targetModels = ["target-model"];
     const config: OpenClawConfig = {
       plugins: {
-        entries: {
-          alpha,
-          "GOOGLE-GEMINI-CLI": { config: { models: targetModels } },
-          omega,
-        },
+        entries: { alpha, "GOOGLE-GEMINI-CLI": { config: { models: targetModels } }, omega },
         ...policy,
       },
     };
@@ -42,9 +34,7 @@ describe("setPluginEnabledInConfig", () => {
     for (const key of ["allow", "deny"] as const) {
       expect(Object.hasOwn(next.plugins ?? {}, key)).toBe(Object.hasOwn(policy, key));
       expect(next.plugins?.[key]).toEqual(expected[key]);
-      if (Array.isArray(policy[key])) {
-        expect(Object.is(next.plugins?.[key], policy[key])).toBe(false);
-      }
+      expect(Object.is(next.plugins?.[key], policy[key])).toBe(false);
     }
   });
 
@@ -58,29 +48,17 @@ describe("setPluginEnabledInConfig", () => {
     custom: "canonical",
     enabled: false,
   };
-  it.each([
-    {
-      name: "canonical entry first",
-      entries: { google: canonicalEntry, "GOOGLE-GEMINI-CLI": legacyEntry },
-    },
-  ])("deep-merges compatibility settings with $name", ({ entries }) => {
-    const config = {
-      plugins: {
-        entries,
-      },
-    } as OpenClawConfig;
-
+  it("deep-merges compatibility settings with canonical entry first", () => {
+    const config: OpenClawConfig = {
+      plugins: { entries: { google: canonicalEntry, "GOOGLE-GEMINI-CLI": legacyEntry } },
+    };
     const next = setPluginEnabledInConfig(config, "google", true);
 
     expect(next.plugins?.entries).toEqual({
       google: {
         config: {
           model: "gemini",
-          nested: {
-            canonical: true,
-            legacy: true,
-            shared: "canonical",
-          },
+          nested: { canonical: true, legacy: true, shared: "canonical" },
           region: "us",
         },
         custom: "canonical",
@@ -90,39 +68,18 @@ describe("setPluginEnabledInConfig", () => {
   });
 
   it("keeps built-in channel and plugin entry flags in sync", () => {
-    const config = {
-      channels: {
-        telegram: {
-          enabled: true,
-          dmPolicy: "open",
-        },
-      },
-      plugins: {
-        entries: {
-          telegram: {
-            enabled: true,
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config: OpenClawConfig = {
+      channels: { telegram: { enabled: true, dmPolicy: "open" } },
+      plugins: { entries: { telegram: { enabled: true } } },
+    };
 
     const disabled = setPluginEnabledInConfig(config, "telegram", false);
-    expect(disabled.channels?.telegram).toEqual({
-      enabled: false,
-      dmPolicy: "open",
-    });
-    expect(disabled.plugins?.entries?.telegram).toEqual({
-      enabled: false,
-    });
+    expect(disabled.channels?.telegram).toEqual({ enabled: false, dmPolicy: "open" });
+    expect(disabled.plugins?.entries?.telegram).toEqual({ enabled: false });
 
     const reenabled = setPluginEnabledInConfig(disabled, "telegram", true);
-    expect(reenabled.channels?.telegram).toEqual({
-      enabled: true,
-      dmPolicy: "open",
-    });
-    expect(reenabled.plugins?.entries?.telegram).toEqual({
-      enabled: true,
-    });
+    expect(reenabled.channels?.telegram).toEqual({ enabled: true, dmPolicy: "open" });
+    expect(reenabled.plugins?.entries?.telegram).toEqual({ enabled: true });
 
     const pluginOnly = setPluginEnabledInConfig(config, "telegram", false, {
       updateChannelConfig: false,

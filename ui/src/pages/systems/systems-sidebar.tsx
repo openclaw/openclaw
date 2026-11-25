@@ -1,14 +1,17 @@
-import { For, Show, createMemo, createUniqueId } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createUniqueId, latest } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
-import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
+import { createSystemsRead } from "./systems-read.ts";
 import "../../styles/systems.css";
+import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 
 registerEnglishCatalog(registerSystemsEnglish);
 
@@ -52,12 +55,25 @@ function shortId(id: string): string {
   return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
-export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" {
-  return row.environment.id === "gateway"
-    ? "host"
-    : row.environment.type === "node"
-      ? "node"
-      : "worker";
+function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" | "device" {
+  if (row.environment.id === "gateway") {
+    return "host";
+  }
+  if (row.environment.type === "node") {
+    return "node";
+  }
+  // Provider metadata distinguishes provisioned cloud devices from generic workers.
+  return row.environment.worker && row.environment.worker.providerId !== "device"
+    ? "worker"
+    : "device";
+}
+
+export function systemKindLabel(row: SystemsInventoryRow): string {
+  const kind = systemKind(row);
+  const profile = row.environment.worker?.profileId;
+  return kind === "worker" && profile
+    ? t("systems.cloudProfile", { profile })
+    : t("systems." + kind);
 }
 
 export function systemStatus(row: SystemsInventoryRow): string {
@@ -76,7 +92,6 @@ export function systemPlatform(row: SystemsInventoryRow): string | undefined {
 }
 
 type SystemsSidebarProps = { controller?: Systems };
-type SystemsSidebarElement = SolidBridgeElement<SystemsSidebarProps>;
 function SystemsSidebarContent(props: SystemsSidebarProps) {
   const projection = createMemo(() =>
     props.controller ? projectOwner(props.controller, (value) => value) : null,
@@ -91,7 +106,14 @@ function SystemsSidebarContent(props: SystemsSidebarProps) {
 function SystemsInventory(props: { controller: Systems }) {
   const menuId = createUniqueId();
   const controller = () => props.controller;
-  const query = createMemo(() => controller().state.query.trim().toLocaleLowerCase());
+  const inventoryRead = createSystemsRead(() => controller().inventoryRead);
+  const readStatus = () => {
+    latest(inventoryRead.read);
+    return null;
+  };
+  const query = createMemo(() =>
+    controller().state.query.trim().toLocaleLowerCase().normalize("NFC"),
+  );
   const rows = createMemo(() => {
     const sortMode = controller().state.sortMode;
     return controller()
@@ -107,7 +129,7 @@ function SystemsInventory(props: { controller: Systems }) {
             row.environment.id,
             systemPlatform(row) ?? "",
             row.environment.platform ?? row.node?.platform ?? "",
-          ].some((value) => value.toLocaleLowerCase().includes(query()))
+          ].some((value) => value.toLocaleLowerCase().normalize("NFC").includes(query()))
         );
       })
       .toSorted((a, b) => {
@@ -128,6 +150,25 @@ function SystemsInventory(props: { controller: Systems }) {
         );
       });
   });
+  let list: HTMLDivElement;
+  // A keyed move can blur the same button. Recover only a surviving row, not one filtered out.
+  createPendingFocus(
+    () => {
+      rows();
+      const button = list?.ownerDocument.activeElement;
+      return button instanceof HTMLButtonElement && list.contains(button) ? { button } : null;
+    },
+    {
+      requested: (target) =>
+        Boolean(
+          target &&
+          list.contains(target.button) &&
+          target.button.isConnected &&
+          target.button.ownerDocument.activeElement === target.button.ownerDocument.body,
+        ),
+      focus: (target) => target?.button.focus({ preventScroll: true }),
+    },
+  );
   const filterItem = (
     prefix: "sort" | "status",
     option: { value: string; labelKey: string },
@@ -145,29 +186,52 @@ function SystemsInventory(props: { controller: Systems }) {
       </span>
     ),
   });
-  const renderRow = (row: SystemsInventoryRow) => {
-    const online = row.environment.status === "available";
-    const platform = systemPlatform(row);
-    const status = () => systemStatus(row);
+  const filterItems = createMemo((): readonly MenuEntry[] => [
+    {
+      kind: "content",
+      id: "sort-heading",
+      content: <MenuHeading label={t("systems.sortBy")} />,
+    },
+    ...sortOptions.map((option) =>
+      filterItem("sort", option, controller().state.sortMode === option.value),
+    ),
+    {
+      kind: "content",
+      id: "status-heading",
+      content: (
+        <>
+          <div class="session-menu__separator" role="separator" />
+          <MenuHeading label={t("systems.status")} />
+        </>
+      ),
+    },
+    ...statusOptions.map((option) =>
+      filterItem("status", option, controller().state.statusFilter === option.value),
+    ),
+  ]);
+  const renderRow = (row: () => SystemsInventoryRow) => {
+    const online = () => row().environment.status === "available";
+    const platform = createMemo(() => systemPlatform(row()));
+    const status = () => systemStatus(row());
     return (
       <button
         class="systems-machine"
         type="button"
-        data-status={row.environment.status}
-        aria-pressed={row.environment.id === controller().state.selectedId ? "true" : "false"}
-        aria-description={platform ? `${status()} · ${platform}` : status()}
-        onClick={() => controller().select(row.environment.id)}
+        data-status={row().environment.status}
+        aria-pressed={row().environment.id === controller().state.selectedId ? "true" : "false"}
+        aria-description={platform() ? `${status()} · ${platform()}` : status()}
+        onClick={() => controller().select(row().environment.id)}
       >
         <i class="systems-machine__dot" aria-hidden="true" />
-        <span class="systems-machine__name">{systemName(row)}</span>
+        <span class="systems-machine__name">{systemName(row())}</span>
         <span class="systems-machine__meta">
-          {!online
+          {!online()
             ? status()
-            : row.environment.worker
-              ? shortId(row.environment.id)
-              : (platform ?? null)}
+            : row().environment.worker
+              ? shortId(row().environment.id)
+              : (platform() ?? null)}
         </span>
-        {row.environment.desktop ? (
+        {row().environment.desktop ? (
           <span class="systems-machine__desktop">
             <Icon name="monitor" />
             <span class="sr-only">{t("systems.desktop")}</span>
@@ -195,32 +259,13 @@ function SystemsInventory(props: { controller: Systems }) {
           panelClass="sidebar-session-sort-menu"
           placement="bottom-end"
           label={t("systems.filterSort")}
-          triggerClass={`systems-filter__sort sidebar-session-sort${controller().state.statusFilter !== "all" ? " sidebar-session-sort--filtered" : ""}`}
+          triggerClass={[
+            "systems-filter__sort sidebar-session-sort",
+            { "sidebar-session-sort--filtered": controller().state.statusFilter !== "all" },
+          ]}
           triggerAttributes={{ title: t("systems.filterSort") }}
           trigger={<Icon name="listFilter" />}
-          items={[
-            {
-              kind: "content",
-              id: "sort-heading",
-              content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
-            },
-            ...sortOptions.map((option) =>
-              filterItem("sort", option, controller().state.sortMode === option.value),
-            ),
-            {
-              kind: "content",
-              id: "status-heading",
-              content: (
-                <>
-                  <div class="session-menu__separator" role="separator" />
-                  <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
-                </>
-              ),
-            },
-            ...statusOptions.map((option) =>
-              filterItem("status", option, controller().state.statusFilter === option.value),
-            ),
-          ]}
+          items={filterItems()}
           onSelect={(item) => {
             const value = item.id;
             const sort = sortOptions.find((option) => value === `sort:${option.value}`);
@@ -236,37 +281,62 @@ function SystemsInventory(props: { controller: Systems }) {
           type="button"
           class="systems-filter__refresh"
           aria-label={t("systems.refresh")}
-          title={t("systems.refresh")}
-          disabled={controller().loading() || !controller().connected()}
+          disabled={inventoryRead.pending() || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
           <Icon name="refresh" />
         </button>
       </div>
-      <div class="systems-sidebar__list" aria-busy={controller().loading() ? "true" : "false"}>
-        {controller().loading() && !controller().state.inventory ? (
+      <Show when={inventoryRead.receipt()} keyed>
+        {(receipt) => (
+          <Errored fallback={null}>
+            <Loading on={receipt}>{readStatus()}</Loading>
+          </Errored>
+        )}
+      </Show>
+      <div
+        ref={(element) => (list = element)}
+        class="systems-sidebar__list"
+        aria-busy={inventoryRead.pending() ? "true" : "false"}
+      >
+        {inventoryRead.pending() && !controller().state.inventory ? (
           <p class="systems-sidebar__empty" role="status">
             {t("systems.loading")}
           </p>
         ) : null}
-        <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
-        <For each={["node", "worker"] as const}>
+        <For
+          each={rows().filter((row) => systemKind(row) === "host")}
+          keyed={(row) => row.environment.id}
+        >
+          {renderRow}
+        </For>
+        <For each={["node", "worker", "device"] as const}>
           {(kind) => {
             const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
             return (
               <Show when={group().length}>
                 <section class="systems-group">
                   <h3>
-                    <span>{t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                    <span>
+                      {t(
+                        kind === "node"
+                          ? "systems.nodes"
+                          : kind === "worker"
+                            ? "systems.workers"
+                            : "systems.devices",
+                      )}
+                    </span>
                     <span class="systems-group__count">{group().length}</span>
                   </h3>
-                  <For each={group()}>{renderRow}</For>
+                  <For each={group()} keyed={(row) => row.environment.id}>
+                    {renderRow}
+                  </For>
                 </section>
               </Show>
             );
           }}
         </For>
-        {!controller().loading() && rows().length === 0 ? (
+        {controller().state.inventory !== null && rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(
               query() || controller().state.statusFilter !== "all"
@@ -286,6 +356,6 @@ defineSolidBridge<SystemsSidebarProps>("openclaw-systems-sidebar", SystemsSideba
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-systems-sidebar": SystemsSidebarElement;
+    "openclaw-systems-sidebar": SolidBridgeElement<SystemsSidebarProps>;
   }
 }

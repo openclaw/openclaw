@@ -36,7 +36,6 @@ import {
   DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
   DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   assertCodexAppServerCommandHasNoInlineArgs,
-  readCodexPluginConfig,
 } from "./config-parsing.js";
 import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
@@ -80,11 +79,8 @@ export function resolveCodexAppServerHomeScope(params: {
     : "agent";
 }
 
-export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    readCodexPluginConfig(pluginConfig).appServer?.requestTimeoutMs,
-    60_000,
-  );
+export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: CodexPluginConfig): number {
+  return resolvePositiveTimerTimeoutMs(pluginConfig?.appServer?.requestTimeoutMs, 60_000);
 }
 
 // Registration binds the host's canonical resolver; cold callers use config-runtime.ts.
@@ -94,7 +90,7 @@ export function createCodexAppServerConfig({
 }: Pick<PluginRuntime["modelAuth"], "resolveProviderIdForAuth">) {
   function resolveRuntimeOptions(
     params: {
-      pluginConfig?: unknown;
+      pluginConfig?: CodexPluginConfig;
       execMode?: OpenClawExecMode;
       execPolicy?: OpenClawExecPolicyForCodexAppServer;
       sessionPermissionMode?: "read-only" | "guarded" | "workspace" | "full";
@@ -105,8 +101,6 @@ export function createCodexAppServerConfig({
       agentDir?: string;
       codexConfigToml?: string | null;
       requirementsToml?: string | null;
-      requirementsPath?: string;
-      readRequirementsFile?: (path: string) => string | undefined;
       platform?: NodeJS.Platform;
       hostName?: string;
       openClawSandboxActive?: boolean;
@@ -115,7 +109,7 @@ export function createCodexAppServerConfig({
     connectionScope: "harness" | "supervision",
   ): CodexAppServerRuntimeOptions {
     const env = params.env ?? process.env;
-    const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+    const pluginConfig = params.pluginConfig ?? {};
     const config = pluginConfig.appServer ?? {};
     const transport = config.transport ?? "stdio";
     const homeScope = resolveCodexAppServerHomeScope({ appServer: config, connectionScope });
@@ -270,6 +264,12 @@ export function createCodexAppServerConfig({
         "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
       );
     }
+    if (
+      config.tlsPeerCertificate !== undefined &&
+      (transport !== "websocket" || !url?.startsWith("wss://"))
+    ) {
+      throw new Error("appServer.tlsPeerCertificate requires a WSS transport");
+    }
     assertCodexAppServerConnectionSecurity({
       transport,
       url,
@@ -285,7 +285,7 @@ export function createCodexAppServerConfig({
       defaultPolicy?.approvalPolicy ??
       (policyMode === "guardian" ? "on-request" : "never");
     const computerUseConfig = resolveCodexComputerUseConfig({
-      pluginConfig: params.pluginConfig,
+      pluginConfig,
       env,
     });
     const managedCommandOrder =
@@ -309,6 +309,9 @@ export function createCodexAppServerConfig({
         args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
         ...(url ? { url } : {}),
         ...(authToken ? { authToken } : {}),
+        ...(config.tlsPeerCertificate !== undefined && {
+          tlsPeerCertificate: config.tlsPeerCertificate,
+        }),
         headers,
         ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
       },
@@ -316,7 +319,6 @@ export function createCodexAppServerConfig({
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
-      loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
       requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(pluginConfig),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
       sandbox: resolvedSandbox,
@@ -382,13 +384,13 @@ export function resolveCodexAppServerStartOptionsForAgent(params: {
 
 export function resolveCodexComputerUseConfig(
   params: {
-    pluginConfig?: unknown;
+    pluginConfig?: CodexPluginConfig;
     env?: NodeJS.ProcessEnv;
     overrides?: Partial<CodexComputerUseConfig>;
   } = {},
 ): ResolvedCodexComputerUseConfig {
   const env = params.env ?? process.env;
-  const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
+  const config = params.pluginConfig?.computerUse ?? {};
   const option = <K extends keyof CodexComputerUseConfig>(key: K) =>
     params.overrides?.[key] ?? config[key];
   const envOption = (key: keyof CodexComputerUseConfig) =>
@@ -494,6 +496,9 @@ export function codexAppServerStartOptionsKey(
     cwd: options.cwd ?? null,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
+    ...(options.tlsPeerCertificate !== undefined && {
+      tlsPeerCertificate: options.tlsPeerCertificate,
+    }),
     headers: Object.entries(options.headers)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
@@ -504,6 +509,10 @@ export function codexAppServerStartOptionsKey(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    managedGitConfigParameters: hashSecretForKey(
+      options.managedGitConfigParameters,
+      "managedGitConfigParameters",
+    ),
     authProfileId: params.authProfileId ?? null,
     authBindingFingerprint: params.authBindingFingerprint ?? null,
     agentDir: params.agentDir ?? null,

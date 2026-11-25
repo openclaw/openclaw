@@ -1,7 +1,6 @@
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import type { MattermostFetch } from "./client.js";
 
 let testConfigSequence = 0;
 
@@ -82,7 +81,7 @@ export function createMattermostReactionFetchMock(params: {
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: MattermostFetch,
+  fetchImpl: typeof fetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;
