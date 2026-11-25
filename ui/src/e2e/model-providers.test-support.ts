@@ -5,10 +5,29 @@ import { expect } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 
+export async function openMoreModelSettings(scope: Locator) {
+  const more = scope.getByRole("button", { name: "More settings", exact: true });
+  if ((await more.getAttribute("aria-expanded")) === "false") {
+    await more.click();
+  }
+}
+
+export async function openAgentFallbackChain(editor: Locator) {
+  await openMoreModelSettings(editor);
+  const row = editor
+    .locator(".settings-row")
+    .filter({ has: editor.page().getByText("Fallback model", { exact: true }) });
+  const edit = row.getByRole("button", { name: "Edit fallback chain", exact: true });
+  if ((await edit.getAttribute("aria-expanded")) === "false") {
+    await edit.click();
+  }
+  return row.locator("openclaw-multi-select");
+}
+
 export function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("Expected config.patch params");
+    throw new Error("Expected config mutation params");
   }
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }

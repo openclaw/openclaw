@@ -264,6 +264,39 @@ function validateCandidateChangelogLints(
         .join("; ")}. ${CHANGELOG_ATTRIBUTION_NEXT_STEP}`,
     );
   }
+  return files.map((file) => file.path);
+}
+
+// Describe commits after the audited record only when assembling final candidate evidence.
+export function inspectCandidateChangelogRange({
+  rootDir,
+  repository,
+  recordedTarget,
+  targetSha,
+  changelogPaths,
+}: StringFields<"rootDir" | "repository" | "recordedTarget" | "targetSha"> & {
+  changelogPaths: string[];
+}) {
+  const range = `${recordedTarget}..${targetSha}`;
+  const revList = (...args: string[]) =>
+    execFileSync("git", ["rev-list", ...args], { cwd: rootDir, encoding: "utf8" }).trim();
+  const commitCount = recordedTarget === targetSha ? 0 : Number(revList("--count", range));
+  // Walk the commits, including merged branches. A tip-to-tip diff hides reverted changes.
+  const excludedPaths = ["CHANGELOG.md", ...changelogPaths].map(
+    (path) => `:(exclude,literal)${path}`,
+  );
+  const latestChangeOutsideChangelog = commitCount
+    ? revList("--full-history", "--max-count=1", range, "--", ".", ...excludedPaths) || null
+    : null;
+  const compareUrl = `https://github.com/${repository}/compare/${recordedTarget}...${targetSha}`;
+  const count = `${commitCount} commit${commitCount === 1 ? "" : "s"} after the audited record`;
+  const summary =
+    commitCount === 0
+      ? "Contribution record covers the candidate."
+      : latestChangeOutsideChangelog
+        ? `${count}. Review changes outside the selected changelog: ${compareUrl}`
+        : `${count} (selected changelog paths only).`;
+  return { candidate: targetSha, commitCount, latestChangeOutsideChangelog, compareUrl, summary };
 }
 
 export function validateCandidateChangelog({
@@ -274,9 +307,10 @@ export function validateCandidateChangelog({
 }: StringFields<"rootDir" | "repository" | "tag" | "targetSha">) {
   const version = releaseNotesVersionForTag(tag);
   const releaseChangelog = loadReleaseNotesForTag({ rootDir, ref: targetSha, tag, version });
-  validateCandidateChangelogLints(releaseChangelog);
+  const changelogPaths = validateCandidateChangelogLints(releaseChangelog);
   return {
     releaseNotesText: releaseChangelog.section,
+    changelogPaths,
     releaseNotesCheck: validateCandidateReleaseNotes({
       changelog: releaseChangelog.section,
       repository,

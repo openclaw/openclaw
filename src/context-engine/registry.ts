@@ -64,6 +64,11 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
     " ",
   ),
 );
+// Subagent lifecycle hooks report failures to their callers; one hook failure must not downgrade turns.
+const SUBAGENT_LIFECYCLE_METHODS = new Set<PropertyKey>([
+  "prepareSubagentSpawn",
+  "onSubagentEnded",
+]);
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
@@ -253,8 +258,11 @@ function wrapResolvedContextEngine(
           try {
             return await method.call(engine, prepareParams(methodName, methodParams));
           } catch (error) {
-            if (isContextEngineAbortRejection(error, abortSignal)) {
-              // Abort is caller intent, not engine instability; never quarantine for it.
+            if (
+              isContextEngineAbortRejection(error, abortSignal) ||
+              SUBAGENT_LIFECYCLE_METHODS.has(methodName)
+            ) {
+              // Abort is caller intent and lifecycle hooks report to their callers; neither quarantines.
               throw error;
             }
             const recording = recordContextEngineQuarantine({
@@ -264,7 +272,7 @@ function wrapResolvedContextEngine(
               error,
               defaultEngineId: fallback.defaultEngineId,
             });
-            if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
+            if (methodName === "compact") {
               await recording;
               throw error;
             }

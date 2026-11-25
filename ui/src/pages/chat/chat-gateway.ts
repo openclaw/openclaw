@@ -76,19 +76,8 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    if (
-      payload.state === "error" &&
-      (payload.errorKind === "state_contention" ||
-        payload.stopReason === "aborted-partial-persistence-failed")
-    ) {
-      return errorText;
-    }
-    const summary =
-      errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-        ? errorText
-        : `Error: ${errorText}`;
     const detail = formatGatewayErrorDetail(payload);
-    return detail ? `${summary}\n\n${detail}` : summary;
+    return detail ? `${errorText}\n\n${detail}` : errorText;
   }
   const messageText = message ? extractText(message)?.trim() : null;
   return messageText || "chat error";
@@ -333,7 +322,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         (projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage ||
-          (chatgptUsageLimitKind && state.chatRunError?.kind !== errorKind))
+          (errorKind && state.chatRunError?.kind !== errorKind))
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.

@@ -94,12 +94,23 @@ suite.define(() => {
         operatorScopes: ["operator.sessions.write"],
         featureMethods: [
           ...featureMethods,
+          "sessions.catalog.route",
           "beam.owned.list",
           "beam.owned.read",
           "beam.owned.continue",
           "beam.owned.resolve",
         ],
         methodResponses: {
+          "sessions.catalog.route": {
+            catalogId: "beam",
+            routeSegment: "beam",
+            methods: {
+              list: "beam.owned.list",
+              read: "beam.owned.read",
+              continue: "beam.owned.continue",
+              resolve: "beam.owned.resolve",
+            },
+          },
           "sessions.catalog.list": { catalogs: [] },
           "beam.owned.list": {
             catalogs: [

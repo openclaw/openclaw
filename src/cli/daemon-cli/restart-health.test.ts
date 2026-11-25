@@ -10,11 +10,10 @@ import {
   inspectUnknownListener,
   makeGatewayService,
   monotonicClock,
-  ownerLease,
   portUsage,
   callGateway,
   gatewayResponseError,
-  readGatewayOwnerLease,
+  readActiveGatewayLockIdentity,
   resetRestartHealthMocks,
   resolveGatewayServiceProbeHosts,
   restoreRestartHealthMocks,
@@ -75,19 +74,14 @@ describe("restart health", () => {
     ];
     const observed: Array<{ at: string; healthy: boolean; staleGatewayPids: number[] }> = [];
     for (const sample of samples) {
-      readGatewayOwnerLease.mockReturnValue(
+      readActiveGatewayLockIdentity.mockResolvedValue(
         sample.ownerPid === undefined
           ? undefined
           : {
-              owner: `owner-${sample.ownerPid}`,
               pid: sample.ownerPid,
-              host: "gateway-test-host",
-              startedAt: sample.ownerPid === 6464 ? 1000 : 2000,
               port: 18789,
-              mode: "supervised",
-              supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
-              state: "live",
-              expired: false,
+              ownerId: `owner-${sample.ownerPid}`,
+              createdAt: "2026-11-25T00:00:00.000Z",
             },
       );
       if (sample.ready) {
@@ -136,15 +130,27 @@ describe("restart health", () => {
       state: "live",
       runtime: { status: "running", pid: 8000 },
     },
-  ] as const)("does not mark listeners stale with a $name", async ({ pid, state, runtime }) => {
-    readGatewayOwnerLease.mockReturnValue(ownerLease(pid, state));
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime,
-      portUsage: portUsage([{ pid: 9000, commandLine: "openclaw-gateway" }]),
-    });
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.staleGatewayPids).toEqual([]);
-  });
+  ] as const)(
+    "classifies stale listeners from the verified file owner ($name)",
+    async ({ pid, state, runtime }) => {
+      readActiveGatewayLockIdentity.mockResolvedValue(
+        state === "dead"
+          ? undefined
+          : {
+              pid,
+              port: 18789,
+              ownerId: `owner-${pid}`,
+              createdAt: "2026-11-25T00:00:00.000Z",
+            },
+      );
+      const snapshot = await inspectGatewayRestartWithSnapshot({
+        runtime,
+        portUsage: portUsage([{ pid: 9000, commandLine: "openclaw-gateway" }]),
+      });
+      expect(snapshot.healthy).toBe(false);
+      expect(snapshot.staleGatewayPids).toEqual(state === "dead" ? [9000] : []);
+    },
+  );
 
   it("verifies a healthy gateway listener child pid without marking it stale", async () => {
     callGateway.mockImplementation(gatewayHealthResponse());

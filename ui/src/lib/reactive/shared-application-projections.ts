@@ -1,16 +1,11 @@
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { profileDirectory } from "../profile-directory.ts";
 import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.ts";
+import { readRuntimeConfig } from "./domain-capabilities.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
 export const sharedRuntimeConfigProjection = createSharedOwnerProjection(
-  (config: ApplicationContext["runtimeConfig"]) => ({
-    state: config.state,
-    canSet: config.canSet,
-    canApply: config.canApply,
-    canPatch: config.canPatch,
-    canOpenFile: config.canOpenFile,
-  }),
+  (config: ApplicationContext["runtimeConfig"]) => readRuntimeConfig(config),
 );
 
 export const sharedAgentsProjection = createSharedOwnerProjection(

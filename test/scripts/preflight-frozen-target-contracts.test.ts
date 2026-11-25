@@ -164,41 +164,70 @@ function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
 describe("update-channel refusal contract", () => {
   const target = "src/cli/update-cli/update-command-target.ts";
   const global = "src/infra/update-global.ts";
+  const gitRoute = "src/cli/update-cli/update-command-git.ts";
+  const report = "src/cli/update-cli/update-command-admission-report.ts";
   it.each([
-    { tag: "main", condition: 'explicitTag === "main"', helper: "" },
     {
+      gitMode: "in-place",
+      route: "updateGitCheckout({});",
+      tag: "main",
+      condition: 'explicitTag === "main"',
+      helper: "",
+      ownerReport: "",
+      packageMode: "switch",
+    },
+    {
+      gitMode: "detached",
+      route: "await updateGitRelease({});",
       tag: "MAIN",
       condition: "isMainPackageTarget(explicitTag)",
       helper:
         'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}',
+      ownerReport: "throw new Error(`The resident launcher owns this installation. ${route}`);",
+      packageMode: "refuse",
     },
-  ])("retains the $tag refusal with omissions disabled", ({ tag, condition, helper }) => {
-    const f = fixture({
-      [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
-      [global]: helper,
-    });
-    // Selection follows committed source, not a dirty working-tree replacement.
-    writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
-    const result = f.run(
-      { docker: { lanes: ["update-channel-switch"] } },
-      { allowFrozenTargetScenarioOmissions: false },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const record = JSON.parse(result.stdout);
-    expect(record.contracts).toContainEqual({
-      consumer: "update-channel-switch",
-      status: "ADMITTED",
-      modes: { OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag },
-      files: [],
-    });
-    expect(record.docker.omitted).toEqual([]);
-    expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
-      expect.arrayContaining([target, global]),
-    );
-  });
+  ])(
+    "retains the $tag refusal, $gitMode route and $packageMode Git-to-package switch",
+    ({ tag, condition, helper, gitMode, route, ownerReport, packageMode }) => {
+      const f = fixture({
+        [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
+        [global]: helper,
+        [gitRoute]: route,
+        [report]: ownerReport,
+      });
+      // Selection follows committed source, not a dirty working-tree replacement.
+      writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
+      writeFileSync(join(f.selected.root, gitRoute), "unknownContract();");
+      const result = f.run(
+        { docker: { lanes: ["update-channel-switch"] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const record = JSON.parse(result.stdout);
+      expect(record.contracts).toContainEqual({
+        consumer: "update-channel-switch",
+        status: "ADMITTED",
+        modes: {
+          OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag,
+          OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE: gitMode,
+          OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE: packageMode,
+        },
+        files: [],
+      });
+      expect(record.docker.omitted).toEqual([]);
+      expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
+        expect.arrayContaining([target, global, gitRoute, report]),
+      );
+    },
+  );
 
   it("rejects an unknown refusal contract rather than dropping its probe", () => {
-    const f = fixture({ [target]: "unknownContract();", [global]: "" });
+    const f = fixture({
+      [target]: "unknownContract();",
+      [global]: "",
+      [gitRoute]: "",
+      [report]: "",
+    });
     expectRejected(
       f.run(
         { docker: { lanes: ["update-channel-switch"] } },

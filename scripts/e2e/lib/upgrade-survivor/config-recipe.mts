@@ -260,6 +260,17 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
+    ...(scenario === "base" &&
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth"
+      ? [
+          {
+            // Keep the seeded Discord and WhatsApp principals out of the same DM session.
+            id: "restart-auth-dm-scope",
+            intent: "restart-auth-dm-scope",
+            argv: ["config", "set", "session.dmScope", "per-channel-peer"],
+          },
+        ]
+      : []),
     validateStep,
   ];
 }
@@ -378,25 +389,30 @@ function* adaptRecipeForBaseline(
       batchedThrough = index + 2;
       continue;
     }
-    yield adaptStepForBaseline(step, baselineVersion);
-    // 2026.10.5 shipped skills.workshop; later candidates move it into the plugin's config.
+    // Write after scenario overrides: whole-plugin config writes replace the Workshop entry.
     if (
-      step.id === "skills" &&
+      step.id === "validate" &&
       pinnedVersion &&
-      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0 &&
+      steps.some((entry) => entry.id === "skills")
     ) {
+      const workshopPath =
+        (compareReleaseVersions(pinnedVersion, "2026.11.10") ?? -1) >= 0
+          ? "plugins.entries.skill-workshop.config"
+          : "skills.workshop";
       yield {
         id: "skill-workshop-settings",
         intent: "skill-workshop-settings",
         argv: [
           "config",
           "set",
-          "skills.workshop",
+          workshopPath,
           JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
           "--strict-json",
         ],
       };
     }
+    yield adaptStepForBaseline(step, baselineVersion);
   }
 }
 

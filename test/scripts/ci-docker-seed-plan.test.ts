@@ -10,7 +10,7 @@ it("keeps the published-driver update tripwire in the main tier", () => {
   ]);
 });
 
-it("retains every Docker seed owner in full release validation", () => {
+it("keeps the manual seed profile within its existing budget", () => {
   expect(resolveDockerSeedLanes({ includeReleaseOnly: true })).toEqual([
     "published-upgrade-survivor",
     "mcp-channels",
@@ -30,7 +30,16 @@ it.each([
   ["src/cli/mcp-cli.ts", ["mcp-docker-custody"]],
   ["src/cli/mcp-cli-probe.ts", ["mcp-docker-custody"]],
   ["scripts/e2e/lib/mcp-docker-custody/scenario.mjs", ["mcp-docker-custody"]],
-  ["src/state/openclaw-state-schema.ts", []],
+  ["src/update/run.ts", ["release-update-survivor"]],
+  ["src/state/openclaw-state-schema.ts", ["release-update-survivor"]],
+  ["src/cli/update-cli/update-command.ts", ["release-update-survivor"]],
+  ["src/daemon/service.ts", ["release-update-survivor"]],
+  ["openclaw.mjs", ["release-update-survivor"]],
+  ["release-launcher-forward.mjs", ["release-update-survivor"]],
+  ["src\\update\\launcher.ts", ["release-update-survivor"]],
+  ["scripts/e2e/lib/upgrade-survivor/release-fixture.mjs", ["release-update-survivor"]],
+  ["scripts/e2e/upgrade-survivor-docker.sh", ["release-update-survivor"]],
+  ["src/updates/unrelated.ts", []],
 ] as const)("selects only Docker owner lanes for %s", (file, expected) => {
   expect(resolveChangedDockerSeedLanes([file])).toEqual(expected);
 });

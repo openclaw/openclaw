@@ -5,18 +5,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const [packageRoot, reportPath] = process.argv.slice(2);
+const [selectedRoot, reportPath, route] = process.argv.slice(2);
 const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const stateDir = process.env.OPENCLAW_STATE_DIR;
 assert.equal(process.env.OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP, "1");
 assert.equal(runtimeRoot, "/tmp/openclaw-update-first-hop-runtime/admission-missing-load-path");
-assert.equal(packageRoot, path.join(runtimeRoot, "npm-prefix/lib/node_modules/openclaw"));
-assert.equal(fs.realpathSync(packageRoot), packageRoot, "Fixture package root must be direct");
 assert.equal(stateDir, path.join(process.env.HOME, ".openclaw"));
 assert.equal(process.env.OPENCLAW_CONFIG_PATH, path.join(stateDir, "openclaw.json"));
 assert.equal(fs.realpathSync(stateDir), stateDir, "Fixture profile root must be direct");
 assert(path.isAbsolute(reportPath));
 assert(!reportPath.startsWith(`${stateDir}${path.sep}`));
+
+let packageRoot = selectedRoot;
+if (route === "resident") {
+  const prefix = path.join(stateDir, "git-install");
+  assert.equal(selectedRoot, path.join(prefix, "openclaw"));
+  const target = fs.readlinkSync(selectedRoot);
+  assert.match(target, /^releases\/[a-z0-9-]+\/openclaw$/u, "Unexpected resident release target");
+  packageRoot = path.join(prefix, target);
+} else {
+  assert.equal(route, "legacy");
+  assert.equal(selectedRoot, path.join(runtimeRoot, "npm-prefix/lib/node_modules/openclaw"));
+}
+assert.equal(fs.realpathSync(packageRoot), packageRoot, "Fixture package root must be direct");
 
 function snapshotProfile() {
   const entries = [];
@@ -160,7 +171,6 @@ try {
     pendingBytes,
     "Admission consumed lifecycle marker",
   );
-  assert.deepEqual(snapshotProfile(), before, "Admission changed profile artifacts");
 } catch (error) {
   errors.push(error);
 }
@@ -185,6 +195,9 @@ for (const cleanup of [
       }
     }
   },
+  // In the resident lane the probe's own marker is inside the observed profile.
+  // Remove only that marker before comparing the entire profile, including the release.
+  () => assert.deepEqual(snapshotProfile(), before, "Admission changed profile artifacts"),
   () => fs.rmSync(privateDir, { recursive: true, force: true }),
 ]) {
   try {

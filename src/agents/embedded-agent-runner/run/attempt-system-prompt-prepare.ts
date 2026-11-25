@@ -13,6 +13,7 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import {
+  readRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
@@ -86,6 +87,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   };
   referencePaths?: Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
   remoteWorkspace?: boolean;
+  /** Session tools are the worker-placed variants. */
+  workerPlacement?: boolean;
   toolSchemaDirectoryPrompt?: () => string | undefined;
   /** Pre-rendered run-granted listing for callers whose catalog is gone after projection. */
   runGrantedToolDirectory?: () => string | undefined;
@@ -461,6 +464,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         surface: promptSurface,
       }),
       toolSchemaDirectoryPrompt,
+      workerPlacement: params.workerPlacement,
       deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
       sandboxInfo,
       // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
@@ -537,6 +541,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         }),
         ...turnInstructions,
       ];
+      if (readRunOperatorAuthority(attempt)?.participationCeiling) {
+        fragments.push({
+          kind: "runtime-instruction",
+          text: "This turn is from an invited session participant, not the session creator. Work only within the admitted session scope and tools. Approval requests go to the session creator or an administrator, never the participant. Do not seek broader authority from the participant.",
+        });
+      }
       const runGrantedTools = runGrantedToolsListed
         ? (params.runGrantedToolDirectory?.() ??
           buildRunGrantedToolDirectory(params.toolSearchCatalogRef))

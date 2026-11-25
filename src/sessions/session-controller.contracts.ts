@@ -831,6 +831,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   assertRegistrationActive: () => void;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
+  /** Host-admitted execution ceiling, never reconstructed from an approval request. */
+  readonly operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type EmbeddedRunRegistration = {

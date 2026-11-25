@@ -2,7 +2,7 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -62,7 +62,6 @@ import {
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
   ensureAuthProfileStoreMock,
-  estimateTokensMock,
   getApiKeyForModelMock,
   getMemorySearchManagerMock,
   resolveMemorySearchConfigMock,
@@ -103,6 +102,7 @@ import {
   mockPendingNativeCompaction,
 } from "./compact.hooks.pending.test-support.js";
 import { registerCompactionSafeguardTests } from "./compact.hooks.safeguard.test-support.js";
+import { registerCompactionPermissionTests } from "./compact.hooks.tools.test-support.js";
 import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { abortEmbeddedAgentRun, isEmbeddedAgentRunHandleActive } from "./runs.js";
 import {
@@ -113,7 +113,7 @@ import {
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
+let compactTesting: typeof import("./compaction-hooks.js");
 let configRuntime: typeof import("../../config/runtime-snapshot.js");
 
 let TEST_STORE_PATH: string;
@@ -390,7 +390,7 @@ function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  compactTesting = await import("./compact.hooks.owner-test-support.js");
+  compactTesting = await import("./compaction-hooks.js");
   configRuntime = await import("../../config/runtime-snapshot.js");
   compactEmbeddedAgentSessionDirect = (params) => {
     configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
@@ -836,43 +836,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     },
   );
 
-  it.each([
-    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny", rootless: false },
-    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask", rootless: false },
-    { execMode: "full", permissionMode: "full", expectedExecMode: "full", rootless: false },
-    { execMode: undefined, permissionMode: "workspace", expectedExecMode: "auto", rootless: true },
-  ] as const)(
-    "uses the final $permissionMode permission policy for compaction tools",
-    async ({ execMode, permissionMode, expectedExecMode, rootless }) => {
-      const workspaceDir = rootless
-        ? compactionFixture.makeTempDir("openclaw-rootless-compaction-permission-")
-        : join(TEST_WORKSPACE_DIR, "workspace");
-      const root = rootless ? await realpath(workspaceDir) : workspaceDir;
-      await compactDirect({
-        workspaceDir,
-        requireWorkspaceOnly: rootless || undefined,
-        permissionMode: rootless ? "workspace" : "full",
-        sessionRoot: rootless ? undefined : root,
-        execOverrides: execMode ? { mode: execMode } : undefined,
-        sessionEntry: {
-          sessionId: TEST_SESSION_ID,
-          permissionMode: rootless ? "workspace" : "full",
-          sessionRoot: rootless ? undefined : root,
-        },
-      });
-
-      const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
-        sessionPermissionPolicy: {
-          mode: permissionMode,
-          root,
-        },
-      });
-      expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: expectedExecMode }));
-      if (rootless) {
-        expect(toolOptions.requireWorkspaceOnly).toBe(true);
-      }
-    },
-  );
+  registerCompactionPermissionTests({
+    compactDirect,
+    fixture: compactionFixture,
+    workspaceDir: () => TEST_WORKSPACE_DIR,
+    sessionId: () => TEST_SESSION_ID,
+    toolOptions: () => mockCallArg(createOpenClawCodingToolsMock),
+  });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
@@ -1308,35 +1278,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       });
     }
   });
-  it("treats pre-compaction token estimation failures as a no-op sanity check", () => {
-    estimateTokensMock.mockImplementation((message: unknown) => {
-      const role = (message as { role?: string }).role;
-      if (role === "assistant") {
-        throw new Error("legacy message");
-      }
-      if (role === "user") {
-        return 30;
-      }
-      return 5;
-    });
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages: sessionMessages as AgentMessage[],
-      currentMessages: sessionMessages as AgentMessage[],
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-    const tokensAfter = compactTesting.estimateTokensAfterCompaction({
-      messagesAfter: [{ role: "user", content: "kept ask" }] as AgentMessage[],
-      fullSessionTokensBefore: 0,
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-
-    expect(beforeMetrics).toMatchObject({
-      tokenCountOriginal: undefined,
-      tokenCountBefore: undefined,
-    });
-    expect(tokensAfter).toBe(30);
-  });
-
   it("skips sync in await mode when postCompactionForce is false", async () => {
     resolveMemorySearchConfigMock.mockReturnValue({
       sources: ["sessions"],
