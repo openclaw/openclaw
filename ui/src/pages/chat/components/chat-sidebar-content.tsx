@@ -453,7 +453,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       )}
                     </Show>
                     <Show when={props.content?.rawText?.trim()}>
-                      <div style={{ margin: "12px 16px" }}>
+                      <div style={{ margin: kind === "canvas" ? "12px 16px" : "12px 0 0" }}>
                         <RawButton onClick={props.onViewRawText} />
                       </div>
                     </Show>

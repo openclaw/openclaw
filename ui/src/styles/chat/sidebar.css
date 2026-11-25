@@ -138,7 +138,7 @@
 
   /* Embedded viewers own their content insets; the panel must not inset the frame. */
   &:has(> .sidebar-attachment-preview),
-  &:has(> .chat-tool-card__preview),
+  &:has(> .chat-tool-card__preview[data-kind="canvas"]),
   &:has(> .mcp-app-sidebar-target),
   &:has(> openclaw-mcp-app-panel) {
     padding: 0;
@@ -148,6 +148,11 @@
     display: flex;
     overflow: hidden;
   }
+}
+
+.sidebar-content > .chat-tool-card__preview[data-kind="canvas"] {
+  margin-top: 0;
+  border-radius: 0;
 }
 
 /* Full-height panel kinds need a bounded wrapper so their inner content can
@@ -328,12 +333,24 @@
   text-transform: none;
 }
 
+/* Cards retain their inset; document rails and unframed readers fill the pane. */
+.sidebar-panel-host--fill:not(.sidebar-panel-host--mobile-reader) .sidebar-attachment-preview {
+  .sidebar-attachment-preview__markdown,
+  .chat-assistant-attachment-card,
+  openclaw-chat-text-attachment > [role="status"]:not(.sidebar-attachment-preview__loading) {
+    margin-inline: 16px;
+  }
+
+  .chat-assistant-attachment-card {
+    width: auto;
+    margin-block: 16px;
+  }
+}
+
 .sidebar-attachment-preview__text {
   min-width: 0;
-  margin: 16px 0 0;
+  margin: 0;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--mono);
   font-size: 13px;

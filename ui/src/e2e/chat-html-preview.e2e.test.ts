@@ -406,7 +406,11 @@ suite.define(() => {
             await selectFileAction(panel, "Source");
             const sourceBlock = panel.locator("pre:visible");
             expect(await sourceBlock.textContent()).toBe(attachmentSource);
-            expect(await sourceBlock.boundingBox()).toMatchObject(paneWidth);
+            const toolbar = await panel.locator(".sidebar-file-toolbar").boundingBox();
+            expect(await sourceBlock.boundingBox()).toMatchObject({
+              ...paneWidth,
+              y: expect.closeTo(toolbar!.y + toolbar!.height, 0),
+            });
             expect(await panel.locator("a[download]").getAttribute("href")).toBe(mediaUrl);
             await tab.click();
             expect(await originalFrame!.evaluate((frame) => frame.isConnected)).toBe(true);

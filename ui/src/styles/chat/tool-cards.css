@@ -1273,7 +1273,7 @@ openclaw-chat-tool-output {
 }
 
 .chat-tool-output > :not(.sidebar-header) {
-  margin-inline: 12px;
+  margin-inline: 16px;
 }
 
 .chat-tool-output__actions,
