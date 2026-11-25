@@ -133,12 +133,17 @@ extension NodeAppModel {
                 // Every page belongs to one physical authenticated Gateway route;
                 // reconnects and gateway switches must never splice two rosters.
                 snapshot = try await ChatSessionRosterSnapshot.collect { offset in
-                    let request = OpenClawChatGatewayRequests.sessionsList(
+                    let base = OpenClawChatGatewayRequests.sessionsList(
                         limit: limit,
                         search: nil,
                         archived: archived,
                         agentID: sourceAgentID,
                         offset: offset)
+                    // ui/src/lib/sessions/session-list-query.ts:54: lists ask for titles derived from the first message.
+                    var params = base.params
+                    params["includeDerivedTitles"] = AnyCodable(true)
+                    let request = OpenClawChatGatewayRequest(
+                        method: base.method, params: params, timeoutMs: base.timeoutMs)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
                     let response: Result<OpenClawChatSessionsListResponse, Error>
                     do {

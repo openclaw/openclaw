@@ -4694,6 +4694,7 @@
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8384e3b48a408c5c","source":"Start a chat to see it here."},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.50a3a5175d7e5b9c","source":"Telegram chat"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d4d40add2415ce06","source":"Try again"},
+    {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.11315a2c1df56a80","source":"Untitled session"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.63e22b4f68067be8","source":"Wakes %@"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1eb5cb3fa091bfaa","source":"Working"},
     {"path":"apps/ios/Sources/Design/CommandCenterTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b7ea6ef573260e0c","source":"iOS chat"},

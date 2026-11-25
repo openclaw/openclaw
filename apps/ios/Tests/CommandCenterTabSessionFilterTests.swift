@@ -240,6 +240,27 @@ struct CommandCenterTabSessionFilterTests {
             OpenClawChatSessionEntry(key: "agent:main:main", label: "Daily standup")) == "Daily standup")
     }
 
+    @Test func `an untitled session reads as its derived title, its given name, or Untitled session`() {
+        var derived = OpenClawChatSessionEntry(key: "agent:main:ios-7d2ab138-a982-4b1a-8ecc-fd334a61f76a")
+        derived.derivedTitle = "Plan a weekend in Porto"
+        #expect(CommandCenterTab.sessionTitle(derived) == "Plan a weekend in Porto")
+        var mainWithDerived = OpenClawChatSessionEntry(key: "agent:main:main")
+        mainWithDerived.derivedTitle = "A friendly greeting"
+        #expect(CommandCenterTab.sessionTitle(mainWithDerived) == "Main chat")
+        // A tail someone named reads as the name, as on the web.
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:iv-lane-1")) == "iv-lane-1")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:explicit:release-notes")) ==
+            "release-notes")
+        // An opaque id is not a name: never a fragment, never the key.
+        #expect(CommandCenterTab.sessionTitle(
+            OpenClawChatSessionEntry(key: "agent:main:run-0f3c2b7e-1111-4222-8333-444455556666")) == "Untitled session")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:node-1234567890ab")) ==
+            "Untitled session")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:abc123def4")) ==
+            "Untitled session")
+        #expect(CommandCenterTab.sessionTitle(OpenClawChatSessionEntry(key: "agent:main:abc123def")) == "abc123def")
+    }
+
     @Test func `a key copied into the label or display name never becomes the session title`() throws {
         let sessions = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
         [
