@@ -256,6 +256,7 @@ describe("OpenClaw rescue message", () => {
     "models status",
     "skills check",
     "plugins doctor",
+    "run status",
   ])("keeps %s out of remote rescue", async (command) => {
     await expectReply(`/openclaw ${command}`, "I can run doctor/status/health");
     await expectReply("/openclaw yes", noPending, true);

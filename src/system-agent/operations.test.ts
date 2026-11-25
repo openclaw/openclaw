@@ -231,6 +231,29 @@ describe("system agent operations", () => {
     expect(output).not.toContain("invalid-plugin-secret");
   });
 
+  it("keeps run config get on the fail-closed config projection", async () => {
+    mockConfig.setConfig({
+      gateway: { port: 19_001 },
+      plugins: { entries: { "test-unknown-owner": { config: { opaque: "PLUGIN_FIXTURE" } } } },
+      channels: { "test-unknown-owner": { opaque: "CHANNEL_FIXTURE" } },
+    });
+    for (const path of [
+      "gateway.port",
+      "plugins.entries.test-unknown-owner.config",
+      "channels.test-unknown-owner",
+    ]) {
+      await run(
+        { kind: "run", argv: ["config", "get", path] },
+        { deps: { setupSurface: "gateway" } },
+      );
+    }
+    expect(lines).toEqual([
+      "gateway.port = 19001",
+      'plugins.entries.test-unknown-owner.config = "<redacted>"',
+      'channels.test-unknown-owner = "<redacted>"',
+    ]);
+  });
+
   it("reads installed plugin field schemas and authored help from the active metadata", async () => {
     await withMetadata({ plugins: { entries: { codex: { enabled: true } } } }, async () => {
       await run({

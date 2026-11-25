@@ -93,24 +93,33 @@ describe("system agent diagnostic reads", () => {
     expect(vi.mocked(modelsStatusCommand).mock.calls[0]?.[0]).toEqual({});
   });
 
-  it("probes deep Gateway status without exec secret refs or log excerpts", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    await executeSystemAgentOperation({ kind: "gateway-status-deep" }, runtime);
-    expect(gatherDaemonStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        probe: true,
+  it.each(["named", "run"] as const)(
+    "probes deep Gateway status via %s without exec secret refs or log excerpts",
+    async (mode) => {
+      const { runtime } = createSystemAgentTestRuntime();
+      await executeSystemAgentOperation(
+        mode === "run"
+          ? { kind: "run", argv: ["gateway", "status", "--deep"] }
+          : { kind: "gateway-status-deep" },
+        runtime,
+        { deps: { setupSurface: "gateway" } },
+      );
+      expect(gatherDaemonStatus).toHaveBeenCalledWith(
+        expect.objectContaining({
+          probe: true,
+          deep: true,
+          requireRpc: false,
+          allowExecSecretRefs: false,
+          includeLogExcerpt: false,
+        }),
+      );
+      expect(vi.mocked(printDaemonStatus).mock.calls[0]?.[1]).toMatchObject({
+        json: false,
         deep: true,
-        requireRpc: false,
-        allowExecSecretRefs: false,
-        includeLogExcerpt: false,
-      }),
-    );
-    expect(vi.mocked(printDaemonStatus).mock.calls[0]?.[1]).toMatchObject({
-      json: false,
-      deep: true,
-      showProcessArguments: false,
-    });
-  });
+        showProcessArguments: false,
+      });
+    },
+  );
 
   it("labels file reads as local CLI profile output", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
@@ -122,20 +131,25 @@ describe("system agent diagnostic reads", () => {
     expect(lines[0]).toMatch(/^Local CLI profile file.*openclaw logs.*\nfile text$/u);
   });
 
-  it("answers skills_check on the CLI surface without creating a device identity", async () => {
-    const stateDir = tempDirs.make("system-agent-no-identity-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    await expect(
-      executeSystemAgentOperation({ kind: "skills-check" }, runtime, {
-        deps: { setupSurface: "cli" },
-      }),
-    ).resolves.toEqual({ applied: false });
-    expect(lines.join("\n")).toContain("no device identity");
-    expect(lines.join("\n")).toContain("openclaw skills check");
-    expect(loadSkillsStatusReport).not.toHaveBeenCalled();
-    await expect(fs.readdir(stateDir)).resolves.toEqual([]);
-  });
+  it.each(["named", "run"] as const)(
+    "checks skills via %s on the CLI without creating a device identity",
+    async (mode) => {
+      const stateDir = tempDirs.make("system-agent-no-identity-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      await expect(
+        executeSystemAgentOperation(
+          mode === "run" ? { kind: "run", argv: ["skills", "check"] } : { kind: "skills-check" },
+          runtime,
+          { deps: { setupSurface: "cli" } },
+        ),
+      ).resolves.toEqual({ applied: false });
+      expect(lines.join("\n")).toContain("no device identity");
+      expect(lines.join("\n")).toContain("openclaw skills check");
+      expect(loadSkillsStatusReport).not.toHaveBeenCalled();
+      await expect(fs.readdir(stateDir)).resolves.toEqual([]);
+    },
+  );
 
   describe("logs", () => {
     async function seedLog(content: string) {
@@ -181,6 +195,24 @@ describe("system agent diagnostic reads", () => {
         await fs.unlink(file);
       }
       expect(lines.slice(2)).toEqual([expect.stringContaining("only read diagnostic files")]);
+    });
+
+    it("uses hosted log scope even when the host has a remote CLI target", async () => {
+      const { config } = await seedLog("HOSTED_LOG_FIXTURE\n");
+      await fs.writeFile(config, '{"gateway":{"mode":"remote"}}');
+      const operation = { kind: "run" as const, argv: ["logs"] };
+      const terminal = createSystemAgentTestRuntime();
+      await executeSystemAgentOperation(operation, terminal.runtime, {
+        deps: { setupSurface: "cli" },
+      });
+      expect(terminal.lines.join("\n")).toContain("only read diagnostic files");
+      expect(terminal.lines.join("\n")).not.toContain("HOSTED_LOG_FIXTURE");
+
+      const hosted = createSystemAgentTestRuntime();
+      await executeSystemAgentOperation(operation, hosted.runtime, {
+        deps: { setupSurface: "gateway" },
+      });
+      expect(hosted.lines.join("\n")).toMatch(/^Gateway log tail.*HOSTED_LOG_FIXTURE/su);
     });
 
     it("keeps only the newest 200 lines", async () => {

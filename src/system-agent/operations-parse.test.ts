@@ -118,7 +118,8 @@ describe("operation grammar", () => {
     "models status",
     "skills check",
     "plugins doctor",
-  ])("keeps the self-repair read %s out of the text grammar", (input) => {
+    "run status",
+  ])("keeps the self-repair command %s out of the text grammar", (input) => {
     expect(parseOperation(input).kind).toBe("none");
   });
   it.each([
