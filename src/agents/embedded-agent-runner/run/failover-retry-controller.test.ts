@@ -167,6 +167,11 @@ it.each([
     'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}',
   ],
   [false, undefined, "429 daily request limit reached"],
+  [
+    true,
+    undefined,
+    "Codex reported a usage or quota limit. Your workspace is out of credits. Add credits to continue. Next reset in 3 hours, Nov 25 at 12:13 PM GMT+1. Wait until the reset time, use another Codex account if available, or switch to another configured model/provider.",
+  ],
 ] as const)("rejects exhausted usage windows (%s, %s, %s)", async (fallback, budget, message) => {
   controller = createRetryController({ fallbackConfigured: fallback });
   controller.observeAttempt({ providerRetryMaxRetries: budget });
