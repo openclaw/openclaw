@@ -678,7 +678,6 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaLocalRoots,
         mediaReadFile,
         propagateMediaUploadFailure,
-        filename,
       } = ctx;
       const sendParams = { cfg, to, accountId: ctx.accountId ?? undefined };
       const nextReplyToId = createFeishuReplyFanout(ctx);
@@ -734,8 +733,8 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
+          fileName: ctx.filename,
           ...mediaReplyMode,
-          ...(filename ? { fileName: filename } : {}),
           ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
       } catch (err) {
