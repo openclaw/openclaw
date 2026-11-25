@@ -34,6 +34,7 @@ import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js"
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
+import { decideTurnGrant } from "./operator-admission.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -133,7 +134,11 @@ async function fixture(
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
   const admitted = await admission.admit("plugin-harness");
   const capability = options.authoring
-    ? await prepareGatewaySkillAuthoring(owner, sessionKey, true)
+    ? await prepareGatewaySkillAuthoring(
+        owner,
+        sessionKey,
+        decideTurnGrant(owner.client?.connect.scopes ?? []),
+      )
     : undefined;
   capability?.bind(admitted);
   const snapshot = options.managed

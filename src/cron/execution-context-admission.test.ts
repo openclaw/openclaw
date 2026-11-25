@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -34,7 +35,7 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   canonicalIdentity: null,
   profileId: "requester",
   scopes: ["operator.admin"],
-  requesterOwner: true,
+  grant: decideTurnGrant(["operator.admin"]),
 };
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {

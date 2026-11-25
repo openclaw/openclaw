@@ -31,6 +31,14 @@ paths:
       - 'constant expression "false" in condition'
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
+  # GitHub enforces job cache-mode with scoped tokens; the pinned parser predates it.
+  # https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching
+  .github/workflows/android-release-e2e.yml:
+    ignore:
+      - '^unexpected key "cache-mode" for "job" section\.'
+  .github/workflows/ios-release-e2e.yml:
+    ignore:
+      - '^unexpected key "cache-mode" for "job" section\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
   .github/workflows/openclaw-performance.yml:
     ignore:

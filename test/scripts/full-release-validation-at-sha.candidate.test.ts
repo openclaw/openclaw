@@ -29,6 +29,27 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("rejects an invalid frozen mock before dispatch unless the local preflight is skipped", () => {
+    const f = createDispatchFixture({
+      candidateOwned: true,
+      targetSource: {
+        "mock-target.ts": "export const read = () => 1;\n",
+        "mock-target.test.ts": 'vi.mock("./mock-target.js", () => ({ read: vi.fn() }));\n',
+      },
+    });
+    const rejected = f.run();
+    expectDispatchFailure(rejected, "First-party mock factories must preserve real exports");
+    expect(rejected.stderr).toContain("mock-target.test.ts:1");
+    expect(dispatches(f)).toEqual([]);
+
+    const skipped = f.run(["--skip-local-mock-preflight"]);
+    expect(skipped.status, skipped.stderr).toBe(0);
+    expect(skipped.stderr).toContain(
+      `Skipping local mock-export preflight for ${f.targetSha} (--skip-local-mock-preflight)`,
+    );
+    expect(dispatches(f)).toEqual([P, Q]);
+  });
+
   it("admits repaired P while retaining existing Q, original artifacts, and baselines", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 1 });
     const artifacts = { runId: "51", runAttempt: 1 };

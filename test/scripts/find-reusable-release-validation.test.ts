@@ -1,6 +1,7 @@
 // Covers policy selection layered on the strict normalized release evidence
 // produced by release-ci-summary.mjs. Topology validation belongs there.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -115,6 +116,7 @@ interface NormalizedEvidence {
 }
 
 interface RunFixture {
+  legacyVerifier?: boolean;
   error?: string;
   exitCode?: number;
   rawOutput?: string;
@@ -481,7 +483,23 @@ if (fixture.exitCode) {
   );
   process.exit(fixture.exitCode);
 }
-process.stdout.write(\`\${JSON.stringify(fixture.record)}\\n\`);
+const request = JSON.parse(process.argv[reuseRequestIndex + 1]);
+const record = fixture.record;
+const exact = record.root.targetSha === request.targetSha;
+const { classifyReleaseEvidenceComparison } = await import(${JSON.stringify(new URL("../../scripts/full-release-validation-policy.mjs", import.meta.url).href)});
+const { createReleaseEvidenceClient } = await import(${JSON.stringify(new URL("../../scripts/release-ci-summary.mjs", import.meta.url).href)});
+const client = createReleaseEvidenceClient("openclaw/openclaw");
+const comparison = exact ? null : JSON.parse(readFileSync(join(process.env.FAKE_VALIDATOR_FIXTURES,
+  ("repos/openclaw/openclaw/compare/" + record.root.targetSha + "..." + request.targetSha).replaceAll(/[/?]/gu, "_") + ".json"), "utf8"));
+const delta = exact ? { policy: "exact-target-full-validation-v1", changedPaths: [] } : classifyReleaseEvidenceComparison(comparison, {
+  baseSha: record.root.targetSha, targetSha: request.targetSha,
+  version: request.validationInputs?.targetVersion ?? record.validationInputs?.targetVersion,
+  targetCoveragePolicy: request.validationInputs?.coveragePolicy,
+  rootManifest: { ...record.manifest, validationInputs: record.validationInputs, runReleaseSoak: String(record.runReleaseSoak) },
+  readSourceFile: (sha, path) => client.getSourceFile(sha, path),
+});
+if (!fixture.legacyVerifier) record.reuseSelection = { ...delta, targetSha: request.targetSha };
+process.stdout.write(\`\${JSON.stringify(record)}\\n\`);
 `;
 
 function fixtureName(fixtures: string, endpoint: string): string {
@@ -520,6 +538,7 @@ function runResolver(args: {
   binDir: string;
   compareBaseSha?: string;
   compareFiles?: string[];
+  comparePatch?: string;
   compareRenamed?: boolean;
   compareStatus?: string;
   fixtures: string;
@@ -574,6 +593,22 @@ function runResolver(args: {
     );
   }
   if (args.compareBaseSha) {
+    if (args.compareFiles?.includes("package.json")) {
+      for (const sha of [args.compareBaseSha, args.targetSha]) {
+        const bytes = Buffer.from(git(args.repoDir, ["show", sha + ":package.json"]));
+        writeFileSync(
+          fixtureName(args.fixtures, `repos/${REPOSITORY}/contents/package.json?ref=${sha}`),
+          JSON.stringify({
+            type: "file",
+            path: "package.json",
+            encoding: "base64",
+            size: bytes.length,
+            content: bytes.toString("base64"),
+            sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+          }),
+        );
+      }
+    }
     writeFileSync(
       fixtureName(
         args.fixtures,
@@ -584,6 +619,7 @@ function runResolver(args: {
           Object.assign(
             {
               filename,
+              ...(args.comparePatch ? { patch: args.comparePatch } : {}),
               status: args.compareRenamed && index === 0 ? "renamed" : "modified",
             },
             args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {},
@@ -1102,6 +1138,61 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
+  it.each(["exact", "changelog"])(
+    "preserves %s reuse with an independently pinned older verifier",
+    (mode) => {
+      const { origin, priorSha } = createRepo();
+      const targetSha =
+        mode === "exact"
+          ? priorSha
+          : commitFile(origin, "CHANGELOG.md", "# Final notes\n", "docs: final notes");
+      const record = normalizedEvidence({ targetSha: priorSha });
+      const result = runResolver({
+        ...setUpFixtures([{ record, runId: record.root.runId, legacyVerifier: true }]),
+        compareBaseSha: priorSha,
+        repoDir: cloneHead(origin),
+        targetSha,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseOutput(result.stdout), result.stderr).toMatchObject({
+        evidence_policy:
+          mode === "exact" ? "exact-target-full-validation-v1" : "changelog-only-release-v1",
+        reuse: "true",
+      });
+    },
+  );
+
+  it("discovers stable-profile beta product evidence for its final version", () => {
+    const { origin, priorSha } = createRepo({ version: "2026.7.1-beta.2" });
+    const targetSha = commitFile(
+      origin,
+      "package.json",
+      JSON.stringify({ name: "x", version: "2026.7.1" }),
+      "chore: final version",
+    );
+    const record = normalizedEvidence({
+      targetSha: priorSha,
+      releaseProfile: "stable",
+      validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1-beta.2" },
+    });
+    const result = resolveEvidence(record, {
+      compareBaseSha: priorSha,
+      compareFiles: ["package.json"],
+      comparePatch: "version-only metadata patch".repeat(10_000),
+      repoDir: cloneHead(origin),
+      targetSha,
+      releaseProfile: "stable",
+      inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1", coveragePolicy: "npm-stable-v1" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
+      evidence_policy: "stable-qualified-beta-final-v1",
+      evidence_sha: priorSha,
+      changed_paths: '["package.json"]',
+      reuse: "true",
+    });
+  });
+
   it("rejects cross-SHA reuse when the release delta includes code", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
@@ -1117,7 +1208,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+    expect(result.stderr).toContain("shared evidence validator rejected the run");
   });
 
   it("rejects a source-file rename to CHANGELOG.md", () => {
@@ -1135,7 +1226,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+    expect(result.stderr).toContain("shared evidence validator rejected the run");
   });
 
   it("rejects target version metadata that is internally inconsistent", () => {

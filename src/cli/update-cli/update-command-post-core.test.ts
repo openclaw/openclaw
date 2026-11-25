@@ -40,6 +40,8 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
       vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
       const argvPath = path.join(root, "argv.json");
@@ -58,6 +60,8 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
         `import fs from "node:fs/promises";
 import path from "node:path";
 const hold = setInterval(() => {}, 1000);
+process.stdout.write("post-core stdout diagnostic");
+process.stderr.write("post-core stderr diagnostic");
 setTimeout(() => process.exit(2), 10000).unref();
 process.once("SIGTERM", () => {
   if (!${JSON.stringify(cooperative)}) return;
@@ -112,6 +116,12 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(await waitForPidToExit(pid)).toBe(true);
       }
       expect(result).toEqual({ resumed: true, pluginUpdate });
+      const protocolOutput = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+      const diagnostics = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(protocolOutput).not.toContain("post-core stdout diagnostic");
+      expect(protocolOutput).not.toContain("post-core stderr diagnostic");
+      expect(diagnostics).toContain("post-core stdout diagnostic");
+      expect(diagnostics).toContain("post-core stderr diagnostic");
       expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toEqual([
         "update",
         "--json",

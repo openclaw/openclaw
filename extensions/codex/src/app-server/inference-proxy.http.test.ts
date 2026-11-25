@@ -24,6 +24,7 @@ import {
   createNativeModelSourceFixture,
 } from "./native-subagent-monitor.test-support.js";
 import { isJsonObject } from "./protocol.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const transport = vi.hoisted(() => ({ origin: "" }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
@@ -154,7 +155,7 @@ async function waitForUpstreamClose() {
 }
 
 describe("inference HTTP transport ownership", () => {
-  it.each(["", "?client_version=0.169.0"])(
+  it.each(["", `?client_version=${CODEX_APP_SERVER_VERSION}`])(
     "relays catalog GETs%s without mixing native accounts or requiring a turn",
     async (query) => {
       const bindModelExecution = vi.fn(() => {

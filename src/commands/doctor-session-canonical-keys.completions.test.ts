@@ -22,6 +22,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-schema-versions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
@@ -227,6 +228,7 @@ describe("Doctor canonical pending-input repair", () => {
       {
         using old = new DatabaseSync(filename);
         old.exec(`
+          ALTER TABLE session_members DROP COLUMN access;
           ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
           ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
           PRAGMA user_version = 42;
@@ -246,13 +248,15 @@ describe("Doctor canonical pending-input repair", () => {
 
       expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
       await f.restart();
-      expect(f.database().db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(f.database().db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(
         f
           .database()
           .db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 43 });
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
       expect(
         f
           .database(true)

@@ -237,28 +237,30 @@ it("preserves Show more as background children change", () => {
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
 
-it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
+it("keeps explicit disclosure through the live handoff without restoring ambiguous old opens", () => {
   const rows = [
     sessionRow("expanded"),
     sessionRow("fully-shown"),
     sessionRow("collapsed", { containsActiveDescendant: true }),
-    sessionRow("untouched", { containsActiveDescendant: true }),
+    sessionRow("old-open", { containsActiveDescendant: true }),
   ];
   project([]);
+  projection.children.toggle("expanded");
   projection.children.restore([
-    { key: "expanded", childrenDisplayMode: "expanded" },
+    { key: "expanded", childrenDisplayMode: projection.children.capture("expanded") },
     { key: "fully-shown", childrenDisplayMode: "expanded-fully" },
     { key: "collapsed", childrenDisplayMode: "collapsed-by-user" },
-    { key: "untouched", childrenDisplayMode: projection.children.capture("untouched") },
+    { key: "old-open", childrenDisplayMode: "expanded" },
   ]);
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
+  expect(projection.children.isExpanded("old-open")).toBe(false);
   const liveConnection = {};
   project(rows, { connectionIdentity: liveConnection, listSource: {} });
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
   expect(projection.children.capture("collapsed")).toBe("collapsed-by-user");
-  expect(projection.children.isExpanded("untouched")).toBe(false);
+  expect(projection.children.isExpanded("old-open")).toBe(false);
   project(rows, { connectionIdentity: {} });
   expect(projection.children.isExpanded("expanded")).toBe(false);
   expect(projection.children.isFullyShown("fully-shown")).toBe(false);

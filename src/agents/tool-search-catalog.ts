@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -17,6 +17,7 @@ import {
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
@@ -454,6 +455,13 @@ export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSes
   const catalog = ctx.catalogRef?.current;
   if (!catalog) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
+  }
+  const participationCeiling = ctx.pluginExecutionAuthority?.participationCeiling;
+  if (participationCeiling) {
+    // Catalog refs are run-owned. Narrow exact-id dispatch as well as discovery.
+    catalog.entries = filterParticipationTools(catalog.entries, participationCeiling, (entry) =>
+      getPluginToolMeta(entry.tool),
+    );
   }
   return catalog;
 }
