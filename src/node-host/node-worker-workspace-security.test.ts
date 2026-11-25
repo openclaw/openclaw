@@ -107,12 +107,6 @@ it.runIf(process.platform === "linux")(
         referenceManifestRef: prepared.snapshot.manifestRef,
         resultVersion: 2,
       });
-      console.log(
-        JSON.stringify({
-          boundary: "production Git-history owner",
-          outsideMarker: fs.existsSync(marker),
-        }),
-      );
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
       await launch.cleanup();
@@ -227,19 +221,7 @@ it.runIf(process.platform === "linux")(
       if (!error) {
         const uploaded = service.takeUpload("disclosure", prepared.snapshot.manifestRef);
         exported = uploaded.gitHistory?.headCommit === privateHead && Boolean(uploaded.gitPackPath);
-        if (exported) {
-          const imported = spawnSync("git", ["-C", source, "index-pack", "--stdin"], {
-            env,
-            input: fs.readFileSync(uploaded.gitPackPath!),
-            encoding: "utf8",
-          });
-          expect(imported.status, imported.stderr).toBe(0);
-          expect(git(source, ["show", privateHead + ":host-only.txt"])).toBe(
-            "synthetic-private-content",
-          );
-        }
       }
-      console.log(JSON.stringify({ boundary: "host-only Git object export", exported, error }));
       expect(exported).toBe(false);
     } finally {
       await launch.cleanup();
@@ -257,7 +239,10 @@ it.runIf(process.platform === "linux")(
     fs.mkdirSync(home, { mode: 0o700 });
     const runtime = new NodeWorkerWorkspaceRuntime({
       root: path.join(home, "state", "node-host"),
-      env: { PATH: process.env.PATH, HOME: home },
+      env: {
+        PATH: path.dirname(process.execPath) + path.delimiter + (process.env.PATH ?? ""),
+        HOME: home,
+      },
       filesystemIsolation: true,
     });
     const identity = {
@@ -269,7 +254,7 @@ it.runIf(process.platform === "linux")(
     const setup = await runtime.exec({
       ...identity,
       argv: [
-        "node",
+        path.basename(process.execPath),
         "-e",
         String.raw`
     const fs = require("node:fs"); const path = require("node:path");
@@ -309,7 +294,7 @@ it.runIf(process.platform === "linux")(
     const control = await runtime.exec({
       ...identity,
       argv: [
-        "node",
+        path.basename(process.execPath),
         "-e",
         'process.exit(require("node:child_process").spawnSync("git", ["--version"], {stdio:"inherit"}).status ?? 1)',
       ],

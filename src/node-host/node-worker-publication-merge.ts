@@ -27,6 +27,7 @@ async function mergeNodeRepositoryPublication(params: {
   targetUrl: string;
   targetCommit: string;
   token: string;
+  baseEnv?: NodeJS.ProcessEnv;
   gitHistory?: WorkerWorkspaceGitHistory;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -38,7 +39,7 @@ async function mergeNodeRepositoryPublication(params: {
   await withTempWorkspace(
     { rootDir: path.dirname(params.outputRoot), prefix: "publication-git-" },
     async ({ dir }) => {
-      const env: NodeJS.ProcessEnv = { ...process.env };
+      const env: NodeJS.ProcessEnv = { ...(params.baseEnv ?? process.env) };
       for (const key of Object.keys(env)) {
         if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/iu.test(key)) {
           delete env[key];
@@ -296,6 +297,7 @@ export async function transferNodeRepositoryPublication(
         targetUrl: transfer.targetUrl,
         targetCommit: transfer.targetCommit,
         token: transfer.gitToken,
+        baseEnv: params.baseEnv,
         gitHistory: transfer.checkpointGitHistory,
         signal: params.signal,
         assertCurrent: params.assertCurrent,

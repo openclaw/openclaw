@@ -628,6 +628,7 @@ export class NodeWorkerWorkspaceRuntime {
               environmentId: input.environmentId,
               workspaceDir: workspacePath,
               manifestHome: homeDir,
+              baseEnv: this.env,
               isolation,
               ...(prepared && this.prepared.store
                 ? { prepared: { row: prepared, store: this.prepared.store } }

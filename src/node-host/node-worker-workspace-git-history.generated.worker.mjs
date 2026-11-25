@@ -12,12 +12,12 @@ const { pipeline } = require("node:stream/promises");
 const { Transform } = require("node:stream");
 const [root, baseCommit, packPath] = process.argv.slice(1);
 
-function createWorkerGitView(root, baseCommit, viewParent, origin) {
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const gitDir = path.join(root, ".git");
+function createWorkerGitView(workspaceRoot, admittedBase, viewParent, origin) {
+  const gitFs = require("node:fs");
+  const gitPath = require("node:path");
+  const gitDir = gitPath.join(workspaceRoot, ".git");
   const kind = (name) => {
-    const stat = fs.lstatSync(path.join(gitDir, name), { throwIfNoEntry: false });
+    const stat = gitFs.lstatSync(gitPath.join(gitDir, name), { throwIfNoEntry: false });
     return !stat ? "missing" : stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
   };
   const standalone =
@@ -35,26 +35,28 @@ function createWorkerGitView(root, baseCommit, viewParent, origin) {
       (name) => kind(name) !== "directory" && kind(name) !== "other",
     );
   if (!standalone) return undefined;
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(baseCommit)) throw Error("Invalid admitted Git base");
-  const sha256 = baseCommit.length === 64;
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(admittedBase))
+    throw new Error("Invalid admitted Git base");
+  const sha256 = admittedBase.length === 64;
   const reftable = kind("reftable") === "directory";
   const nil = process.platform === "win32" ? "NUL" : "/dev/null";
-  const view = fs.mkdtempSync(path.join(viewParent, "git-view-"));
-  const close = () => fs.rmSync(view, { recursive: true, force: true });
+  const view = gitFs.mkdtempSync(gitPath.join(viewParent, "git-view-"));
+  const close = () => gitFs.rmSync(view, { recursive: true, force: true });
   try {
     for (const name of ["objects", "refs", "reftable"]) {
       if (kind(name) === "directory")
-        fs.symlinkSync(
-          path.join(gitDir, name),
-          path.join(view, name),
+        gitFs.symlinkSync(
+          gitPath.join(gitDir, name),
+          gitPath.join(view, name),
           process.platform === "win32" ? "junction" : "dir",
         );
     }
     for (const name of ["packed-refs", "shallow"]) {
-      if (kind(name) === "file") fs.copyFileSync(path.join(gitDir, name), path.join(view, name));
+      if (kind(name) === "file")
+        gitFs.copyFileSync(gitPath.join(gitDir, name), gitPath.join(view, name));
     }
-    fs.writeFileSync(
-      path.join(view, "config"),
+    gitFs.writeFileSync(
+      gitPath.join(view, "config"),
       "[core]\n\trepositoryformatversion = " +
         (sha256 || reftable || origin ? 1 : 0) +
         "\n\tbare = false\n\tlongpaths = true\n\thooksPath = " +
@@ -74,7 +76,7 @@ function createWorkerGitView(root, baseCommit, viewParent, origin) {
     Object.assign(env, {
       GIT_DIR: gitDir,
       GIT_COMMON_DIR: view,
-      GIT_WORK_TREE: root,
+      GIT_WORK_TREE: workspaceRoot,
       GIT_CONFIG_GLOBAL: nil,
       GIT_CONFIG_SYSTEM: nil,
       GIT_CONFIG_NOSYSTEM: "1",
@@ -84,7 +86,7 @@ function createWorkerGitView(root, baseCommit, viewParent, origin) {
       GIT_ALLOW_PROTOCOL: "",
       GIT_TERMINAL_PROMPT: "0",
       GIT_OPTIONAL_LOCKS: "0",
-      ...(origin ? { GIT_SHALLOW_FILE: path.join(gitDir, "shallow") } : {}),
+      ...(origin ? { GIT_SHALLOW_FILE: gitPath.join(gitDir, "shallow") } : {}),
     });
     return { env, close };
   } catch (error) {

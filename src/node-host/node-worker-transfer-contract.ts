@@ -17,6 +17,8 @@ export type WorkspaceTransferContext = {
   environmentId: string;
   workspaceDir: string;
   manifestHome: string;
+  /** Node-owned command environment, never supplied by the workspace request. */
+  baseEnv?: NodeJS.ProcessEnv;
   isolation?: NodeWorkerCommandIsolation;
   transfer: NodeWorkerWorkspaceTransferInput;
   assertCurrent?: () => void;
