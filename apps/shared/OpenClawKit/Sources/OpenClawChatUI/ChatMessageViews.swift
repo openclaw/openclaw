@@ -1037,13 +1037,19 @@ private struct AttachmentRow: View {
                 loadingLabel: String(localized: "Loading photo"),
                 resolverReady: image.local != nil || self.gateway?.isResolverReady() == true,
                 gallery: self.imageGallery,
-                load: { [messageAttachments] id in
-                    // The viewer pages through the message's photos with this one loader.
+                load: { id in
+                    if let local = image.local { return .data(local) }
+                    return try await self.loadMedia(id, .image, nil)
+                },
+                viewerLoad: { [messageAttachments] id in
+                    // The viewer pages through the message's photos with this one loader. The bytes
+                    // the phone holds are the original; otherwise it asks for the upload as is
+                    // (`.native`), not the transcript's thumbnail.
                     let page = messageAttachments.first { ChatUserImageSource.pageID($0) == id }
                     let local = page.flatMap(ChatUserImageSource.init)?
                         .local ?? (id == image.loadID ? image.local : nil)
                     if let local { return .data(local) }
-                    return try await self.loadMedia(id, .image, nil)
+                    return try await self.loadMedia(id, .image, .native)
                 })
         } else {
             self.gatewayMedia

@@ -45,21 +45,24 @@ actor IOSSourceResourceLoader {
         return data
     }
 
-    /// A thumbnail of a user's upload from the route the Control UI reads it from, with the same
-    /// accepted socket bearer and pinned TLS as the avatars above.
+    /// A user's upload from the route the Control UI reads it from, with the same accepted socket
+    /// bearer and pinned TLS as the avatars above: the thumbnail, or the original for the viewer.
     func loadInboundImage(
         _ source: String,
+        original: Bool,
         sessionKey: String,
         agentID: String?,
         ifCurrentRoute route: GatewayNodeSessionRoute) async -> OpenClawChatMediaData?
     {
+        let buildURL = original ? OpenClawChatInboundMedia.originalURL : OpenClawChatInboundMedia.thumbnailURL
         guard let connection = await connectionProvider(),
               let context = await self.loadContext(ifCurrentRoute: route),
-              let url = OpenClawChatInboundMedia.thumbnailURL(
-                  source: source, context: context, sessionKey: sessionKey, agentID: agentID),
+              let url = buildURL(source, context, sessionKey, agentID),
               let (data, response) = try? await self.request(
                   url: url,
-                  maximumBytes: OpenClawChatInboundMedia.maximumThumbnailBytes,
+                  maximumBytes: original
+                      ? OpenClawChatInboundMedia.maximumOriginalBytes
+                      : OpenClawChatInboundMedia.maximumThumbnailBytes,
                   connection: connection,
                   route: route),
               (response as? HTTPURLResponse)?.statusCode == 200,

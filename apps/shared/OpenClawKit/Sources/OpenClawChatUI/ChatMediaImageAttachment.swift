@@ -180,6 +180,8 @@ struct ChatMediaImageAttachment: View {
     let tileSide: CGFloat?
     /// What VoiceOver reads while the bytes load, when the label alone would not say so.
     let loadingLabel: String?
+    /// The viewer's loader, when the transcript's reads a smaller rendition than the original.
+    let viewerLoad: (@MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)?
     /// A size remembered from an earlier load, read once when the row appears: adopting it later
     /// would reshape a box that is already on screen.
     @State private var rememberedSize: CGSize?
@@ -202,7 +204,8 @@ struct ChatMediaImageAttachment: View {
         loadingLabel: String? = nil,
         resolverReady: Bool,
         gallery: [ChatImageViewerItem] = [],
-        load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)
+        load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?,
+        viewerLoad: (@MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)? = nil)
     {
         self.artifactId = artifactId
         self.label = label
@@ -212,6 +215,7 @@ struct ChatMediaImageAttachment: View {
         #if os(iOS)
         self.tileSide = tileSide
         self.loadingLabel = loadingLabel
+        self.viewerLoad = viewerLoad
         if let width, let height, width > 0, height > 0 {
             self.gatewaySize = CGSize(width: width, height: height)
         } else {
@@ -266,7 +270,7 @@ struct ChatMediaImageAttachment: View {
                                 label: self.label),
                             artifactId: self.artifactId,
                             thumbnail: image,
-                            load: self.load)
+                            load: self.viewerLoad ?? self.load)
                     } label: {
                         // The UIKit thumbnail is the zoom transition's source. A known size or a
                         // tile fills its own box; an unknown size keeps the 3:2 box. It takes no

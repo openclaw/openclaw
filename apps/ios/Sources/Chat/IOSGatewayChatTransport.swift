@@ -568,12 +568,17 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
-        // A user's upload is not an artifact; history names it `media://inbound/<id>`.
+        // A user's upload is not an artifact; history names it `media://inbound/<id>`. The transcript
+        // reads its thumbnail; `.native` asks for the bytes as uploaded, for the viewer.
         if kind == .image, let source = OpenClawChatInboundMedia.canonicalSource(artifactId) {
             guard let route = await gateway.currentRoute() else { return nil }
             let target = self.sessionTarget(for: sessionKey)
             return await self.sourceResourceLoader?.loadInboundImage(
-                source, sessionKey: target.sessionKey, agentID: target.agentID, ifCurrentRoute: route)
+                source,
+                original: playback == .native,
+                sessionKey: target.sessionKey,
+                agentID: target.agentID,
+                ifCurrentRoute: route)
                 .map(OpenClawChatLoadedMedia.data)
         }
         guard kind.acceptsManagedArtifactID(artifactId),
