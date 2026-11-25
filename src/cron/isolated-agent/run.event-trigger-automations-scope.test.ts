@@ -11,7 +11,7 @@ import {
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { admitEventOccurrence } from "../event-occurrence-admission.js";
-import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import type { CronJob } from "../types.js";
 import {
   prepareAuthorityConfig,
@@ -105,8 +105,7 @@ function readActionEnum(tool: { parameters?: unknown }): string[] {
 async function runAndTouchSibling(params: {
   trigger: "cron" | "event";
   toolsAllow?: string[];
-  /** Event turns admit through `admitEventOccurrence` unless set to "unadmitted". */
-  ingressBoundary?: "gateway.hooks.agent" | "unadmitted";
+  ingressBoundary?: "gateway.hooks.agent";
   /** The automations call to make; defaults to removing a sibling job. */
   call?: Record<string, unknown>;
 }): Promise<AutomationsOutcome> {
@@ -150,21 +149,20 @@ async function runAndTouchSibling(params: {
         }
         return { payloads: [{ text: "done" }], meta: { agentMeta: {} } };
       },
-      // The embedded attempt forwards trigger and jobId into tool construction
-      // (embedded-agent-runner/run/attempt-tool-run-context.ts).
-      { includeOpenClawTools: true, trigger: runParams.trigger, jobId: runParams.jobId },
+      { includeOpenClawTools: true },
     ),
   );
   const job = hookShapedJob(params.toolsAllow);
+  // Both triggers admit their occurrence, as the Gateway does; the scope comes from it.
   const occurrence =
-    params.trigger === "event" && params.ingressBoundary !== "unadmitted"
+    params.trigger === "event"
       ? await admitEventOccurrence({
           cfg: config,
           job,
           agentId: "main",
           ...(params.ingressBoundary ? { ingressBoundary: params.ingressBoundary } : {}),
         })
-      : TEST_SCHEDULED_OCCURRENCE;
+      : await admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" });
   await runCronIsolatedAgentTurn({
     cfg: config,
     deps: {},
@@ -206,13 +204,6 @@ it("event-triggered hook turns cannot act on another automation", async () => {
     actions: SELF_ACTIONS,
     error: expect.stringContaining(SCOPE_ERROR),
   });
-  expect(gatewayDispatches).toEqual([]);
-});
-
-it("event-triggered turns without an admitted context cannot use automations", async () => {
-  const outcome = await runAndTouchSibling({ trigger: "event", ingressBoundary: "unadmitted" });
-  expect(outcome).toEqual({ offered: true, actions: expect.any(Array), gated: true });
-  // Refused before any automations Gateway RPC, so nothing can be read or removed.
   expect(gatewayDispatches).toEqual([]);
 });
 
