@@ -1282,7 +1282,7 @@ upload_release_evidence_assets() {
 
 wait_for_core_npm_visibility() {
   local version="${RELEASE_TAG#v}" selector="${RELEASE_NPM_DIST_TAG}" started=$SECONDS
-  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800})) document state last_state=""
+  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-3600})) document state last_state=""
   while true; do
     state="registry unavailable"
     if document="$(curl -fsSL --connect-timeout 10 --max-time 60 \
