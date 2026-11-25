@@ -50,7 +50,7 @@ const commonRequestSchema = z.strictObject({
   releaseTag,
   channel: z.enum(["beta", "latest", "extended-stable"]),
   candidateSha: sha,
-  reference: z.strictObject({ releaseTag, targetSha: sha, validationEvidenceDigest: digest }),
+  reference: z.strictObject({ releaseTag, targetSha: sha }),
   delta: z.strictObject({ commits: count, added: count, deleted: count }),
   artifacts: z.array(artifact).min(1).max(256),
   publicationScope: z
@@ -196,15 +196,13 @@ const validatedReferenceSchema = z.strictObject({
   repository,
   releaseTag,
   targetSha: sha,
-  validationEvidenceDigest: digest,
-  validationMode: z.literal("full-release-validation"),
   published: z.literal(true),
 });
 
 /**
- * Eligibility only. The publisher must separately authenticate reference evidence, verify the
- * human decision for fastTrackRequestDigest(request), and retain package/publication gates.
- * A previous fast-track release is not valid reference evidence.
+ * Eligibility only. The publisher must confirm the reference release was published and bind
+ * the request digest to the existing npm-release approval receipt, retaining
+ * package/publication gates. A previous fast-track release is not a valid reference.
  */
 export function collectFastTrackEligibility(input: {
   repositoryRoot: string;
@@ -221,10 +219,9 @@ export function collectFastTrackEligibility(input: {
   if (
     reference.repository !== request.repository ||
     reference.releaseTag !== request.reference.releaseTag ||
-    reference.targetSha !== request.reference.targetSha ||
-    reference.validationEvidenceDigest !== request.reference.validationEvidenceDigest
+    reference.targetSha !== request.reference.targetSha
   ) {
-    throw new Error("Published fully validated reference does not match the request.");
+    throw new Error("Published reference does not match the request.");
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["--no-replace-objects", "-C", input.repositoryRoot, ...args], {
@@ -244,7 +241,7 @@ export function collectFastTrackEligibility(input: {
   try {
     git("merge-base", "--is-ancestor", reference.targetSha, request.candidateSha);
   } catch {
-    throw new Error("Published fully validated reference must be an ancestor of the candidate.");
+    throw new Error("Published reference release must be an ancestor of the candidate.");
   }
   const commits = Number(
     git("rev-list", "--count", `${reference.targetSha}..${request.candidateSha}`).trim(),

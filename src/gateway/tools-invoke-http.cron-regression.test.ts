@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestGatewayHttpServer } from "./http-server.test-support.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 let cfg: Record<string, unknown> = {};
@@ -34,10 +37,13 @@ vi.mock("../agents/openclaw-tools.js", () => {
 
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 
+// The owner's HTTP request is admitted against a real Gateway context.
+const context = createGatewayRequestContext(makeContextParams());
 let url: string;
 const server = createTestGatewayHttpServer((req, res) =>
   handleToolsInvokeHttpRequest(req, res, {
     auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+    resolveGatewayContext: () => context,
   }),
 );
 beforeAll(async () => {
@@ -81,8 +87,11 @@ it.each([
   },
 ] as const)("HTTP tool denylist: $name", async ({ config, checks }) => {
   cfg = config;
-  for (const [tool, status] of checks) {
-    const scopes = tool === "cron" ? "operator.admin" : "operator.write";
-    expect((await invoke(tool, scopes)).status).toBe(status);
-  }
+  // The owner's request is admitted against its real owner profile.
+  await withOpenClawTestState({ label: "tools-invoke-cron-denylist" }, async () => {
+    for (const [tool, status] of checks) {
+      const scopes = tool === "cron" ? "operator.admin" : "operator.write";
+      expect((await invoke(tool, scopes)).status).toBe(status);
+    }
+  });
 });

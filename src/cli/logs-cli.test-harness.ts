@@ -96,8 +96,9 @@ vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
-      callGatewayFromCli(...args),
+    callGatewayFromCliWithTransport: (
+      ...args: Parameters<typeof actual.callGatewayFromCliWithTransport>
+    ) => callGatewayFromCli(...args),
   };
 });
 

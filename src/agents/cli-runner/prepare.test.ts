@@ -232,7 +232,6 @@ function createLoopbackRuntime() {
   return {
     port: 31783,
     ownerToken: "loopback-owner-token",
-    nonOwnerToken: "loopback-non-owner-token",
   };
 }
 
@@ -2869,7 +2868,6 @@ describe("prepareCliRunContext", () => {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
         ownerToken: "synthetic-loopback-owner",
-        nonOwnerToken: "synthetic-loopback-non-owner",
       }));
       setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
       setRawCliBackendForPrepareTest({

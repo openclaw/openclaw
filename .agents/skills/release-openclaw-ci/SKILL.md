@@ -9,19 +9,20 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 
 ## Fast-track approval boundary
 
-Agents MUST NOT approve fast-track exceptions, even with a release manager's
-available token. Require explicit approval from a human in the normal
-release-managers group, which may be the requesting release manager, for the exact request/digest and skip or incomplete-FRV
-action; retain its permalink and original FRV results. Generic release authority
-is insufficient. Use the normal environment approval and release receipt. An approved packet is passed with
-`--fast-track-approval <packet.json>` to `pnpm release:publish-preflight` and
-forwarded as `fast_track_approval` through existing publishers. Preserve the
-original FRV and sealed artifact bytes. Bounded policy: 20 commits AND 15,000
+The sole approval gate is the normal GitHub Actions `npm-release` environment,
+reviewed by an eligible npm release manager. No Firebase service, chat/group
+approval, approval URL or manually supplied approver/time is required. Agents
+must not approve the environment using a human's token. Preparation and scoped
+dispatch do not require a separate chat decision.
+
+Pass exception evidence with `--fast-track-request <packet.json>` to
+`pnpm release:publish-preflight`, forwarded as `fast_track_request`. Preserve
+original FRV results and sealed bytes. Bounded policy: 20 commits AND 15,000
 added/deleted lines, excluding enumerated package manifests/lockfiles from LOC
-only. Partial-FRV is a separate policy with a complete outstanding-check
-snapshot and no delta ceiling. Neither can reset the fully validated baseline.
-Post-expiry recovery must use the original packet-bound publication receipt
-and verified approval-job start timestamp, never a new unrelated publisher. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-approval-is-human-only).
+only. Partial-FRV retains a complete outstanding-check snapshot without a delta
+ceiling. Neither establishes a fully validated baseline. Post-expiry recovery
+uses the original packet-bound GitHub publication receipt and verified job start
+time. See the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-publication-uses-github-approval).
 
 ## Guardrails
 
@@ -264,12 +265,13 @@ An `all` run without soak for an actual beta package on its matching canonical r
 
 ## Preflight
 
-Run in approved isolation, outside trusted admission/dispatch tooling:
+Run checks that execute candidate code in approved isolation, outside trusted admission/dispatch tooling.
 
 **Before dispatch**
 
-- Run `pnpm check:test-mock-exports --base <frozen-sha>` in exact candidate checkout with frozen dependencies.
-- Failure blocks dispatch; rerun after any candidate change. FRV repeats before child fanout. Keep candidate execution outside trusted admission.
+- Fresh validation through `pnpm ci:full-release` scans committed mock exports with trusted local tooling. Failure blocks dispatch for that candidate SHA. The helper does not run candidate code.
+- When dispatching directly without the helper, run `pnpm check:test-mock-exports --base <frozen-sha>` in an approved isolated exact-candidate checkout with frozen dependencies. FRV repeats the guard before child fanout.
+- `--skip-local-mock-preflight` logs the candidate SHA and defers only the local check to the hosted workflow. Build-only and retained requests are unchanged.
 
 **Before full matrix dispatch**
 
@@ -592,4 +594,4 @@ Record:
 
 Lessons/recovery patterns: `references/release-ci-notes.md`.
 
-For public-safe approval evidence, follow [public approval packets](../release-openclaw-maintainer/references/fast-track.md#public-approval-packets).
+For public-safe approval evidence, follow [public request packets](../release-openclaw-maintainer/references/fast-track.md#public-request-packets).

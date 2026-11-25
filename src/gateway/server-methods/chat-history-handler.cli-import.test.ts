@@ -13,6 +13,7 @@ import {
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
+import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -22,10 +23,15 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { chatHistoryActivityBytes } from "../chat-history-budget.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 
 function appendLocal(
   scope: Parameters<typeof appendTranscriptMessage>[0],
@@ -209,6 +215,96 @@ function expectMissingAnchor(page: HistoryPage) {
     expect(page).not.toHaveProperty(key);
   }
 }
+
+it("makes room for a proven pre-tool prefix on a packed tail without losing back-scroll", async () => {
+  await withCliHistory(async ({ scope, timestamp, native, append, write }) => {
+    const runId = "swatch-run";
+    const callId = "swatch-read";
+    const suffix = " The tool returned amber.";
+    await append("user", "Earlier question.", timestamp);
+    await append("user", "Read the swatch. " + "Context. ".repeat(110), timestamp + 1, {
+      idempotencyKey: runId + ":user",
+    });
+    await write([
+      native("preamble", "assistant", [{ type: "text", text: "A" }], timestamp + 2),
+      native(
+        "call",
+        "assistant",
+        [{ type: "tool_use", name: "Read", id: callId, input: {} }],
+        timestamp + 3,
+        "preamble",
+      ),
+    ]);
+    const context = await createHistoryReadContext();
+    const rpc = historyRpc(context, scope.sessionKey);
+    const read = async (params: HistoryRequest) => {
+      const payload = historyPayload(
+        await rpc("chat.history", params, { acceptsSerializedJson: true }),
+      );
+      return JSON.parse(serializeGatewayFrame({ type: "res", payload }).toString())
+        .payload as HistoryPage & {
+        activity?: AgentHistoryActivity[];
+        inFlightRun?: { text: string; textFromMessage?: number; events?: unknown[] };
+      };
+    };
+    const all = await read({});
+    expect(all.messages).toHaveLength(4);
+    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+    const pageBytes = (page: typeof all) =>
+      bytes(page.messages) + chatHistoryActivityBytes(page.activity ?? []);
+    const maxBytes = pageBytes(all) + bytes({ runId, text: "", events: [] });
+    expect(maxBytes).toBeGreaterThanOrEqual(1024);
+    const registration = registerChatAbortController({
+      ...scope,
+      target: captureRpcTargetForTest(scope),
+      runId,
+      timeoutMs: 60_000,
+    });
+    if (!registration.entry) {
+      throw new Error("Missing history source");
+    }
+    const release = await claimRpcSourceForTest(registration.entry);
+    try {
+      for (const cumulative of [false, true]) {
+        context.chatRunState.clearRun(runId);
+        if (cumulative) {
+          context.chatRunState.updateBuffer(runId, { itemId: "assistant", text: "A" });
+          context.chatRunState.resolveBuffer(runId);
+        }
+        context.chatRunState.recordProgressEvent(runId, {
+          runId,
+          seq: 1,
+          ts: timestamp + 3,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "Read",
+            toolCallId: callId,
+            args: { preview: "x".repeat(700) },
+            ...(cumulative ? { textLengthBeforeTool: 1 } : {}),
+          },
+        });
+        context.chatRunState.updateBuffer(runId, { itemId: "assistant", text: "A" + suffix });
+        const page = await read({ maxBytes });
+        expect(pageBytes(page) + bytes(page.inFlightRun)).toBeLessThanOrEqual(maxBytes);
+        if (cumulative) {
+          expect(page.messages).toEqual(all.messages.slice(1));
+          expect(page.inFlightRun).toMatchObject({ textFromMessage: 1, text: suffix, events: [] });
+          expect(page.hasMore).toBe(true);
+          expect((await read({ offset: page.nextOffset })).messages).toEqual(
+            all.messages.slice(0, 1),
+          );
+        } else {
+          expect(page.messages).toEqual(all.messages);
+          expect(page.inFlightRun).toEqual({ runId, text: "", events: [] });
+        }
+      }
+    } finally {
+      release();
+      registration.cleanup();
+    }
+  });
+});
 
 it("reports Claude CLI tool results with the same outcomes as the live stream", async () => {
   await withCliHistory(async ({ scope, timestamp, native, write }) => {

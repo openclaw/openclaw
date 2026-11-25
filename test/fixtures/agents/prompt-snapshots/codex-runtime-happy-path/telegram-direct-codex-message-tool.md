@@ -247,8 +247,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 106100,
-    "roughTokens": 26525
+    "chars": 105936,
+    "roughTokens": 26484
   },
   "openClawBaseInstructions": {
     "chars": 7208,
@@ -267,8 +267,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 3392
   },
   "totalWithDynamicToolsJson": {
-    "chars": 119669,
-    "roughTokens": 29918
+    "chars": 119505,
+    "roughTokens": 29877
   },
   "userInputText": {
     "chars": 879,
@@ -605,7 +605,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "effectId": {
-          "description": "sendWithEffect id/name.",
+          "description": "Numeric Telegram message effect id; private chats only.",
           "type": "string"
         },
         "emoji": {
@@ -628,9 +628,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "gatewayUrl": {
           "type": "string"
-        },
-        "gifPlayback": {
-          "type": "boolean"
         },
         "groupId": {
           "type": "string"
@@ -994,12 +991,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {

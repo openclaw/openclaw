@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Keep this file under 20,000 characters, the size OpenClaw loads whole. Put long rules in the owning guide and leave a one-line pointer here. A new rule cites an incident; see [instruction rules](.agents/skills/technical-documentation/SKILL.md#instruction-rules).
+Keep this file under 20,000 characters, the size OpenClaw loads whole. Put long rules in the owning guide and leave a one-line pointer here. A new rule cites an incident; see [instruction rules](.agents/skills/openclaw-writing/references/agent-instructions.md#instruction-rules).
 
 ## Choose good compromises
 
@@ -76,7 +76,7 @@ Update instructions at owner; no competing rules here.
 
 ## Product and validation
 
-- Defaults produce working, understandable result. Prioritize silent failures: every action has visible outcome or recorded intentional non-outcome; errors name next step.
+- Defaults produce working, understandable result. Prioritize silent failures: every action has visible outcome or recorded intentional non-outcome.
 - **Updates always work:** best effort everywhere. Update/Doctor/lifecycle/migration/plugin-loading changes state update behavior and follow the [update contract](docs/install/updating.md#update-implementation-contract). [`src/update/`](src/update/AGENTS.md) owns owned-install updates; other update code is a [bridge for shipped updaters](src/cli/update-cli/AGENTS.md), not the place for new behavior.
 - Security = product tradeoff: weigh concrete risk against user effort, lockouts, lost capability. Prefer least restrictive effective safeguard; keep risky paths explicit, operator-controlled within existing trust model and approval boundaries; explain tradeoffs, never invent gates.
 - **Behavior over test count.** Prefer production-path integration proof and independent unit contracts. Before changing provider requests, fallbacks, recovery, defaults, and when writing or reviewing behavioral tests: read [boundary proof](docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary).

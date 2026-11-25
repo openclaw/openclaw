@@ -1,44 +1,49 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../agents/admitted-run-context.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryView } from "../config/sessions/session-entry-view.js";
+import { matchesSessionParticipationSource } from "../config/sessions/session-participation-source.js";
 import {
   bindSynchronousSessionSource,
   composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { waitForAgentInputAdmission } from "../state/agent-database-preparation-context.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
-import {
-  prepareUserProfileIdentity,
-  readResidentGatewayOwnerProfile,
-} from "../state/user-profile-list.js";
+import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import type { PreparedUserProfileIdentity } from "../state/user-profiles.types.js";
 import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
-import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { decideOperatorAdmission, prepareOperatorAdmission } from "./operator-admission.js";
 import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import {
+  restoreGatewayQueuedOperatorRecovery,
+  type RestoredGatewayOperatorAuthority,
+} from "./operator-run-recovery.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  prepareSessionDelegatedOperatorAuthority,
+  prepareSessionParticipantSystemTurnAuthority,
+} from "./session-delegated-operator-source.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
+import { bindSessionParticipationSource } from "./session-participation-authorization.js";
+import { resolveSessionSystemTurnProfileId } from "./session-principal-run-authority.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -60,63 +65,7 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-/** An explicit non-human assignment must not fall back to a former human creator. */
-export function resolveSessionSystemTurnProfileId(
-  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
-): string | undefined {
-  const actor = entry?.owner
-    ? entry.owner.actor
-    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
-      ? entry.createdActor
-      : undefined;
-  if (actor?.type !== "human") {
-    return undefined;
-  }
-  const profileId = actor.id?.trim();
-  if (!profileId) {
-    throw new Error("Session owner has no current profile identity");
-  }
-  return profileId;
-}
-
-/** Admit a new input as a recorded person using only that person's current grants. */
-export async function prepareSessionPrincipalRunAuthority(
-  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
-): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
-  const source = await prepareSessionPrincipalRunAccess(params);
-  const original = source.recordedOperatorAuthority;
-  if (original) {
-    return {
-      authority: createAdmittedRunOperatorAuthority({
-        ...original,
-        signal: source.signal,
-      }),
-      release: source.release,
-    };
-  }
-  let admitted: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
-  try {
-    admitted = await prepareGatewayOperatorRunAuthority({
-      client: source.client,
-      context: params.context,
-      sourceAuthority: source,
-    });
-    if (!admitted) {
-      throw new Error("Session principal has no current run authority.");
-    }
-    return admitted;
-  } catch (error) {
-    if (admitted) {
-      admitted.release();
-    } else {
-      source.release();
-    }
-    throw error;
-  }
-}
-
-/** Resolve a recorded person against current grants and an existing exact session. */
-async function prepareSessionPrincipalRunAccess(params: {
+type SessionPrincipalRunParams = {
   context: GatewayRequestContext;
   profileId: string;
   agentId: string;
@@ -127,88 +76,136 @@ async function prepareSessionPrincipalRunAccess(params: {
   sessionPrincipal?: true;
   /** Restart continuations retain a recorded original source when one exists. */
   preserveRecordedSource?: true;
-  /** Host-restored interrupted requester, not session ownership or caller-supplied attribution. */
-  recoveredOperatorAuthority?: AdmittedRunOperatorAuthority;
+  /** The requester's source, already admitted; this lifetime takes over its release. */
+  restored?: RestoredGatewayOperatorAuthority;
+  /** Host-retained participant limit; the current invitation must still permit it. */
+  participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
   assertCurrent?: () => void;
-}) {
+};
+
+/**
+ * A system turn (restart resume, completion, unattributed event) replays the requester's recorded
+ * source when it has one, else the session's person. Turn kind only selects the source; admission
+ * decides what the turn may do.
+ */
+export async function prepareSessionSystemTurnAuthority(
+  params: Omit<
+    SessionPrincipalRunParams,
+    "profileId" | "sessionPrincipal" | "restored" | "participationCeiling"
+  > & {
+    operatorSource?: QueuedOperatorRecoverySource;
+  },
+) {
+  const entry = await readSessionEntryReadOnlyInWorker(
+    {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      projection: "list",
+    },
+    params.assertCurrent,
+  );
+  // The person's admission below checks the session id it runs in.
+  if (!entry) {
+    throw new Error("System turn session is unavailable.");
+  }
+  const restored = params.operatorSource
+    ? await restoreGatewayQueuedOperatorRecovery({
+        agentId: params.agentId,
+        source: params.operatorSource,
+        context: params.context,
+        assertCurrent: () => params.assertCurrent?.(),
+      })
+    : undefined;
+  // A participant's child or retained participant work never falls back to owner admission.
+  const delegated = await prepareSessionParticipantSystemTurnAuthority({
+    context: params.context,
+    agentId: params.agentId,
+    entry,
+    restored,
+    assertCurrent: params.assertCurrent,
+  });
+  if (delegated) {
+    return delegated;
+  }
+  if (restored) {
+    return prepareSessionPrincipalRunAuthority({
+      ...params,
+      profileId: restored.authority.profileId,
+      preserveRecordedSource: true,
+      restored,
+    });
+  }
+  const profileId = resolveSessionSystemTurnProfileId(entry);
+  return profileId
+    ? prepareSessionPrincipalRunAuthority({ ...params, profileId, sessionPrincipal: true })
+    : undefined;
+}
+
+/**
+ * Admit a new input as a recorded person: their restored source, else their recorded session
+ * source, else the person alone. Then check the session is theirs to run in.
+ */
+export async function prepareSessionPrincipalRunAuthority(
+  params: SessionPrincipalRunParams,
+): Promise<
+  RestoredGatewayOperatorAuthority & {
+    assertCurrent: () => void;
+    participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
+  }
+> {
   params.assertCurrent?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  const preserveRecordedSource =
-    params.preserveRecordedSource || params.recoveredOperatorAuthority !== undefined;
-  const identity = await prepareUserProfileIdentity(params.profileId);
-  const ownerProfilePath = resolveDatabasePath();
+  let admitted = params.restored;
+  let identity: PreparedUserProfileIdentity | undefined;
   let sharing: ReturnType<typeof resolveSessionMutationAuthorization>["authorization"];
-  let recorded:
-    | Pick<
-        NonNullable<Awaited<ReturnType<typeof restoreSessionOperatorSource>>>,
-        "authority" | "release"
-      >
-    | undefined;
   const release = () => {
     sharing?.release?.();
-    recorded?.release();
-    identity.release();
-  };
-  const readScopes = () => {
-    const profile = identity.readCurrentProfile();
-    let scopes: readonly string[] | undefined = recorded?.authority.scopes;
-    if (!scopes && params.profileId === GATEWAY_OWNER_PROFILE_ID) {
-      if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
-        throw new Error("Session principal is no longer the Gateway owner.");
-      }
-      scopes = ["operator.admin"];
-    } else if (!scopes) {
-      scopes = resolveOperatorRolePolicyForAssignment(
-        params.profileId,
-        profile.assignedRole,
-        getConfig(),
-        profile.githubLogin ?? null,
-        operatorRoleSubject(profile),
-      )?.scopes;
-    }
-    if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
-      throw new Error("Session principal has no current run authority.");
-    }
-    return scopes;
+    admitted?.release();
+    identity?.release();
   };
   try {
-    // Fresh role-based principals keep their existing admission semantics. A
-    // restart may additionally transfer the original authenticated custody;
-    // source-less legacy sessions remain non-durable when roles authorize them.
-    if (params.recoveredOperatorAuthority) {
-      const authority = params.recoveredOperatorAuthority;
-      assertAdmittedRunOperatorAuthority(authority);
-      if (authority.profileId !== params.profileId) {
-        throw new Error("Interrupted requester identity changed.");
-      }
-      recorded = { authority, release: authority.retain?.() ?? (() => {}) };
-    } else if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
-      recorded = await restoreSessionOperatorSource({
+    const assertCurrent = () => params.assertCurrent?.();
+    if (!admitted && params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
+      identity = await prepareUserProfileIdentity(params.profileId);
+      const subject = operatorRoleSubject(identity.readCurrentProfile());
+      admitted = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         memberOnly:
-          !preserveRecordedSource &&
-          isOperatorRoleEnforcedFor(
-            getConfig(),
-            operatorRoleSubject(identity.readCurrentProfile()),
-          ) &&
-          !operatorRoleSubject(identity.readCurrentProfile()).openclawIdMember,
-        assertCurrent: () => params.assertCurrent?.(),
+          !params.preserveRecordedSource &&
+          isOperatorRoleEnforcedFor(getConfig(), subject) &&
+          !subject.openclawIdMember,
+        assertCurrent,
       });
     }
-    const scopes = readScopes();
-    const original = recorded?.authority;
-    // A restored requester already passed current reference admission.
-    const access = original
-      ? undefined
-      : resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
-          requireLivePolicySet: true,
-          openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
-        });
-    access?.assertCurrent();
+    const recordedSource = admitted !== undefined;
+    if (!admitted) {
+      const facts = {
+        kind: "person",
+        snapshot: { profileId: params.profileId },
+        agentId: params.agentId,
+      } as const;
+      admitted = decideOperatorAdmission(
+        facts,
+        await prepareOperatorAdmission(facts, params.context),
+      );
+    }
+    const { scopes, openclawIdPrincipal } = admitted.authority;
+    const ceiling = params.participationCeiling;
+    if (
+      ceiling &&
+      (ceiling.profileId !== params.profileId || ceiling.sessionKey !== params.sessionKey)
+    ) {
+      throw new Error("Participation source does not match its original target.");
+    }
+    const requiredScope = ceiling ? "operator.sessions.read" : "operator.sessions.write";
+    if (resolveMissingOperatorScope([requiredScope], scopes) !== null) {
+      throw new Error("Session principal has no current run authority.");
+    }
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
       connect: {
@@ -221,29 +218,41 @@ async function prepareSessionPrincipalRunAccess(params: {
       internal: {
         syntheticClient: true,
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
-        openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
+        openclawIdPrincipal,
       },
     };
     const assertPrincipalCurrent = composeSessionSourceAssertion(
       [params.assertCurrent],
       undefined,
-      { synchronousCheck: true },
+      {
+        synchronousCheck: true,
+      },
     );
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client,
       context: params.context,
       method: "chat.send",
+      ...(ceiling ? { participationRequired: true as const } : {}),
       sessionScope:
-        original && resolveMissingOperatorScope(["operator.write"], scopes) !== null
+        recordedSource &&
+        !ceiling &&
+        resolveMissingOperatorScope(["operator.write"], scopes) !== null
           ? "operator.sessions.write"
           : undefined,
       requestParams: { agentId: params.agentId, sessionKey: params.sessionKey },
       assertInvocationCurrent: assertPrincipalCurrent,
       assertPrincipalTargetCurrent: (target) => {
+        const origin = ceiling?.source;
         if (
           !target ||
           target.agentId !== params.agentId ||
           target.entry.archivedAt !== undefined ||
+          (origin &&
+            !matchesSessionParticipationSource(
+              { sessionKey: params.sessionKey, source: origin },
+              target,
+              resolveAgentWorkspaceDir(getConfig(), params.agentId),
+            )) ||
           (params.sessionPrincipal &&
             resolveSessionSystemTurnProfileId(target.entry) !== params.profileId) ||
           (params.storePath !== undefined &&
@@ -258,29 +267,38 @@ async function prepareSessionPrincipalRunAccess(params: {
     if (resolved.error) {
       throw new Error(resolved.error.message);
     }
-    if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
+    if (
+      !sharing ||
+      !captureSessionEntryView(params, ["sessionId"]).matches(sharing.admittedTarget)
+    ) {
       throw new Error("Session is unavailable for this principal.");
     }
     const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;
     // This synthetic principal's sharing owner has no caller-supplied policy callbacks.
     bindSynchronousSessionSource(sharingSource);
-    const assertCurrent = composeSessionSourceAssertion(
+    const assertAccessCurrent = composeSessionSourceAssertion(
       [assertPrincipalCurrent, sharingSource],
       undefined,
       { synchronousCheck: true },
     );
-    assertCurrent();
+    assertAccessCurrent();
+    const participationSignal = sharing.participationSignal;
+    const signal = participationSignal
+      ? AbortSignal.any(
+          [admitted.authority.signal, participationSignal].filter(
+            (entry): entry is AbortSignal => entry !== undefined,
+          ),
+        )
+      : admitted.authority.signal;
     return {
-      client,
-      assertCurrent,
-      signal: recorded?.authority.signal,
-      gatewayAccessGrant: original
-        ? original.gatewayAccessGrant
-        : access
-          ? access.gatewayAccessGrant
-          : null,
-      recordedOperatorAuthority: original,
+      ...admitted,
+      authority:
+        signal === admitted.authority.signal
+          ? admitted.authority
+          : createAdmittedRunOperatorAuthority({ ...admitted.authority, signal }),
       release,
+      assertCurrent: assertAccessCurrent,
+      participationCeiling: sharing.participationCeiling,
     };
   } catch (error) {
     release();
@@ -336,7 +354,14 @@ export async function resolveSessionMutationAuthorizationAsync(
       ]
     : [
         ...resolveDirectSessionTargets(params.method, params.requestParams),
-        ...(resolveSessionMutationTargets(params) ?? []),
+        // Discovery precedes profile preparation; the final check resolves the role ceiling.
+        ...(resolveSessionMutationTargets({
+          ...params,
+          ...(params.method === "session.typing" &&
+          params.sessionScope === "operator.sessions.write"
+            ? { participationRequired: true as const }
+            : {}),
+        }) ?? []),
       ];
   if (targets.length === 0 && !params.sessionScope && !isSessionTargetMethod(params.method)) {
     return resolveSessionMutationAuthorization(params);
@@ -354,6 +379,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       : undefined;
   // Match the chat handler's command interpretation: cancellation must not join startup.
   const stopCommand =
+    !params.participationRequired &&
     chatParams?.suppressCommandInterpretation !== true &&
     chatParams?.intent === undefined &&
     chatMessage?.ok === true &&
@@ -375,6 +401,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     }
   };
   let references = 0;
+  let childParticipation: Awaited<ReturnType<typeof prepareSessionDelegatedOperatorAuthority>>;
   const retain = () => {
     if (!active) {
       throw new Error("Session authorization has been released");
@@ -437,6 +464,48 @@ export async function resolveSessionMutationAuthorizationAsync(
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
+      if (!initialFacts.target && (params.method === "chat.send" || params.method === "agent")) {
+        const { getSubagentRunsForChildSession } =
+          await import("../agents/subagents/registry/subagent-registry-memory.js");
+        // An indexed custody requirement can refuse recreation, never reconstruct authority.
+        for (const run of getSubagentRunsForChildSession(target.sessionKey, input.agentId)) {
+          if (run.requiresCompletionAuthority) {
+            throw new Error("Constrained child requires its original session source.");
+          }
+        }
+      }
+      const inherited = params.client?.internal?.operatorRunAuthority;
+      if (
+        (params.method === "chat.send" || params.method === "agent") &&
+        initialFacts.target?.entry.delegatedOperatorSource
+      ) {
+        childParticipation = await prepareSessionDelegatedOperatorAuthority({
+          context: params.context,
+          agentId: input.agentId,
+          entry: initialFacts.target.entry,
+          authority: inherited,
+          assertCurrent: params.assertInvocationCurrent,
+        });
+        if (childParticipation) {
+          creationReleases.push(childParticipation.release);
+        }
+      }
+      const participantRunAuthority =
+        params.method === "chat.send" || params.method === "agent"
+          ? (childParticipation?.authority ??
+            (inherited?.participationCeiling ? inherited : undefined))
+          : undefined;
+      if (participantRunAuthority) {
+        params = {
+          ...params,
+          participantRunAuthority,
+          participationRequired: undefined,
+          assertInvocationCurrent: composeSessionSourceAssertion([
+            params.assertInvocationCurrent,
+            () => participantRunAuthority.signal?.throwIfAborted(),
+          ]),
+        };
+      }
       const readCurrent = () => {
         try {
           return retained.readCurrent(params.context.getRuntimeConfig());
@@ -468,6 +537,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             storageTarget: retained.storageTarget,
             members: [],
             isMember: (identityId: string) => facts.membership.has(identityId),
+            memberAccess: (identityId: string) => facts.memberAccess?.[identityId],
             assertCurrent: () => {
               readCurrent();
             },
@@ -510,6 +580,13 @@ export async function resolveSessionMutationAuthorizationAsync(
       return result;
     }
     const authorization = result.authorization;
+    if (childParticipation) {
+      authorization.participationCeiling = childParticipation.authority.participationCeiling;
+      authorization.participationSignal = childParticipation.authority.signal;
+    }
+    if (authorization.release) {
+      creationReleases.push(authorization.release);
+    }
     const prepareWorkerGrant = authorization.prepareWorkerGrant;
     if (prepareWorkerGrant) {
       authorization.prepareWorkerGrant = async (source) => {
@@ -539,9 +616,18 @@ export async function resolveSessionMutationAuthorizationAsync(
         },
         retain,
         retainForRun: () => ({
-          // Published facts stay live without repeating history preparation or transport admission.
-          assertCurrent: () =>
-            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          signal: authorization.participationSignal,
+          participationCeiling: bindSessionParticipationSource(
+            authorization.participationCeiling,
+            () => preparedTargets[0]?.read().target,
+            params.context.getRuntimeConfig,
+            authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
+          ),
+          participationAuthority: childParticipation?.authority,
+          assertCurrent: () => {
+            authorization.participationSignal?.throwIfAborted();
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
+          },
           release: retain(),
         }),
         release: () => {
@@ -592,6 +678,7 @@ export async function resolveSessionMutationAuthorizationAsync(
               },
               members: [],
               isMember: (identityId: string) => current.membership.has(identityId),
+              memberAccess: (identityId: string) => current.memberAccess?.[identityId],
               assertCurrent: () => {
                 if (!active || !retained.readCurrent(readScope)) {
                   throw sessionMutationTargetChanged(params.method, created.sessionKey);

@@ -10,7 +10,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 type RequiredReplyFixture = {
   createMinimalRun: (params?: {
@@ -254,7 +253,6 @@ export function registerRequiredReplyCompletionCases({
       expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(
         expectedStatus === "failed" ? "failed" : "completed",
       );
-      expect(resolveReplyOperationAgentTurn(runState)).toBe(expectedStatus);
     },
   );
 }

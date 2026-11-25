@@ -569,7 +569,7 @@ export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string
   }
 }
 
-/** Presence only: version and initialize health remain startup's responsibility. */
+/** Activation-time presence only; version and initialize health are checked at startup. */
 export function hasManagedCodexAppServerBinary(): boolean {
   const root = registeredCodexPlugin.root;
   if (
@@ -583,7 +583,10 @@ export function hasManagedCodexAppServerBinary(): boolean {
   ) {
     return true;
   }
-  const found = resolveNodeHostExecutable("codex", { strategy: "direct" })?.executable;
+  const found = resolveNodeHostExecutable("codex", {
+    strategy: "direct",
+    useCache: false,
+  })?.executable;
   return (
     found !== undefined && resolveInstalledCodexLauncher(found, process.platform) !== undefined
   );

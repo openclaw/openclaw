@@ -96,9 +96,6 @@ export function createCronCreatorAuthorityRunScope(
     ...(managementEntitlement ? { managementEntitlement } : {}),
     ...(requesterOwner ? { requesterOwner } : {}),
     ...(callerScopedCreation ? { callerScopedCreation } : {}),
-    get controlUiAdmin(): true | undefined {
-      return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
-    },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
     abort: () => {

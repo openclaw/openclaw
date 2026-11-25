@@ -376,7 +376,7 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return handled !== false;
   }
-  const { payload, abortController, senderIsOwner } = handled;
+  const { payload, abortController } = handled;
   const hasMedia = (payload.messages ?? []).some((message) => {
     const content = asOptionalObjectRecord(message)?.content;
     return (
@@ -466,7 +466,7 @@ export async function handleOpenAiHttpRequest(
     agentId,
     sessionKey,
     requestAuth: handled.requestAuth,
-    senderIsOwner,
+    senderIsOwner: handled.grant.owner,
   });
   if (!sessionAuth.allowed) {
     sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
@@ -540,7 +540,6 @@ export async function handleOpenAiHttpRequest(
       sessionKey,
       runId,
       messageChannel,
-      senderIsOwner,
       requestAuth: handled.requestAuth,
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,

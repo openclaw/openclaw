@@ -8,6 +8,7 @@ import {
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionActionV2,
 } from "./github-personal-publication.js";
+import { publicationParticipantDisplayName } from "./github-publication-content.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
@@ -192,6 +193,10 @@ export function createRepositoryGitHubPublicationExecution(params: {
             execution: await claimExecution(),
             requesterProfileId:
               action?.owner ?? (actor?.kind === "operator" ? actor.profileId : undefined),
+            requester: action ? undefined : getRequester(),
+            participantDisplayName: action
+              ? undefined
+              : publicationParticipantDisplayName(getRequester()),
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
             history: prepared.history,

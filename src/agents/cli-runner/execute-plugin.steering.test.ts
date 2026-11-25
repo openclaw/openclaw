@@ -79,7 +79,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     appendFileSync("received.ndjson", JSON.stringify(text) + "\n");
     appendFileSync("received-origins.ndjson", JSON.stringify(message.isSynthetic === true) + "\n");
     inputs.set(message.uuid, { text, initial });
-    if (initial) send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
+    if (initial) send({ type: "system", subtype: "init", session_id: "native-child-session", capabilities: ["msg_lifecycle_v1"] });
+    if (text === "refuse-before-start") {
+      send({ type: "command_lifecycle", state: "refused", command_uuid: message.uuid });
+      continue;
+    }
+    if (text === "explicit steer") appendFileSync("document-uuid", message.uuid);
     send({ type: "command_lifecycle", state: "started", command_uuid: message.uuid });
     send({ type: "control_request", request_id: message.uuid, request: {
       subtype: "hook_callback", callback_id: "UserPromptSubmit",
@@ -141,6 +146,15 @@ it("steers configured, session and explicit inputs through current authority int
     const recordInput = (text: string, provenance?: InputProvenance) =>
       createUserTurnTranscriptRecorder({
         input: { text, idempotencyKey: text, provenance },
+        target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId, cwd: root }),
+      });
+    const recordDocument = (idempotencyKey: string) =>
+      createUserTurnTranscriptRecorder({
+        input: {
+          text: "field note",
+          idempotencyKey,
+          media: [{ kind: "document", fileName: "field.md", contentType: "text/markdown" }],
+        },
         target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId, cwd: root }),
       });
     const followupRun = createQueueTestRun({ prompt: "initial", originatingChannel: "webchat" });
@@ -254,7 +268,8 @@ it("steers configured, session and explicit inputs through current authority int
             : undefined,
         });
         expect(resolvedQueue.mode).toBe("steer");
-        const recorder = recordInput(route.text);
+        const recorder =
+          route.text === "explicit steer" ? recordDocument(route.text) : recordInput(route.text);
         const incoming = {
           ...followupRun,
           prompt: route.text,
@@ -383,6 +398,12 @@ it("steers configured, session and explicit inputs through current authority int
       expect(refusal).toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       vi.restoreAllMocks();
+      const deniedRecorder = recordDocument("refuse-before-start");
+      const denied = await beginReplyMessageInjectionTarget(target, "refuse-before-start", {
+        userTurnTranscriptRecorder: deniedRecorder,
+      });
+      await expect(denied.outcome).resolves.toMatchObject({ status: "rejected" });
+      expect(deniedRecorder.hasPersisted()).toBe(false);
       const exitRecorder = recordInput("started-exit");
       const exit = await beginReplyMessageInjectionTarget(target, "started-exit", {
         userTurnTranscriptRecorder: exitRecorder,
@@ -391,14 +412,29 @@ it("steers configured, session and explicit inputs through current authority int
       await expect(exit.outcome).resolves.toMatchObject({ status: "accepted" });
       await expect(run).rejects.toThrow();
       const expectedInputs = [...routeInputs, "started-exit"];
-      expect(await readInputs()).toEqual(["initial", ...routeInputs, "started-exit"]);
+      expect(await readInputs()).toEqual([
+        "initial",
+        ...routeInputs,
+        "refuse-before-start",
+        "started-exit",
+      ]);
       expect(exitRecorder.hasPersisted()).toBe(true);
       const messages = await readTranscriptMessages({
         sessionId,
         sessionKey,
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       });
-      expect(messages.map((message) => message.content)).toEqual(expectedInputs);
+      expect(messages.map((message) => message.content)).toEqual(
+        expectedInputs.map((input) => (input === "explicit steer" ? "field note" : input)),
+      );
+      expect(messages.find((message) => message.content === "field note")).toMatchObject({
+        __openclaw: {
+          media: [expect.objectContaining({ fileName: "field.md" })],
+          importedFrom: "claude-cli",
+          cliSessionId: "native-child-session",
+          externalId: await readFile(path.join(root, "document-uuid"), "utf8"),
+        },
+      });
       expect(followup).not.toHaveBeenCalled();
     } finally {
       operation.abortByUser();

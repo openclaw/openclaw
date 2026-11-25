@@ -26,7 +26,6 @@ function request(candidateSha = "b".repeat(40), referenceSha = "a".repeat(40)): 
     reference: {
       releaseTag: "v2026.11.1",
       targetSha: referenceSha,
-      validationEvidenceDigest: digest,
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [{ name: "openclaw.tgz", digest }],
@@ -68,7 +67,6 @@ function eligibility(
     validatedReference: {
       repository: value.repository,
       ...value.reference,
-      validationMode: "full-release-validation",
       published: true,
       ...anchorChanges,
     },
@@ -84,7 +82,6 @@ it("binds all immutable review fields while treating artifact and scope lists as
   const changes = [
     { candidateSha: "c".repeat(40) },
     { reference: { ...original.reference, targetSha: "c".repeat(40) } },
-    { reference: { ...original.reference, validationEvidenceDigest: `sha256:${"b".repeat(64)}` } },
     { artifacts: [{ name: "openclaw.tgz", digest: `sha256:${"b".repeat(64)}` }] },
     { publicationScope: ["docker:openclaw:beta"] },
     { run: { id: "124", attempt: "1" } },
@@ -147,7 +144,6 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { targetSha: candidate })).toThrow(
     "reference does not match",
   );
-  expect(() => eligibility(h.root, value, { validationMode: "approved-fast-track-v1" })).toThrow();
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
@@ -253,23 +249,23 @@ it("prepares an exact local packet without credentials, network access or approv
   vi.stubGlobal("fetch", network);
   const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
-    await runReleasePublishPreflightCommand(["approval", "request", "--request", file]);
+    await runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]);
     expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
       requestId: value.requestId,
       digest: fastTrackRequestDigest(value),
       payload: serializeFastTrackRequest(value),
-      state: "awaiting-explicit-maintainer-approval",
+      state: "awaiting-npm-release-environment-approval",
       publicationAuthorized: false,
     });
     expect(network).not.toHaveBeenCalled();
     for (const operation of ["approve", "status", "reject"]) {
       await expect(
-        runReleasePublishPreflightCommand(["approval", operation, "--request", file]),
+        runReleasePublishPreflightCommand(["fast-track", operation, "--request", file]),
       ).rejects.toThrow(/no machine approval/u);
     }
     writeFileSync(file, JSON.stringify({ ...value, expiresAt: "2000-01-01T00:00:00.000Z" }));
     await expect(
-      runReleasePublishPreflightCommand(["approval", "request", "--request", file]),
+      runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]),
     ).rejects.toThrow(/fresh expiry/u);
   } finally {
     output.mockRestore();
@@ -352,7 +348,6 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
       validatedReference: {
         repository: original.repository,
         ...original.reference,
-        validationMode: "full-release-validation",
         published: true,
       },
     }),

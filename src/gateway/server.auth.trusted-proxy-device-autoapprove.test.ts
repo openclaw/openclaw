@@ -29,6 +29,7 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { loggingState } from "../logging/state.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { CONTROL_UI_OPERATOR_SCOPES } from "./control-ui-bootstrap-contract.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
 import {
   BROWSER_ORIGIN,
@@ -390,6 +391,16 @@ describe("trusted-proxy operator device auto-approval", () => {
     });
   });
 
+  test("keeps the default scope names for an admin-only request", async () => {
+    const { identityPath, identity } = await prepareAutoApproval();
+    const connected = await connectSharedUi(identityPath, { scopes: ["operator.admin"] });
+    expect(connected).toMatchObject({
+      ok: true,
+      payload: { auth: { scopes: ["operator.questions"] } },
+    });
+    await expectApprovedScopes(identity.deviceId, ["operator.questions"]);
+  });
+
   test("leaves mixed node and operator requests pending for manual approval", async () => {
     const { identityPath, identity } = await prepareAutoApproval(READ);
 
@@ -443,6 +454,17 @@ describe("trusted-proxy operator device auto-approval", () => {
       }),
     );
     await expectApprovedScopes(identity.deviceId, READ);
+  });
+
+  test.each([
+    { requested: CONTROL_UI_OPERATOR_SCOPES, expected: ["operator.sessions.write"] },
+    { requested: ["operator.read"], expected: ["operator.sessions.read"] },
+    { requested: ["operator.questions"], expected: [] },
+  ])("limits a session-only device to the rights shared with $requested", async (testCase) => {
+    const { identityPath, identity } = await prepareAutoApproval(["operator.sessions.write"]);
+    const connected = await connectSharedUi(identityPath, { scopes: [...testCase.requested] });
+    expect(connected).toMatchObject({ ok: true, payload: { auth: { scopes: testCase.expected } } });
+    await expectApprovedScopes(identity.deviceId, testCase.expected);
   });
 
   test("keeps configured and requested scope behavior when the proxy header is absent", async () => {

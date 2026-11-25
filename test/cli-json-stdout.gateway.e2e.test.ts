@@ -7,6 +7,7 @@ import {
   expectCleanOutput,
   expectCliError,
   expectMissing,
+  expectOnlyLoggingState,
   runIsolatedCli,
   cliCase,
 } from "./cli-json-stdout-contract.test-support.js";
@@ -121,7 +122,8 @@ it.each([
     if ("tty" in testCase) {
       expect(result.stderr).toContain("\u001B[?25h");
     }
-    await expectMissing(path.join(tempHome, "isolated-state"), configPath);
+    await expectOnlyLoggingState(path.join(tempHome, "isolated-state"));
+    await expectMissing(configPath);
   });
 });
 

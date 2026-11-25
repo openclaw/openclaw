@@ -9,9 +9,17 @@ export function validateReleaseManifestAdvisoryJobs(
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
-export function classifyReleaseChangelogEvidenceComparison(
+export function classifyReleaseEvidenceComparison(
   comparison: unknown,
-  identity: { baseSha: string; version?: unknown },
+  identity: {
+    baseSha: string;
+    targetSha?: string;
+    rootManifest?: unknown;
+    targetCoveragePolicy?: string;
+    readSourceFiles?: (requests: Array<{ sha: string; path: string }>) => Map<string, string>;
+    version?: unknown;
+    readSourceFile?: (sha: string, path: string) => string;
+  },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
 export function buildReleaseValidationManifest(input: {
@@ -203,7 +211,10 @@ export function selectReleaseStateArtifacts(
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
 ): ReturnType<typeof verifyReleaseStateArtifacts>;
-export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
+export function formatReleaseStateOutcome(
+  payload: ReleaseRecord,
+  options?: { observedDrainStatus?: string },
+): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],
@@ -221,4 +232,5 @@ export function qualificationChildDispatchInputs(
   admission: import("./release-qualification-admission.mjs").QualificationAdmission,
   binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
   workflowSource: string,
+  parentWorkflowSource?: string,
 ): Record<string, string>;

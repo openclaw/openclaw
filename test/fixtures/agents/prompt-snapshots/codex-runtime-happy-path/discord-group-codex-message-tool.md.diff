@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=2267cdf2a575a4ca85816b17c0bf2e2dc34fbc151369cbc2142cb87953344c8e
-+++ discord-group-codex-message-tool.md	sha256=c849a05fa2f74feed8d00388b140856a5d1058c07d43deb660fdc36721ee2776
+--- telegram-direct-codex-message-tool.md	sha256=61326466991f25f472141e444079c0ffa694199594fc49cbe1b1a20a49539ba9
++++ discord-group-codex-message-tool.md	sha256=5afe06f30b8cdd4167ce8e1fa8926dc67f6cd0de4299f6fa33f550d35c53013f
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -34,10 +34,10 @@
 +    "chars": 972,
 +    "roughTokens": 243
 @@ -250,2 +250,2 @@
--    "chars": 106100,
--    "roughTokens": 26525
-+    "chars": 104670,
-+    "roughTokens": 26168
+-    "chars": 105936,
+-    "roughTokens": 26484
++    "chars": 104140,
++    "roughTokens": 26035
 @@ -258,2 +258,2 @@
 -    "chars": 3683,
 -    "roughTokens": 921
@@ -49,10 +49,10 @@
 +    "chars": 14812,
 +    "roughTokens": 3703
 @@ -270,2 +270,2 @@
--    "chars": 119669,
--    "roughTokens": 29918
-+    "chars": 119484,
-+    "roughTokens": 29871
+-    "chars": 119505,
+-    "roughTokens": 29877
++    "chars": 118954,
++    "roughTokens": 29739
 @@ -274,2 +274,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
@@ -143,10 +143,19 @@
 +        "contentType": {
 +          "type": "string"
 +        },
-@@ -612,1 +605,1 @@
+@@ -603,8 +595,0 @@
+-        "effect": {
+-          "description": "Alias for effectId.",
+-          "type": "string"
+-        },
+-        "effectId": {
+-          "description": "Numeric Telegram message effect id; private chats only.",
+-          "type": "string"
+-        },
+@@ -612,1 +597,1 @@
 -          "description": "Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:\"emoji-list\" directly as emoji. Use action:\"emoji-list\" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.",
 +          "description": "Unicode emoji or custom name:id (also <:name:id> / <a:name:id>). Use action:\"emoji-list\" for server emojis.",
-@@ -638,33 +630,0 @@
+@@ -635,33 +619,0 @@
 -        "location": {
 -          "description": "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
 -          "properties": {
@@ -180,7 +189,7 @@
 -          "required": ["latitude", "longitude"],
 -          "type": "object"
 -        },
-@@ -690,12 +649,0 @@
+@@ -687,12 +638,0 @@
 -        "pollAnonymous": {
 -          "description": "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
 -          "type": "boolean"
@@ -192,4 +201,9 @@
 -        "pollPublic": {
 -          "description": "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
 -          "type": "boolean"
+-        },
+@@ -979,4 +918,0 @@
+-        "quoteText": {
+-          "description": "Telegram reply quote text.",
+-          "type": "string"
 -        },

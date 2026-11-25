@@ -668,6 +668,63 @@ describe("saved message attachment response authority", () => {
     },
   );
 
+  it.each([
+    { author: true, late: false },
+    { author: false, late: false },
+    { author: false, late: true },
+  ])("limits a revoked queued attachment to its author (%j)", async ({ author, late }) => {
+    const runId = `attachment-revoked-${author}-${late}`;
+    const operatorProfileId = ensureProfileForEmail(author ? email : unrelatedEmail).id;
+    const receipt = (await stageSessionPendingInput(scope, {
+      runId,
+      assertCurrent: () => {},
+      message: {
+        role: "user",
+        content: "Revoked pending comment",
+        timestamp: 1,
+        idempotencyKey: `${runId}:user`,
+        __openclaw: {
+          media: [{ url: source, contentType: "text/plain" }],
+          requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId },
+          participationRevoked: true,
+        },
+      },
+    }))!;
+    let revoked = false;
+    const revoke = async () => {
+      revoked = true;
+      receipt.finish("cancelled", "revoked");
+      await receipt.settled?.();
+    };
+    try {
+      const query = { messageId: `pending:${receipt.inputId}` };
+      const mediaTicket = late ? await metadata(query) : undefined;
+      const file = state.statePath("media", "inbound", "selection-comment.txt");
+      const open = fs.open;
+      using _ = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const handle = await open(filePath, flags, mode);
+        if (late && filePath === file && !revoked) {
+          await revoke();
+        }
+        return handle;
+      });
+      if (!late) {
+        await revoke();
+      }
+      const response = await request(
+        mediaTicket ? { ...query, mediaTicket } : query,
+        mediaTicket ? { ticketOnly: true } : {},
+      );
+      expect(revoked).toBe(true);
+      expect(response.status).toBe(author ? 200 : 404);
+      expect((await response.text()) === text).toBe(author);
+      expect((await request({ ...query, meta: "1" })).status).toBe(author ? 200 : 404);
+    } finally {
+      receipt.finish("cancelled", "failed");
+      await receipt.settled?.();
+    }
+  });
+
   const ticketSources: Record<string, string>[] = [
     {},
     { source: "/workspace/.artifacts/proof/screenshot.png", messageId: "sandbox-screenshot" },
