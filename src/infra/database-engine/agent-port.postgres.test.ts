@@ -12,6 +12,7 @@ import {
   memoryStandingIntentSearchSchema,
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+import type { MemorySearchManager } from "../../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
@@ -28,7 +29,6 @@ import {
   prepareTranscriptPayload,
 } from "../../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { MemorySearchManager } from "../../memory-host-sdk/host/types.js";
 import * as memoryRuntime from "../../plugins/memory-runtime.js";
 import {
   capturePostgresBackup,

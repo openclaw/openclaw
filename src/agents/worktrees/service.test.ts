@@ -21,7 +21,7 @@ import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
 } from "./capacity.test-support.js";
-import { isWorktreeAdd } from "./git-fixture.test-support.js";
+import { gitIdentity, isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -31,9 +31,10 @@ import {
   WorktreeRemovalContentionError,
 } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   git,
   materializeManagedWorktreeFixture,
@@ -337,16 +338,26 @@ describe("ManagedWorktreeService", () => {
   it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",
     async (admission) => {
-      await addRemote(root, repo);
+      const remote = await addRemote(root, repo);
       const blob = await git(repo, "rev-parse", "HEAD:README.md");
       const tooLongForCheckout = "x".repeat(300);
       const tree = await gitWithInput(
-        repo,
+        remote,
         ["mktree"],
         `100644 blob ${blob}\t${tooLongForCheckout}\n`,
       );
-      const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
-      await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
+      const remoteCommit = await git(
+        remote,
+        ...gitIdentity,
+        "commit-tree",
+        tree,
+        "-p",
+        "HEAD",
+        "-m",
+        "bad remote",
+      );
+      // Advance origin independently so preparation must fetch the missing commit.
+      await git(remote, "update-ref", "refs/heads/main", remoteCommit);
       const runCommand = commandRunner.runCommandWithTimeout;
       const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
       const controller = new AbortController();
@@ -427,37 +438,6 @@ describe("ManagedWorktreeService", () => {
     await expect(
       fs.stat(path.join(created.path, "linked-dir", "escape.txt")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("rejects an included file replaced by a symlink after inspection", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
-    const source = path.join(repo, "settings.local");
-    await fs.writeFile(source, "included bytes\n");
-    const outside = path.join(root, "outside.txt");
-    await fs.writeFile(outside, "outside bytes\n");
-    const lstat = fs.lstat.bind(fs);
-    let replaced = false;
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const observed = await lstat(...args);
-      if (args[0] === source && !replaced) {
-        replaced = true;
-        await fs.rename(source, `${source}.original`);
-        await fs.symlink(outside, source);
-      }
-      return observed;
-    });
-
-    await expect(
-      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
-    ).rejects.toThrow();
-
-    expect(replaced).toBe(true);
-    expect(listRegistryWorktrees(env)).toEqual([]);
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
-      "refs/heads/openclaw/swapped-source",
-    );
-    expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {

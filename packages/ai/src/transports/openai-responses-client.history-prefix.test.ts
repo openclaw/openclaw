@@ -5,11 +5,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   assertStableProviderPrefix,
+  omitResponsesReplayEnvelopes,
   snapshotProviderPrefix,
 } from "../../../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-sanitize.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createModel, outputMessage } from "./openai-responses-prompt-observer.test-support.js";
@@ -64,21 +66,12 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
       assert(inherited);
       const effectiveInput = [...inherited, ...payload.input];
       requests.push(payload);
-      // Match the release gate: ignore provider message/call envelopes, not reasoning fields.
-      const comparable = effectiveInput.map((item) => {
-        if (
-          !isRecord(item) ||
-          (item.type !== "function_call" && !(item.type === "message" && item.role === "assistant"))
-        ) {
-          return item;
-        }
-        const { id: _id, status: _status, ...rest } = item;
-        return rest;
-      });
       prefixes.push(
         snapshotProviderPrefix(
           "openai-responses",
-          JSON.parse(stableStringify({ ...payload, input: comparable })),
+          JSON.parse(
+            stableStringify({ ...payload, input: omitResponsesReplayEnvelopes(effectiveInput) }),
+          ),
         ),
       );
       const id = `response_${requests.length}`;
@@ -125,6 +118,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         const response = await stream(model, context, {
           apiKey: "synthetic-prefix-key",
           sessionId,
+          ...writerState(sessionId),
           transport: "sse",
         });
         const assistant = await response.result();
@@ -152,9 +146,8 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
     }
     const reopenedReasoning = prefixes[9]?.history[2];
     assert(reopenedReasoning);
-    expect(JSON.parse(reopenedReasoning)).toEqual(
-      reasoningItem("rs_response_1", "encrypted_response_1"),
-    );
+    const { id: _id, ...reopenedWire } = reasoningItem("rs_response_1", "encrypted_response_1");
+    expect(JSON.parse(reopenedReasoning)).toEqual(reopenedWire);
   } finally {
     configureAiTransportHost(host);
     cleanupSessionResources(sessionId);

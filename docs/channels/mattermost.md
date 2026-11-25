@@ -78,6 +78,10 @@ commands flush buffered text before their own dispatch. Channel batches preserve
 arrival order through turn admission. Stopping the monitor cancels buffered work
 and leaves unadopted durable posts available for recovery.
 
+Human posts carrying message attachment cards, such as `slack_attachment` link
+previews, follow normal sender and bot admission checks and stay separate from
+batched text. Actual `system_*` posts are ignored.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.
@@ -313,6 +317,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 Unsupported binary attachment objects are rejected before any message is posted.
+Text sent with an attachment follows `textChunkLimit` and `streaming.chunkMode`: the first chunk is posted with the file and the rest follow as separate posts in the same thread.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
@@ -386,7 +391,7 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
-    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. If the check fails, the preview is finalized in place.
+    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. The same check runs before answer text first replaces the preview's status: if a newer post is already below the preview, the preview keeps its status and the answer appears only in the new post. If a check fails, the preview is streamed into and finalized in place.
     - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.

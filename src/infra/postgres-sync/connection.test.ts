@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_thre
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransaction as prepared,
@@ -41,7 +42,14 @@ function transactionFixture() {
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
+  initialMode:
+    | "normal"
+    | "spurious"
+    | "mismatched"
+    | "missing"
+    | "timeout"
+    | "service-death"
+    | "delayed",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -58,6 +66,8 @@ function transportFixture(
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
   let now = 0;
+  let wallNow = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -76,6 +86,11 @@ function transportFixture(
     const query = pending.operation === "query" ? pending : undefined;
     if (query) {
       waits.push({ observed, timeout });
+      if (mode === "delayed") {
+        mode = "normal";
+        now += 121_000;
+        return "timed-out";
+      }
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -133,8 +148,14 @@ function transportFixture(
     db,
     sent,
     waits,
-    elapse: (ms: number) => (now += ms),
+    elapse: (ms: number) => {
+      now += ms;
+      wallNow += ms;
+    },
+    suspend: (ms: number) => (wallNow += ms),
     normal: () => (mode = "normal"),
+    dropReplies: () => (mode = "missing"),
+    delayNextReply: () => (mode = "delayed"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
@@ -181,14 +202,65 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         reconnectIfIdle: true,
         ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
+        deadlineMs: 120_000,
       },
-      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        id: 4,
+        deadlineMs: 120_000,
+      },
     ]);
   } finally {
     next?.close();
     vi.advanceTimersByTime(3 * 60_000);
     vi.useRealTimers();
   }
+});
+
+it("lets maintenance finish beyond the runtime deadline, then restores runtime liveness", () => {
+  const fixture = transportFixture("normal");
+  fixture.command("COMMIT");
+  const result = fixture.db.runTransaction(
+    () => {
+      fixture.delayNextReply();
+      return fixture.db.prepare("SELECT 7 AS value").get();
+    },
+    { maintenance: true },
+  );
+  expect(result).toEqual({ value: 7 });
+  expect(fixture.db.isTransaction).toBe(false);
+  fixture.delayNextReply();
+  expect(() => fixture.db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
+  expect(fixture.db.isOpen).toBe(false);
+});
+
+it("validates retained idle connections after suspended wall time, never inside a transaction", () => {
+  const fixture = transportFixture("normal");
+  fixture.db.exec("SELECT 7");
+  fixture.suspend(2 * 60 * 60_000);
+  fixture.db.exec("BEGIN");
+  fixture.suspend(2 * 60 * 60_000);
+  fixture.db.exec("SELECT 8");
+  fixture.command("COMMIT");
+  fixture.db.exec("COMMIT");
+  fixture.db.exec("SELECT 9");
+  expect(
+    fixture.sent.mock.calls.map(([request]) => ({
+      sql: request.sql,
+      reconnect: request.reconnectIfIdle === true,
+      validate: request.validateIfIdle === true,
+    })),
+  ).toEqual([
+    { sql: "SELECT 7", reconnect: false, validate: false },
+    { sql: "BEGIN", reconnect: true, validate: true },
+    { sql: "SELECT 8", reconnect: false, validate: false },
+    { sql: "COMMIT", reconnect: false, validate: false },
+    { sql: "SELECT 9", reconnect: true, validate: false },
+  ]);
 });
 
 it("checks transport status after a query error instead of reusing an earlier idle reply", () => {
@@ -204,7 +276,7 @@ it("checks transport status after a query error instead of reusing an earlier id
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "release", id: 4 },
+      { operation: "release", id: 4, deadlineMs: 120_000 },
     ]);
   } finally {
     vi.advanceTimersByTime(3 * 60_000);
@@ -407,6 +479,126 @@ it("runs the commit authority guard and rolls back when it refuses", () => {
   ).toThrow(refusal);
   expect(statements).toEqual([writeBegin, "ROLLBACK"]);
   expect(db.isTransaction).toBe(false);
+});
+
+it("invalidates staged authority after a lost COMMIT reply", () => {
+  const fixture = transportFixture("normal");
+  const phases: string[] = [];
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        prepareCommit: () => phases.push("prepare"),
+        commit: () => phases.push("commit"),
+        rollback: () => phases.push("rollback"),
+        invalidate: () => phases.push("invalidate"),
+      });
+      fixture.dropReplies();
+    }),
+  ).toThrow(expect.objectContaining({ code: "outcome-unknown" }));
+  expect(phases).toEqual(["prepare", "invalidate"]);
+  expect(fixture.db.isOpen).toBe(false);
+});
+
+it.each(["throw", "promise"])(
+  "invalidates a committed write after its guard returns %s",
+  (mode) => {
+    const { db } = transactionFixture();
+    const invalidate = vi.fn();
+    const rollback = vi.fn();
+    expect(() =>
+      immediate(
+        db,
+        () => stageSqliteTransactionState(db, { commit: vi.fn(), invalidate, rollback }),
+        {
+          withCommit(commit) {
+            commit();
+            if (mode === "throw") {
+              throw new Error("guard failed after COMMIT");
+            }
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).toThrow(mode === "throw" ? "guard failed after COMMIT" : "synchronous");
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "invalidates all staged state after failed rollback (nested=%s)",
+  (nested) => {
+    const { db } = transactionFixture();
+    const execute = db.exec.bind(db);
+    const failure = new Error("write refused");
+    const phases: string[] = [];
+    db.exec = (sql) => {
+      if (sql.startsWith("ROLLBACK")) {
+        throw new Error("rollback unavailable");
+      }
+      execute(sql);
+    };
+    const stage = (name: string) =>
+      stageSqliteTransactionState(db, {
+        commit: () => phases.push(`${name}:commit`),
+        rollback: () => phases.push(`${name}:rollback`),
+        invalidate: () => phases.push(`${name}:invalidate`),
+      });
+    expect(() =>
+      immediate(db, () => {
+        stage("outer");
+        const fail = () => {
+          stage("inner");
+          throw failure;
+        };
+        return nested ? immediate(db, fail) : fail();
+      }),
+    ).toThrow(failure);
+    expect(phases).toEqual(["inner:invalidate", "outer:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it("keeps a known rejected COMMIT distinct from an unknown outcome", () => {
+  const fixture = transportFixture("normal");
+  const rollback = vi.fn();
+  const invalidate = vi.fn();
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, { commit: vi.fn(), rollback, invalidate });
+      fixture.command("ROLLBACK");
+    }),
+  ).toThrow("rolled back instead of committing");
+  expect(rollback).toHaveBeenCalledOnce();
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(fixture.db.isOpen).toBe(true);
+});
+
+it("retires the connection even when an unknown-outcome invalidator throws", () => {
+  const fixture = transportFixture("normal");
+  const cleanup = new Error("authority invalidation failed");
+  let failure: unknown;
+  try {
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        commit: vi.fn(),
+        invalidate() {
+          throw cleanup;
+        },
+      });
+      fixture.dropReplies();
+    });
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(failure).toMatchObject({
+    cause: expect.objectContaining({ code: "outcome-unknown" }),
+    errors: [expect.objectContaining({ code: "outcome-unknown" }), cleanup],
+  });
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+  expect(fixture.db.isOpen).toBe(false);
 });
 
 it("prepares before asynchronous admission and commits only inside its guard", async () => {

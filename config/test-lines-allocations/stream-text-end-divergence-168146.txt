@@ -1,2 +1,0 @@
-16
-# Subscriber delivery regression: divergent resends and authoritative terminal corrections.

@@ -10,12 +10,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const M_POLL_START = "m.poll.start" as const;
+const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
 const M_POLL_END = "m.poll.end" as const;
 
-const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
 const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
 const POLL_EVENT_TYPES = [
@@ -255,15 +255,9 @@ export function buildPollResultsSummary(params: {
       continue;
     }
     const rawAnswers = parsePollResponseAnswerIds(event.content) ?? [];
-    const normalizedAnswers = Array.from(
-      new Set(
-        rawAnswers
-          .map((answerId) => normalizeOptionalString(answerId) ?? "")
-          .filter((answerId) => answerIds.has(answerId))
-          .slice(0, parsed.maxSelections),
-      ),
-    );
-    latestVoteBySender.set(senderId, normalizedAnswers);
+    // Answer IDs reference the exact strings in the poll start event.
+    const validAnswers = rawAnswers.filter((answerId) => answerIds.has(answerId));
+    latestVoteBySender.set(senderId, [...new Set(validAnswers.slice(0, parsed.maxSelections))]);
   }
 
   const voteCounts = new Map<string, number>(
@@ -330,9 +324,11 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   const fallbackText = `${normalized.question}\n${normalized.options.map((option, idx) => `${idx + 1}. ${option}`).join("\n")}`;
 
   return {
-    [M_POLL_START]: {
+    [ORG_POLL_START]: {
       question: buildTextContent(normalized.question),
-      kind: isMultiple ? "m.poll.undisclosed" : "m.poll.disclosed",
+      kind: isMultiple
+        ? "org.matrix.msc3381.poll.undisclosed"
+        : "org.matrix.msc3381.poll.disclosed",
       max_selections: normalized.maxSelections,
       answers,
     },

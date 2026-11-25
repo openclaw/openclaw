@@ -24,6 +24,7 @@ import {
 import {
   classifySystemdUnavailableDetail as classify,
   isSystemctlMissingDetail,
+  isSystemdNotBooted,
 } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
@@ -34,6 +35,37 @@ function captureOutput() {
   return { stdout, output: () => Buffer.concat(chunks).toString() };
 }
 const generic = "generic_unavailable";
+
+describe.skipIf(process.platform === "win32")("systemd boot evidence", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.restoreAllMocks());
+  it.each(["missing", "file", "directory", "symlink", "EACCES", "ENOTDIR"] as const)(
+    "treats %s as affirmative absence only when known not booted",
+    async (scenario) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const home = dirs.make("openclaw-systemd-boot-");
+      const file = path.join(home, "marker");
+      await fs.writeFile(file, "not a directory");
+      const link = path.join(home, "link");
+      await fs.symlink(home, link);
+      const target = scenario === "directory" ? home : scenario === "symlink" ? link : file;
+      const entry = await fs.lstat(target);
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        if (args[0] !== "/run/systemd/system") {
+          return await lstat(...args);
+        }
+        if (scenario === "missing" || scenario === "EACCES" || scenario === "ENOTDIR") {
+          throw Object.assign(new Error(scenario), {
+            code: scenario === "missing" ? "ENOENT" : scenario,
+          });
+        }
+        return entry;
+      });
+      expect(await isSystemdNotBooted()).toBe(scenario === "missing" || scenario === "file");
+    },
+  );
+});
 
 it("classifies missing systemctl details", () => {
   expect(isSystemctlMissingDetail("spawn systemctl ENOENT")).toBe(true);

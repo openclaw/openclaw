@@ -37,10 +37,16 @@ export function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema |
 }
 
 export function requiredPropertyKeys(schema: JsonSchema): Set<string> {
+  if (!schema.allOf?.length) {
+    return new Set(schema.required);
+  }
   return new Set(collectAllOfSchemas(schema).flatMap((entry) => entry.required ?? []));
 }
 
 export function objectPropertyKeys(schema: JsonSchema): string[] {
+  if (!schema.allOf?.length) {
+    return Object.keys(schema.properties ?? {});
+  }
   const schemas = collectAllOfSchemas(schema);
   const keys = new Set(schemas.flatMap((entry) => Object.keys(entry.properties ?? {})));
   return [...keys].filter((key) =>
@@ -54,6 +60,9 @@ export function objectPropertyKeys(schema: JsonSchema): string[] {
 export function objectAdditionalPropertiesSchema(
   schema: JsonSchema,
 ): JsonSchema | false | undefined {
+  if (!schema.allOf?.length) {
+    return schema.additionalProperties === true ? {} : schema.additionalProperties;
+  }
   const policies = collectAllOfSchemas(schema)
     .map((entry) => entry.additionalProperties)
     .filter((policy) => policy !== undefined);
@@ -70,6 +79,10 @@ export function objectAdditionalPropertiesSchema(
 }
 
 export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
+  // Ordinary objects need one lookup, not an enumeration of every sibling for each field.
+  if (!schema.allOf?.length) {
+    return ownPropertySchema(schema, key);
+  }
   if (!objectPropertyKeys(schema).includes(key)) {
     return undefined;
   }

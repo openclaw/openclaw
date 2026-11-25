@@ -487,7 +487,7 @@ describe("native transcript catalog SDK", () => {
       });
       const next = await read(2, first.nextCursor);
       expect(next.items.map((item) => item.text)).toEqual(["one"]);
-      await expect(read(2, "not-a-cursor")).rejects.toThrow("Invalid session transcript cursor");
+      await expect(read(2, "not-a-cursor")).rejects.toThrow("Invalid chat history cursor");
       for (const limit of [0, 201, 1.5, Number.NaN]) {
         await expect(read(limit)).rejects.toThrow("limit must be an integer");
       }

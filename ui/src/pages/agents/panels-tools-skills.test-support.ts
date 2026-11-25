@@ -27,6 +27,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     },
     agentId: "main",
     canUpdateConfig: true,
+    canReadConfig: true,
     configForm: {
       agents: {
         entries: { main: { tools: { profile: "full" } } },
@@ -35,7 +36,6 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     configLoading: false,
     configSaving: false,
     configDirty: false,
-    presentationRetired: Promise.withResolvers<void>().promise,
     catalog: null,
     readCatalog() {
       return this.catalog;
@@ -56,8 +56,6 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
-    onConfigReload: async () => undefined,
-    onConfigSave: async () => undefined,
     ...overrides,
   };
 }

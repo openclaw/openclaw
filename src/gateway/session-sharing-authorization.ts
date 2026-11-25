@@ -11,6 +11,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
+import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import {
   authenticatedProfileUnavailableError,
@@ -26,6 +27,7 @@ import {
   isAgentRunStartMethod,
   isSessionArchiveMutation,
   isSessionProfileDependentMethod,
+  isRequiredSessionTargetMethod,
 } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
@@ -37,13 +39,15 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import type {
-  createSessionSharingConsumption,
-  PreparedMutationSharing,
-  PreparedSessionSharingProfiles,
+import {
+  prepareSessionSharing,
+  type createSessionSharingConsumption,
+  type PreparedMutationSharing,
+  type PreparedSessionSharingProfiles,
 } from "./session-sharing-read.js";
 import {
   resolveChatSendAuthorizationParams,
+  resolveSessionMutationTargets,
   resolveTalkSessionTargetInput,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
@@ -62,6 +66,10 @@ export type SessionMutationAuthorizationParams = {
   assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Resolve this pending requirement against the exact existing session. */
+  participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Database access classified by the host-owned method registry. */
   databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
@@ -86,7 +94,16 @@ export type SessionMutationAuthorizationParams = {
 export function prepareSessionMutationAuthorizationRequest(
   request: SessionMutationAuthorizationParams,
 ) {
-  let params = { ...request };
+  const publicationAuthority = readParticipantPublicationAuthority(
+    request.method,
+    request.requestParams,
+  );
+  let params = {
+    ...request,
+    ...(publicationAuthority
+      ? { participantRunAuthority: publicationAuthority, participationRequired: undefined }
+      : {}),
+  };
   params.preparedProfiles?.readCurrent();
   if (params.method === "chat.send") {
     const normalized = resolveChatSendAuthorizationParams(
@@ -161,6 +178,7 @@ export function prepareSessionMutationAuthorizationRequest(
       requiresCommunicationAuthority ||
       bindsProgressLifecycle ||
       bindsTalkTarget ||
+      params.method === "chat.send" ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
@@ -408,6 +426,33 @@ export function findPreparedSharingTarget(
   );
 }
 
+/** Resolve a canonical writer target back to its retained request identity. */
+export function bindSessionMutationSharingReader(
+  authorization: SessionMutationAuthorization,
+  params: SessionMutationAuthorizationParams,
+  targets: readonly AuthorizedSessionMutationTarget[],
+): void {
+  if (!params.preparedTargets) {
+    return;
+  }
+  authorization.readTargetSharing = (targetRef) => {
+    const expected = targets.find(
+      (target) =>
+        target.resolved?.canonicalKey === targetRef.sessionKey &&
+        target.resolved.agentId === targetRef.agentId,
+    );
+    if (!expected) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    authorization.assertTargetCurrent(expected);
+    const retained = findPreparedSharingTarget(params, expected);
+    if (!retained) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    return retained.read();
+  };
+}
+
 export async function withCurrentSessionSharingSource<T>(params: {
   request: SessionMutationAuthorizationParams;
   target: SessionMutationTarget;
@@ -454,4 +499,59 @@ export function resolveSessionMutationWriteRoute(
     ...identity,
     storePath: memory?.path ?? resolveSessionStorePathCore(cfg.session?.store, identity),
   };
+}
+
+export function resolveRequiredSessionMutationTargets(
+  params: SessionMutationAuthorizationParams,
+  talkTargets: SessionMutationTarget[] | undefined,
+  readPolicy: () => ReturnType<typeof prepareSessionSharing> | undefined,
+): { targets?: SessionMutationTarget[]; error: ErrorShape | null } {
+  const targetRefs =
+    talkTargets ??
+    resolveSessionMutationTargets({
+      participationRequired: params.participationRequired,
+      hasInvitedAccessCeiling:
+        (params.method === "session.typing" || params.method === "session.suggestions.add") &&
+        params.sessionScope === "operator.sessions.write" &&
+        Boolean(
+          (
+            readPolicy() ??
+            prepareSessionSharing({
+              cfg:
+                params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig(),
+              client: params.client,
+            })
+          ).invitedAccessCeiling,
+        ),
+      sessionScope: params.sessionScope,
+      client: params.client,
+      method: params.method,
+      requestParams: params.requestParams,
+      context: params.context,
+    }) ??
+    (params.sessionScope === "operator.sessions.write" &&
+    !isRequiredSessionTargetMethod(params.method)
+      ? []
+      : undefined);
+  if (params.expectedTarget && targetRefs?.length !== 1) {
+    return {
+      error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
+    };
+  }
+  if (params.participationRequired && targetRefs?.length !== 1) {
+    return {
+      error: errorShape(ErrorCodes.FORBIDDEN, "Participation requires one existing session."),
+    };
+  }
+  if (!targetRefs) {
+    if (isRequiredSessionTargetMethod(params.method)) {
+      return {
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
+          details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
+        }),
+      };
+    }
+    return { error: null };
+  }
+  return { targets: targetRefs, error: null };
 }

@@ -53,8 +53,35 @@ The existing route and history-boundary refresh contracts remain in effect.
 
 The `sessions_yield` description does not change with sibling tool availability.
 Per-turn prompt-hook tool restrictions gate execution while retaining the session's
-provider definitions. Genuine config, skill, and tool refreshes still apply; the
-tool set is not permanently frozen to the first request.
+provider definitions. The tool set and every definition are fixed at the first
+request of a prompt series, whatever starts a later turn (user, cron, wake, or
+restart recovery). A tool that a later turn builds but the series did not send
+waits for the next series; a pinned tool that a turn did not build stays listed
+and refuses its calls. A tool or plugin configuration change starts a new pin.
+
+With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
+`include` or `exclude` selections), every turn of a session builds the same list:
+
+- `message` is listed on every turn: user, cron, wake, subagent completion, and
+  child-session turns. A turn whose reply delivery or tool policy does not allow
+  the message tool refuses the call with a visible message. The turn's own
+  delivery rules still decide whether a send is allowed.
+- A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
+  events) and group `tools` / `toolsBySender` policy keep the session's tools
+  listed and refuse each call they do not allow with a visible message, including
+  calls made through `dispatch_action`. They refuse the same calls as when they
+  removed those tools from the list, so every sender in a group chat sends one list.
+- The deferred MCP tool directory is part of the system prompt's deferred-tool
+  section, not the `tool_search` definition. An MCP server that connects,
+  disconnects, or changes its tools later reaches the model as an appended
+  prompt update.
+
+These exceptions keep the earlier behavior, where `message`, `toolsAllow`, and
+sender policy filter the list: Tool Search off (`tools.toolSearch: false`) or
+disabled for a run (Code Mode, memory flush, and runs that disable Tool Search),
+`include` or `exclude` selections, and `mode: "directory"`. On these opt-out
+surfaces a later turn can still add a tool to the pinned list mid-session, for
+example `skills_read` or `skills_search`, by design.
 
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
@@ -76,6 +103,14 @@ Internal wake and restart-recovery turns retain the same tool definitions and
 Code Mode catalog, including `screen`, without borrowing execution authority.
 The next operator declaration updates that session fact; current-turn execution
 gates and the live requesting-browser check still enforce calls.
+
+Message-tool listing uses configured channel capabilities and the recorded prompt
+source, not connection health or the current turn’s reaction grant. A WebChat
+operator declaration retains local prompt-reaction support even when the session
+keeps an external delivery route. A session with neither a supported source nor a
+configured messaging route omits the tool. This presentation-only omission does
+not become a permanent restriction on children or automations; their final policy
+and schema checks still apply.
 
 GitHub tool listing follows the session's Gateway publication capability and
 workspace support, not the current turn's operator or GitHub identity. Operator,
@@ -148,6 +183,11 @@ the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
 
+When a preflight check predicts overflow, OpenClaw can cap results from the
+current tool batch before sending them. If that cannot make room, it compacts
+retained history instead of truncating previously sent results in place.
+Recovery after an actual provider rejection can still truncate those results.
+
 OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable
@@ -163,6 +203,80 @@ compaction boundary count as their cache key unless the caller supplies an
 explicit key. Operator, WebChat, private subagent completion, requester-settle,
 and recovery turns share this session-boundary identity. The current client and
 reply delivery route do not select a different cache key.
+
+## Warm compaction requests
+
+Automatic compaction at a request boundary sends its summary request as the
+session's next normal request: the same system prompt, tools, `tool_choice`,
+output limit, thinking settings, cache key and every earlier message, plus one
+appended user item that asks for the summary. The provider therefore reads the
+prompt prefix it already cached instead of processing a separate summarizer
+request. The appended item is sent once and is never replayed, so the Anthropic
+and Chat Completions transports place no cache marker on it. The history markers
+are the ones the normal request would carry, so the request writes only what that
+request would have written, such as a new user message. On routes without prompt
+caching the request is still correct and costs ordinary input.
+
+This applies on every built-in route except the native ChatGPT sign-in route,
+which uses its provider checkpoint at the same boundary, and sessions whose
+compaction belongs to a context engine, a registered compaction provider, or a
+separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
+recovery keep their existing paths. See
+[Compaction](/concepts/compaction#warm-request-compaction).
+
+<a id="idle-keep-warm" />
+
+## Idle keep-warm
+
+When an interactive session goes idle with a large cached prompt, the Gateway
+sends one read-only prewarm request shortly before the provider's cache lifetime
+ends. The prewarm is the session's own next request (pinned system prompt and
+tool definitions, history, cache markers, cache key, thinking settings and
+`tool_choice`) with one trailing placeholder item that is never cached or
+answered, sent so that the provider generates no output:
+
+- Anthropic Messages (direct API, setup-token, compatible proxies, GitHub
+  Copilot Claude): `max_tokens: 0` without streaming. The reply is empty and
+  bills no output tokens.
+- OpenAI Responses: `prompt_cache_options.prewarm: true`, with the lifetime the
+  session already sends.
+
+The prewarm reads the cached prefix and so restarts its lifetime. Nothing is
+written to the transcript. Each prewarm records its usage as an internal
+`model.usage` diagnostic of a background session fork, like other forks.
+
+A session gets prewarms only when all of these hold:
+
+- The route has a known cache lifetime of at most one hour. Anthropic-style
+  routes use the cache-write tier the session's own responses reported (5 minutes
+  or 1 hour, so a proxy that forces 1 hour is handled). OpenAI Responses routes
+  use the documented 30-minute lifetime on the native API (GPT-5.6 and later).
+  Routes with an undocumented or no lifetime (ChatGPT sign-in, xAI, Gemini, Chat
+  Completions, local models) get none. A 12-hour lifetime gets none: a read
+  does not restart it.
+- The last reply settled on the session's current route, with no compaction,
+  reset or model change after it, and its prompt was at least 50,000 tokens.
+- A person used the session within one cache lifetime of its last request.
+  Automation runs, subagents and ACP sessions get none.
+- The request does not use Anthropic budget thinking, a forced tool or
+  structured output, which cannot be prewarmed without changing the cached
+  prefix.
+
+Prewarms stop when the user sends a message (the next turn re-anchors the
+schedule), after a miss (the prewarm read less than half the prompt or wrote
+more than it read), after an error (the provider pauses for 15 minutes), after
+12 hours, and after a budget that keeps all prewarms below half the cost of
+one cache rewrite: `(write − read) / (2 × read)` prices relative to input, at
+most 24, or 3 when the route has no prices. A wake that arrives after the cache
+may have expired sends nothing.
+
+The schedule comes from stored facts: the transcript's last reply and the
+session row's `promptCacheKeepWarm` record of the last prewarm (its time, route,
+the reply it warmed and the prewarm count since the last human turn). A Gateway
+restart therefore resumes a series where it stopped. Cache-TTL pruning reads the
+same record as a cache touch, so a prewarmed cache is not pruned as expired.
+
+Set `agents.defaults.promptCacheKeepWarm: false` to turn it off.
 
 ## Primary knobs
 
@@ -312,7 +426,8 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
-- On native OpenAI Responses routes the system prompt is pinned for the session and sent unchanged as `instructions`. Later changes to its sections (skills, workspace memory, temporal context, config-driven sections) arrive as instruction messages after the current user turn, so the cached `instructions` prefix and earlier history stay byte-identical. Changing the route or selected personal profile, resetting, or compacting starts a new series and re-caches from the start; see [Context](/concepts/context#how-openclaw-builds-the-system-prompt). Routes without a pinned series still send the whole rendered prompt as `instructions`, where a suffix change re-caches from the changed point and cache observations report it as a `systemPromptSuffix` change.
+- On native OpenAI Responses routes the system prompt is pinned for the session and sent unchanged as `instructions`. Later changes to its sections (skills, workspace memory, temporal context, config-driven sections) arrive as instruction messages after the current user turn, so the cached `instructions` prefix and earlier history stay byte-identical. Changing the route or selected personal profile, resetting, or compacting starts a new series and re-caches from the start; see [Context](/concepts/context#how-openclaw-builds-the-system-prompt) and [Session prefix stability](#session-prefix-stability).
+- Some models never cache the `instructions` field. Their catalog entry sets `compat.cachesInstructions: false` (including GPT-6.2 Astra and Sol). On the OpenAI API-key Responses route, OpenClaw sends the same pinned system prompt as a `developer` input item so it is eligible for caching. The prompt leads fresh input and follows the compaction item on replay, because OpenAI can discard input placed before the checkpoint. The separate `/responses/compact` call still uses `instructions` so the returned window does not retain an old copy of the prompt. With `previous_response_id`, the stored item carries forward and deltas do not send it again. If the system prompt changes, OpenClaw drops `previous_response_id` and sends the full history with only the new item, so the model never sees two system prompts.
 
 ### OpenAI 12-hour cache lifetime
 
@@ -386,7 +501,7 @@ Live AWS acceptance proof remains a gap until a maintainer with Bedrock access r
 
 For `openrouter/anthropic/*` model refs, including `openrouter/~anthropic/*-latest` aliases, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
-For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders send one `cache_control: { type: "ephemeral" }` breakpoint on the stable system/developer prefix. Gemini uses only the last breakpoint, so tools and conversation history are not marked: a later marker would supersede the stable-prefix boundary and include the volatile system suffix. Without a split boundary, the complete system prompt is marked. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
+For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders mark the complete system/developer message with one `cache_control: { type: "ephemeral" }` breakpoint. OpenClaw moves only producer-delimited Runtime facts to the first eligible user turn; other instructions keep their system authority. If no user carrier is emitted, the Runtime facts stay in the system message. [OpenRouter caches Gemini's whole `systemInstruction`](https://openrouter.ai/docs/guides/best-practices/prompt-caching), so marking a stable block inside a message would not isolate a dynamic tail. Tools and history receive no marker. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
 
 `contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs. Older Gemini models and other `google/*` models (for example Gemma) remain excluded from cache-TTL pruning eligibility.
 
@@ -410,7 +525,7 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
-Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version check finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared check; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed check keeps the established argv. `cacheRetention` still has no effect on this path.
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint in its system prompt, so OpenClaw keeps its complete system prompt in that transport. Agent turns send it as Claude Code's replacement system prompt, so Claude Code's default prompt, including sections it rewrites when a session resumes, stays out of the cached prefix; one-shot side completions still use `--append-system-prompt-file`. A manual `/compact` resumes the session with the exact system prompt its last turn sent (through `--system-prompt-file`), the same tool selection, and the same OpenClaw MCP tool list, so it reads the warm cache instead of rewriting the history; its MCP grant refuses every tool call. After a Gateway restart OpenClaw no longer holds that prompt and rebuilds it, so the first compaction can miss once. When the bounded version check finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared check; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed check keeps the established argv. `cacheRetention` still has no effect on this path.
 
 One-shot helper runs dispatched through a CLI backend, such as Active Memory recall on `claude-cli`, get a new session key on every run. Those runs carry the Runtime facts line (agent, session, model, channel) in their only user turn instead of the system prompt, so repeated recalls of one agent send a byte-identical system prompt and can reuse Claude's prompt cache. Normal CLI turns keep the Runtime line in the system prompt.
 
@@ -425,19 +540,24 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
 marker policy across the managed transport, SDK builder, and provider wrappers.
 
-OpenRouter Gemini uses only the stable system checkpoint described above; other
+OpenRouter Gemini uses the whole system checkpoint described above; other
 routes use the following layout.
 
 - The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
 - The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
+- On an opening OpenRouter Anthropic turn, producer-delimited session-shared guidance gets a second system checkpoint before Runtime facts. Later turns omit it to reserve the four-marker budget for conversation history.
 - The latest eligible user text or tool result is marked, advancing through tool loops and new turns while skipping transient runtime-context carriers.
 
-The layout normally uses three markers and stays within the four-breakpoint
-budget. `cacheRetention: "none"` emits none. A conversation checkpoint covers
+The layout normally uses three markers; the opening OpenRouter Anthropic turn can
+use four. `cacheRetention: "none"` emits none. A conversation checkpoint covers
 all preceding tools, system content, and messages, so changing the volatile
 system suffix still invalidates that later checkpoint; the earlier stable-system
 checkpoint remains reusable where the backend supports block-level caching.
 Backend token minimums and cache lifetimes still apply.
+
+DeepInfra keeps the three-marker layout. Its public docs describe automatic
+prefix matching but do not establish independent cache checkpoints within one
+system message, so a fourth shared-system marker there has no verified contract.
 
 With `compat.requiresStringContent: true`, managed requests keep message content
 as strings and omit message-block markers, including through provider wrappers.
@@ -605,7 +725,7 @@ read/write counts and preserve the last measured comparison baseline. A later
 reported zero still counts as a measured miss. This distinction applies to local
 engines with optional cache metrics as well as compatible cloud APIs.
 
-On routes that pin the system prompt, the `[prompt-cache] cache read dropped`
+The `[prompt-cache] cache read dropped`
 warning includes `systemPromptSeries=pinned` when the saved series was reused,
 or `systemPromptSeries=restarted:<reason>` when the attempt restarted it.
 Reasons are `new` (no saved series), `history` (compaction or a history rewrite),
@@ -613,21 +733,76 @@ Reasons are `new` (no saved series), `history` (compaction or a history rewrite)
 The route part names the first changed element: `provider`, `model`, `api`,
 `baseUrl`, `inHistorySystemUpdates`, or `personalProfile`. Only these reason
 tokens are reported, never profile IDs, route-key contents, or prompt text.
-Routes without a system-prompt series omit the field.
+Raw model runs and settled-turn finalization have no series and omit the field.
 
-The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+History baselines share a 16 MiB budget for fingerprint strings and container overhead, in addition to the 512-tracker limit. The least recently used baselines are released when either limit is reached; a single history exceeding the byte budget is not retained and can also evict older baselines. Evicted sessions start a fresh diagnostic baseline on their next request. Provider prompt observations retain bounded digests and wire metadata, not request payloads.
 
-For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
+The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; resident sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+
+For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Output caps (`max_tokens`, `max_completion_tokens`, `max_output_tokens`) are not compared: they do not change the prompt a prefix cache keys on, and Chat Completions routes re-clamp them from the remaining context on most requests, so a drop where only the cap changed reports `prefix-match`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 
 A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
 
-OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, and the persisted `display` visibility flag are excluded from history fingerprints because they are not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications, including deeply frozen messages shared during hydration, reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Unchanged envelope revisions reuse the complete fingerprint when the content is immutable; replacing content or changing envelope fields invalidates that reuse. Sealed record fingerprints retain only packed diagnostic hashes and field layouts; primitive revision tracking is released when a record becomes immutable. Request projections of deeply frozen transcript messages reuse immutable wrappers, including tool-result detail removal, custom-message conversion, image blocking, and runtime-context policy. Projection caches use weak source identities and separate policy inputs. Mutable SDK messages and mutable replacement content remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
+OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, and the persisted `display` visibility flag are excluded from history fingerprints because they are not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. `OPENCLAW_PROMPT_CACHE_ASSERT=1` (the test-suite default) throws at the first differing message, system prompt, or tool block outside the [rebuild points](#session-prefix-stability). Compaction and pruning declare their rewrites as `compaction` and `pruning`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications, including deeply frozen messages shared during hydration, reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Unchanged envelope revisions reuse the complete fingerprint when the content is immutable; replacing content or changing envelope fields invalidates that reuse. Sealed record fingerprints retain only packed diagnostic hashes and field layouts; primitive revision tracking is released when a record becomes immutable. Request projections of deeply frozen transcript messages reuse immutable wrappers, including tool-result detail removal, custom-message conversion, image blocking, and runtime-context policy. Projection caches use weak source identities and separate policy inputs. Mutable SDK messages and mutable replacement content remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
 
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
 - For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.
 - For OpenAI, expect `cacheRead` on cache hits; `cacheWrite` is populated only on Responses API payloads that include it (see [OpenAI](#openai-direct-api) above).
 - OpenAI also returns tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`; use those for request tracing, but cache-hit accounting should still come from the usage payload, not from headers.
+
+## Session prefix stability
+
+Every embedded Gateway session pins its system prompt and tool definitions when
+it starts, on every provider route. Each later request in the session extends the
+previous one byte for byte: system prompt, tools, and every earlier message stay
+unchanged, and earlier runtime-context carriers stay in history.
+
+Mid-session changes (skills, workspace files, permissions, exec wakes,
+inter-session input, subagent completions) go out as appended deltas: an
+in-history system message where the route supports one (direct Anthropic API
+keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
+user-role note. Tools change only at a rebuild point or a tool configuration
+change. Reordering existing `##` sections also appends an update, even when their
+text is unchanged. That update includes the complete current prompt in its new
+order; ordinary text edits still send only the changed sections. The pinned
+prefix and earlier messages remain unchanged.
+
+The session prompt rebuilds only at these points:
+
+- A new session: the first request, `/new`, or `/reset`.
+- An explicit compaction (`/compact` or automatic compaction).
+- A move from the default workspace into a project when the session had the
+  project move tool. The fresh series removes that tool and its guidance.
+- A model or provider switch, including a change of API, base URL, agent
+  harness, tool surface (direct tools, tool search, or Code Mode), or the
+  session's selected personal profile. The selection is a session fact (its
+  assigned owner or authenticated creator). In a spawned session, every turn
+  keys on it, so a hidden subagent task and later `sessions_send` turns share
+  one prompt series. In other sessions, a turn whose sender does not qualify
+  rebuilds without the personal file, so that file never reaches its request.
+
+These are also the operator refresh points: use `/compact` or `/new` to make the
+model see a fully re-rendered prompt.
+
+Known exceptions:
+
+- Remote worker turns still render the system prompt on each turn.
+- A provider plugin can opt out of retained runtime-context carriers
+  (`appendOnlyRuntimeContext: false` in its replay policy), for example for
+  Gemini's managed explicit caching or a proxy that misreads a trailing
+  carrier. That route then drops the previous turn's carrier, which rewrites
+  that turn's tail once.
+- Routes that merge consecutive user turns (strict Chat Completions
+  compatibility, Google, Bedrock) can rewrite the last message once. This
+  happens when a turn with a prompt update ends without a stored assistant
+  reply, so the next input merges into that update.
+
+Outside these points and exceptions, a changed prefix is a bug. Tests fail on it
+(`OPENCLAW_PROMPT_CACHE_ASSERT=1` is the test default), and the Gateway logs one
+`[prompt-cache] prefix changed within session outside a rebuild point` warning per
+session and changed component (`systemPrompt`, `systemPromptSuffix`, `tools`, or
+`historyRewrite`).
 
 ## Quick troubleshooting
 

@@ -24,13 +24,23 @@ async function loadModuleCopies() {
 afterEach(resetDatabaseEngineSelectionForTest);
 
 describe("SQLite worker state context across module copies", () => {
-  it.each(["sqlite", "postgres"] as const)(
-    "hands the installed %s state selection to workers without losing SQLite family choices",
-    async (state) => {
+  it.each([
+    { state: "sqlite", readOnly: undefined },
+    { state: "postgres", readOnly: undefined },
+    { state: "postgres", readOnly: true },
+  ] as const)(
+    "hands the installed $state readOnly=$readOnly selection to workers without losing SQLite family choices",
+    async ({ state, readOnly }) => {
       const selection: DatabaseEngineSelection = {
         effectiveEngines: createSqliteFamilyEngines({ state }),
         ...(state === "postgres"
-          ? { postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" } }
+          ? {
+              postgres: {
+                connection: "postgresql://localhost/synthetic",
+                schemaPrefix: "test",
+                ...(readOnly ? { readOnly } : {}),
+              },
+            }
           : {}),
       };
       installDatabaseEngineSelection(selection);

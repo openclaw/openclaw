@@ -10,6 +10,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities, projectPresencePayload } from "../../lib/presence-users.ts";
@@ -22,6 +23,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
@@ -126,6 +128,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
     this.collaboration.suggestions = [];
+    this.collaboration.liveResolutions = new Map();
     this.collaboration.role = undefined;
     this.collaboration.busyIds = new Set();
     this.collaboration.addOperation = undefined;
@@ -137,7 +140,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     session: GatewaySessionRow | undefined,
   ): void {
     const signature = session
-      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}\0${session.invitedAccess ?? ""}`
       : "";
     if (signature === this.sessionSuggestionTargetSignature) {
       return;
@@ -182,7 +185,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (
       !scope ||
       !row ||
-      !this.hasMultipleIdentities() ||
+      (!this.hasMultipleIdentities() && row.invitedAccess === undefined) ||
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.suggestions.list")
     ) {
       this.collaboration.suggestions = [];
@@ -221,7 +224,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   }
 
   protected handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
-    if (!this.hasMultipleIdentities() || !this.suggestionMatchesCurrentSession(event.suggestion)) {
+    if (
+      (!this.hasMultipleIdentities() &&
+        (!this.state || selectedChatSessionRow(this.state)?.invitedAccess === undefined)) ||
+      !this.suggestionMatchesCurrentSession(event.suggestion)
+    ) {
       return;
     }
     const shouldRefresh =
@@ -230,6 +237,16 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const selfId = this.context.gateway.snapshot.selfUser?.id;
     if (this.collaboration.role === "viewer" && event.suggestion.author.id !== selfId) {
       return;
+    }
+    if (
+      event.action === "resolved" &&
+      event.suggestion.author.id === selfId &&
+      !this.collaboration.liveResolutions.has(event.suggestion.id)
+    ) {
+      this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+        event.suggestion.id,
+        true,
+      );
     }
     if (event.action === "added") {
       this.collaboration.suggestions = [
@@ -261,17 +278,20 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       !scope ||
       !text.trim() ||
       this.collaboration.addOperation ||
-      !this.hasMultipleIdentities()
+      (!this.hasMultipleIdentities() &&
+        selectedChatSessionRow(scope.state)?.invitedAccess !== "suggest")
     ) {
       return;
     }
     if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
-      scope.state.chatError = t(
-        scope.state.chatMentions?.length
-          ? "chat.mentions.unsupported"
-          : "chat.sessionSuggestions.attachmentsUnsupported",
+      scope.state.setRecoverableChatError(
+        t(
+          scope.state.chatMentions?.length
+            ? "chat.mentions.unsupported"
+            : "chat.sessionSuggestions.attachmentsUnsupported",
+        ),
+        EXPECTED_CHAT_REFUSAL,
       );
-      scope.state.lastError = scope.state.chatError;
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -302,8 +322,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ];
     } catch (error) {
       if (this.collaboration.addOperation === operation && this.isConnectionScopeCurrent(scope)) {
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (this.collaboration.addOperation === operation) {
@@ -350,7 +369,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
-        getChatComposerState(this.presentationId).composerTextarea?.focus({
+        focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
           preventScroll: true,
         }),
       );
@@ -389,8 +408,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
             previousEditDraft.mentions ?? [],
           );
         }
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (isCurrentTarget()) {

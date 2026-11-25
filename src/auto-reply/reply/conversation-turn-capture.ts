@@ -21,10 +21,10 @@ import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { claimPendingConversationTurnReply } from "../../sessions/conversation-turns.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
-  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";

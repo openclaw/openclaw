@@ -82,7 +82,10 @@ it.each(["initial", "reopened"])("rejects disconnected %s layers", async (state)
 it("occludes native tabs through nesting, closing animations, and removal", async () => {
   const changes = vi.fn(),
     modalChanges: boolean[] = [];
-  const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
+  const unsubscribe = subscribeNativeOverlayOcclusion(
+    (value) => changes(value !== "live"),
+    () => null,
+  );
   const onModalState = (event: Event) => {
     modalChanges.push((event as CustomEvent<{ open: boolean }>).detail.open);
   };
@@ -222,7 +225,7 @@ it.each(["hide", "remove"] as const)(
     try {
       const { modal } = await renderModal();
       // Keep the toast active through the cold lazy import.
-      showToast({ message: "Saved", durationMs: 60_000 });
+      showToast({ severity: "success", message: "Saved", durationMs: 60_000 });
       await commit(appHost);
       await vi.dynamicImportSettled();
       flush();

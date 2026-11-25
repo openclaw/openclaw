@@ -93,6 +93,13 @@ Before streaming, an admitted run records its durable `activeWriterRunId` claim.
 
 System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap context, and per-run overrides. Model-specific limits and compaction reserve tokens are enforced. See [System prompt](/concepts/system-prompt) for what the model sees.
 
+The Codex runtime accepts at most 1,048,576 characters of text per turn. When a current request is larger, the model sees the request's start and end, which keep its instruction and any untrusted-content markers, with a marker in place of the middle:
+
+- When the run may read files on the same host, the complete request is saved as an inbound attachment named `current-request.txt`, and the model gets its path with an instruction to search or read it before answering.
+- Otherwise, such as in a sandbox, a remote workspace or without the `read` tool, only the middle is cut.
+
+The transcript keeps the complete original request, and the Gateway logs `current input oversize: chars=… budget=… action=attached|cut`. Smaller models can be unreliable at finding a fact that is only in the attachment.
+
 ## Hooks
 
 OpenClaw has two in-process hook systems:
@@ -316,11 +323,17 @@ nonempty text, reasoning, or tool argument deltas count as progress, including h
 reasoning. To tolerate long hidden-reasoning phases, Responses uses a 15-minute
 model-progress deadline, or the effective idle budget when larger. Real progress
 resets this deadline; ordinary network silence retains the existing idle budget.
+Tool activity and periodic tool heartbeats can keep the connection active, but
+they do not reset the model-progress deadline while a model stream remains open.
 Computation that emits only bookkeeping can still time out at this long ceiling.
 The session watchdog follows the request guard's current deadline with a recovery
 margin derived from its warning interval. Request stalls therefore surface as
 transient timeouts for bounded retry and configured model fallback before the
 watchdog stops the whole reply. Explicit execution deadlines still apply.
+Every completed request retains that bounded recovery window for cleanup and
+retry admission, including an output-limit continuation after a long stream.
+Repeated cleanup does not extend it; if no continuation starts, the session
+watchdog can still stop the stalled reply when the window expires.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start
@@ -373,6 +386,10 @@ Harness cleanup flushes trajectory events accepted before foreground work ended,
 including during restart cancellation. It cannot accept new events after that
 lifetime ends, or flush through a closed host, revoked admission, replaced run,
 or replaced recorder.
+
+Completed and aborted built-in attempts release their session transcript listeners
+even if transcript-owner cleanup fails. The cleanup error remains visible, while
+the global listener registry no longer retains the completed session's history.
 
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for

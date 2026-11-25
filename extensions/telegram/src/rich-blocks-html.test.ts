@@ -125,6 +125,18 @@ describe("block HTML islands", () => {
     expect(quote.blocks.map(({ type }) => type)).toEqual(["details"]);
   });
 
+  it.each([
+    [2147483646, [2147483646, 2147483647]],
+    [2147483647, [1, 2]],
+  ] as const)(
+    "keeps every HTML list label in Telegram's integer range: start=%i",
+    (start, values) => {
+      const block = single(`<ol start="${start}"><li>a</li><li>b</li></ol>`);
+      assert(block.type === "list");
+      expect(block.items.map((item) => item.value)).toEqual(values);
+    },
+  );
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
@@ -398,5 +410,62 @@ describe("inline HTML islands", () => {
     for (const text of excludes) {
       expect(serialized).not.toContain(text);
     }
+  });
+});
+
+describe("tg-time inline islands", () => {
+  const unix = 1647531900;
+
+  it("maps valid tg-time tags to date_time nodes that keep their fallback text", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      `Due <tg-time unix="${unix}" format="wDT">22:45 tomorrow</tg-time>, **<tg-time unix="${unix}" format="r">soon <i>now</i></tg-time>** or <tg-time unix="${unix}">A &amp;amp; B</tg-time>.`,
+    );
+    expect(blocks).toEqual([
+      {
+        type: "paragraph",
+        text: [
+          "Due ",
+          { type: "date_time", text: "22:45 tomorrow", unix_time: unix, date_time_format: "wDT" },
+          ", ",
+          {
+            type: "bold",
+            text: { type: "date_time", text: "soon now", unix_time: unix, date_time_format: "r" },
+          },
+          " or ",
+          { type: "date_time", text: "A &amp; B", unix_time: unix, date_time_format: "" },
+          ".",
+        ],
+      },
+    ]);
+    expect(plainText).toBe("Due 22:45 tomorrow, soon now or A &amp; B.");
+  });
+
+  it.each([
+    'unix="-1"',
+    'unix="0"',
+    'unix="1.5"',
+    'unix="2147483648"',
+    'unix="1793793600000"',
+    'datetime="2026-11-03T10:00:00Z"',
+    'format="t"',
+    `unix="${unix}" format="x"`,
+    `unix="${unix}" format="rt"`,
+  ])("keeps only the text of a tg-time with invalid attributes: %s", (attrs) => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      `at <tg-time ${attrs}>noon</tg-time>!`,
+    );
+    expect(plainText).toBe("at noon!");
+    expect(JSON.stringify(blocks)).not.toMatch(/date_time|tg-time/);
+  });
+
+  it("never slices a date_time node across split pieces", () => {
+    const { blocks } = markdownToTelegramRichBlocks(
+      `${"x".repeat(60)} <tg-time unix="${unix}" format="t">22:45 tomorrow</tg-time>`,
+    );
+    const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
+    const serialized = JSON.stringify(chunks);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(serialized.match(/"date_time"/g)).toHaveLength(1);
+    expect(serialized).toContain('"text":"22:45 tomorrow"');
   });
 });

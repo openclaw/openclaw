@@ -107,6 +107,7 @@ async function mountMenu(
 
 async function openMenu(menu: HeaderMenuElement) {
   expect(menu.openMenu()).toBe(true);
+  await import("./chat-header-session-menu-content.tsx");
   await waitForSolid(() => expect(menu.querySelector('[data-value="rename"]')).not.toBeNull());
 }
 
@@ -189,7 +190,7 @@ async function select(menu: HeaderMenuElement, value: string) {
 it("focuses the current first row when reopening removes the parked first row", async () => {
   const menu = await mountMenu({}, false);
   await openMenu(menu);
-  const previousFirst = item(menu, "Command palette");
+  const previousFirst = item(menu, "Search");
   const trigger = menu.readTrigger()!;
   const hidden = whenHidden(menu);
   press(panel(menu), "Escape");
@@ -275,7 +276,7 @@ it.each(["MacIntel", "Win32"])(
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const menu = await mountMenu({ archiveShortcut: true });
     expect(shortcut(item(menu, "Archive session"), true)).toBe(
-      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl⇧A",
     );
     menu.archiveShortcut = false;
     await menu.updateComplete;
@@ -348,6 +349,7 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
     true,
     true,
     false,
+    false,
   ]);
   if (onboarding) {
     expect(viewItems.every((entry) => entry.disabled)).toBe(true);
@@ -359,7 +361,13 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
       "Stored in this browser only.",
     );
   }
-  for (const value of ["reasoning", "tool-calls", "commentary", "speech-bubbles"]) {
+  for (const value of [
+    "reasoning",
+    "tool-calls",
+    "commentary",
+    "inline-commands",
+    "speech-bubbles",
+  ]) {
     await select(menu, `view:${value}`);
   }
   expect(onSettingsChange.mock.calls.map(([patch]) => patch)).toEqual(
@@ -369,6 +377,7 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
           { chatShowThinking: false },
           { chatShowToolCalls: false },
           { chatPersistCommentary: false },
+          { chatInlineCommands: true },
           { chatBubbleSessionKeys: ["agent:main:test"], chatBubbleDisabledSessionKeys: undefined },
         ],
   );

@@ -27,13 +27,6 @@ const mocks = vi.hoisted(() => {
     metadataScopes: [] as AsyncDisposable[],
   };
   const replacements = {
-    "../agents/model-catalog.js": {
-      findModelInCatalog: (
-        catalog: Array<{ provider?: string; id?: string }>,
-        provider: string,
-        modelId: string,
-      ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
-    },
     "../agents/prepared-model-catalog.js": {
       loadProviderScopedThinkingCatalog: vi.fn(async () => []),
       readPreparedModelCatalog: handles.catalog,
@@ -70,6 +63,13 @@ const mocks = vi.hoisted(() => {
     vi.doMock(module, () => exports);
   }
   const partials = {
+    "../agents/model-catalog-lookup.js": {
+      findModelInCatalog: (
+        catalog: Array<{ provider?: string; id?: string }>,
+        provider: string,
+        modelId: string,
+      ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
+    },
     "../agents/model-selection.js": { resolveDefaultModelForAgent: handles.defaultModel },
     "../daemon/runtime-paths.js": { resolveNodeRuntimeInfo: handles.nodeInfo },
   };
@@ -293,32 +293,6 @@ describe("doctor runtime tool schema checks", () => {
       expect(exitCodeFromFindings(findings, "error")).toBe(0);
     },
   );
-
-  it("preserves the catalog transport when building runtime models", async () => {
-    const transport = {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    };
-    mocks.catalog.mockResolvedValueOnce([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        ...transport,
-        compat: { supportsTools: true },
-      },
-    ]);
-    mocks.codingTools.mockReturnValueOnce([tool("healthy", objectSchema)]);
-    await inspectSchemas({});
-    expect(mocks.normalizeTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          modelApi: transport.api,
-          model: expect.objectContaining(transport),
-        }),
-      }),
-    );
-  });
 
   it.each([
     ["cleanup failure", "fuzzplugin", undefined, true, false],

@@ -33,6 +33,8 @@ let output: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   root = tempDirs.make("openclaw-upgrade-baselines-");
+  // Exercise PATH tools in ESM scope even outside workspace-local temp roots.
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   bin = path.join(root, "bin");
   output = path.join(root, "output");
   mkdirSync(bin);
@@ -153,13 +155,14 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       writeExecutable(
         path.join(bin, "gh"),
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
+import assert from "node:assert/strict";
 const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 if (args[0] === "release") {
   console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
 } else {
-  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
   const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
     tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
   })));
@@ -255,7 +258,7 @@ if (process.env.FAIL_API === "true") process.exit(75);
     writeExecutable(
       path.join(bin, "npm"),
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"
@@ -303,7 +306,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     });
     const expanded = entrypoint === "update-migration" || standaloneSelectors.has(entrypoint);
     const expectedBaselines = expanded
-      ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34"
+      ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35"
       : `openclaw@${entrypoint === "minimum" ? "2026.6.1" : "2026.7.1-2"}`;
     expect(readFileSync(output, "utf8")).toBe(
       `baselines=${expectedBaselines}\nbaseline_scope=${expanded ? "legacy-operator-state" : "all-scenarios"}\nbaseline=openclaw@2026.7.1-2\n`,
@@ -336,7 +339,6 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         ["openclaw@2026.9.2", "legacy-operator-state"],
         ["openclaw@2026.9.1", "legacy-operator-state"],
         ["openclaw@2026.8.35", "legacy-operator-state"],
-        ["openclaw@2026.6.34", "legacy-operator-state"],
         ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
       ]);
     }
@@ -355,7 +357,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       args: { requested: "supported-lines" },
       tags: { latest: "2026.9.2", ...(extended ? { "extended-stable": `2026.${extended}` } : {}) },
       versions: yearVersions("6.34 8.33 8.35 9.1 9.2 9.3-beta.1 9.3"),
-      expected: yearVersions(`9.2 9.1${extended ? ` ${extended}` : ""} 6.34`),
+      expected: yearVersions(`9.2 9.1${extended ? ` ${extended}` : ""}`),
     })),
     {
       name: "supported lines excluding unpublished candidate",
@@ -366,7 +368,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       },
       tags: { latest: "2026.9.3" },
       versions: ["2026.6.34", "2026.8.33", "2026.9.2", "2026.9.3"],
-      expected: ["2026.9.2", "2026.6.34"],
+      expected: ["2026.9.2"],
     },
     baseline(
       "six supported stable releases, deduplicating explicit versions",
@@ -440,11 +442,6 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         { latest: "2026.9.2", "extended-stable": `2026.${extended}` },
         `6.34 8.33 9.1 9.2 ${extended}`,
       ),
-    ),
-    unsupportedLine(
-      { latest: "2026.9.2" },
-      "9.1 9.2",
-      "oldest supported baseline is not published",
     ),
     {
       args: { requested: "release-history", "history-count": "1e3" },

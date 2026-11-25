@@ -3,6 +3,8 @@ import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statem
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
+  readSqliteDatabaseIntegrityVerification,
+  revokeSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "../infra/sqlite-database-admission.js";
 import { getSqlitePinnedReadSnapshot } from "../infra/sqlite-pinned-read-snapshot.js";
@@ -20,6 +22,7 @@ import {
   adoptOpenClawAgentDatabaseSchema,
   captureOpenClawAgentDatabaseReadValidation,
   getOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 
 describe("agent schema refresh", () => {
@@ -32,6 +35,9 @@ describe("agent schema refresh", () => {
         }
         const db = database.db;
         db.exec("DROP INDEX idx_agent_cache_expiry");
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
+        revokeSqliteDatabaseAdmissions(db);
+        expect(readSqliteDatabaseIntegrityVerification(db)).toBeUndefined();
         const publicationFailure = new Error("Publication was not acknowledged");
         let repairedPublication = false;
         let publicationWasPinned: boolean | undefined;
@@ -60,18 +66,19 @@ describe("agent schema refresh", () => {
         }
         expect(repairedPublication).toBe(true);
         expect(publicationWasPinned).toBe(false);
+        expect(readSqliteDatabaseIntegrityVerification(db)).toBeUndefined();
       });
     },
   );
 
   it("publishes known derived DDL without repeating agent admission", async () => {
-    await withReceiptFixture(false, (database, options) => {
+    await withReceiptFixture(false, async (database, options) => {
       const reader = openOpenClawAgentDatabaseReadOnly(options);
       if (!reader.found || isPostgresSqlConnection(reader.database.db)) {
         throw new Error("Expected independent SQLite reader");
       }
       const previous = getOpenClawAgentDatabaseValidation(database)!;
-      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
+      const retainedReader = await captureOpenClawAgentDatabaseReadValidation(database);
       expect(retainedReader).toBeDefined();
       try {
         runSqliteImmediateTransactionSync(database.db, () => {

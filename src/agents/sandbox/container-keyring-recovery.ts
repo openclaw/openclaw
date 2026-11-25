@@ -39,9 +39,9 @@ export async function reclaimIdleSandboxContainer(options: {
   engine: SandboxContainerEngine;
   assertCurrent?: () => void;
 }): Promise<void> {
-  const assertOwner = await captureSandboxStateOwner();
+  const owner = await captureSandboxStateOwner();
   const assertCurrent = () => {
-    assertOwner();
+    owner.assertCurrent();
     options.assertCurrent?.();
   };
   const { entries } = await readRegistry();
@@ -87,6 +87,7 @@ export async function reclaimIdleSandboxContainer(options: {
         await execContainer(engine, ["stop", "--time", "10", state.id], {
           signal: AbortSignal.timeout(30_000),
           assertCurrent,
+          prepareCurrent: owner.prepareCurrent,
         });
         return true;
       },

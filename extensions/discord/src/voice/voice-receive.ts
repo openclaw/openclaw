@@ -55,7 +55,7 @@ export class DiscordVoiceReceive {
       accountId: string;
       admissionAllowFrom?: string[];
       botUserId?: string;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
       sessions: ReadonlyMap<string, VoiceSessionEntry>;
@@ -175,6 +175,7 @@ export class DiscordVoiceReceive {
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
@@ -231,6 +232,7 @@ export class DiscordVoiceReceive {
     let failed = false;
     let resetReceiveRecovery = false;
     const acceptPacket = (frame: DiscordAudioFrame) => {
+      const { pcm } = frame;
       if (failed || !frame.packet.byteLength || stream.destroyed) {
         stream.acknowledge(frame);
         return;
@@ -242,7 +244,7 @@ export class DiscordVoiceReceive {
       }
       // Reset in worker-message order, before asynchronous recording/admission.
       // A queued healthy frame must not erase another speaker's later failure.
-      if (!resetReceiveRecovery && frame.pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
+      if (!resetReceiveRecovery && pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
         resetReceiveRecovery = true;
         this.resetDecryptFailureState(entry);
       }
@@ -251,7 +253,7 @@ export class DiscordVoiceReceive {
         startedAt: frame.receivedAt,
         recordingEpoch: frame.recordingEpoch,
       };
-      input.write({ pcm: Buffer.from(frame.pcm), receipt, frame });
+      input.write({ pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength), receipt, frame });
     };
     const endInput = () => input.end();
     let aborted = false;
@@ -295,7 +297,7 @@ export class DiscordVoiceReceive {
       : undefined;
     const recording = new DiscordVoiceRecording({
       entry,
-      cfg: this.params.cfg,
+      readConfig: this.params.readConfig,
       userId,
       isInputComplete: () => !failed,
       minimumSeconds: () => (aborted ? 0.2 : MIN_SEGMENT_SECONDS),
@@ -456,6 +458,7 @@ export class DiscordVoiceReceive {
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
     });

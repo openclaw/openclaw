@@ -228,6 +228,7 @@ describe("matrix channel message adapter", () => {
 
   it("forwards presentation payload hooks through the registered outbound adapter", async () => {
     const outbound = matrixPlugin.outbound;
+    expect(outbound?.chunker?.("```\nab\ncd\n```", 10)).toEqual(["```\nab\n```", "```\ncd\n```"]);
     expect(outbound?.presentationCapabilities).toMatchObject({
       supported: true,
       buttons: true,

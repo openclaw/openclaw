@@ -1,8 +1,5 @@
-import {
-  captureWorktreeRegistryReadGuard,
-  readRegistryWorktree,
-} from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { resolveSessionWorktree } from "../../agents/worktrees/session-lifecycle.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -28,35 +25,27 @@ export async function readLocalWorkspaceReviewBase(params: {
   );
   params.assertCurrent();
   const row = reply?.row;
-  if (!row) {
-    return undefined;
-  }
   if (
-    row.worktree_id !== binding.id ||
-    row.agent_id !== params.agentId ||
-    row.session_key !== params.sessionKey ||
-    row.session_id !== params.entry.sessionId
+    row &&
+    (row.worktree_id !== binding.id ||
+      row.agent_id !== params.agentId ||
+      row.session_key !== params.sessionKey ||
+      row.session_id !== params.entry.sessionId)
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }
-  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
-  const worktree = await readRegistryWorktree(context, binding.id);
-  const assertWorktreeCurrent = accept(worktree);
-  const assertCurrent = () => {
-    params.assertCurrent();
-    assertWorktreeCurrent();
-  };
+  const prepared = await resolveSessionWorktree({
+    binding,
+    sessionKey: params.sessionKey,
+    assertCurrent: params.assertCurrent,
+  });
+  if (!prepared) {
+    return undefined;
+  }
+  const { worktree, assertCurrent } = prepared;
   assertCurrent();
-  if (
-    !worktree ||
-    worktree.removedAt !== undefined ||
-    worktree.ownerKind !== "session" ||
-    worktree.ownerId !== params.sessionKey ||
-    worktree.repoRoot !== binding.repoRoot ||
-    worktree.branch !== binding.branch ||
-    !isPathInside(worktree.path, params.cwd)
-  ) {
+  if (!isPathInside(worktree.path, params.cwd)) {
     throw new Error("Local workspace review owner changed");
   }
-  return { baseCommit: row.base_commit, assertCurrent };
+  return row ? { baseCommit: row.base_commit, assertCurrent } : undefined;
 }

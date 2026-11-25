@@ -1,14 +1,14 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type {
+  PersistedUserTurnMediaInput,
+  PersistedUserTurnMessage,
+} from "./user-turn-input.types.js";
 import {
   buildLateMediaAttachedProjection,
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
-import type {
-  PersistedUserTurnMediaInput,
-  PersistedUserTurnMessage,
-} from "./user-turn-transcript.types.js";
 
 const userMessage = { role: "user" as const, content: "", timestamp: 123 };
 const sparsePath = "/media/sparse.png";

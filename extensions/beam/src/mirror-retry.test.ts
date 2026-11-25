@@ -1,6 +1,7 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  beamTestAuthority,
   beamTestNow,
   beamTestSessions as sessions,
   beamMirrorTestFixture,
@@ -10,7 +11,7 @@ import {
   persistentBeamTestStore,
   type BeamTestSession,
 } from "./beam.test-support.js";
-import { beamMirrorId } from "./mirror.js";
+import { beamMirrorId } from "./mirror-candidate.js";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.js";
 
@@ -72,7 +73,7 @@ describe("Beam terminal retry policy", () => {
 
   it("keeps receiver-retained retry state with independent clocks", async () => {
     const targetBeamId = beamMirrorId("claude", "gateway:local", "session-273");
-    const { store: receiverStore, close } = persistentBeamTestStore();
+    const { store: receiverStore, close } = await persistentBeamTestStore();
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
     const store: BeamStore = {
@@ -92,15 +93,16 @@ describe("Beam terminal retry policy", () => {
     const handler = beamTestHandler(
       store,
       {
-        resolveClient: () => ({ clientIp: `test-${++requestNumber}`, scopes: ["operator.write"] }),
+        resolveAuthority: () => beamTestAuthority({ clientIp: `test-${++requestNumber}` }),
       },
       503,
     );
     try {
       await withServer(handler, async (baseUrl) => {
+        const catalog = createBeamTestCatalog({ sessions: () => activeSessions });
         const runner = createBeamTestRunner({
           endpoint: `${baseUrl}/api/v1/beam/sessions`,
-          listCatalogs: () => [createBeamTestCatalog({ sessions: () => activeSessions })],
+          listCatalogs: () => [catalog],
         });
         for (let offset = 0; offset < BEAM_MAX_SESSIONS; offset += 32) {
           const count = Math.min(32, BEAM_MAX_SESSIONS - offset);

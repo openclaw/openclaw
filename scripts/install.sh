@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -77,7 +81,7 @@ NODE_24_MIN_MINOR=16
 NODE_24_MIN_PATCH=0
 NODE_26_MIN_MINOR=1
 NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
+NODE_SUPPORTED_VERSION_LABEL="24.16.0+ on 24.x or 26.1.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -227,6 +231,19 @@ has_visible_prompt_output() {
     [[ -t 1 ]]
 }
 
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+    local name=""
+    name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+        echo "/dev/$name"
+    else
+        echo "/dev/tty"
+    fi
+}
+
 resolve_subprocess_stdin_path() {
     local prompt_output_visible="${1:-0}"
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -237,7 +254,7 @@ resolve_subprocess_stdin_path() {
         return 1
     fi
     if has_controlling_tty && [[ "$prompt_output_visible" == "1" ]]; then
-        echo "/dev/tty"
+        controlling_tty_path
     else
         echo "/dev/null"
     fi
@@ -627,12 +644,14 @@ run_with_spinner() {
     fi
 }
 
+# Quiet steps hide output, so they never read the terminal. A terminal stdin
+# under sudo-rs use_pty with redirected output stops apt with SIGTTOU (#203460).
 run_quiet_step() {
     local title="$1"
     shift
 
     if [[ "$VERBOSE" == "1" ]]; then
-        run_with_spinner "$title" "$@"
+        run_with_spinner "$title" "$@" < /dev/null
         return $?
     fi
 
@@ -645,18 +664,14 @@ run_quiet_step() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "$@"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || cmd_exit=$?
+        run_with_spinner "$title" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        if needs_stdin_isolation; then
-            "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
-        else
-            "$@" >"$log" 2>&1 || cmd_exit=$?
-        fi
+        "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
@@ -970,7 +985,7 @@ run_npm_global_install() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "${cmd[@]}"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || install_status=$?
+        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || install_status=$?
     else
         ui_info "Installing OpenClaw package"
         "${cmd[@]}" < /dev/null >"$log" 2>&1 || install_status=$?
@@ -1270,7 +1285,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify
@@ -1505,7 +1520,8 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
+            # Interactive: Homebrew asks for the admin password and confirmation on the terminal.
+            run_with_safe_stdin run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -1595,8 +1611,8 @@ node_version_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch"
 }
 
-# Fallback covers latest and extended-stable until both defaults publish relaxed engines.
-NODE_PACKAGE_ENGINE=">=24.22.1 <25 || >=26.12.1"
+# Unknown package metadata must not trigger a download for a recommendation alone.
+NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
 
 node_components_satisfy_package_engine() {
     local major="$1" minor="$2" patch="$3" range="$4"
@@ -2124,6 +2140,7 @@ check_node() {
         NODE_VERSION="$(node_major_version || true)"
         if node_binary_is_supported node; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
+            warn_node_security_patch "$(node -v)"
             print_active_node_paths || true
             return 0
         else
@@ -2712,12 +2729,13 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
-    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    local shell_name="${SHELL:-}" quoted_dir fish_dir quote_escape="'\\''"
     shell_name="${shell_name##*/}"
     # Keep path bytes literal, including history expansion in interactive Bash.
     quoted_dir="${managed_node_bin:-$dir}"
     fish_dir="$quoted_dir"
-    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    # Bash 3.2 reinterprets inline quote escapes in pattern replacements.
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
     quoted_dir="'$quoted_dir'"
     fish_dir="${fish_dir//\\/\\\\}"
     fish_dir="${fish_dir//\"/\\\"}"
@@ -3375,7 +3393,11 @@ is_installer_git_wrapper() {
     IFS= read -r first < "$wrapper" || return 1
     second="$(sed -n '2p' "$wrapper")"; third="$(sed -n '3p' "$wrapper")"; fourth="$(sed -n '4p' "$wrapper")"
     [[ "$first" == "#!/usr/bin/env bash" && "$second" == "set -euo pipefail" && -z "$fourth" ]] || return 1
-    case "$third" in "exec "*"/dist/entry.js \"\$@\"") return 0 ;; *) return 1 ;; esac
+    # `openclaw update` points a Git install's wrapper at the release launcher.
+    case "$third" in
+        "exec "*"/dist/entry.js \"\$@\"" | "exec "*"/git-install/openclaw-launcher.mjs \"\$@\"") return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 prepare_git_wrapper_backup_for_npm() {
@@ -3403,7 +3425,7 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
-# These metadata documents contain only objects and unescaped ASCII strings.
+# Metadata uses objects, unescaped ASCII strings, and boolean values.
 # Reject other JSON forms and duplicate keys instead of guessing their meaning.
 bun_metadata_string() {
     LC_ALL=C awk -v wanted="$2" '
@@ -3414,9 +3436,13 @@ bun_metadata_string() {
             if (match(json, /^[ \t\r\n]+/)) { json=substr(json,RLENGTH+1); continue }
             if (done) fail()
             quoted=match(json, /^"[A-Za-z0-9_.+\/-]*"/)
+            boolean=!quoted && match(json, /^(true|false)/)
             token=quoted ? substr(json,2,RLENGTH-2) : substr(json,1,1)
-            json=substr(json,quoted ? RLENGTH+1 : 2)
-            if (quoted) {
+            json=substr(json,(quoted || boolean) ? RLENGTH+1 : 2)
+            if (boolean) {
+                if (!depth || state[depth]!="value") fail()
+                state[depth]="end"
+            } else if (quoted) {
                 if (!depth) fail()
                 if (state[depth]=="first" || state[depth]=="key") {
                     if (token ~ /\// || seen[path[depth] "/" token]++) fail()
@@ -3774,7 +3800,7 @@ install_with_bun() {
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
     elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
         if is_promptable; then
-            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun </dev/tty
+            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun <"$(controlling_tty_path)"
             # Onboarding has no runtime-path option; record the exact fork now.
             "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
         else
@@ -3914,18 +3940,6 @@ main() {
     OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
-    # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
-    local npm_bin=""
-    npm_bin="$(npm_global_bin_dir || true)"
-    if [[ "$INSTALL_METHOD" == "npm" ]]; then
-        warn_shell_path_missing_dir "$npm_bin" "npm global bin dir"
-    fi
-    if [[ "$INSTALL_METHOD" == "git" ]]; then
-        if [[ -x "$HOME/.local/bin/openclaw" ]]; then
-            warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir (~/.local/bin)"
-        fi
-    fi
-
     local config_present=false defer_success=false
     if has_openclaw_config; then
         config_present=true
@@ -3956,7 +3970,7 @@ main() {
             if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" <"$(controlling_tty_path)" || doctor_exit=$?
             fi
             if (( doctor_exit == 130 )); then
                 abort_install_int
@@ -4008,15 +4022,34 @@ main() {
         return 1
     fi
 
+    # Keep caller-shell setup separate from PATH changes in this child process.
+    local shell_bin="" shell_bin_label=""
+    if [[ "$INSTALL_METHOD" == "npm" ]]; then
+        shell_bin="$(npm_global_bin_dir || true)"
+        shell_bin_label="npm global bin dir"
+    elif [[ -x "$HOME/.local/bin/openclaw" ]]; then
+        shell_bin="$HOME/.local/bin"
+        shell_bin_label="user-local bin dir (~/.local/bin)"
+    fi
+    local shell_setup_needed=false
+    if [[ -n "$shell_bin" ]] && ! path_has_dir "$ORIGINAL_PATH" "$shell_bin"; then
+        shell_setup_needed=true
+    fi
+
     local installed_version=""
     installed_version="$(resolve_openclaw_version)"
     echo ""
-    if [[ -n "$installed_version" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        ui_warn "Installed; one shell setup step remains${installed_version:+ (${installed_version})}"
+    elif [[ -n "$installed_version" ]]; then
         ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
     else
         ui_celebrate "🦞 OpenClaw installed successfully!"
     fi
-    if [[ "$is_upgrade" == "true" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        echo "  A piped installer cannot change its parent shell environment."
+        warn_shell_path_missing_dir "$shell_bin" "$shell_bin_label"
+    elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
     else
         local completion_messages=(
@@ -4065,7 +4098,7 @@ main() {
                     warn_openclaw_not_found
                     return 0
                 fi
-                exec </dev/tty
+                exec <"$(controlling_tty_path)"
                 exec "$claw" onboard
             fi
             local user_claw

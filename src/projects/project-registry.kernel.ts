@@ -107,15 +107,18 @@ export function resolveProjectRegistryInDatabase(
   return row ? rowToProject(row) : undefined;
 }
 
-export function resolveRecordedProjectRootInDatabase(
+export function resolveRecordedProjectByRootInDatabase(
   database: EngineConnection,
   repoRoot: string,
-): string | undefined {
+  source?: ProjectRegistryInsert["source"],
+): ProjectRegistryRecord | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
-  return executeSqliteQueryTakeFirstSync(
+  const query = db.selectFrom("projects").selectAll().where("repo_root", "=", repoRoot).limit(1);
+  const row = executeSqliteQueryTakeFirstSync(
     database,
-    db.selectFrom("projects").select("repo_root").where("repo_root", "=", repoRoot),
-  )?.repo_root;
+    source ? query.where("source", "=", source) : query,
+  );
+  return row ? rowToProject(row) : undefined;
 }
 
 function readMatchingProjectRow(
@@ -156,6 +159,25 @@ export function removeProjectRegistryInDatabase(
     executeSqliteQuerySync(database, db.deleteFrom("projects").where("id", "=", project.id))
       .numAffectedRows === 1n
   );
+}
+
+export function renameProjectRegistryInDatabase(
+  database: EngineConnection,
+  project: ProjectRegistryIdentity & { displayName: string },
+): ProjectRegistryRecord | undefined {
+  const current = readMatchingProjectRow(database, project);
+  if (!current) {
+    return undefined;
+  }
+  const renamed = { ...current, display_name: project.displayName, updated_at_ms: Date.now() };
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<ProjectsDatabase>(database)
+      .updateTable("projects")
+      .set({ display_name: renamed.display_name, updated_at_ms: renamed.updated_at_ms })
+      .where("id", "=", project.id),
+  );
+  return rowToProject(renamed);
 }
 
 export function removeProjectCheckoutReferenceInDatabase(

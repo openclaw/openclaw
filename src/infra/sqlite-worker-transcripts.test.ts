@@ -23,10 +23,6 @@ import {
   getTranscriptLibrary,
   listTranscriptLibrary,
 } from "../transcripts/library.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptUtterance,
-} from "../transcripts/provider-types.js";
 import { readTranscriptLibraryStatus } from "../transcripts/status.js";
 import {
   TranscriptSessionConflictError,
@@ -36,6 +32,7 @@ import * as exportOwnership from "../transcripts/store-export-ownership.js";
 import { TranscriptLibraryError } from "../transcripts/store-read.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "../transcripts/types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";

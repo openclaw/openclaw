@@ -25,7 +25,7 @@ function formFixture(
     root.querySelector<HTMLInputElement>(selector)!;
   const add = (root: ParentNode = container) =>
     [...root.querySelectorAll("button")]
-      .find((button) => button.textContent?.trim() === "Add Entry")!
+      .find((button) => button.textContent?.trim() === (root === container ? "Add" : "Add entry"))!
       .click();
   renderValue();
   return { state, container, renderValue, input, add };
@@ -61,9 +61,9 @@ describe("config form map key ownership", () => {
   it.each([
     { kind: "duplicate", attempt: "backup", reason: "already in use" },
     { kind: "reserved", attempt: "declared", reason: "already in use" },
-    { kind: "schema", attempt: "bad/key", reason: "matches this setting's constraints" },
+    { kind: "schema", attempt: "bad/key", reason: "matches this setting’s constraints" },
     { kind: "redacted", attempt: "renamed", reason: "stored secret" },
-    { kind: "empty", attempt: "  ", reason: "matches this setting's constraints" },
+    { kind: "empty", attempt: "  ", reason: "matches this setting’s constraints" },
     { kind: "parent", attempt: "renamed", reason: "Review its documentation and constraints" },
   ])(
     "explains a rejected $kind rename after restoring the valid key",

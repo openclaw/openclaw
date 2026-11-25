@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, onTestFinished, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createNewSessionRequest } from "../acp/translator.bridge-test-helpers.js";
 import {
@@ -10,11 +10,12 @@ import {
   createAcpGatewayAgent,
 } from "../acp/translator.test-helpers.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { GatewayClient } from "./client.js";
-import { setupSessionCreateTestHarness } from "./server.sessions.create.test-support.js";
+import { setupPersistentSessionCreateTestHarness } from "./server.sessions.create.test-support.js";
 import { rpcReq, testState } from "./test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
+const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 test.each(["fresh", "fresh-reset", "adopt"])(
@@ -29,6 +30,9 @@ test.each(["fresh", "fresh-reset", "adopt"])(
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
     const { ws } = await openClient({ scopes: ["operator.admin"] });
+    const sharedState = openOpenClawStateDatabase();
+    // Ledger cleanup must leave the suite Gateway's shared-state owner alive.
+    onTestFinished(() => expect(sharedState.db.isOpen).toBe(true));
     const existingKey = "agent:main:acp-bridge:existing-project";
     try {
       if (adoptExisting) {

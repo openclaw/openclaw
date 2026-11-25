@@ -22,12 +22,13 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const CONTINUATION_PROMPT =
-  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
+  "Continue the current task from the existing transcript, preserving completed work and the user's constraints. Use recorded tool results to determine what completed. Before retrying an action with an unknown outcome, inspect its state. If the recorded results already satisfy the remaining request, report them without additional tool calls. Do not restart the task or repeat completed actions.";
 
 type ActivePrompt = {
   override?: string;
   persisted: boolean;
   internal: boolean;
+  replayCurrentTranscript?: true;
 };
 
 export async function createEmbeddedRunSessionPromptState(input: {
@@ -132,7 +133,11 @@ export async function createEmbeddedRunSessionPromptState(input: {
   // Internal control prompts are model-only context, never operator-authored transcript turns.
   const activateInternalPrompt = (prompt: string) => {
     basePromptOverride = prompt;
-    Object.assign(activePrompt, { persisted: true, internal: true });
+    Object.assign(activePrompt, {
+      persisted: true,
+      internal: true,
+      replayCurrentTranscript: undefined,
+    });
     suppressNextUserMessagePersistence = true;
   };
   if (params.pluginRuntimeRefreshContinuation) {
@@ -190,6 +195,21 @@ export async function createEmbeddedRunSessionPromptState(input: {
       activePrompt.persisted &&
       recorder?.hasPersisted() === true &&
       Boolean((recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey)
+    );
+  };
+  // Every transcript retry resends a persisted keyed turn in place with its completed tools:
+  // a hidden prompt would append another user turn and runtime carrier on each retry and
+  // break the provider prompt cache. Only a turn that cannot be replayed, or an attempt
+  // whose tail is not a request to resend, continues through the hidden prompt.
+  const continueTranscript = (unsettledTail: boolean, includeToolFailureInstruction?: boolean) => {
+    if (!unsettledTail && canReplayCurrentUserTurn()) {
+      activePrompt.replayCurrentTranscript = true;
+      return;
+    }
+    activateInternalPrompt(
+      includeToolFailureInstruction
+        ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
+        : CONTINUATION_PROMPT,
     );
   };
   const waitForCurrentUserMessagePersistence = async () => {
@@ -258,9 +278,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
         customType: "incomplete-tool-call",
         content:
           (toolCallId
-            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments. `
-            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls. ") +
-          "Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments only if the original request allows continuing that work. `
+            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls only if the original request allows continuing that work. ") +
+          "Use recorded tool results to determine what completed, and do not repeat completed actions. Inspect state only for actions whose outcomes are unknown.",
         display: false,
         details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
         timestamp: Date.now(),
@@ -323,9 +343,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
       }
     },
     continueFromCurrentTranscript: (options?: {
+      /** The attempt left partial output or unsettled work, so its tail is not a request to resend. */
+      unsettledTail?: boolean;
       includeToolFailureInstruction?: boolean;
       messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
-      replayCurrentUserTurn?: boolean;
     }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
@@ -339,16 +360,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
           messages,
         };
       }
-      // A request rejected before any output left the transcript unchanged. Replaying
-      // the persisted keyed user turn resends that exact request; a hidden prompt
-      // would add a user turn and shift the prompt prefix on every retry.
-      if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
-        return;
-      }
-      const prompt = options?.includeToolFailureInstruction
-        ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
-        : CONTINUATION_PROMPT;
-      activateInternalPrompt(prompt);
+      continueTranscript(options?.unsettledTail === true, options?.includeToolFailureInstruction);
     },
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
@@ -359,7 +371,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;
       } else if (activePrompt.persisted) {
-        activateInternalPrompt(CONTINUATION_PROMPT);
+        continueTranscript(false, false);
       }
     },
   };

@@ -6,6 +6,7 @@ const INHERITED_TOP_LEVEL_CODEX_CONFIG_KEYS = new Set([
   "model",
   "model_provider",
   "model_reasoning_effort",
+  "model_context_window",
   "sandbox_mode",
 ]);
 

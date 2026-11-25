@@ -8,7 +8,12 @@ import WebKit
 final class ControlUIDocumentHost {
     let webView: DashboardWebView
     var currentURL: URL
-    var auth: DashboardWindowAuth
+    var auth: DashboardWindowAuth {
+        didSet {
+            if self.auth != oldValue { self.installNativeAuthScript() }
+        }
+    }
+
     var nativeGatewayAuthProvider: DashboardNativeGatewayAuth.Provider? {
         didSet { self.nativeGatewayAuthRevision &+= 1 }
     }
@@ -109,7 +114,6 @@ final class ControlUIDocumentHost {
         // navigation intent. The challenge provider can follow native reconnect.
         self.auth = .nativeDevice(gatewayUrl: gatewayUrl, token: token, password: password)
         self.nativeGatewayAuthRevision &+= 1
-        self.installNativeAuthScript()
     }
 
     var browserSession: GatewayBrowserSession? {

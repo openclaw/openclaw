@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
 const AUDIENCE = "npm:registry.npmjs.org";
 const NPM_REGISTRY = "https://registry.npmjs.org";
@@ -87,6 +90,26 @@ export async function preflightNpmTrustedPublisher(packageName) {
     "GitHub OIDC token request",
     "value",
   );
+
+  // Environment approval and token acquisition can outlive preview admission.
+  // Reuse its source policy, then refresh tooling authority at the credential effect.
+  execFileSync(
+    "python3",
+    [
+      "-I",
+      "-S",
+      process.env.CI_GIT_OWNER,
+      "--policy",
+      fileURLToPath(new URL("./plugin-npm-release-admission.py", import.meta.url)),
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  verifyReleaseToolingIdentity({
+    repository: process.env.GITHUB_REPOSITORY,
+    workflowRef: process.env.WORKFLOW_REF_NAME,
+    workflowFullRef: process.env.WORKFLOW_REF,
+    workflowSha: process.env.WORKFLOW_SHA,
+  });
 
   // npm-package-arg's escapedName preserves the scope and escapes only its slash.
   const escapedPackageName = packageName.replaceAll("/", "%2f");

@@ -347,6 +347,24 @@ export function tryNativeRequireModule(
   }
 }
 
+/** Terminal capture disposal revokes its modules and ends original-error retry ownership. */
+export function clearPluginSourceCaptureModuleCache(directory: string): void {
+  // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+  const urls = pathToFileURL(directory + path.sep).href;
+  const cache = createRequire(import.meta.url).cache;
+  for (const id of Object.keys(cache)) {
+    if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
+      delete cache[id];
+    }
+  }
+  // Failed modules need not remain in require.cache, but their errors still retain plugin objects.
+  for (const filename of nativeModuleLoadFailures.keys()) {
+    if (isPathInside(directory, filename)) {
+      nativeModuleLoadFailures.delete(filename);
+    }
+  }
+}
+
 /** Explicit public-library invalidation refreshes the current path synchronously. */
 export function clearPluginModuleRequireCache(modulePath: string, dependencyRoot: string): void {
   const require = createRequire(import.meta.url);

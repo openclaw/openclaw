@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
+  captureMcpAppContext,
   publishMcpAppContext,
   readMcpAppContexts,
   subscribeMcpAppContexts,
@@ -56,4 +57,50 @@ describe("app context presentation", () => {
       "data:image/png;base64,YWJj",
     );
   });
+});
+
+it("uses safe MCP resource icons and freezes submitted references", () => {
+  const content = {
+    type: "resource_link" as const,
+    name: "helmet.json",
+    title: "Helmet shell",
+    uri: "shell://specimens/helmet",
+    description: "Helmet facts",
+    icons: [{ src: "https://example.test/shell.png" }],
+  };
+  expect(mcpAppContextThumbnail(content)).toBe("https://example.test/shell.png");
+  const entry = {
+    viewId: "v",
+    title: "Store",
+    sessionKey: "main",
+    state: { updateId: "1", content: [content] },
+  };
+  // SAFETY: Context projections key by client identity without invoking the client.
+  const client = {} as NonNullable<ApplicationGateway["snapshot"]["client"]>;
+  publishMcpAppContext(client, entry);
+  const snapshot = captureMcpAppContext(client, entry.sessionKey);
+  content.title = "Changed selection";
+  expect(snapshot).toEqual([
+    {
+      title: "Helmet shell",
+      uri: content.uri,
+      description: "Helmet facts",
+      icon: "https://example.test/shell.png",
+    },
+  ]);
+  expect(
+    mcpAppContextThumbnail({ ...content, icons: [{ src: "javascript:alert(1)" }] }),
+  ).toBeNull();
+});
+
+it("keeps the visible App title when only structured context is shared", () => {
+  // SAFETY: Context projections key by client identity without invoking the client.
+  const client = {} as NonNullable<ApplicationGateway["snapshot"]["client"]>;
+  publishMcpAppContext(client, {
+    viewId: "structured",
+    title: "Specimen comparison",
+    sessionKey: "main",
+    state: { updateId: "1", structuredContent: { specimen: "Helmet shell" } },
+  });
+  expect(captureMcpAppContext(client, "main")).toEqual([{ title: "Specimen comparison" }]);
 });

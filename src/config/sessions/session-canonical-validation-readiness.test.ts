@@ -220,7 +220,7 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { options, database } = seedPendingRows(1);
       if (change === "startup revoked") {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
       }
       let changed = false;
@@ -240,7 +240,7 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
             if (change === "row changed") {
               markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
             } else if (change === "receipt revoked") {
-              invalidateOpenClawAgentDatabaseValidation(database.path);
+              invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
             }
           }
         });
@@ -322,7 +322,7 @@ it("forces a fresh worker to revalidate a canonical receipt revoked by its paren
       UPDATE session_nodes SET parent_session_key = 'agent:main:changed';
       DELETE FROM session_canonical_validation_pending;
     `);
-    invalidateOpenClawAgentDatabaseValidation(database.path);
+    invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
     await expect(
       withSqliteCanonicalValidationWorker((withWorker) =>
         certifySessionCanonicalValidationPending(options, withWorker),

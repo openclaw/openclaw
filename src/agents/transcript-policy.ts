@@ -4,7 +4,10 @@
  */
 import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { requiresReasoningContentReplay } from "@openclaw/ai/internal/openai-completions-compat";
-import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  isOpenAIResponsesApi,
+  supportsNativeOpenAIResponsesEndpoint,
+} from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -26,7 +29,9 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
-  appendOnlyRuntimeContext: false,
+  // Earlier runtime-context carriers stay in history on every route, so each request extends
+  // the previous one byte for byte. An owning provider plugin may opt out explicitly.
+  appendOnlyRuntimeContext: true,
   inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
@@ -36,14 +41,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   validateAnthropicTurns: false,
   allowSyntheticToolResults: false,
 };
-
-function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
-  return (
-    modelApi === "openai-responses" ||
-    modelApi === "openai-chatgpt-responses" ||
-    modelApi === "azure-openai-responses"
-  );
-}
 
 function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
@@ -75,7 +72,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     };
   }
   const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
-  const isOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi);
+  const isOpenAiResponses = isOpenAIResponsesApi(params.modelApi);
   const requiresOpenAiCompatibleToolIdSanitization = isStrictOpenAiCompatible || isOpenAiResponses;
 
   if (!isGoogle && !requiresOpenAiCompatibleToolIdSanitization) {
@@ -157,12 +154,7 @@ export function resolveTranscriptPolicy(params: {
   const replayPolicy = buildReplayPolicy
     ? (buildReplayPolicy(context) ?? undefined)
     : buildUnownedProviderTransportReplayFallback(context);
-  const modelApi = params.modelApi;
-  const policy = {
-    ...DEFAULT_TRANSCRIPT_POLICY,
-    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
-    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
-  };
+  const policy = { ...DEFAULT_TRANSCRIPT_POLICY };
   for (const [key, value] of Object.entries(replayPolicy ?? {})) {
     if (value != null) {
       Object.assign(policy, {

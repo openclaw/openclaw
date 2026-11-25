@@ -5,6 +5,12 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import {
+  resolveGitReleaseEntrypointForLauncher,
+  resolveGitReleaseLauncherForEntrypoint,
+  resolveGitReleasePrefix,
+  servingGitReleaseSlot,
+} from "../infra/git-release-paths.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -21,6 +27,33 @@ type GatewayProgramArgs = {
 };
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+
+/**
+ * A CLI entrypoint the service install publishes before the service starts. It is not on
+ * disk while planning, so the argument builder uses it as given instead of probing.
+ */
+export type PlannedCliEntrypoint = { planned: string };
+
+/**
+ * Plans the entrypoint inside `packageRoot`, a copy of the same version as the running CLI
+ * that is not installed yet: the entry this CLI's own files resolve to, at the same relative path.
+ */
+export async function planCliEntrypoint(params: {
+  sourceEntrypoint: string;
+  sourceRoot: string;
+  packageRoot: string;
+  service: "gateway" | "node";
+}): Promise<PlannedCliEntrypoint> {
+  const source = await resolveCliEntrypointPathForService(params.sourceEntrypoint, params.service);
+  const relative = path.relative(
+    await fs.realpath(params.sourceRoot),
+    await fs.realpath(source).catch(() => source),
+  );
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Cannot plan the service CLI: ${source} is outside ${params.sourceRoot}.`);
+  }
+  return { planned: path.join(params.packageRoot, relative) };
+}
 
 const canAccessEntrypoint = (candidate: string) =>
   fs.access(candidate).then(
@@ -188,7 +221,8 @@ export async function resolveOpenClawWrapperPath(
 }
 
 async function resolveCliProgramArguments(params: {
-  cliEntrypoint?: string;
+  cliEntrypoint?: string | PlannedCliEntrypoint;
+  env?: NodeJS.ProcessEnv;
   service?: "gateway" | "node";
   args: string[];
   dev?: boolean;
@@ -233,23 +267,44 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
-  const cliEntrypointPath = await resolveCliEntrypointPathForService(
-    params.cliEntrypoint,
-    params.service,
-  );
+  // The selected state's launcher owns ordinary installs; retained recovery entries stay explicit.
+  const launcher =
+    params.service === "node"
+      ? null
+      : typeof params.cliEntrypoint === "string"
+        ? resolveGitReleaseEntrypointForLauncher(params.cliEntrypoint)
+          ? params.cliEntrypoint
+          : null
+        : resolveGitReleaseLauncherForEntrypoint(
+            path.join(
+              servingGitReleaseSlot(resolveGitReleasePrefix(params.env)),
+              "dist",
+              "index.js",
+            ),
+          );
+  const cliEntrypointPath =
+    launcher && (await canAccessEntrypoint(launcher))
+      ? launcher
+      : typeof params.cliEntrypoint === "object"
+        ? params.cliEntrypoint.planned
+        : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
   return {
     programArguments: [
       runtimePath,
       ...resolveRuntimeArgs(params.runtime),
-      (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
+      typeof params.cliEntrypoint === "object"
+        ? cliEntrypointPath
+        : ((await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath),
       ...params.args,
     ],
   };
 }
 
 export async function resolveGatewayProgramArguments(params: {
-  /** Retained CLI entrypoint to plan for instead of this process's argv[1]. */
-  cliEntrypoint?: string;
+  /** Retained or planned CLI entrypoint to use instead of this process's argv[1]. */
+  cliEntrypoint?: string | PlannedCliEntrypoint;
+  /** Captured install environment selecting the service's state directory. */
+  env?: NodeJS.ProcessEnv;
   port: number;
   allowUnconfigured?: boolean;
   dev?: boolean;
@@ -275,7 +330,8 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
-  cliEntrypoint?: string;
+  resumeSavedTarget?: boolean;
+  cliEntrypoint?: string | PlannedCliEntrypoint;
   host: string;
   port: number;
   contextPath?: string;
@@ -291,19 +347,22 @@ export async function resolveNodeProgramArguments(params: {
   runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
-  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls === false && !params.tlsFingerprint) {
-    // Managed services must carry plaintext explicitly; omission would let the
-    // node runtime re-inherit TLS from the operator's global Gateway config.
-    args.push("--no-tls");
-  } else if (params.tls || params.tlsFingerprint) {
-    args.push("--tls");
-  }
-  if (params.tlsFingerprint) {
-    args.push("--tls-fingerprint", params.tlsFingerprint);
-  }
-  if (params.contextPath) {
-    args.push("--context-path", params.contextPath);
+  const args = ["node", "run"];
+  if (!params.resumeSavedTarget) {
+    args.push("--host", params.host, "--port", String(params.port));
+    if (params.tls === false && !params.tlsFingerprint) {
+      // Managed services must carry plaintext explicitly; omission would let the
+      // node runtime re-inherit TLS from the operator's global Gateway config.
+      args.push("--no-tls");
+    } else if (params.tls || params.tlsFingerprint) {
+      args.push("--tls");
+    }
+    if (params.tlsFingerprint) {
+      args.push("--tls-fingerprint", params.tlsFingerprint);
+    }
+    if (params.contextPath) {
+      args.push("--context-path", params.contextPath);
+    }
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);

@@ -341,6 +341,12 @@ run/worker authority; a continuation also checks the original owner's live
 exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
 lifetime, while MCP tools retain the existing authenticated grant or
 loopback-runtime lifetime.
+The guard identifies the invoking call from its async context. Awaited work keeps
+that context, but callbacks from an event source shared across calls, such as a
+cached connection's event listeners, can run in another call's context, such as
+the call that created the source. Capture `AsyncLocalStorage.snapshot()` when the call starts and run
+the guard through it in those callbacks. The same applies to runtime helpers that
+act as the current caller, such as `api.runtime.gateway.request`.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 
@@ -447,8 +453,9 @@ or sensitive values in schema descriptions because trusted output metadata can
 become model-visible.
 Use `{ additionalProperties: false }` on object layers when you want a complete
 compact output hint; open or truncated schemas remain available through
-the callable catalog handle's `describe()` but are not advertised as complete
-quick-index contracts.
+Code Mode's `API.read` declarations but are not advertised as complete
+quick-index contracts. Model-facing `tool_describe` and Code Mode
+`describe()` omit output schemas unless the model explicitly requests them.
 
 Factory tools declare `outputSchema` on the concrete `AnyAgentTool` they
 return. The static `tool({ factory })` declaration does not accept a separate

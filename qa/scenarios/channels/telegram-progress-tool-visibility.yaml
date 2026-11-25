@@ -141,10 +141,13 @@ flow:
               - assert:
                   expr: firstCommentaryIndex >= 0 && progressEvents.slice(firstCommentaryIndex).every((event) => event.message.text.includes(commentaryMarker))
                   message: authored commentary must remain visible from its first complete preview through final delivery
-              - set: toolEvents
+              - set: toolLines
                 value:
                   expr: |-
-                    turnEvents.filter((event) => event.message.text.split("\n").some((line) => !["Exec: running", "Last activity: Exec"].includes(line.trim()) && (/🛠️|\b(?:Exec|Bash)\b/u.test(line) || line.includes(toolMarker))))
+                    turnEvents.map((event) => event.message.text.split("\n").map((line) => line.trim()).filter((line) => /🛠️|\b(?:Exec|Bash)\b/u.test(line) || line.includes(toolMarker)))
+              - set: toolEvents
+                value:
+                  expr: turnEvents.filter((event, index) => toolLines[index].length > 0)
               - if:
                   expr: fixture.toolProgress === true
                   then:
@@ -153,8 +156,8 @@ flow:
                         message: explicitly enabled tool progress must show an exec row on the commentary draft
                   else:
                     - assert:
-                        expr: toolEvents.length === 0
-                        message: omitted toolProgress must hide exec rows and command markers throughout every observed message and edit
+                        expr: toolLines.every((lines) => lines.length <= 1 && lines.every((line) => ["🛠️ Exec running", "🛠️ Exec"].includes(line)))
+                        message: omitted toolProgress must show only one bounded Exec status row, never tool details or command markers, in every observed message and edit
               - set: proofs
                 value:
                   expr: "proofs.concat([{ case: fixture.name, toolProgress: fixture.toolProgress === true ? true : 'omitted', providerRequests: requests.length, correlatedExecResult: true, finalMarkerCount: finalEvents.length, observedEvents: turnEvents.map((event) => ({ kind: event.kind, message: event.message.id === finalEvents[0].message.id ? 'final' : 'progress', text: event.message.text })), toolRowEvents: toolEvents.length, noProgressAfterFinal: true }])"

@@ -91,6 +91,7 @@ class ModelRequestJson {
 }
 type ModelRequestBodyState = {
   enabled?: boolean;
+  hasFinalPolicy?: boolean;
   reportsBytes?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
   onBytes?: (bytes: number) => void;
@@ -121,6 +122,8 @@ export function withModelRequestBodyBytes(
       state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
     } else if (init?.body instanceof Blob) {
       state.onBytes?.(init.body.size);
+    } else if (init?.body instanceof Uint8Array) {
+      state.onBytes?.(init.body.byteLength);
     }
     return fetch(input, init);
   };
@@ -160,6 +163,18 @@ export function markEncodedModelRequestBody(body: Blob | Uint8Array, stream: boo
 
 export function encodedModelRequestBodyStream(body: unknown): boolean | undefined {
   return typeof body === "object" && body !== null ? encodedBodyStreams.get(body) : undefined;
+}
+
+/** Defer an opted-in host policy until after a JSON transport's private media projection.
+ * Without a final policy, keep the transport's existing serialization path unchanged.
+ */
+export function prepareFinalModelRequestJson(options: object | undefined) {
+  if (!options || !modelRequestBodyState(options).hasFinalPolicy) {
+    return undefined;
+  }
+  const encode = prepareModelRequestBody(options);
+  return async (wireJson: string): Promise<Uint8Array<ArrayBuffer>> =>
+    (await encode(JSON.parse(wireJson))).body;
 }
 
 /** SDK RequestOptions.body overrides encoding while the original params retain stream metadata. */

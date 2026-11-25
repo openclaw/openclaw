@@ -8,6 +8,7 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./client-thread-closure.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
@@ -342,6 +343,7 @@ function observeCodexThreadConfiguration(
     }
   });
   return {
+    model: thread.model,
     modelProvider: thread.modelProvider,
     dispose: () => {
       clearTimeout(timer);
@@ -356,7 +358,7 @@ function observeCodexThreadConfiguration(
       timer ??= setTimeout(() => {
         expired = true;
         onUnload?.();
-      }, 2_000);
+      }, CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
       if (!(requireClosed ? closed : unloaded) && !expired) {
         await new Promise<void>((resolve) => {
           const finish = () => {

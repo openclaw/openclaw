@@ -3,7 +3,7 @@ import {
   type InputFileLimits,
   type InputFileLimitsConfig,
   resolveInputFileLimits,
-} from "../media/input-files.js";
+} from "../media/input-file-limits.js";
 
 // Inbound channel/UI attachments are managed media already accepted under the
 // agent's media size cap (chat.send's mediaMaxMb / DEFAULT_CHAT_ATTACHMENT_MAX_MB).

@@ -397,7 +397,11 @@ it("revalidates the exact receipt authority after awaited ownership lookup", asy
         agentId: "main",
         sessionKey: requesterSessionKey,
         executionIdentityToken: token,
-        receiptAuthority: () => authorityActive,
+        receiptAuthority: () => {
+          if (!authorityActive) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       async () =>
         await resolveAccess({

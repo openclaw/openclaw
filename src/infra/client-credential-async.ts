@@ -2,13 +2,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { registerOpenClawAgentDatabaseReadCandidateResource } from "../state/openclaw-agent-db-resources.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
-import { requestClientCredentialsFromApp } from "./client-credential-ipc.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import type {
   ClientCredentialOperation,
@@ -20,16 +14,14 @@ import type {
   ClientCredentialWorkerOperation,
   ClientCredentialWorkerResult,
 } from "./client-credential.worker.js";
-import {
-  acquireStateDatabaseSchemaLease,
+import { settleWithCleanup } from "./error-graph-internal.js";
+import type {
   captureStateDatabaseAccess,
-  type StateDatabaseSchemaLease,
+  StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { resolveDatabasePathKeyAsync } from "./sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
+import type { WorkerTaskPool } from "./worker-task-pool.js";
 
 const queues = resolveGlobalSingleton(
   Symbol.for("openclaw.clientCredentialOperations"),
@@ -122,6 +114,22 @@ async function runClientCredentialTaskAsync(
     key: root,
     task: async () => {
       const offline = async () => {
+        // Token-only Gateway clients do not need a local database or worker runtime.
+        const [
+          { registerOpenClawAgentDatabaseReadCandidateResource },
+          { hydrateOpenClawStateWorkerError, retainOpenClawStateWorkerErrorPayload },
+          { acquireStateDatabaseSchemaLease, captureStateDatabaseAccess },
+          { retainSqliteWriteAdmissionService },
+          { createSqliteWorkerOperationAdmission },
+          { WorkerTaskPool },
+        ] = await Promise.all([
+          import("../state/openclaw-agent-db-resources.js"),
+          import("../state/openclaw-state-worker-error.js"),
+          import("./gateway-state-owner.js"),
+          import("./sqlite-transaction.js"),
+          import("./sqlite-worker-operation-admission.js"),
+          import("./worker-task-pool.js"),
+        ]);
         assertCurrent();
         if (runtime.closing) {
           throw new Error("Client credential worker is closing.");
@@ -177,37 +185,46 @@ async function runClientCredentialTaskAsync(
         const releaseService = retainSqliteWriteAdmissionService([databasePath], () =>
           admission.service(),
         );
-        try {
-          runtime.pool ??= new WorkerTaskPool({
-            workerUrl: resolveRuntimeProcessEntrypointUrl("clientCredentials"),
-            workerClass: "singleton",
-            idleTimeoutMs: 0,
-          });
-          const result = await runtime.pool.run(
-            { root, operation, admission: admission.port },
-            {
-              signal: options.signal,
-              transferList: (input) => [input.admission],
-            },
-          );
-          assertAccess();
-          if (result.kind === "error") {
-            const error = new Error("Client credential operation failed");
-            retainOpenClawStateWorkerErrorPayload(error, result.error);
-            throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-          }
-          return result;
-        } catch (error) {
-          throw admission.failure ?? error;
-        } finally {
-          releaseService();
-          admission.finish();
-        }
+        return settleWithCleanup(
+          (async () => {
+            try {
+              runtime.pool ??= new WorkerTaskPool({
+                workerUrl: resolveRuntimeProcessEntrypointUrl("clientCredentials"),
+                workerClass: "singleton",
+              });
+              const result = await runtime.pool.run(
+                { root, operation, admission: admission.port },
+                {
+                  signal: options.signal,
+                  transferList: (input) => [input.admission],
+                },
+              );
+              assertAccess();
+              if (result.kind === "error") {
+                const error = new Error("Client credential operation failed");
+                retainOpenClawStateWorkerErrorPayload(error, result.error);
+                throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+              }
+              return result;
+            } catch (error) {
+              throw admission.failure ?? error;
+            }
+          })(),
+          async () => {
+            try {
+              await admission.finish();
+            } finally {
+              releaseService();
+            }
+          },
+          "Client credential operation and admission cleanup failed",
+        );
       };
       const maintenance = getOpenClawDatabaseMaintenanceScope();
       if (maintenance?.ownsSchemaMaintenance) {
         maintenance.assertAdmission();
       } else {
+        const { requestClientCredentialsFromApp } = await import("./client-credential-ipc.js");
         assertCurrent();
         const result = await requestClientCredentialsFromApp(
           capturedEnv,

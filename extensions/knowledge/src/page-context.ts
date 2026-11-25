@@ -1,5 +1,5 @@
 import type { FeatureClient } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { KnowledgeLocation } from "./page-location.js";
 import type { PageState, RecentCursor } from "./page-state.js";
 import type { TemporalSelection } from "./search-date-filters.js";
@@ -9,9 +9,9 @@ import type { TemporalSelection } from "./search-date-filters.js";
 export type Page = {
   s: PageState;
   /** Store settings and the viewing selector. */
-  base: FeatureClient<typeof contract>;
+  base: FeatureClient<FullOutputContract>;
   /** Reads as the selected agent's effective store. */
-  feature: FeatureClient<typeof contract>;
+  feature: FeatureClient<FullOutputContract>;
   root: HTMLElement;
   content: HTMLElement;
   loading: HTMLElement;

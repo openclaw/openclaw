@@ -1,5 +1,5 @@
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export class ExecProcessPreflightError extends Error {
@@ -30,12 +30,9 @@ export function createExecLaunchLifecycle(
     },
     release,
     async prepare(
-      assertSource: (() => void) | undefined,
       beforeSpawn: (() => Promise<AgentToolResult<ExecToolDetails> | undefined>) | undefined,
     ) {
-      assertSource?.();
       const denied = await beforeSpawn?.();
-      assertSource?.();
       if (denied) {
         throw new ExecProcessPreflightError(denied);
       }

@@ -9,7 +9,7 @@ export interface FrvChildStatus extends Record<string, unknown> {
   key: string;
   plannedRunAttempt: number | null;
   runId: string;
-  status: "active" | "failed" | "missing" | "passed";
+  status: "active" | "failed" | "missing" | "passed" | "waived";
 }
 
 export interface FrvContinuationStatus {
@@ -113,7 +113,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "getReleaseEvidenceClient">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(

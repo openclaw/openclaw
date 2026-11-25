@@ -27,11 +27,13 @@ const emit = (stream: ChildProcess["stdout"], text: string) =>
 
 function makeChild() {
   const child = new ChildProcess();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
   let exitCode: number | null = null;
   // The external fixture owns settlement; ChildProcess exposes a read-only projection.
-  Object.defineProperty(child, "exitCode", { get: () => exitCode });
+  Object.defineProperties(child, {
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+    exitCode: { get: () => exitCode },
+  });
   const finish = (code: number, stderr = "") => {
     if (exitCode !== null) {
       return;
@@ -153,13 +155,9 @@ it.each([
       }
       if (recovery === "port") {
         expect(expectedPort).not.toBe(oldPort);
-        const replacement = await reserveTestPortListener({
-          offsets: [0],
-          port: expectedPort,
-          createListener: createServer,
-        });
-        await replacement.releaseListener();
-        await replacement.claim.release();
+        // The mocked CLI does not retain the replacement listener. Rebinding here
+        // races unrelated ephemeral sockets and does not prove startup recovery;
+        // the launch, status and persisted-config assertions above own that proof.
       }
       expect(occupied.listener.listening).toBe(true);
     } finally {

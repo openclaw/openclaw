@@ -79,7 +79,7 @@ suite.define(() => {
         const failure =
           surface === "header"
             ? page.getByText(/changed before patch\. Retry\./).first()
-            : page.locator('openclaw-modal-dialog [role="alert"]');
+            : page.locator('openclaw-modal-dialog .callout.danger[role="alert"]');
         expect(acceptedKeys).not.toContain(original.key);
         await failure.waitFor({ state: "visible" });
         expect(targets.find((target) => target.key === original.key)).toMatchObject({

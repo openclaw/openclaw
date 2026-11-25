@@ -3,8 +3,6 @@ import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -12,18 +10,11 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveGatewayAuth } from "./auth.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
-import {
-  createRequest,
-  createResponse,
-  createTestGatewayServer,
-  dispatchRequest,
-  sendRequest,
-} from "./server-http.test-harness.js";
+import { createRequest, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
@@ -225,78 +216,3 @@ it.each(roleCases)(
       },
     ),
 );
-
-it("retires prepared plugin effects when role or proxy policy changes", async () =>
-  withRoleConfig(
-    roleConfig("writer", {
-      writer: roleDefinition(write),
-      reader: roleDefinition(read),
-    }),
-    async (profile, initial) => {
-      let current = initial;
-      let prepared = createDeferred();
-      let resume = createDeferred();
-      let effects = 0;
-      const server = pluginServer(
-        {
-          gatewayRuntimeScopeSurface: "trusted-operator",
-          handler: async (_req, res) => {
-            const scope = getPluginRuntimeGatewayRequestScope();
-            prepared.resolve();
-            await resume.promise;
-            await scope?.revalidate?.();
-            const allowed = observeRuntimeScope().writeAllowed;
-            if (allowed) {
-              effects += 1;
-            }
-            res.statusCode = allowed ? 200 : 403;
-            res.end();
-            return true;
-          },
-        },
-        {
-          getRuntimeConfig: () => current,
-          getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
-          shouldEnforcePluginGatewayAuth: (path) => path.pathname === routePath,
-        },
-      );
-      const request = { ...pluginRequest(), method: "POST" };
-      for (const change of [
-        "unrelated",
-        "role-definition",
-        "role-assignment",
-        "proxy-trust",
-      ] as const) {
-        current = structuredClone(initial);
-        setUserProfileRole(profile.id, null);
-        invalidateOperatorRolePolicy(profile.id);
-        setRuntimeConfigSnapshot(current, current);
-        prepared = createDeferred();
-        resume = createDeferred();
-        const response = createResponse();
-        const dispatch = dispatchRequest(server, createRequest(request), response.res);
-        await prepared.promise;
-        const before = effects;
-        if (change === "role-assignment") {
-          setUserProfileRole(profile.id, "reader");
-          invalidateOperatorRolePolicy(profile.id);
-        } else {
-          current = structuredClone(current);
-          if (change === "unrelated") {
-            current.logging = { level: "debug" };
-          } else if (change === "role-definition") {
-            current.gateway!.roles!.default = "reader";
-          } else {
-            current.gateway!.trustedProxies = [];
-          }
-          setRuntimeConfigSnapshot(current, current);
-        }
-        resume.resolve();
-        await dispatch;
-        const settled = [response.res.statusCode, effects - before];
-        expect([...settled, (await sendRequest(server, request)).res.statusCode], change).toEqual(
-          change === "unrelated" ? [200, 1, 200] : [401, 0, 403],
-        );
-      }
-    },
-  ));

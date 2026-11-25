@@ -3,11 +3,21 @@ import {
   hasSqliteDatabaseSchemaAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
 } from "../../infra/sqlite-database-admission.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
+import {
+  assertAgentCreationClaimAliases,
+  captureAgentCreationClaim,
+  reserveAgentCreationClaimAdmission,
+} from "../../state/agent-creation-claim.js";
+import {
+  captureAgentDatabaseAdmission,
+  runWithAgentDatabaseReadAdmissionTurn,
+} from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -23,17 +33,17 @@ import {
   armDatabaseWorkerIdleRetirement,
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
-  targetDiscoveryLane,
   type HistoryDatabaseResource,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestOptions,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -59,6 +69,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
+    case "compaction-preparation":
     case "current-turn-entry":
     case "recent-active-events":
     case "latest-active-message":
@@ -80,7 +91,7 @@ export function runSessionBranchSummaryWorkerRequest(
   return withSessionHistoryWorkerDatabase(
     database,
     (owner) => owner.readBranchSummaries({ request: read }, signal),
-    maintenanceLane,
+    sessionStoreLane,
   );
 }
 
@@ -137,6 +148,10 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(database.agentId, {
+    env: options.env,
+    access: "read",
+  });
   let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
@@ -165,7 +180,7 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      timeoutMs = 60_000,
+      { timeoutMs = 60_000, pointRead }: SessionHistoryWorkerRequestOptions = {},
     ) => {
       let retirement: Promise<void> | undefined;
       const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
@@ -187,6 +202,11 @@ export function retainSessionHistoryWorkerDatabase(
         aborters: owned.aborters,
       };
       const { lane: requestedLane, ...readOptions } = readAdmissionOptions;
+      assertAgentCreationClaimAliases(readOptions);
+      const creationClaim = captureAgentCreationClaim(readOptions);
+      if (creationClaim) {
+        reserveAgentCreationClaimAdmission(database, readOptions, () => owned.retire());
+      }
       const deadline = performance.now() + readRequest.timeoutMs;
       const remainingTime = () => {
         const remaining = deadline - performance.now();
@@ -202,7 +222,7 @@ export function retainSessionHistoryWorkerDatabase(
           !(options.readIdentity
             ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
             : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
-        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+        const requestLane = cold ? sessionStoreLane : requestedLane;
         if (requestLane !== requestedLane) {
           clearDatabaseWorkerIdleRetirement(requestLane);
           requestLane.pending++;
@@ -252,18 +272,26 @@ export function retainSessionHistoryWorkerDatabase(
           const reply = await admit((requestSignal, remaining) => {
             return runWithAgentDatabaseReadAdmissionTurn(
               [database.path],
-              () => {
+              async () => {
                 // A preceding writer can renew this physical proof while admission waits.
                 const validation = preserveSourceArtifacts
                   ? undefined
-                  : captureOpenClawAgentDatabaseReadValidation(
+                  : await captureOpenClawAgentDatabaseReadValidation(
                       database,
                       owned.nativeLanes.has(requestLane) ? "retained" : "admission",
                     );
+                await options.prepareRead?.(validation);
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
-                    options.prepareRead?.();
+                    assertAgentCreationClaimAliases(readOptions);
+                    creationClaim?.assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
                     const input = prepare();
                     if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
                       inspectionIdentity =
@@ -280,6 +308,7 @@ export function retainSessionHistoryWorkerDatabase(
                         );
                       }
                       input.preserveSourceArtifacts = true;
+                      input.inspectionSnapshot = getArtifactPreservingSqliteRead(database.path);
                       input.inspectionSourcePath = options.readSourcePath;
                       inspectionIdentity ??= input.expectedIdentity;
                       if (inspectionIdentity) {
@@ -302,7 +331,9 @@ export function retainSessionHistoryWorkerDatabase(
                     return {
                       ...input,
                       database,
+                      creationClaim: creationClaim?.witness,
                       validation: validation?.validation,
+                      readCustody: options.readCustody,
                       projectionReceipt:
                         projectionReceipt &&
                         (input.kind === "history-page"
@@ -316,9 +347,13 @@ export function retainSessionHistoryWorkerDatabase(
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
-                    inputBytes: inputBytes + (validation?.inputBytes ?? 0),
+                    inputBytes:
+                      inputBytes +
+                      (validation?.inputBytes ?? 0) +
+                      (options.readCustody ? JSON.stringify(options.readCustody).length * 2 : 0),
                     timeoutMs: remaining,
                     signal: requestSignal,
+                    pointRead,
                     onRequest: onRequest
                       ? (value, context) => {
                           const effect = (async () => {
@@ -351,6 +386,7 @@ export function retainSessionHistoryWorkerDatabase(
             );
           });
           await retirement;
+          creationClaim?.assertCurrent();
           const received =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (

@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { isReadyPreparation } from "./cloud-worker-environment-model.ts";
@@ -54,9 +55,9 @@ export function CloudWorkerMachinePool(props: { inventory: EnvironmentsListResul
         }
       />
       <Show when={editor.state().error}>
-        <div class="callout warning" role="alert">
+        <InlineAlert tone="warning" role="alert">
           {editor.state().error}
-        </div>
+        </InlineAlert>
       </Show>
     </>
   );

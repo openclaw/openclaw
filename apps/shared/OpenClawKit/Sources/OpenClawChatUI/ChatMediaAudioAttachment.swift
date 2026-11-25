@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct ChatMediaAudioAttachment: View {
     private enum LoadState {
+        case idle
         case loading
         case preparing
         case loaded(ChatMediaAudioPlayer)
@@ -20,12 +21,16 @@ struct ChatMediaAudioAttachment: View {
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
 
-    @State private var state: LoadState = .loading
-    @State private var retryGeneration = 0
+    @State private var state: LoadState = .idle
+    @State private var requestedArtifactId: String?
+    @State private var requestGeneration = 0
+    @State private var playbackIntent: Int?
 
     var body: some View {
         Group {
             switch self.state {
+            case .idle:
+                self.previewRow
             case .loading:
                 self.waitingRow(String(localized: "Loading audio…"))
             case .preparing:
@@ -36,14 +41,54 @@ struct ChatMediaAudioAttachment: View {
                 self.unavailableRow
             }
         }
-        .task(id: "\(self.artifactId):\(self.resolverReady):\(self.retryGeneration)") {
-            await self.loadAudio()
+        .task(id: "\(self.artifactId):\(self.resolverReady):\(self.requestGeneration)") {
+            guard !Task.isCancelled else { return }
+            guard self.requestedArtifactId == self.artifactId, self.resolverReady else {
+                if case let .loaded(player) = self.state {
+                    player.stop()
+                }
+                self.requestedArtifactId = nil
+                self.state = .idle
+                return
+            }
+            await self.loadAudio(artifactId: self.artifactId, generation: self.requestGeneration)
         }
         .onDisappear {
             if case let .loaded(player) = self.state {
                 player.stop()
             }
+            self.requestedArtifactId = nil
+            self.requestGeneration &+= 1
+            self.state = .idle
         }
+    }
+
+    private var previewRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                self.requestAudio()
+            } label: {
+                Image(systemName: "play.fill")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!self.resolverReady)
+            .accessibilityLabel(String(localized: "Play"))
+
+            Text(verbatim: self.label)
+                .font(OpenClawChatTypography.footnote)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if let durationSeconds {
+                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.black.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func waitingRow(_ message: String) -> some View {
@@ -71,8 +116,6 @@ struct ChatMediaAudioAttachment: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "waveform")
-                    Text(String(localized: "Voice note"))
-                        .font(OpenClawChatTypography.footnote)
                     Text(verbatim: self.label)
                         .font(OpenClawChatTypography.footnote)
                         .lineLimit(1)
@@ -85,7 +128,8 @@ struct ChatMediaAudioAttachment: View {
                         player.toggle()
                     } label: {
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .frame(width: 18, height: 18)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
@@ -96,6 +140,7 @@ struct ChatMediaAudioAttachment: View {
                             set: { player.seek(to: $0) }),
                         in: 0...max(player.duration, 0.001))
                         .accessibilityLabel(String(localized: "Audio position"))
+                        .accessibilityValue(self.playbackPositionLabel(player))
 
                     Text(verbatim: self.playbackPositionLabel(player))
                         .font(OpenClawChatTypography.mono(size: 11, relativeTo: .caption))
@@ -120,8 +165,19 @@ struct ChatMediaAudioAttachment: View {
             systemImage: "waveform.badge.exclamationmark",
             message: String(localized: "Audio unavailable"))
         {
-            self.retryGeneration &+= 1
+            self.requestAudio()
         }
+    }
+
+    private func requestAudio() {
+        guard self.resolverReady else { return }
+        self.playbackIntent = ChatMediaPlaybackCoordinator.shared.claimPlaybackIntent()
+        self.requestedArtifactId = self.artifactId
+        self.requestGeneration &+= 1
+    }
+
+    private func isCurrentRequest(artifactId: String, generation: Int) -> Bool {
+        self.requestedArtifactId == artifactId && self.requestGeneration == generation && self.resolverReady
     }
 
     private func playbackPositionLabel(_ player: ChatMediaAudioPlayer) -> String {
@@ -130,21 +186,29 @@ struct ChatMediaAudioAttachment: View {
         return "\(elapsed) / \(total)"
     }
 
-    private func loadAudio() async {
+    private func loadAudio(artifactId: String, generation: Int) async {
+        guard !Task.isCancelled,
+              self.isCurrentRequest(artifactId: artifactId, generation: generation),
+              let playbackIntent = self.playbackIntent
+        else { return }
         if case let .loaded(player) = self.state {
             player.stop()
-        }
-        guard self.resolverReady else {
-            self.state = .unavailable
-            return
         }
         self.state = .loading
         do {
             let loaded = try await ChatMediaPlaybackLoader.load(
-                request: { try await self.load(self.artifactId) },
-                onPreparing: { self.state = .preparing })
-            guard let loaded, !Task.isCancelled else {
-                if !Task.isCancelled { self.state = .unavailable }
+                request: { try await self.load(artifactId) },
+                onPreparing: {
+                    guard !Task.isCancelled,
+                          self.isCurrentRequest(artifactId: artifactId, generation: generation)
+                    else { return }
+                    self.state = .preparing
+                })
+            guard !Task.isCancelled,
+                  self.isCurrentRequest(artifactId: artifactId, generation: generation)
+            else { return }
+            guard let loaded else {
+                self.state = .unavailable
                 return
             }
             guard case let .data(media) = loaded,
@@ -153,15 +217,19 @@ struct ChatMediaAudioAttachment: View {
                 self.state = .unavailable
                 return
             }
-            self.state = try .loaded(ChatMediaAudioPlayer(
+            let player = try ChatMediaAudioPlayer(
                 media: media,
                 title: self.label,
                 fallbackDuration: self.durationSeconds,
-                playbackAllowed: self.playbackAllowed))
+                playbackAllowed: self.playbackAllowed)
+            self.state = .loaded(player)
+            player.play(intent: playbackIntent)
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled,
+                  self.isCurrentRequest(artifactId: artifactId, generation: generation)
+            else { return }
             self.state = .unavailable
         }
     }
@@ -243,13 +311,17 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlayer {
     }
 
     func play() {
+        self.play(intent: nil)
+    }
+
+    func play(intent: Int?) {
         guard self.playbackAllowed() else {
             self.isPlaybackBlocked = true
             return
         }
         self.isPlaybackBlocked = false
+        guard ChatMediaPlaybackCoordinator.shared.activate(self, intent: intent) else { return }
         self.rewindIfFinished()
-        ChatMediaPlaybackCoordinator.shared.activate(self)
         guard self.activateAudioSession() else {
             self.isUnavailable = true
             ChatMediaPlaybackCoordinator.shared.release(self)
@@ -265,6 +337,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlayer {
     }
 
     func pause() {
+        ChatMediaPlaybackCoordinator.shared.playbackDidPause(self)
         self.progressTask?.cancel()
         self.progressTask = nil
         self.player.pause()

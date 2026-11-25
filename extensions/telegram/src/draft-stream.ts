@@ -148,6 +148,7 @@ export function createTelegramDraftStream(params: {
   let lastSentPreviewKey = "";
   let lastDeliveredText = "";
   let lastRequestedText = "";
+  let attemptedText = "";
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
   let pendingPlatformSendAuthorization: (() => void) | undefined;
@@ -425,6 +426,7 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
+    attemptedText = trimmed;
     const fullPreview =
       lastRequestedPreview?.text === trimmed
         ? lastRequestedPreview
@@ -756,7 +758,10 @@ export function createTelegramDraftStream(params: {
     /** Reset internal state so the next update creates a new message instead of editing. */
     forceNewMessage: () => resetStreamToNewMessage("retain"),
     rotateToNewMessageDeferringDelete,
-    /** True when a preview sendMessage was attempted but the response was lost. */
-    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
+    /** True when a lost sendMessage response may have delivered exactly this text. */
+    sendMayHaveLanded: (text: string) =>
+      messageSendAttempted &&
+      typeof streamMessageId !== "number" &&
+      attemptedText === text.trimEnd(),
   };
 }

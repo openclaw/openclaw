@@ -153,7 +153,8 @@ function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
 ) {
-  const stateDir = canonicalEntryPath(manifest.stateDir);
+  // Resolve directory aliases without rewriting sealed provenance or following the config entry.
+  const stateDir = resolvePathViaExistingAncestorSync(manifest.stateDir);
   const configPath = canonicalEntryPath(manifest.configPath);
   if (!scopes.get(stateDir)?.has(configPath)) {
     throw new Error("Update recovery backup belongs to another selected state or configuration.");
@@ -456,6 +457,16 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   }
   if (present.length !== 1) {
     throw new Error("Multiple original update captures belong to this run; preserve all evidence.");
+  }
+  if (
+    !expectedRef &&
+    !(await lstatIfExists(path.join(directory, "manifest.json"), "ENOENT")) &&
+    !(await hasPendingUpdateRecoverySeal(directory))
+  ) {
+    // Failed best-effort capture keeps unsealed evidence without a manifest.
+    // The updater already reported it; there is no baseline to reuse.
+    params.assertCurrent();
+    return undefined;
   }
   let identity:
     | { ref: UpdateRecoveryBackupRef; manifest: UpdateRecoveryBackupManifest }
