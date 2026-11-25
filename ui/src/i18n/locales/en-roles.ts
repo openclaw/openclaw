@@ -5,7 +5,8 @@ const enRoles = {
   rolesPage: {
     title: "Roles",
     configPath: "Saved in {path}. Changes apply right away; people whose access changes reconnect.",
-    adminOnly: "Only administrators can manage roles.",
+    adminOnly:
+      "Only administrators can manage roles. Ask an administrator to give you a role with Gateway admin access. If nobody can, run openclaw config unset gateway.roles.default on the Gateway host to stop applying roles to everyone.",
     loading: "Loading roles…",
     loadFailed: "Couldn’t load roles.",
     empty:
@@ -15,8 +16,16 @@ const enRoles = {
     defaultRoleDescription:
       "Anyone who signs in without an assigned role or GitHub mapping gets this role.",
     defaultRoleNone: "None (roles not enforced)",
-    defaultRoleConfirm:
-      "Turn on roles for everyone? People without an assigned role or GitHub mapping get {role}, and their current connections reconnect.",
+    enableDefaultTitle: "Turn on roles for everyone",
+    enableDefaultDescription:
+      "People without an assigned role or GitHub mapping get {role}, and their connections reconnect. Choose who stays an administrator first.",
+    enableDefaultAdmins: "Keep these people as administrators ({role})",
+    enableDefaultCreateAdmin:
+      "Keep these people as administrators: a {role} role with full access will be created",
+    enableDefaultYou: "You → {role}",
+    enableDefaultNoAdminRole:
+      "No role here can manage roles, and the names admin and administrator are taken. Create a role with Gateway admin access first.",
+    enableDefaultSave: "Turn on roles",
     githubMappings: "GitHub mappings",
     githubMappingsDescription: "Roles given to GitHub logins before their first sign-in.",
     githubMappingsCount: "{count} logins",

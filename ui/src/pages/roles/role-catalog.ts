@@ -283,6 +283,24 @@ const PRESETS: Record<RolePreset, RoleDefinition> = {
   blank: { sessions: { others: "none" }, agents: "*", scopes: ["operator.sessions.read"] },
 };
 
+/**
+ * The role administrators keep when roles turn on for everyone: an existing admin role
+ * (preferring one named "admin"), or the first free built-in name to create one under.
+ */
+export function planAdminRole(
+  catalog: Pick<RoleCatalog, "roles">,
+): { name: string; create: boolean } | null {
+  const admins = catalog.roles.filter((role) => isAdminRole(role.definition));
+  const existing = admins.find((role) => role.name === "admin") ?? admins[0];
+  if (existing) {
+    return { name: existing.name, create: false };
+  }
+  const free = ["admin", "administrator"].find(
+    (name) => !catalog.roles.some((role) => role.name === name),
+  );
+  return free ? { name: free, create: true } : null;
+}
+
 export function presetDefinition(preset: RolePreset): RoleDefinition {
   return structuredClone(PRESETS[preset]);
 }

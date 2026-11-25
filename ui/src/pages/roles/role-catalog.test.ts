@@ -6,6 +6,7 @@ import {
   buildRoleDelete,
   buildRoleEdit,
   normalizeRoleDefinition,
+  planAdminRole,
   presetDefinition,
   profilesByRole,
   readRoleCatalog,
@@ -149,6 +150,21 @@ describe("role catalog", () => {
       replacePaths: [],
     });
     expect(buildDefaultRole(config(), "missing")).toEqual({ error: "missing" });
+  });
+
+  it("keeps an existing admin role or picks a free name for a new one", () => {
+    const admin = presetDefinition("admin");
+    const catalog = (definitions: Record<string, RoleDefinition>) =>
+      readRoleCatalog({ gateway: { roles: { definitions } } });
+    expect(planAdminRole(catalog({ ops: admin, admin }))).toEqual({ name: "admin", create: false });
+    expect(planAdminRole(catalog({ ops: admin }))).toEqual({ name: "ops", create: false });
+    // A role named admin without operator.admin does not count, and its name is taken.
+    const blank = presetDefinition("blank");
+    expect(planAdminRole(catalog({ admin: blank }))).toEqual({
+      name: "administrator",
+      create: true,
+    });
+    expect(planAdminRole(catalog({ admin: blank, administrator: blank }))).toBeNull();
   });
 
   it("groups people by the role they resolve to", () => {

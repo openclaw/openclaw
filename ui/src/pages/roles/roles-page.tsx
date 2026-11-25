@@ -90,7 +90,12 @@ export function RolesPage() {
             <Show when={selected()}>
               <InlineAlert tone="warning">{t("rolesPage.errors.missing")}</InlineAlert>
             </Show>
-            <RoleList roles={roles} onOpen={open} onCreate={() => setDialog({ kind: "create" })} />
+            <RoleList
+              roles={roles}
+              onOpen={open}
+              onCreate={() => setDialog({ kind: "create" })}
+              onEnableDefault={(role) => setDialog({ kind: "enable-default", role })}
+            />
           </Match>
         </Switch>
       </SettingsWorkspace>

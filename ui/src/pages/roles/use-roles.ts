@@ -113,6 +113,7 @@ export function useRoles() {
     profiles,
     people,
     peopleLoaded: () => Boolean(directory.read().result),
+    selfProfileId: () => gateway.snapshot?.selfUser?.id ?? null,
     clearMessages: () => writer.update({ error: null, notice: null }),
     reload: () => context.runtimeConfig.ensureLoaded(),
     patch(

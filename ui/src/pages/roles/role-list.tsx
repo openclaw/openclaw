@@ -1,5 +1,4 @@
 import { For, Show } from "solid-js";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
@@ -19,6 +18,7 @@ export function RoleList(props: {
   roles: RolesState;
   onOpen: (name: string) => void;
   onCreate: () => void;
+  onEnableDefault: (role: string) => void;
 }) {
   const context = useApplication();
   const catalog = () => props.roles.catalog();
@@ -30,15 +30,10 @@ export function RoleList(props: {
       select.value = previous;
       return;
     }
-    if (
-      !previous &&
-      !(await showConfirmDialog({
-        title: t("rolesPage.defaultRole"),
-        message: t("rolesPage.defaultRoleConfirm", { role: name }),
-        confirmLabel: t("rolesPage.save"),
-      }))
-    ) {
+    if (!previous) {
+      // Turning roles on goes through choosing administrators first.
       select.value = previous;
+      props.onEnableDefault(name);
       return;
     }
     if (

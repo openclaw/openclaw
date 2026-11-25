@@ -269,7 +269,15 @@ secret prompts, and other privileged question workflows retain their existing
 ## Named operator roles
 
 Team Gateways enable named-role enforcement by setting `gateway.roles.default`.
-This binds authenticated durable profiles to named operator roles.
+This binds authenticated durable profiles to named operator roles, including the
+administrator who sets it: a profile without an assignment gets the default too.
+Before turning on a default, assign yourself a role that includes `operator.admin`.
+The Gateway refuses a role change (a config write to `gateway.roles` or `users.setRole`)
+that would leave the profile making it without `operator.admin`, and the Control UI
+Roles page asks who stays an administrator before it sets a default. The gateway owner
+and shared-token connections are never under roles, so `openclaw config unset
+gateway.roles.default` on the Gateway host always turns enforcement back off.
+When a role change widens someone's access, their open connections reconnect to pick it up.
 Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
 scopes, and whether newly created sessions require sandboxing. It can also require
@@ -674,14 +682,15 @@ An individual request already admitted may finish. Automations and other fresh
 starts recheck their saved source before running. Owner-device authority is unchanged.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
-`operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
+`admin`, `operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
 are preserved. Installing presets rewrites the config file as JSON through the
 standard config writer and removes JSON5 comments. Startup installs them before
 publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
 activation that cannot apply at runtime is reported in OpenClaw ID service status
 with a request to restart the Gateway.
 
-The operator preset grants read, write, approvals, questions, and
+The admin preset grants `operator.admin` with all agents and writable shared sessions;
+it is assigned to nobody until an administrator chooses who gets it. The operator preset grants read, write, approvals, questions, and
 talk scopes with all agents and writable shared sessions. The viewer preset
 allows all agents and viewable shared sessions but grants only
 `operator.sessions.read`: conversation browsing, not logs, `users.list`, or general

@@ -7,9 +7,11 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
+  buildDefaultRole,
   buildRoleCreate,
   buildRoleDelete,
   isValidRoleName,
+  planAdminRole,
   presetDefinition,
   type RoleDefinition,
   type RolePreset,
@@ -21,7 +23,8 @@ export type RoleDialog =
   | { kind: "create" }
   | { kind: "duplicate"; role: string }
   | { kind: "assign"; role: string }
-  | { kind: "delete"; role: string };
+  | { kind: "delete"; role: string }
+  | { kind: "enable-default"; role: string };
 
 const PRESETS: readonly RolePreset[] = ["guest", "collaborator", "operator", "admin", "blank"];
 const PRESET_KEYS: Record<RolePreset, string> = {
@@ -416,6 +419,99 @@ function DeleteRoleDialog(props: DialogProps) {
   );
 }
 
+/**
+ * Turning on a default role puts everyone without an assignment under it, including the
+ * person doing it. Administrators are chosen first, with the signed-in person kept, so the
+ * default never takes away the access needed to undo it.
+ */
+function EnableDefaultDialog(props: DialogProps) {
+  const plan = createMemo(() => planAdminRole(props.roles.catalog()));
+  const self = () => props.roles.selfProfileId();
+  const isAdmin = (profile: RoleProfile) => profile.effectiveRole === plan()?.name;
+  const picked = selection();
+  const chosen = () =>
+    props.roles
+      .profiles()
+      .filter(
+        (profile) =>
+          !isAdmin(profile) && (profile.id === self() || picked.selected().has(profile.id)),
+      );
+  const save = async () => {
+    const admin = plan();
+    const role = props.role;
+    if (!admin) {
+      return;
+    }
+    if (
+      admin.create &&
+      !(await props.roles.patch(
+        (base) => buildRoleCreate(base, admin.name, presetDefinition("admin")),
+        "Create role " + admin.name,
+        t("rolesPage.saved"),
+      ))
+    ) {
+      return;
+    }
+    if (chosen().length && !(await props.roles.assign(chosen(), admin.name))) {
+      return;
+    }
+    if (
+      await props.roles.patch(
+        (base) => buildDefaultRole(base, role),
+        "Set default role " + role,
+        t("rolesPage.saved"),
+      )
+    ) {
+      props.onClose();
+    }
+  };
+  return (
+    <Frame
+      title={t("rolesPage.enableDefaultTitle")}
+      description={t("rolesPage.enableDefaultDescription", { role: props.role })}
+      busy={props.roles.busy()}
+      wide
+      onClose={props.onClose}
+      submitLabel={t("rolesPage.enableDefaultSave")}
+      submitDisabled={!plan() || !props.roles.peopleLoaded()}
+      onSubmit={() => void save()}
+    >
+      <Show
+        when={plan()}
+        fallback={
+          <InlineAlert tone="danger" role="note">
+            {t("rolesPage.enableDefaultNoAdminRole")}
+          </InlineAlert>
+        }
+      >
+        {(admin) => (
+          <fieldset class="roles-fieldset">
+            <legend>
+              {admin().create
+                ? t("rolesPage.enableDefaultCreateAdmin", { role: admin().name })
+                : t("rolesPage.enableDefaultAdmins", { role: admin().name })}
+            </legend>
+            <PeoplePicker
+              people={props.roles.profiles()}
+              selected={picked.selected()}
+              disabled={(profile) => isAdmin(profile) || profile.id === self()}
+              detail={(profile) =>
+                isAdmin(profile)
+                  ? t("rolesPage.alreadyHasRole", { role: admin().name })
+                  : profile.id === self()
+                    ? t("rolesPage.enableDefaultYou", { role: admin().name })
+                    : (profile.effectiveRole ?? props.role) + " → " + admin().name
+              }
+              onToggle={picked.toggle}
+            />
+          </fieldset>
+        )}
+      </Show>
+      <ErrorAlert roles={props.roles} />
+    </Frame>
+  );
+}
+
 export function RoleDialogs(props: {
   roles: RolesState;
   dialog: RoleDialog;
@@ -443,6 +539,14 @@ export function RoleDialogs(props: {
       </Match>
       <Match when={props.dialog.kind === "assign"}>
         <AssignPeopleDialog
+          roles={props.roles}
+          role={role()}
+          onClose={props.onClose}
+          onOpen={props.onOpen}
+        />
+      </Match>
+      <Match when={props.dialog.kind === "enable-default"}>
+        <EnableDefaultDialog
           roles={props.roles}
           role={role()}
           onClose={props.onClose}

@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
@@ -75,11 +76,19 @@ const PROFILES = [
   profile("p-maya", "Maya Chen", "collaborator", "assigned"),
 ];
 
-async function openRoles(page: Page, scopes?: string[], search = "") {
-  const config = rolesConfig();
+async function openRoles(
+  page: Page,
+  scopes?: string[],
+  search = "",
+  options: { config?: ReturnType<typeof rolesConfig>; selfProfileId?: string } = {},
+) {
+  const config = options.config ?? rolesConfig();
   const gateway = await installMockGateway(page, {
     featureMethods: ["config.patch", "users.setRole", "users.list"],
     ...(scopes ? { operatorScopes: scopes } : {}),
+    ...(options.selfProfileId
+      ? { presenceUsers: [{ id: options.selfProfileId, self: true }] }
+      : {}),
     methodResponses: {
       "config.get": {
         ...configSnapshot(config, HASH),
@@ -240,6 +249,32 @@ suite.define(() => {
         gateway: { roles: { definitions: Record<string, unknown> } };
       };
       expect(Object.keys(raw.gateway.roles.definitions)).toEqual(["design-reviewers"]);
+    });
+  });
+
+  it("keeps the person turning roles on as an administrator", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const config = rolesConfig();
+      const { default: _default, ...roles } = config.gateway.roles;
+      const gateway = await openRoles(page, undefined, "", {
+        config: { gateway: { roles: roles as typeof config.gateway.roles } },
+        selfProfileId: "p-dev",
+      });
+      await page.getByLabel("Role for people without one").selectOption("operator");
+      const dialog = page.locator(".roles-dialog");
+      const self = dialog.locator(".roles-picker__row").filter({ hasText: "Dev Patel" });
+      await expect.poll(() => self.textContent()).toContain("You → administrator");
+      expect(await self.locator("input").isChecked()).toBe(true);
+      await proof(page, "roles-enable-default");
+      await dialog.getByRole("button", { name: "Turn on roles" }).click();
+      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+      const [assigned] = await gateway.getRequests("users.setRole");
+      expect(assigned?.params).toEqual({ profileId: "p-dev", role: "administrator" });
+      const [request] = await gateway.getRequests("config.patch");
+      assert(request && isRecord(request.params) && typeof request.params.raw === "string");
+      expect(JSON.parse(request.params.raw)).toEqual({
+        gateway: { roles: { default: "operator" } },
+      });
     });
   });
 
