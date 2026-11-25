@@ -1262,13 +1262,18 @@
 
 openclaw-chat-tool-output {
   display: block;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: auto;
 }
 
 .chat-tool-output {
-  padding: 12px;
+  padding-bottom: 12px;
+}
+
+.chat-tool-output > :not(.sidebar-header) {
+  margin-inline: 12px;
 }
 
 .chat-tool-output__actions,

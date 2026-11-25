@@ -367,6 +367,18 @@ suite.define(() => {
             await panel
               .locator("openclaw-chat-html-preview [role=status]")
               .waitFor({ state: "hidden" });
+            const header = await page.locator(".side-panel__header:visible").boundingBox();
+            const paneWidth = {
+              x: expect.closeTo(header!.x, 0),
+              width: expect.closeTo(header!.width, 0),
+            };
+            for (const part of [
+              panel.locator(".sidebar-file-view__path-bar"),
+              panel.locator(".sidebar-file-toolbar"),
+              outer,
+            ]) {
+              expect(await part.boundingBox()).toMatchObject(paneWidth);
+            }
             for (const height of [1000, 480]) {
               await page.setViewportSize({ width: 1440, height });
               await expect
@@ -392,7 +404,9 @@ suite.define(() => {
             await page.setViewportSize({ width: 1440, height: 1000 });
             const attachmentFrame = await outer.elementHandle();
             await selectFileAction(panel, "Source");
-            expect(await panel.locator("pre:visible").textContent()).toBe(attachmentSource);
+            const sourceBlock = panel.locator("pre:visible");
+            expect(await sourceBlock.textContent()).toBe(attachmentSource);
+            expect(await sourceBlock.boundingBox()).toMatchObject(paneWidth);
             expect(await panel.locator("a[download]").getAttribute("href")).toBe(mediaUrl);
             await tab.click();
             expect(await originalFrame!.evaluate((frame) => frame.isConnected)).toBe(true);

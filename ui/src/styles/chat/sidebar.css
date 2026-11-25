@@ -136,14 +136,17 @@
   overflow: auto;
   padding: 16px;
 
-  &:has(.sidebar-file-toolbar) {
-    padding-top: 0;
+  /* Embedded viewers own their content insets; the panel must not inset the frame. */
+  &:has(> .sidebar-attachment-preview),
+  &:has(> .chat-tool-card__preview),
+  &:has(> .mcp-app-sidebar-target),
+  &:has(> openclaw-mcp-app-panel) {
+    padding: 0;
   }
 
   &:has(.sidebar-pdf-preview) {
     display: flex;
     overflow: hidden;
-    padding: 0;
   }
 }
 
@@ -551,7 +554,7 @@
   gap: 10px;
   min-width: 0;
   flex: none;
-  padding: 6px 0;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
