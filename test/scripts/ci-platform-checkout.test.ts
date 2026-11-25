@@ -31,6 +31,7 @@ import {
   expectCensusClosed,
   registerWindowsCensusTests,
 } from "./ci-windows-process-census.test-support.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real deadline
 // and drain waits while keeping subprocess pressure bounded within one worker.
@@ -92,9 +93,17 @@ const workflowDefinition = parse(readFileSync(".github/workflows/ci.yml", "utf8"
 };
 for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
   const checkout = job.steps?.find((step) => step.env?.CHECKOUT_REPO);
+  const runner =
+    typeof job["runs-on"] === "string" && job["runs-on"].startsWith("${{")
+      ? evaluateWorkflowExpression(job["runs-on"], {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        })
+      : job["runs-on"];
   const kind =
     checkout?.env?.CHECKOUT_KIND ??
-    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(job["runs-on"])) ? "platform" : "linux-node");
+    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(runner)) ? "platform" : "linux-node");
   const references = new Map<string, string>();
   for (const step of job.steps ?? []) {
     for (const match of JSON.stringify(step).matchAll(/\.ci-harness\/([\w./-]+)/gu)) {
