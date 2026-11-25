@@ -61,6 +61,36 @@ describe("WhatsApp text runtime", () => {
     ).toBe("word ".repeat(12));
   });
 
+  it.each(["length", "newline"] as const)("keeps code table spaces across %s chunks", (mode) => {
+    const wideCell = `${"x".repeat(3993)}  END`;
+    const lastCell = "Q".repeat(3988);
+    for (const [limit, row, expected] of [
+      [17, "| North East Bay  Plan | 1 |", "North East Bay  Plan"],
+      [4000, `| ${wideCell} | 1 |`, wideCell],
+      [4000, `| ROW | \` ${lastCell}  \` |`, `${lastCell}  |`],
+    ] as const) {
+      const source = `| Name | Value |\n| --- | --- |\n${row}`;
+      const chunks = markdownToWhatsAppChunks(source, limit, "code", mode);
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(
+        chunks.every(
+          (chunk) => chunk.startsWith("```\n") && chunk.endsWith("```") && chunk.length <= limit,
+        ),
+      ).toBe(true);
+      const joined = chunks.map((chunk) => chunk.slice(4, -3)).join("");
+      expect(joined).toContain(expected);
+      expect(joined).toBe(markdownToWhatsApp(source, "code").slice(4, -3));
+    }
+  });
+
+  it("keeps newline-mode prose trimming beside a code table", () => {
+    const word = "a".repeat(3997);
+    const prose = `${word}   next field`;
+    const chunks = markdownToWhatsAppChunks(`${prose}\n\n${table}`, 4000, "code", "newline");
+    expect(chunks.slice(0, -1)).toEqual([word, "next field"]);
+    expect(chunks.at(-1)).toContain("| A    | 1     |");
+  });
+
   it("keeps newline-mode paragraph packing for formatted text", () => {
     expect(
       markdownToWhatsAppChunks("**Alpha**\n\n**Beta**\n\n**Gamma**", 14, "bullets", "newline"),
