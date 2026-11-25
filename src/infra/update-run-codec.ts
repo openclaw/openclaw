@@ -18,6 +18,9 @@ import { UpdateRunRecordSchema } from "./update-run-schema.js";
 const JSON_BYTES = 16 * 1024;
 /** Plugin rollback kept a later writer's value; users review it through Doctor. */
 export const PLUGIN_COHORT_KEPT_WARNING_STEP = "warning:plugin-cohort:later-changes-kept";
+/** A replaced package directory's successor settled the run's plugin recovery. */
+export const PLUGIN_COHORT_REPLACED_INSTALLATION_STEP =
+  "warning:plugin-cohort:replaced-installation";
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
   "candidate-admission",
@@ -80,6 +83,7 @@ const RETAINED_STEP_NAMES = [
   "warning:recovery-artifact-cleanup",
   "diagnostic:recovery-artifact-cleanup",
   PLUGIN_COHORT_KEPT_WARNING_STEP,
+  PLUGIN_COHORT_REPLACED_INSTALLATION_STEP,
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
@@ -323,7 +327,10 @@ function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): str
     return hasNamespaces ? undefined : throwOversizedReceipts();
   }
   const routing = { requester, sessionKey, deliveryContext, campaignId };
-  const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
+  const hasAdmission =
+    origin.admission !== undefined ||
+    origin.candidateAdmission !== undefined ||
+    origin.releaseAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
     ? JSON.stringify({

@@ -499,13 +499,31 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
-  it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
+  it.each(["direct", "prewarmed"])("retires a v16 display-trimmed snapshot (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 10));
+    // v16 cut [m1, m8, m2, …, m7, m9, …, m82] at display index two.
+    // Paging before its first held row (m2) can only return m1.
+    const messages = Array.from({ length: 82 }, (_, index) => index + 1)
+      .filter((seq) => seq !== 1 && seq !== 8)
+      .map((seq) => ({ role: "assistant", __openclaw: { id: `m${seq}`, seq } }));
+    await putRawRecord(
+      envelope(
+        sessionKey,
+        {
+          ...snapshot(),
+          messages,
+          deltaCursor: "cursor-for-incomplete-history",
+          pagination: { hasMore: true, needsBoundary: true, totalMessages: 82 },
+        },
+        16,
+      ),
+    );
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    expect(await readRawRecord(sessionKey)).toBeUndefined();
+    expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
   });
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {

@@ -298,6 +298,15 @@ export function findPluginSdkApiReleaseNoteOmissions({
   return { missing, removals: uniqueRemovals };
 }
 
+// An acknowledgement is the reviewed diff digest. When the npm selector moved after
+// qualification, the operator must also name the sealed predecessor
+// (`<digest>@<tag>`), accepting that review instead of a comparison to the new selector.
+const ACKNOWLEDGEMENT_PATTERN = /^(?<digest>[a-f0-9]{8})?(?:@(?<predecessor>v[0-9A-Za-z.+-]+))?$/u;
+
+export function isPluginSdkApiAcknowledgement(value) {
+  return typeof value === "string" && value !== "" && ACKNOWLEDGEMENT_PATTERN.test(value);
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",
@@ -310,6 +319,12 @@ export function validatePluginSdkApiReleaseEvidence({
 }) {
   const evidence = selectPluginSdkApiReleaseEvidence({ evidence: inputEvidence, npmDistTag });
   assertSha(expectedHeadSha, "Expected Plugin SDK API evidence head SHA");
+  if (acknowledgement && !isPluginSdkApiAcknowledgement(acknowledgement)) {
+    throw new Error("Plugin SDK API acknowledgement must be <digest> or <digest>@<tag>");
+  }
+  const { digest: acknowledgedDigest = "", predecessor: acknowledgedPredecessor = "" } =
+    (acknowledgement && acknowledgement.match(ACKNOWLEDGEMENT_PATTERN)?.groups) || {};
+  let predecessorDrift = null;
   if (
     !isReleaseEvidenceObject(evidence) ||
     evidence.schema !== PLUGIN_SDK_API_RELEASE_EVIDENCE_SCHEMA
@@ -331,6 +346,11 @@ export function validatePluginSdkApiReleaseEvidence({
   }
   if (typeof evidence.baseRef !== "string" || evidence.baseRef.length === 0) {
     throw new Error("Plugin SDK API evidence base ref is missing");
+  }
+  if (acknowledgedPredecessor && acknowledgedPredecessor !== evidence.baseRef) {
+    throw new Error(
+      `Plugin SDK API acknowledgement names ${acknowledgedPredecessor}, but the evidence compares against ${evidence.baseRef}`,
+    );
   }
   const selectorValues = [currentSelectorRef, currentSelectorSha, targetRef];
   const selectorValueCount = selectorValues.filter((value) => value !== "").length;
@@ -354,7 +374,12 @@ export function validatePluginSdkApiReleaseEvidence({
       currentSelectorRef !== targetRef &&
       (evidence.baseRef !== currentSelectorRef || evidence.baseSha !== currentSelectorSha)
     ) {
-      throw new Error("Plugin SDK API evidence predecessor no longer matches the npm dist-tag");
+      if (acknowledgedPredecessor !== evidence.baseRef) {
+        throw new Error(
+          `Plugin SDK API evidence predecessor no longer matches the npm dist-tag (${evidence.baseRef} qualified, ${currentSelectorRef} current); acknowledge <digest>@${evidence.baseRef} to accept the qualified comparison`,
+        );
+      }
+      predecessorDrift = { qualifiedRef: evidence.baseRef, currentRef: currentSelectorRef };
     }
   }
   const payload = diffPayload(evidence.diff);
@@ -367,13 +392,14 @@ export function validatePluginSdkApiReleaseEvidence({
     throw new Error("Plugin SDK API release evidence change state does not match its diff");
   }
   const expectedAcknowledgement = digest.slice(0, 8);
-  if (changed && acknowledgement !== expectedAcknowledgement) {
+  if (changed && acknowledgedDigest !== expectedAcknowledgement) {
     throw new PluginSdkApiAcknowledgementError(expectedAcknowledgement);
   }
   return {
     acknowledgement: changed ? expectedAcknowledgement : null,
     digest,
     hasChanges: changed,
+    ...(predecessorDrift ? { predecessorDrift } : {}),
     status: "checked",
   };
 }

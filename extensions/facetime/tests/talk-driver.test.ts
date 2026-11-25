@@ -422,7 +422,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.sessionParams?.instructions).toContain("Name: Tide");
     expect(mocks.sessionParams?.instructions).toContain("same configured OpenClaw agent");
     expect(mocks.sessionParams?.instructions).toContain(
-      "authenticated owner/user described by the loaded workspace profile context",
+      "usually the owner/user described by the loaded workspace profile context",
     );
     expect(mocks.sessionParams?.instructions).toContain(
       "Answer greetings, acknowledgements, and questions about your own identity or persona directly",

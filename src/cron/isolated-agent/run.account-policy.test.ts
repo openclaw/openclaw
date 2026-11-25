@@ -13,6 +13,7 @@ import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gatewa
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
@@ -125,6 +126,8 @@ it.each<AccountCase>([
       defaultAgentId: "main",
       onEvent: (event) => events.push(structuredClone(event)),
       runSchedulerOwned: createScheduledGatewayRunner(),
+      admitScheduledOccurrence: ({ job: stored }) =>
+        admitScheduledOccurrence({ cfg, job: stored, agentId: "main", trigger: "cron" }),
       runIsolatedAgentJob: async (params) => {
         await continuePayload.promise;
         return await runCronIsolatedAgentTurn({

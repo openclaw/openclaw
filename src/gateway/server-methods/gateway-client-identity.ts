@@ -162,7 +162,7 @@ export function resolveChatSendCallerContext(
           }
         : {}),
       GatewayClientScopes: client?.connect?.scopes ?? [],
-      GatewayClientCaps: client?.connect?.caps ?? [],
+      GatewayClientCaps: synthetic ? undefined : (client?.connect?.caps ?? []),
     },
     commandSenderAuthority,
   );

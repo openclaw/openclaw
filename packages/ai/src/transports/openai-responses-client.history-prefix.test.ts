@@ -5,11 +5,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   assertStableProviderPrefix,
+  omitResponsesReplayEnvelopes,
   snapshotProviderPrefix,
 } from "../../../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-sanitize.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createModel, outputMessage } from "./openai-responses-prompt-observer.test-support.js";
@@ -64,24 +66,12 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
       assert(inherited);
       const effectiveInput = [...inherited, ...payload.input];
       requests.push(payload);
-      // Ignore provider item envelopes: the IDs render no tokens, and cold replay omits
-      // them because an unstored response's IDs name no stored record. Ciphertext stays.
-      const comparable = effectiveInput.map((item) => {
-        if (
-          !isRecord(item) ||
-          (item.type !== "function_call" &&
-            item.type !== "reasoning" &&
-            !(item.type === "message" && item.role === "assistant"))
-        ) {
-          return item;
-        }
-        const { id: _id, status: _status, ...rest } = item;
-        return rest;
-      });
       prefixes.push(
         snapshotProviderPrefix(
           "openai-responses",
-          JSON.parse(stableStringify({ ...payload, input: comparable })),
+          JSON.parse(
+            stableStringify({ ...payload, input: omitResponsesReplayEnvelopes(effectiveInput) }),
+          ),
         ),
       );
       const id = `response_${requests.length}`;
@@ -128,6 +118,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         const response = await stream(model, context, {
           apiKey: "synthetic-prefix-key",
           sessionId,
+          ...writerState(sessionId),
           transport: "sse",
         });
         const assistant = await response.result();

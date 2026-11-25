@@ -6,7 +6,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
-import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { resolveCatalogOriginalUrl } from "../lib/sessions/catalog-original-url.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
@@ -53,6 +53,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         ...menu.key,
         agentId: menu.agentId,
         ...(displayName ? { displayName } : {}),
+        ...(menu.profileRelation ? { profileRelation: menu.profileRelation } : {}),
       });
       if (!result || !isMutationCurrent(scope)) {
         return;
@@ -180,6 +181,14 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
             void deleteSession(props.menu);
           }
           return;
+        }
+        const pathname = props.menu.navigation.pathname;
+        if (pathname) {
+          props.host.prepareSessionNavigation(
+            buildCatalogSessionKey(props.menu.key, props.menu.agentId),
+            pathname,
+            props.menu.profileRelation,
+          );
         }
         props.host.onNavigate?.(props.menu.routeId, props.menu.navigation);
       }}

@@ -157,6 +157,37 @@ it("publishes changed properties synchronously before rendering and suppresses e
   await expectOutput(host, "next:0:false");
 });
 
+it("reads the current owner commit only after the native bridge mounts", async () => {
+  const pending = Promise.withResolvers<boolean>();
+  let ownerCompletion = Promise.resolve(true);
+  const readOwnerCompletion = vi.fn(() => ownerCompletion);
+  const CompletionBridge = defineSolidBridge<{ label: string }>(
+    "openclaw-solid-completion-test",
+    (props) => {
+      ownerCompletion = pending.promise;
+      return <output>{props.label}</output>;
+    },
+    {
+      properties: { label: { default: "initial" } },
+      updateComplete: readOwnerCompletion,
+    },
+  );
+  const host = new CompletionBridge.Element();
+  host.label = "mounted";
+  document.body.append(host);
+  const completion = host.updateComplete;
+  const settled = vi.fn();
+  void completion.then(settled);
+  expect(readOwnerCompletion).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(host.querySelector("output")?.textContent).toBe("mounted");
+  await Promise.resolve();
+  expect(readOwnerCompletion).toHaveBeenCalledExactlyOnceWith(host);
+  expect(settled).not.toHaveBeenCalled();
+  pending.resolve(false);
+  await expect(completion).resolves.toBe(false);
+});
+
 it("preserves enumerable declared props and their children value", async () => {
   const DeclaredChildren = defineSolidBridge<{ label: string; children: string; count: number }>(
     "openclaw-solid-declared-children-test",

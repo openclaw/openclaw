@@ -76,8 +76,11 @@ function stripPrivateSessionEntryFields(
       Reflect.deleteProperty(projected, key);
     }
   }
-  if (identity === "public" && projected.createdActor) {
-    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+  if (identity === "public") {
+    delete projected.delegatedOperatorSource;
+    if (projected.createdActor) {
+      projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+    }
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;

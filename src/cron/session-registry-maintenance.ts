@@ -134,7 +134,7 @@ export async function runSessionRegistryMaintenance(params: {
       };
       assertCurrent();
       const registeredDatabases = (snapshot?.registeredAgentDatabases ?? []).filter(
-        (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+        (entry) => entry.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION,
       );
       const isRetained = createRetainedAgentDatabaseMatcherFromSnapshot(
         env,

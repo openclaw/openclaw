@@ -18,7 +18,6 @@ import {
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import {
-  cfg,
   createCronFixture,
   installRequesterCronAuthorityTestHooks,
   SESSION,
@@ -56,7 +55,7 @@ it.for(
   "persists the $source job update only for a current owner requester: $requester",
   async ({ source, requester }) => {
     const config = {
-      ...cfg,
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
       plugins: { enabled: false },
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456"] },
@@ -175,7 +174,7 @@ it.for(
 // An operator-source job (created from a Control UI turn) repaired in its source conversation.
 const operatorOutcomes = {
   // A Control UI administrator's restored source keeps owner tools, as its in-session runs do.
-  "control-ui-admin": { update: "ok", description: "fixed by repair" },
+  operator: { update: "ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
   "device-revoked": { update: "not run", description: "original" },
@@ -185,7 +184,10 @@ const operatorOutcomes = {
 it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
   "persists an operator-source repair's job update only while its source stays current: %s",
   async (scenario) => {
-    const config = { ...cfg, plugins: { enabled: false } } as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+      plugins: { enabled: false },
+    } as OpenClawConfig;
     setRuntimeConfigSnapshot(config);
     const { context, read } = createCronFixture(undefined, config);
     const recovery = await createOperatorRecoveryFixture({

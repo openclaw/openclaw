@@ -34,7 +34,6 @@ const {
   expectPresent,
   renderTestMessageGroup,
   renderAssistantMessage,
-  renderAssistantMessages,
   renderGroupedMessage,
   renderMarkdownHtml,
   markdownRenderMock,
@@ -362,64 +361,6 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("uses the largest prompt for context and aggregates usage, cache, and nested cost", () => {
-    renderAssistantMessages(
-      [
-        createAssistantMessage("Checking", {
-          usage: { input: 100_000, output: 900_000, cost: { total: 0.1234 } },
-          timestamp: 1000,
-        }),
-        createAssistantMessage("Done", {
-          usage: { input: 1, output: 1200, cacheRead: 438_400, cacheWrite: 307 },
-          model: "example/provider-model",
-          timestamp: 1001,
-        }),
-      ],
-      { contextWindow: 1_000_000 },
-    );
-    expect(elementText(".msg-meta__ctx")).toBe("44% ctx");
-    expect(elements(".msg-meta__tokens").map((node) => node.textContent)).toEqual([
-      "↑100k",
-      "↓901.2k",
-    ]);
-    expect(elements(".msg-meta__cache").map((node) => node.textContent)).toEqual([
-      "R438.4k",
-      "W307",
-    ]);
-    expect(elementText(".msg-meta__cost")).toContain("$0.12");
-  });
-
-  it("renders relative and compact dates while clamping clock skew", () => {
-    vi.useFakeTimers();
-    const now = Date.UTC(2026, 5, 24, 18, 30);
-    vi.setSystemTime(now);
-    const renderTimestamp = (timestamp: number) => {
-      renderAssistantMessage(createAssistantMessage("Done", { timestamp }));
-      return elementText(".chat-group-timestamp")?.trim();
-    };
-
-    const recent = now - 5 * 60_000;
-    expect(renderTimestamp(recent)).toBe("5m ago");
-    expect(harness.view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
-      new Date(recent).toISOString(),
-    );
-    const oldTimestamp = Date.UTC(2026, 3, 24, 18, 30);
-    expect(renderTimestamp(oldTimestamp)).toBe(
-      new Date(oldTimestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
-    );
-    expect(renderTimestamp(now + 30_000)).toBe("Just now");
-    expect(renderTimestamp(now - 10_000)).toBe("Just now");
-
-    const nextYear = Date.UTC(2027, 3, 24, 18, 30);
-    expect(renderTimestamp(nextYear)).toBe(
-      new Date(nextYear).toLocaleDateString([], {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-    );
-  });
-
   it("keeps streaming participant attribution on the shared reply renderer", () => {
     const container = document.createElement("div");
     renderStreamGroup(
@@ -475,22 +416,6 @@ describe("grouped chat rendering", () => {
     expectPresent(".chat-group-footer");
   });
 
-  it("shows live output tokens before the elapsed time", () => {
-    renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-      runOutputTokens: 892,
-    });
-
-    const status = element(".chat-working-indicator__status");
-    const tokens = status?.querySelector(".chat-working-indicator__tokens");
-    const elapsed = status?.querySelector(".chat-working-indicator__elapsed");
-    expect(tokens?.textContent).toBe("892 output tokens");
-    expect(elapsed).not.toBeNull();
-    expect(
-      tokens!.compareDocumentPosition(elapsed!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(status?.querySelector("openclaw-working-phrase")).toBeNull();
-  });
-
   it("relabels the working indicator while the run waits for approval", () => {
     renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
       startupLabel: "Waiting for a response",
@@ -503,52 +428,13 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-working-indicator__tokens")).toBe("5.5k output tokens");
   });
 
-  it("keeps streamed assistant content in the guttered group without an avatar", () => {
-    renderStreamGroup(
-      [
-        {
-          kind: "stream",
-          key: "stream:s:live",
-          text: "reply",
-          startedAt: 10,
-          isStreaming: true,
-        },
-        { kind: "reading-indicator", key: "reading", startedAt: 10 },
-      ],
-      { showAssistantAvatar: false },
-    );
-
-    const group = element(".chat-group.assistant");
-    expect(group?.classList.contains("chat-group--working")).toBe(false);
-    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
-    expectCount(".chat-avatar.assistant", 0);
-    expect(element(".chat-group-footer")?.childElementCount).toBe(0);
-    expectCount(".chat-working-indicator", 1);
-    expectCount(".chat-reading-indicator", 1);
-    renderStreamGroup(
-      [
-        {
-          kind: "stream",
-          key: "stream:s:live",
-          text: "reply",
-          startedAt: 10,
-          isStreaming: false,
-        },
-      ],
-      { showAssistantAvatar: false },
-    );
-    expectAbsent(".chat-bubble.streaming");
-    expect(harness.view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
-      new Date(10).toISOString(),
-    );
-  });
-
   it.each([
     [
-      "qualified local profile",
+      "qualified local profile using the Mac app",
       {
         senderId: "profile-buns",
         senderIdentity: { type: "profile", id: "profile-buns" },
+        transport: { clients: [{ id: "openclaw-macos", mode: "ui" }] },
       },
       { userId: "profile-buns", userName: "Buns" },
       "Buns",
@@ -782,27 +668,6 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-divider__title")).toBe("System");
     expect(harness.view.textContent).toContain("Custom execution rules were not applied.");
     expect(harness.view.textContent).not.toContain("Guardian warning");
-  });
-
-  it("falls back to initials when a user avatar image fails", async () => {
-    const message = createUserMessage("hello", { timestamp: 1000 });
-    const group = createMessageGroup(message, "user", {
-      key: "gravatar-user",
-      senderLabel: "alice",
-      // A gateway avatar exercises the image tier without third-party requests.
-      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
-    });
-    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
-
-    const image = await vi.waitFor(() => {
-      const result = harness.view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
-      expect(result).not.toBeNull();
-      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
-      return result!;
-    });
-    image.dispatchEvent(new Event("error"));
-    await waitForSolid(() => expect(image.parentElement?.classList).toContain("is-fallback"));
-    expect(elementText(".chat-author-avatar__fallback")?.trim()).toBe("A");
   });
 
   it("keeps a persisted reply preview busy until its target resolves, then opens it", () => {

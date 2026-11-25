@@ -5,7 +5,7 @@ import {
   isUnknownCallStatus,
   normalizeFaceTimeCallEvent,
   normalizeFaceTimeHandle,
-  resolveAuthorizedFaceTimeOwner,
+  resolveAuthorizedFaceTimeCaller,
 } from "../src/call-events.js";
 import type { FaceTimeCallStatusEvent } from "../src/call-events.js";
 import {
@@ -25,7 +25,7 @@ function call(data: Record<string, unknown>) {
 }
 
 const owner = (event: ReturnType<typeof call>, handle = "owner@example.com") =>
-  resolveAuthorizedFaceTimeOwner({ event, ownerHandles: [handle] });
+  resolveAuthorizedFaceTimeCaller({ event, ownerHandles: [handle] });
 
 it("normalizes helper telemetry and authorizes the exact nested handle candidate", () => {
   const event = call({
@@ -42,7 +42,7 @@ it("normalizes helper telemetry and authorizes the exact nested handle candidate
     local_meter_level: 0.37,
   });
   expect(normalizeFaceTimeHandle(event.data.handle)).toBe("display@example.com");
-  expect(owner(event)).toEqual({ senderId: "owner@example.com", senderIsOwner: true });
+  expect(owner(event)).toEqual({ senderId: "facetime:owner@example.com" });
 });
 
 it("fails unknown states closed", () => {

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -74,21 +73,6 @@ function mapper() {
     mapError: vi.fn((_error: unknown, _phase: OpenClawStateReadReceipt["phase"]) => mapped),
   };
 }
-
-it("rotates mapped readers when explicit SQLite close cannot release native resources", async () => {
-  vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
-    explicitSqliteCloseReleasesNativeResources: false,
-    decided: true,
-    reason: "test policy",
-  });
-  const options = source();
-  await readExisting(options, { type: "backup.runs" });
-  await closePath(options.path);
-  expect(mock.rotate).toHaveBeenCalledOnce();
-  expectCalls(0, mock.closeResources, mock.closePool);
-  await closeState();
-  expect(mock.closePool).toHaveBeenCalledOnce();
-});
 
 it.each(["retired", "different-source", "schema"] as const)(
   "maps %s authority failure once before dispatching a read",

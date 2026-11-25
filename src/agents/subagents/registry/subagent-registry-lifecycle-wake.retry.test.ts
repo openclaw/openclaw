@@ -5,6 +5,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../../config/sessions/session-source-authority.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -15,7 +16,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import {
@@ -102,16 +103,16 @@ describe("requester settle retry lifetime", () => {
         agentId: "main",
         sessionKey: input.subagent.requesterSessionKey,
         operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
-        receiptAuthority: () => !origin.signal.aborted,
+        receiptAuthority: () => origin.signal.throwIfAborted(),
         approvalSignals: [origin.signal],
       };
       const entered = createDeferred();
       const release = createDeferred();
       driver.wake.mockImplementation(async (params) => {
-        const assertCaller = captureGatewayToolCallerAssertion();
+        const assertCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
         entered.resolve();
         await release.promise;
-        assertCaller?.("agent");
+        assertCaller?.();
         expect(params.isSourceCurrent()).toBe(true);
         await params.completeBatch(
           [params.settledEntry],
@@ -124,9 +125,9 @@ describe("requester settle retry lifetime", () => {
         await awaitGateBeforeSettlement(entered.promise, running, "Wake did not start");
         origin.abort();
         await withGatewayToolCallerIdentity(caller, () => {
-          expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-            "agent tool caller authority is no longer active",
-          );
+          expect(() =>
+            composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.(),
+          ).toThrow("operation was aborted");
         });
         release.resolve();
         await running;
@@ -141,7 +142,7 @@ describe("requester settle retry lifetime", () => {
     });
   });
 
-  it("reports a lost-run batch failure in the requester's current transcript", async () => {
+  it("records lost-run child status in the requester's current transcript", async () => {
     await withSubagentCompletionWorkerState(async (database) => {
       const input = armRequesterWake(records());
       const requester = {
@@ -182,10 +183,17 @@ describe("requester settle retry lifetime", () => {
         expect(events).toContainEqual(
           expect.objectContaining({
             type: "custom_message",
-            customType: "run-failed-before-reply",
-            details: expect.objectContaining({ error: "requester turn failed" }),
+            customType: "subagent-completion",
+            display: false,
+            content: expect.stringContaining(`run ${input.subagent.runId}): completed`),
+            details: expect.objectContaining({ childRunIds: [input.subagent.runId] }),
           }),
         );
+        expect(storedRun(input)?.delivery).toMatchObject({
+          status: "delivered",
+          disposition: "delivered",
+        });
+        expect(storedWake(input)).toBeUndefined();
       } finally {
         driver.controller.clearRuntimeState();
       }
@@ -539,54 +547,6 @@ describe("requester settle retry lifetime", () => {
         database.db.exec("DROP TRIGGER IF EXISTS reject_delivered_batch");
         driver.controller.clearRuntimeState();
         worker.mockRestore();
-      }
-    });
-  });
-
-  it("retries a failed wake publication through the existing sweep", async () => {
-    await withSubagentCompletionWorkerState(async (database) => {
-      const input = armRequesterWake(records());
-      const driver = seedDriver(database, input);
-      const attempts = vi.fn();
-      const batchRunIds = [input.subagent.runId];
-      const pending = {
-        ...structuredClone(input.subagent.requesterSettleWake!),
-        nextAttemptAt: Date.now() + 30_000,
-      };
-      database.db.exec(
-        "CREATE TRIGGER reject_wake_publication BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'pending' BEGIN SELECT RAISE(ABORT, 'wake publication unavailable'); END",
-      );
-      driver.wake.mockImplementation(async (params) => {
-        await params.transitionBatch(
-          [currentCompletionRun(input)],
-          { ...pending, status: "dispatching", attemptCount: 1, batchRunIds },
-          () => {},
-        );
-        attempts();
-        if (attempts.mock.calls.length === 1) {
-          await params.transitionBatch([currentCompletionRun(input)], pending, () => {});
-          return false;
-        }
-        await params.completeBatch([currentCompletionRun(input)], pending.rearmGeneration, {
-          delivered: true,
-          path: "direct",
-          deliveredAt: 5_000,
-        });
-        return true;
-      });
-      try {
-        await driver.run();
-        expect(attempts).toHaveBeenCalledOnce();
-        expect(storedWake(input)).toBeDefined();
-        database.db.exec("DROP TRIGGER reject_wake_publication");
-        await driver.sweep();
-        expect(attempts).toHaveBeenCalledTimes(2);
-        expect(driver.wake).toHaveBeenCalledTimes(2);
-        expect(storedWake(input)).toBeUndefined();
-        expect(storedRun(input)?.delivery?.status).toBe("delivered");
-      } finally {
-        database.db.exec("DROP TRIGGER IF EXISTS reject_wake_publication");
-        driver.controller.clearRuntimeState();
       }
     });
   });

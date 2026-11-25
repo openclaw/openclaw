@@ -9,7 +9,9 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
@@ -22,6 +24,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import { CodexCatalogNodeSnapshots } from "./session-catalog-node-snapshot.js";
 import {
   CatalogParamsError,
@@ -32,6 +35,7 @@ import {
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
   readGatewayParams,
+  toCatalogSession,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -148,6 +152,15 @@ function withCatalogListScope(
   };
 }
 
+function permitsLocalCatalogExport(home: CodexCatalogHome) {
+  return Boolean(
+    home.localSessionsRoot &&
+    home.appServer.start.transport === "stdio" &&
+    home.appServer.start.commandSource === "managed" &&
+    !isCodexAppServerProxyLaunch(home.appServer.start.args),
+  );
+}
+
 function catalogHostMapper(
   localTerminalAvailable: boolean,
   localHomes: readonly CodexCatalogHome[],
@@ -156,11 +169,12 @@ function catalogHostMapper(
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
     const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
+      const home = localHomes.find((candidate) => candidate.hostId === host.hostId);
       const localSourceAvailable =
-        localTerminalAvailable &&
-        localHomes.some(
-          (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-        );
+        localTerminalAvailable && home?.appServer.start.transport === "stdio";
+      // A stdio proxy forwards to a daemon selected by its socket. An arbitrary
+      // command also cannot attest that it reads the selected native home.
+      const exportHomeId = home && permitsLocalCatalogExport(home) ? home.sourceHomeId : undefined;
       const local = isLocalCodexCatalogHost(host.hostId);
       return {
         hostId: host.hostId,
@@ -178,6 +192,18 @@ function catalogHostMapper(
           const name = session.name ?? session.fallbackName;
           return {
             threadId: session.threadId,
+            ...(exportHomeId && exportHomeId === session.sourceHomeId
+              ? {
+                  exportPolicy: {
+                    origin: "native-local" as const,
+                    automatic: true,
+                    // Every home can switch between primary and qualified host aliases.
+                    // Its pre-existing publication cannot be identified from this row.
+                  },
+                }
+              : host.kind === "node" || home?.appServer.connectionClass === "remote"
+                ? { exportPolicy: { origin: "federated" as const, automatic: false } }
+                : {}),
             ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
             ...(name ? { name } : {}),
             ...(session.cwd ? { cwd: session.cwd } : {}),
@@ -311,13 +337,55 @@ export function registerCodexSessionCatalog(params: {
     id: "codex",
     label: "Codex",
     supportsProcessHomeIsolation: true,
+    automaticExportHosts: async ({ agentId, allowProcessHomeFallback }) =>
+      (await catalogHomes(agentId, allowProcessHomeFallback))
+        .filter(permitsLocalCatalogExport)
+        .map((home) => home.hostId),
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
         params.api.runtime.modelConfig,
         params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
         agentId,
       ),
-    list: (query) => runCatalogListInline(createListOperation(query)),
+    list: async ({ exportSource, ...query }) => {
+      if (!exportSource) {
+        return runCatalogListInline(createListOperation(query));
+      }
+      const { control, source } = await bindLocalRequest({
+        ...exportSource,
+        agentId: query.agentId,
+        allowProcessHomeFallback: query.allowProcessHomeFallback,
+      });
+      if (
+        !exportSource.sourceHomeId ||
+        !permitsLocalCatalogExport(source) ||
+        !query.hostIds?.includes(source.hostId)
+      ) {
+        return [];
+      }
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      // The existing native action guard validates the managed marker, exact rollout
+      // metadata and archive status on the pinned home without enumerating other threads.
+      const thread = await control.requireEligibleThread(exportSource.threadId);
+      source.assertCurrent();
+      query.signal?.throwIfAborted();
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      const session = toCatalogSession(prepared, prepared.preview);
+      if (!session || session.threadId !== exportSource.threadId) {
+        return [];
+      }
+      const mapHost = catalogHostMapper(false, [source], false);
+      return [
+        mapHost({
+          hostId: source.hostId,
+          label: source.label,
+          kind: "gateway",
+          connected: true,
+          sessions: [{ ...session, sourceHomeId: source.sourceHomeId }],
+        }),
+      ];
+    },
     createListOperation,
     read: async (request) => {
       const { agentId, source, control } = await bindRequest(request);

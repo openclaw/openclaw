@@ -98,11 +98,13 @@ export async function readChatPendingInputs(
     cronStorePath?: string;
     resolveGatewayContext?: GatewayContextResolver;
     physicalPaths?: SessionRuntimeScope["physicalPaths"];
+    audience?: import("../../config/sessions/session-pending-input-audience.js").PendingInputAudience;
   },
 ): Promise<ChatPendingInputsPage> {
   const page = await listSessionPendingInputs(scope, {
     before: options.before,
     limit: Math.min(options.limit, 20),
+    audience: options.audience,
   });
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     page.items.map((input) => input.message),

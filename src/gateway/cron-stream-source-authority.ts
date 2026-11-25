@@ -2,7 +2,6 @@ import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { ownsStreamSource } from "../cron/stream-schedule.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -61,11 +60,10 @@ export async function prepareCronStreamSourceAuthority(params: {
         throw new Error("Native stream source identity is no longer current.");
       }
     };
-    const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
-    restored = await restoreGatewayOperatorSource({
+    const { restoreScheduledAutomationOperator } = await import("./operator-run-recovery.js");
+    restored = await restoreScheduledAutomationOperator({
       agentId: tryResolveCronJobEffectiveAgentId(job, context.cron.getDefaultAgentId()),
-      snapshot,
-      source: job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
+      source: { kind: "gateway", snapshot },
       context,
       assertCurrent,
     });

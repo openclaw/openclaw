@@ -134,8 +134,8 @@ without automatic setup use the existing native AI setup flow.
 
 Gemini CLI remains available as an explicitly configured runtime after setup,
 but Gemini CLI and Antigravity are not offered as detected inference routes.
-Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for guided setup. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 

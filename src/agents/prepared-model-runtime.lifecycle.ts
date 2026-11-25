@@ -42,10 +42,16 @@ export function recordPreparedModelCatalogReplacement(
   catalogReplacements.set(previous.isCurrent, replacement.isCurrent);
 }
 
-export function hasCurrentPreparedModelCatalogReplacement(owner: {
-  isCurrent: () => boolean;
-}): boolean {
-  return !owner.isCurrent() && catalogReplacements.get(owner.isCurrent)?.() === true;
+export function hasCurrentPreparedModelCatalogReplacement(
+  owner: { isCurrent: () => boolean },
+  expected?: { isCurrent: () => boolean },
+): boolean {
+  const replacement = catalogReplacements.get(owner.isCurrent);
+  return (
+    !owner.isCurrent() &&
+    (!expected || expected.isCurrent === replacement) &&
+    replacement?.() === true
+  );
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;

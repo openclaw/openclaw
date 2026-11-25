@@ -30,6 +30,9 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
   return Object.hasOwn(keyboardIconData, symbol);
 }
 
+const macosSidebarFrame =
+  "M6 4.25h12a3 3 0 0 1 3 3v9.5a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-9.5a3 3 0 0 1 3-3Z";
+
 export const toolIconData = {
   codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
   bookOpenText: strokePathData(
@@ -395,6 +398,25 @@ export const toolIconData = {
   sidebarPanel: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
     ["path", { d: "M9 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
+  ]),
+  macosTitlebarSidebar: strokeIconData([
+    // Paint the frame and divider in one stroke so their translucent color does not stack.
+    [
+      "path",
+      {
+        class: "macos-sidebar-open",
+        d: `${macosSidebarFrame}M15.5 4.75v14.5`,
+        "stroke-width": "1.6",
+      },
+    ],
+    [
+      "path",
+      {
+        class: "macos-sidebar-closed",
+        d: `${macosSidebarFrame}M15.5 8.375v7.25`,
+        "stroke-width": "1.6",
+      },
+    ],
   ]),
   // Dock is a destination action, so it has no open/close chevron or active fill.
   sessionPanelDockBottom: strokeIconData([

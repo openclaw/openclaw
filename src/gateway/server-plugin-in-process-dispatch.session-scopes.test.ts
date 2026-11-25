@@ -458,7 +458,9 @@ describe("hosted session tool narrow scope projection", () => {
     withHostedCreation(async (fixture) => {
       await fixture.seedForeign();
       const before = fixture.read();
-      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow("own session");
+      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow(
+        'Session "agent:main:dashboard:scope-child" was not found.',
+      );
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toEqual(before);
     }));
@@ -481,9 +483,7 @@ describe("hosted session tool narrow scope projection", () => {
           await release.promise;
         });
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
-        const rejected = expect(request).rejects.toThrow(
-          "agent tool caller authority is no longer active",
-        );
+        const rejected = expect(request).rejects.toThrow("original native source revoked");
         try {
           await Promise.race([entered.promise, request]);
           expect(fixture.handler).toHaveBeenCalledOnce();

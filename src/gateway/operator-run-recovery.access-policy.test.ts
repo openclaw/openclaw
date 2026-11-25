@@ -146,17 +146,10 @@ it.each([false, true])(
         fixture.setConfig({
           gateway: { auth: { ...auth, identityScopes: { [email]: ["operator.read"] } } },
         });
-        const next = await restoreGatewayOperatorSource({
-          snapshot,
-          context: fixture.context,
-          assertCurrent() {},
-        });
-        try {
-          expect(operatorScopeSatisfied("operator.write", next.authority.scopes)).toBe(false);
-          expect(operatorScopeSatisfied("operator.read", next.authority.scopes)).toBe(true);
-        } finally {
-          next.release();
-        }
+        // Current identity scopes narrow the next start to read, which starts no chat-like work.
+        await expect(
+          restoreGatewayOperatorSource({ snapshot, context: fixture.context, assertCurrent() {} }),
+        ).rejects.toThrow("I did not run your queued request. Your role on this Gateway");
         expectCurrent(admitted.authority);
         expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
       } finally {

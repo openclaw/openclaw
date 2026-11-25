@@ -20,7 +20,6 @@ const toolingClosure = [
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
-  "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/record-shared.mjs",
@@ -72,7 +71,10 @@ const shellOwners = {
     [`${prefix}AGENT_BUNDLE_MCP_MODE`, `${prefix}AGENT_BUNDLE_MCP_CLIENT_PATH`],
   ],
   plugins: ["plugin_harness_capabilities", [`${prefix}PLUGIN_UNINSTALL_MODE`]],
-  "update-channel-switch": ["update_channel_switch_contract", [`${prefix}UPDATE_MAIN_TAG`]],
+  "update-channel-switch": [
+    "update_channel_switch_contract",
+    [`${prefix}UPDATE_MAIN_TAG`, `${prefix}PACKAGE_TO_GIT_MODE`, `${prefix}GIT_TO_PACKAGE_MODE`],
+  ],
   "upgrade-survivor": [
     ["upgrade_survivor_capabilities", "upgrade_skill_library_contract"],
     [
@@ -480,6 +482,8 @@ async function planWorkflowAdmission(input) {
     sourcePaths.add("src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts");
   }
   if (consumers.has("update-channel-switch")) {
+    sourcePaths.add("src/cli/update-cli/update-command-admission-report.ts");
+    sourcePaths.add("src/cli/update-cli/update-command-git.ts");
     sourcePaths.add("src/cli/update-cli/update-command-target.ts");
     sourcePaths.add("src/infra/update-global.ts");
   }
@@ -1012,6 +1016,8 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       );
     }
     if (consumer === "update-channel-switch") {
+      required(sources.selected, "src/cli/update-cli/update-command-admission-report.ts");
+      required(sources.selected, "src/cli/update-cli/update-command-git.ts");
       required(sources.selected, "src/cli/update-cli/update-command-target.ts");
       required(sources.selected, "src/infra/update-global.ts");
     }

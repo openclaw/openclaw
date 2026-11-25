@@ -16,7 +16,10 @@ import {
   cleanDeferredFinalText,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
+import {
+  appendTtsBlockSource,
+  createTtsDirectiveTextStreamCleaner,
+} from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
@@ -282,25 +285,22 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
       kind === "block" ? normalizeOptionalString(visiblePayload.text) : undefined;
     const rawBlockText = isStatusNotice ? undefined : rawBlockPayloadText;
     let blockSource: BlockReplySource | undefined;
-    if (rawBlockPayloadText) {
-      const joinsBufferedTtsDirective =
-        state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
-      if (rawBlockText) {
-        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-          state.accumulatedBlockTtsText += "\n";
-        }
-        state.accumulatedBlockTtsText += rawBlockText;
-      }
+    if (rawBlockText) {
+      // Preserve authored line boundaries when the cleaner tests a fence continuation.
+      const cleanerInput =
+        visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockText;
+      state.accumulatedBlockTtsText = appendTtsBlockSource(
+        state.accumulatedBlockTtsText,
+        rawBlockText,
+        state.cleanBlockTtsDirectiveText,
+        cleanerInput,
+      );
 
-      if (state.cleanBlockTtsDirectiveText && rawBlockText) {
+      if (state.cleanBlockTtsDirectiveText) {
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(
-          // Keep authored line boundaries without restoring padding removed by
-          // the existing speech-cleaning path (including private-context gaps).
-          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
-        );
+        const text = state.cleanBlockTtsDirectiveText.push(cleanerInput);
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);

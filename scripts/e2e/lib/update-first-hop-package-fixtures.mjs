@@ -392,31 +392,6 @@ export function packFailingDoctorUpdateFixture(
   };
 }
 
-/**
- * A same-schema future fixture whose first post-activation Doctor against `stateDir`
- * SIGKILLs the updater that started it: the candidate is installed and that update
- * is not confirmed. Creating `marker` arms it once, so every later Doctor is real.
- */
-export function packKilledUpdaterDoctorFixture(
-  candidateTarball,
-  outputTarball,
-  stateDir,
-  marker,
-  sequence = 0,
-) {
-  return {
-    method: "candidate-updater-killed-in-post-activation-doctor-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
-      prependPostActivationDoctor(
-        root,
-        stateDir,
-        `const fs = process.getBuiltinModule("node:fs"); let armed = true; try { fs.writeFileSync(${JSON.stringify(marker)}, fs.readFileSync(\`/proc/\${process.ppid}/cmdline\`, "utf8").split("\\0").join(" "), { flag: "wx" }); } catch (error) { if (error?.code !== "EEXIST") { throw error; } armed = false; } if (armed) { process.kill(process.ppid, "SIGKILL"); process.exit(1); }`,
-      );
-    }),
-  };
-}
-
 /** Rehearsal runs `doctor` on copied state, so only the post-activation Doctor runs `body`. */
 function prependPostActivationDoctor(root, stateDir, body) {
   const relative = "dist/infra/update-migrated-finalize.worker.js";
@@ -453,7 +428,7 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
 
 export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
-    method: "candidate-without-admission-marker-fixture",
+    method: "candidate-without-update-admission-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
       const manifestPath = path.join(root, "package.json");
       const manifest = readJson(manifestPath);
@@ -462,6 +437,26 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
       }
       delete manifest.openclaw.updateAdmissionProtocol;
       writeJson(manifestPath, manifest);
+      // Frozen legacy updaters use the marker. The release-aware updater checks
+      // for candidate-side command modules instead and refuses this target.
+      const paths = resolveFixturePaths(root);
+      const removed = new Set();
+      for (const file of fs.readdirSync(path.join(root, "dist"))) {
+        if (/^check-release(?:-[\w-]+)?\.m?js$/u.test(file)) {
+          const relative = "dist/" + file;
+          fs.rmSync(path.join(root, relative));
+          removed.add(relative);
+        }
+      }
+      if (removed.size > 0) {
+        writeJson(
+          paths.inventory,
+          readJson(paths.inventory).filter((entry) => !removed.has(entry)),
+        );
+        updateFixtureContentInventory(paths, (entries) =>
+          entries.filter((entry) => !removed.has(entry.path)),
+        );
+      }
       stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
     }),
   };
