@@ -143,12 +143,7 @@ describe("openai transport stream", () => {
 
     expect(params.store).toBe(false);
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    expect(reasoningItem).toBeUndefined();
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -340,7 +335,7 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("keeps GitHub Copilot Responses reasoning replay when store-disabled ids are omitted", () => {
+  it("omits unproven GitHub Copilot Responses reasoning when store-disabled ids are omitted", () => {
     const model = makeResponsesModel({
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -366,11 +361,7 @@ describe("openai transport stream", () => {
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
+    expect(reasoningItem).toBeUndefined();
   });
 
   it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
@@ -431,12 +422,7 @@ describe("openai transport stream", () => {
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    expect(reasoningItem).toBeUndefined();
   });
 
   it("strips encrypted reasoning replay when the auth profile provenance changes", () => {
@@ -470,12 +456,7 @@ describe("openai transport stream", () => {
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    expect(reasoningItem).toBeUndefined();
   });
 
   it("keeps embedded replay provenance as a compatibility fallback", () => {
