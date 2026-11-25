@@ -37,6 +37,7 @@ import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { stripRetiredStartupKeys } from "./retired-startup-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -113,6 +114,9 @@ function* loadConfigWithEffects(
       deps.lowerPrecedenceEnv,
     );
     const effectiveConfigRaw = applyImplicitAgentRosterDefaults(readResolution.resolvedConfigRaw);
+    // Supervisors rewrite retired keys on every boot. Drop them before schema
+    // validation so the gateway can start; doctor still owns rewriting the file.
+    stripRetiredStartupKeys(effectiveConfigRaw);
     const hash = hashConfigRaw(raw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(
