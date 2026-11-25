@@ -24,6 +24,7 @@ import {
 import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import type { SessionMaintenanceMcpRelease } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   collectReclamationDeletionEntries,
   prepareReclamationPublication,
@@ -61,6 +62,7 @@ export function deleteSessionWithNativeBindingsInWorker(
     identity: string,
     fileIdentity: AgentDatabaseExecutionFileIdentity,
   ) => void,
+  onMaintenanceMcpCommit?: (release: SessionMaintenanceMcpRelease) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
     SessionNativeBindingCandidate,
@@ -73,6 +75,13 @@ export function deleteSessionWithNativeBindingsInWorker(
     assertCurrent,
     assertCandidate: (_candidate, operation) => assertCurrent(operation),
     candidateKind: "session-native-binding-deletion",
+    onAgentCommitReceipt: onMaintenanceMcpCommit
+      ? ({ result }) => {
+          if (result.kind === "maintenance-finalize" && result.value.mcpRelease) {
+            onMaintenanceMcpCommit(result.value.mcpRelease);
+          }
+        }
+      : undefined,
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
     onCommitted(candidate, published, identity, _context, fileIdentity) {

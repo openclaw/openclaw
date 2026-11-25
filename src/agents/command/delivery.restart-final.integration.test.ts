@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
+import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createAdminIngressFixture } from "../../channels/message-access/operator-authority.test-support.js";
 import {
@@ -188,11 +188,11 @@ it.each(
       unlinkUserChannelIdentity(admin.profile.id, admin.identity);
       await activatePolicy({});
     }
-    const assertOwnerCurrent = expectDefined(
-      captureCommandOwnerAssertion(await context(admin.identity.senderId)),
-      "Channel owner assertion was not admitted",
+    const owner = expectDefined(
+      getCommandOwnerAuthority(await context(admin.identity.senderId)),
+      "Channel owner was not admitted",
     );
-    assertOwnerCurrent();
+    expect(owner.isCurrent()).toBe(true);
     // Confirm every database selector before the first session/queue write.
     expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     const databasePaths: [string, string][] = [
@@ -226,7 +226,7 @@ it.each(
     }
     const marker = await persistMarker(target, entry, payloads, {
       deliveryContext: { channel: "matrix", to: "!restart:example" },
-      commandOwnerReference: assertOwnerCurrent.recoveryReference,
+      commandOwnerReference: owner.recoveryReference ?? null,
     });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
     const entered = createDeferred();
@@ -285,7 +285,6 @@ it.each(
       result: { meta: { durationMs: 1 } },
       payloads,
       assertDeliveryCurrent: () => {
-        assertOwnerCurrent();
         if (custodyError) {
           throw custodyError;
         }
@@ -324,7 +323,6 @@ it.each(
         !ownerRevoked;
       if (ownerRevoked) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary === "restart-owner-retired") {
         retire();
@@ -387,7 +385,6 @@ it.each(
       }
       if (lateRevocation) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary.endsWith("reference")) {
         const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);

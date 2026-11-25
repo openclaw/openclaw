@@ -47,6 +47,10 @@ export const validateSessionsCatalogListParams = createProtocolValidator(
   S.SessionsCatalogListParamsSchema,
   Checks.isSessionsCatalogListParams,
 );
+export const validateSessionsCatalogRouteParams = createProtocolValidator(
+  S.SessionsCatalogRouteParamsSchema,
+  Checks.isSessionsCatalogRouteParams,
+);
 export const validateSessionsCatalogReadParams = createProtocolValidator(
   S.SessionsCatalogReadParamsSchema,
   Checks.isSessionsCatalogReadParams,
@@ -154,6 +158,10 @@ export const validateSessionMembersListParams = createProtocolValidator(
 export const validateSessionMemberAddParams = createProtocolValidator(
   S.SessionMemberAddParamsSchema,
   Checks.isSessionMemberAddParams,
+);
+export const validateSessionMemberSetAccessParams = createProtocolValidator(
+  S.SessionMemberSetAccessParamsSchema,
+  Checks.isSessionMemberSetAccessParams,
 );
 export const validateSessionMemberRemoveParams = createProtocolValidator(
   S.SessionMemberRemoveParamsSchema,

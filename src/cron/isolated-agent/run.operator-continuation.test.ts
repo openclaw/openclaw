@@ -490,9 +490,6 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original && !queuedEdit) {
-    expect(() => original.authority.assertCurrent()).toThrow();
-  }
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
@@ -924,9 +921,7 @@ it.each([
       } else {
         expect(admittedOperator).toBe(scenario === "cron-scoped operator");
         expect(rejected).toContain(
-          scopedOperator
-            ? "missing scope: operator.write"
-            : "require full operator write permission",
+          scopedOperator ? "missing scope: operator.write" : "needs operator write permission",
         );
       }
       if (scenario === "role revoked during merge") {

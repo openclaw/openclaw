@@ -7,6 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
+import type { QueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
   ManagedRunStdin,
@@ -171,6 +172,8 @@ export interface ProcessSession {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
+  /** A restored process's saved requester; its exit wakes the chat as them, admitted again. */
+  operatorSource?: QueuedOperatorRecoverySource;
   /** One-shot run (hidden subagent, cron run): the exit continues it only after sessions_yield. */
   exitWakeAfterYield?: true;
   /** sessions_yield awaits this command, so its exit resumes the yielded origin run. */

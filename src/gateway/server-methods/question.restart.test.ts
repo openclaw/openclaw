@@ -16,8 +16,8 @@ import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "../session-restart-resume.js";
+import * as systemTurnAuthority from "../session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import * as systemTurnAuthority from "../session-system-turn-authority.js";
 import * as support from "./question.test-support.js";
 
 support.installQuestionTestHooks();

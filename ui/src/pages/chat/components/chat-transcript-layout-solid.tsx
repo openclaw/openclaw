@@ -122,7 +122,6 @@ function TranscriptRows(props: {
         {props.snapshot.header}
       </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
-        {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
@@ -159,7 +158,10 @@ function TranscriptRows(props: {
                     ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
-                      { "chat-virtual-row--first": virtualRow().index === 0 },
+                      {
+                        "chat-virtual-row--first": virtualRow().index === 0,
+                        "chat-virtual-row--compact-activity": row()?.compactActivity,
+                      },
                     ]}
                     style={{
                       "min-height":

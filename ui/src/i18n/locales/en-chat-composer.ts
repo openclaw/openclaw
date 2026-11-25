@@ -46,8 +46,6 @@ const catalog = {
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      compactingContext: "Compacting context",
-      contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
       modelRestoredEvent: "Returned to selected model: {from} → {to}",

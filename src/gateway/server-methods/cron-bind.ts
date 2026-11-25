@@ -88,9 +88,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
     const { params, respond, context, client, signal } = options;
     const { sessionMutationCommitGuard, hasCurrentClientAuthority } = options;
     sessionMutationCommitGuard?.();
-    if (hasCurrentClientAuthority?.() === false) {
-      throw new Error("Automation caller authority is no longer active");
-    }
     const jobId = resolveCronJobId(params);
     if (!jobId) {
       respondMissingCronJobId(respond, "cron.bind");
@@ -125,7 +122,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
         client,
         callerScope,
         sessionMutationCommitGuard,
-        hasCurrentClientAuthority,
       });
       capture = await captureCronCreatorSession(
         job,
@@ -173,7 +169,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       sessionMutationCommitGuard: () => {
         sessionMutationCommitGuard?.();
         creator.assertCurrent();
-        capture.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
     });

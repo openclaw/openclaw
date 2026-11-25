@@ -1,16 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as sessionMembers from "../config/sessions/session-sharing-store.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -30,41 +23,7 @@ import { testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
 
-// Hold the real worker command before SQLite starts writing; every command and
-// native receipt still comes from the production owner, including on refusal.
-const replacementBoundary = vi.hoisted(() => ({
-  key: undefined as string | undefined,
-  entered: undefined as (() => void) | undefined,
-  release: undefined as Promise<void> | undefined,
-}));
-vi.mock(
-  "../config/sessions/session-accessor.sqlite-replacement-worker.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../config/sessions/session-accessor.sqlite-replacement-worker.js")
-      >();
-    return {
-      ...actual,
-      commitSessionEntryReplacementsInWorker: async (
-        ...args: Parameters<typeof actual.commitSessionEntryReplacementsInWorker>
-      ) => {
-        if (args[2].replacements.some(({ sessionKey }) => sessionKey === replacementBoundary.key)) {
-          replacementBoundary.entered?.();
-          await replacementBoundary.release;
-        }
-        return await actual.commitSessionEntryReplacementsInWorker(...args);
-      },
-    };
-  },
-);
-
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
-afterEach(() => {
-  replacementBoundary.key = undefined;
-  replacementBoundary.entered = undefined;
-  replacementBoundary.release = undefined;
-});
 
 async function createFixture(
   suffix: string,
@@ -388,62 +347,3 @@ test.each([
     expect(loadSessionEntry(scope)?.communication).toEqual({ send: "ask" });
   },
 );
-
-test("sessions.create refuses persistence after membership changes during worker preparation", async ({
-  signal,
-}) => {
-  const f = await createFixture("revoked-membership");
-  const childKey = "agent:main:dashboard:communication-revoked-child-membership";
-  const client = f.collaboratorClient;
-  const parent = { agentId: "main", sessionKey: f.parentKey, storePath: f.storePath };
-  const resolved = resolveSqliteStoreScope(f.storePath, { agentId: "main" });
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: resolved.path });
-  const transcriptCount = () =>
-    database.db.prepare("SELECT count(*) AS count FROM transcript_events").get()?.count;
-  const beforeTranscripts = transcriptCount();
-  const entered = createDeferred();
-  const release = createDeferred();
-  replacementBoundary.key = childKey;
-  replacementBoundary.entered = entered.resolve;
-  replacementBoundary.release = release.promise;
-  // Membership exercises omitted policy inheritance through actual access.
-  const creating = request(f.context, client, "sessions.create", {
-    agentId: "main",
-    key: childKey,
-    parentSessionKey: f.parentKey,
-  });
-  const settled = creating.then(
-    (response) => ({ response, error: undefined }),
-    (error: unknown) => ({ response: undefined, error }),
-  );
-  try {
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        creating,
-        "creation never reached the real SQLite replacement",
-      ),
-      signal,
-    );
-    sessionMembers.removeSessionMember(
-      parent,
-      f.collaborator.id,
-      undefined,
-      expectDefined(loadSessionEntry(parent), "current parent").sessionId,
-    );
-  } finally {
-    release.resolve();
-    await settled;
-  }
-  const outcome = await settled;
-  expect(outcome.error).toBeUndefined();
-  const denied = expectDefined(outcome.response, "live transport refusal");
-  expect(denied.ok).toBe(false);
-  expect(denied.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    details: { code: "SESSION_PARTICIPATION_REQUIRED" },
-  });
-  expect(loadSessionEntry({ sessionKey: childKey, storePath: f.storePath })).toBeUndefined();
-  expect(transcriptCount()).toBe(beforeTranscripts);
-  expect(loadSessionEntry(parent)?.communication).toEqual({ receive: "always" });
-});

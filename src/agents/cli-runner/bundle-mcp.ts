@@ -354,6 +354,7 @@ export async function prepareCliBundleMcpConfig(params: {
   env?: Record<string, string>;
   warn?: (message: string) => void;
   nativeMcpPolicy?: {
+    storeAdmission?: object;
     sessionId: string;
     sessionKey?: string;
     capabilityProfile: ResolvedConversationCapabilityProfile;
@@ -465,6 +466,7 @@ export async function prepareCliBundleMcpConfig(params: {
       mcp: { ...params.config?.mcp, servers: nativePolicyConfig.mcpServers },
     };
     const acquisition = await acquireSessionMcpRuntime({
+      storeAdmission: params.nativeMcpPolicy.storeAdmission,
       sessionId: params.nativeMcpPolicy.sessionId,
       sessionKey: params.nativeMcpPolicy.sessionKey,
       agentId: params.nativeMcpPolicy.capabilityProfile.agentId,

@@ -50,6 +50,7 @@ it.each(["crash", "shutdown"] as const)(
             : {}),
         }),
       );
+      entries[0]!.requiresCompletionAuthority = true;
       const restore = () =>
         createSubagentRegistryRestorer({
           runs: subagentRuns,
@@ -92,6 +93,17 @@ it.each(["crash", "shutdown"] as const)(
           pending: [],
         };
         expect((await waiting).details).toMatchObject(expected);
+        const restoredParticipant = subagentRuns.get("captured")!;
+        expect(restoredParticipant.requiresCompletionAuthority).toBe(true);
+        const ownerEffect = () => {
+          throw new Error("Owner fallback executed");
+        };
+        expect(() =>
+          subagentRuns.runWithCompletionAuthority(restoredParticipant, ownerEffect),
+        ).toThrow("Constrained completion requires");
+        expect(() =>
+          subagentRuns.runWithCompletionBatchAuthority([restoredParticipant], ownerEffect),
+        ).toThrow("Constrained completion requires");
         // A late waiter must read the durable result without a new completion event.
         expect((await tool.execute("late-wait", args, signal)).details).toMatchObject(expected);
         for (const entry of entries) {

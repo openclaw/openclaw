@@ -70,7 +70,7 @@ test("commits foreground replacement while cold reclamation holds native integri
   const foreground = { sessionId: "foreground", label: "foreground committed" };
   vi.stubEnv("OPENCLAW_STATE_DIR", fixture.options.env.OPENCLAW_STATE_DIR);
   await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
-  invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
+  invalidateOpenClawAgentDatabaseValidation(fixture.database.path, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(fixture.database.path);
   // Required unique-index repair holds verification while the foreground writer proceeds.
   {

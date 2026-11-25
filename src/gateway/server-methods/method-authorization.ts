@@ -10,6 +10,7 @@ import {
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
+import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
@@ -36,7 +37,7 @@ import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
 /** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
-export function authorizeGatewayMethodScopes(
+function authorizeGatewayMethodScopes(
   method: string,
   scopes: readonly string[],
   params: unknown,
@@ -114,7 +115,12 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "This connection lost access. Reconnect and try again.",
+      ),
+    };
   }
   if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
     const roleError = authorizeCurrentOperatorRoleScopes(
@@ -129,6 +135,22 @@ export function authorizeGatewayMethod(
     // Scope recovery must remain reachable from a paired operator whose grant is empty;
     // the handlers bind both calls to the connection's exact device identity.
     return { error: null };
+  }
+  const participationApproval = authorizeParticipationExecApprovalMethod({
+    method,
+    params,
+    client,
+    manager: context.execApprovalManager,
+  });
+  if (participationApproval !== undefined) {
+    return {
+      error: participationApproval
+        ? null
+        : errorShape(
+            ErrorCodes.FORBIDDEN,
+            "Only the session creator or an administrator may review this participation approval.",
+          ),
+    };
   }
   if (scopes.includes(ADMIN_SCOPE)) {
     return { error: null };

@@ -1,4 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
+import type { CommandStdinFileSource } from "../command-stdin-file.js";
 import type { CommandSpawnOptions } from "./execa-types.js";
 
 type OutputStream = "stdout" | "stderr";
@@ -69,6 +70,20 @@ function decodeExecaMessage(encoded: EncodedExecaMessage, output: ExecaMessageOu
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
+function isBrokerOutputOption(value: unknown): value is BrokerOutputOption | undefined {
+  return (
+    value === undefined ||
+    value === "pipe" ||
+    value === "ignore" ||
+    value === "inherit" ||
+    (typeof value === "object" &&
+      value !== null &&
+      "file" in value &&
+      typeof value.file === "string" &&
+      Object.keys(value).length === 1)
+  );
+}
+
 export type BrokerExecaOptions = Omit<
   CommandSpawnOptions,
   | "cancelSignal"
@@ -87,6 +102,7 @@ export type BrokerExecaOptions = Omit<
   env?: NodeJS.ProcessEnv;
   shell?: false;
   stdin?: "pipe" | "ignore" | "inherit";
+  stdinFile?: CommandStdinFileSource;
   stdout?: BrokerOutputOption;
   stderr?: BrokerOutputOption;
   stdio?:
@@ -95,6 +111,61 @@ export type BrokerExecaOptions = Omit<
     | "inherit"
     | readonly ["pipe" | "ignore" | "inherit", BrokerOutputOption, BrokerOutputOption];
 };
+
+/** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
+export function brokerExecaOptions(
+  options: CommandSpawnOptions,
+): BrokerExecaOptions | "ipc" | "independent" | "descriptor" | "inherit" {
+  if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
+    return options.ipc ? "ipc" : options.cleanup === false ? "independent" : "descriptor";
+  }
+  if (
+    options.stdout === "inherit" ||
+    options.stderr === "inherit" ||
+    options.stdio === "inherit" ||
+    typeof options.stdout === "number" ||
+    typeof options.stderr === "number"
+  ) {
+    return typeof options.stdout === "number" || typeof options.stderr === "number"
+      ? "descriptor"
+      : "inherit";
+  }
+  const nativeStdio = Array.isArray(options.stdio)
+    ? options.stdio.find(
+        (entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"),
+      )
+    : undefined;
+  if (nativeStdio !== undefined) {
+    return typeof nativeStdio === "number" ? "descriptor" : "inherit";
+  }
+  if (
+    (options.cwd !== undefined && typeof options.cwd !== "string") ||
+    (options.input !== undefined &&
+      typeof options.input !== "string" &&
+      !(options.input instanceof Uint8Array)) ||
+    (options.stdin !== undefined &&
+      options.stdin !== "pipe" &&
+      options.stdin !== "ignore" &&
+      options.stdin !== "inherit") ||
+    !isBrokerOutputOption(options.stdout) ||
+    !isBrokerOutputOption(options.stderr) ||
+    (options.shell !== undefined && options.shell !== false)
+  ) {
+    throw new TypeError("Unsupported spawn broker execa stream or invocation options");
+  }
+  if (
+    Array.isArray(options.stdio) &&
+    (options.stdio.length !== 3 ||
+      !["pipe", "ignore", "inherit"].includes(String(options.stdio[0])) ||
+      !isBrokerOutputOption(options.stdio[1]) ||
+      !isBrokerOutputOption(options.stdio[2]))
+  ) {
+    throw new TypeError("Unsupported spawn broker execa stdio");
+  }
+  const { cancelSignal: _cancelSignal, ...serializable } = options;
+  // SAFETY: The allowed options were checked above, excluding streams, URLs, IPC and native descriptors.
+  return serializable as BrokerExecaOptions;
+}
 
 export type BrokerExecaError = EncodedExecaMessage & {
   name: string;

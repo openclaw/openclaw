@@ -5,9 +5,11 @@ import { dirname } from "node:path";
 import process from "node:process";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,
+  terminalPolicyPass,
 } from "./full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "./lib/canonical-json.mjs";
 import {
@@ -81,11 +83,13 @@ async function seal() {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
   const targetInput =
-    role === "npmTelegram"
-      ? "harness_ref"
-      : role.startsWith("releaseChecks")
-        ? "ref"
-        : "target_ref";
+    role === "stableClientCompatibility"
+      ? "target_sha"
+      : role === "npmTelegram"
+        ? "harness_ref"
+        : role.startsWith("releaseChecks")
+          ? "ref"
+          : "target_ref";
   if (inputs[targetInput] !== targetSha) {
     throw new Error("Child evidence target differs from the exact dispatched product source");
   }
@@ -96,14 +100,17 @@ async function seal() {
     if (allJobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== attempt)) {
       throw new Error("Child evidence job inventory belongs to another attempt");
     }
-    const publishers = allJobs.filter((job) => job.name === PUBLISHER_JOB);
+    const resolvedJobs = resolveReleaseAttemptJobs(allJobs, attempt, {
+      allowRunning: attempt === runAttempt,
+    });
+    const publishers = resolvedJobs.filter((job) => job.name === PUBLISHER_JOB);
     if (attempt === runAttempt) {
       if (publishers.length !== 1 || publishers[0].status !== "in_progress") {
         throw new Error("Child evidence publisher job identity is ambiguous or inactive");
       }
       publisher = publishers[0];
     }
-    const jobs = allJobs.filter((job) => job.name !== PUBLISHER_JOB);
+    const jobs = resolvedJobs.filter((job) => job.name !== PUBLISHER_JOB);
     if (jobs.some((job) => job.status !== "completed")) {
       throw new Error("Child evidence cannot seal while predecessor jobs are active");
     }
@@ -134,11 +141,17 @@ async function seal() {
     dispatchId,
     sourceParentRunId: parent[1],
     sourceParentAttempt: Number(parent[2]),
-    workloadConclusion: composite.jobs.every((job) =>
-      ["success", "neutral"].includes(job.conclusion),
-    )
-      ? "success"
-      : "failure",
+    workloadConclusion:
+      (role !== "stableClientCompatibility" ||
+        terminalPolicyPass({
+          key: role,
+          jobs: composite.jobs,
+          status: "completed",
+          conclusion: "success",
+        })) &&
+      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))
+        ? "success"
+        : "failure",
     inputs: inputsWithoutDispatch,
     publisher: { jobId: String(publisher.id), jobName: PUBLISHER_JOB },
     ...composite,

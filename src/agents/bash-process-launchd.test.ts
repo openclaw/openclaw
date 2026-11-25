@@ -142,16 +142,23 @@ async function runWrapper(command: string, timeoutMs = 0) {
   return { status: recorded, log: await fs.readFile(logPath, "utf8") };
 }
 
-it("wrapper records the exit after the whole group ends and enforces the timeout", async () => {
-  const run = await runWrapper('echo "$SECRET-out"; (sleep 0.2; echo child-done) & exit 7');
-  expect(run.status).toMatchObject({
-    phase: "exited",
-    exitCode: 7,
-    exitSignal: null,
-    reason: "exit",
-  });
-  expect(run.log).toBe("s-out\nchild-done\n");
-  expect(run.status.durationMs).toBeGreaterThanOrEqual(150);
+it("wrapper records the command's exit while what it left running keeps running", async () => {
+  // The incident shape: a helper left in the command's group must not hold its completion.
+  const run = await runWrapper('echo "$SECRET-out"; sleep 600 & echo $! > leftover.pid; exit 3');
+  const leftover = Number(await fs.readFile(path.join(dir, "leftover.pid"), "utf8"));
+  try {
+    expect(run.status).toMatchObject({ phase: "exited", exitCode: 3, reason: "exit" });
+    expect(run.log).toBe("s-out\n");
+    expect(run.status.durationMs).toBeLessThan(5000);
+    await status(run.status);
+    const observed = await supervisor.read(label);
+    expect(observed).toMatchObject({ state: "exited", exitCode: 3 });
+    expect(observed.state === "exited" && observed.survivors?.map(({ pid }) => pid)).toEqual([
+      leftover,
+    ]);
+  } finally {
+    process.kill(leftover, "SIGKILL");
+  }
   const timeout = await runWrapper("trap '' TERM; sleep 30 & wait", 300);
   const signal = expect.stringMatching(/^SIG(TERM|KILL)$/);
   expect(timeout.status).toMatchObject({ reason: "overall-timeout", exitSignal: signal });

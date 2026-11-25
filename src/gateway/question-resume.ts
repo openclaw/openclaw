@@ -19,7 +19,7 @@ import {
   withPreparedQuestionSessionFacts,
 } from "./question-session-access.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 const log = createSubsystemLogger("gateway/questions");
 type AskingSession = {

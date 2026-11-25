@@ -38,8 +38,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { testing as deliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
-import { announceTesting } from "./subagent-announce-overrides.test-support.js";
+import { announceTesting, outputTesting } from "./subagent-announce-overrides.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import {
   visibleAgentResponse,
@@ -757,7 +756,7 @@ describe("subagent announce formatting", () => {
       sessionStore = { [childKey]: session("child-session-1", minimalUsage) };
       expect(
         await announceWithDefaults({ timeoutMs: 1000, expectsCompletionMessage: !settled }),
-      ).toBe(settled ? "delivered" : "retryable");
+      ).toBe(settled ? "delivered" : "undelivered");
       if (settled) {
         expect(waitForEmbeddedAgentRunEndSpy).toHaveBeenCalledWith("child-session-1", 1000);
         expectText(getAgentCallContext(), ["raw subagent reply"], ["(no output)"]);
@@ -786,7 +785,7 @@ describe("subagent announce formatting", () => {
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2:wake"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       registry.countPendingDescendantRuns.mockReturnValueOnce(1).mockReturnValueOnce(1);
-      expect(await announceWake(parentKey, parentRunId)).toBe("retryable");
+      expect(await announceWake(parentKey, parentRunId)).toBe("undelivered");
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
         runTimeoutSeconds,
@@ -862,7 +861,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: parentKey,
         cleanup: "delete",
       }),
-    ).toBe(mode === "missing fallback" ? "retryable" : "delivered");
+    ).toBe(mode === "missing fallback" ? "undelivered" : "delivered");
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     if (destination) {
       expectAgentCallFields(getAgentCall(), { sessionKey: destination, deliver: false });

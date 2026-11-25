@@ -141,15 +141,22 @@ struct ChatMediaPlaybackCoordinatorTests {
     }
 
     @Test func `stale owner release does not clear its replacement`() {
-        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: RecordingNowPlayingCenter())
+        let center = RecordingNowPlayingCenter()
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: center)
         let first = RecordingMediaPlaybackOwner()
-        let second = RecordingMediaPlaybackOwner()
+        let second = RecordingNowPlayingOwner()
 
         coordinator.activate(first)
         coordinator.activate(second)
+        #expect(center.published.last?.title == "clip.mov")
+        let clearCountBeforeRelease = center.clearCount
+
         coordinator.release(first)
 
         #expect(coordinator.isActive(second))
+        #expect(center.clearCount == clearCountBeforeRelease)
+        center.send(.pause)
+        #expect(second.commands == [.pause])
     }
 
     @Test func `inline owner publishes updates and handles remote commands until release`() {

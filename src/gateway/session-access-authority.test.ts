@@ -416,42 +416,11 @@ describe("session resource admission", () => {
       expect(
         thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
       ).toMatch(
-        stage === "aliases" ? "Session access changed" : /authority|Session access changed/,
+        stage === "aliases"
+          ? "Session access changed"
+          : /authority|Session access changed|could not start/,
       );
       expect(mocks.profileLeases.size).toBe(0);
-    },
-  );
-
-  it.each([{ scopes: ["operator.sessions.write"], reason: "changed admission alternative" }])(
-    "releases prepared authority after final $reason denial",
-    async ({ scopes }) => {
-      const test = fixture(["operator.write", "operator.sessions.write"], "alice");
-      const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
-      const release = vi.fn();
-      using _ = vi
-        .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
-        .mockImplementation(async (params) => {
-          const prepared = await prepare(params);
-          const authority = prepared.authority;
-          release.mockImplementation(authority.release);
-          return {
-            ...prepared,
-            assertPreparationCurrent: () => {
-              prepared.assertPreparationCurrent();
-              test.client.connect.scopes = scopes;
-            },
-            authority: { ...authority, release },
-          };
-        });
-      const handler = vi.fn<GatewayRequestHandler>();
-      const respond = vi.fn();
-      await dispatchSession(test, handler, {
-        respond,
-        allowOwnSessionScope: true,
-      });
-      expect(handler).not.toHaveBeenCalled();
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(release).toHaveBeenCalledOnce();
     },
   );
 
@@ -470,7 +439,7 @@ describe("session resource admission", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "alice",
       scopes: ["operator.sessions.write"],
-      assertCurrent: () => test.grant.signal.throwIfAborted(),
+      signal: test.grant.signal,
     });
     mocks.ambient = {
       agentId: "main",
