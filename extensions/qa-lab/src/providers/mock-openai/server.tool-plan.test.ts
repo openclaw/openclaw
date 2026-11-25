@@ -20,9 +20,9 @@ const shellExec = {
     required: ["command"],
   },
 };
-async function startTurn(prompt: string, body: Record<string, unknown>) {
+async function startTurn(prompt: string, body: Record<string, unknown>, ...context: unknown[]) {
   const server = await startMockServer();
-  const input: unknown[] = [makeUserInput(prompt)];
+  const input: unknown[] = [makeUserInput(prompt), ...context];
   const request = () => expectNonStreamingResponsesJson(server, { ...body, input });
   const complete = (call: Record<string, unknown>, output: string) => {
     input.push(call, makeToolOutputWithCallId(String(call.call_id), output));
@@ -93,6 +93,24 @@ it("names a drive-rooted media path from a plain-text QA tool plan result", asyn
   const done = await turn.complete(call, "Generated music at C:\\state\\media\\generated\\b.mp3");
 
   expect(outputText(done)).toBe("plugin C:\\state\\media\\generated\\b.mp3");
+});
+
+it("does not count standalone context as a completed QA tool plan step", async () => {
+  const tools = [{ type: "function", name: "music_generate", parameters: { type: "object" } }];
+  const plan = { calls: [{ name: "music_generate", args: {} }], reply: "plugin {{media:0}}" };
+  // Codex standalone context: a named function output with no call ID.
+  const context = {
+    type: "function_call_output",
+    name: "notifications",
+    namespace: "slack",
+    output: "Alice mentioned you.",
+  };
+  const turn = await startTurn(`QA tool plan: ${JSON.stringify(plan)}`, { tools }, context);
+
+  const call = outputToolCall(await turn.request(), "music_generate");
+  const done = await turn.complete(call, "Generated music at /state/media/generated/b.mp3");
+
+  expect(outputText(done)).toBe("plugin /state/media/generated/b.mp3");
 });
 
 it("waits for a QA tool plan step that Code Mode leaves running", async () => {

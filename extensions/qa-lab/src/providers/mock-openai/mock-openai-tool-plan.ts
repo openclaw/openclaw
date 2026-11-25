@@ -5,6 +5,7 @@ import { buildAssistantEvents } from "./mock-openai-events.js";
 import {
   extractAllToolOutputText,
   extractLastMatchingUserTurn,
+  isResponsesToolCallOutput,
   parseToolOutputJson,
   splitMockConversationContext,
 } from "./mock-openai-input.js";
@@ -71,10 +72,10 @@ export function planQaToolPlanTurn(
     return null;
   }
   // Only results after this plan's own user turn count; earlier turns ran other plans.
+  // Standalone context carries no call ID and completes no step.
   const turn = extractLastMatchingUserTurn(input, QA_TOOL_PLAN_PROMPT_RE);
   const toolOutputs = input.flatMap((item, index) =>
-    index >= (turn?.index ?? input.length) &&
-    (item.type === "function_call_output" || item.type === "custom_tool_call_output")
+    index >= (turn?.index ?? input.length) && isResponsesToolCallOutput(item)
       ? [{ item, index }]
       : [],
   );
