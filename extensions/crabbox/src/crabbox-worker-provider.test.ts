@@ -87,6 +87,14 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+function jsonCommandResult(value: unknown): SpawnResult {
+  return commandResult({ stdout: JSON.stringify(value) });
+}
+
+function inspectCommandResult(overrides: Record<string, unknown> = {}): SpawnResult {
+  return commandResult({ stdout: inspectJson(overrides) });
+}
+
 function readyResult(argv: string[], overrides: Record<string, unknown> = {}) {
   return commandResult({ stdout: argv[1] === "inspect" ? inspectJson(overrides) : "" });
 }
@@ -143,7 +151,7 @@ function providerWithRunner(
   return providerWithRawRunner(
     async (argv, options) => {
       if (argv[1] === "config" && argv[2] === "show") {
-        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+        return jsonCommandResult({ aws: { instanceProfile: "" } });
       }
       if (argv[1] === "egress" && argv.includes("--help")) {
         return commandResult({
@@ -267,16 +275,14 @@ it("projects a large catalog by OS and architecture without inferring resources"
 
 it("discovers Boat through Crabbox aliases without inventing unmapped machine sizes", async () => {
   const runCommand = vi.fn(async () =>
-    commandResult({
-      stdout: JSON.stringify([
-        {
-          provider: "ascii-box",
-          aliases: ["boat", "ascii", "asciibox"],
-          targets: ["linux"],
-          classCatalog: { disposition: "unmapped", profiles: [] },
-        },
-      ]),
-    }),
+    jsonCommandResult([
+      {
+        provider: "ascii-box",
+        aliases: ["boat", "ascii", "asciibox"],
+        targets: ["linux"],
+        classCatalog: { disposition: "unmapped", profiles: [] },
+      },
+    ]),
   );
   const provider = providerWithRunner(runCommand);
   const profiles = ["boat", "ascii-box", "ascii"].map((backend) => ({
@@ -359,7 +365,7 @@ it.each([
   },
 ])("caches unusable catalog %j without warnings", async (entry) => {
   const warn = vi.fn();
-  const runCommand = vi.fn(async () => commandResult({ stdout: JSON.stringify([entry]) }));
+  const runCommand = vi.fn(async () => jsonCommandResult([entry]));
   const provider = providerWithRunner(runCommand, warn);
   expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
   expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
@@ -576,7 +582,7 @@ it("rejects an effective AWS instance profile during allocation-free preparation
   const calls: string[][] = [];
   const provider = providerWithRawRunner(async (argv) => {
     calls.push(argv);
-    return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "worker-role" } }) });
+    return jsonCommandResult({ aws: { instanceProfile: "worker-role" } });
   });
   await expect(
     provider.prepareProvision!({ ...PROFILE, provider: "AWS" }, OPERATION_ID, {
@@ -646,9 +652,7 @@ it.each([
 
 it("rejects a registered Hetzner desktop profile before allocation", async () => {
   const config = { coordinator: "https://coordinator.example.test", brokerMode: "registered" };
-  const runCommand = vi.fn<CrabboxCommandRunner>(async () =>
-    commandResult({ stdout: JSON.stringify(config) }),
-  );
+  const runCommand = vi.fn<CrabboxCommandRunner>(async () => jsonCommandResult(config));
   const provider = providerWithRawRunner(runCommand);
 
   await expect(
@@ -661,7 +665,7 @@ it("rejects a registered Hetzner desktop profile before allocation", async () =>
 
 it("collects node evidence before stopping an unenrolled lease", async () => {
   const { provider, commands: calls } = recordedProvider({
-    status: commandResult({ stdout: inspectJson() }),
+    status: inspectCommandResult(),
     run: async (_argv, options) =>
       commandResult({
         stdout: String(options.input).includes("node.log tail:")
@@ -762,9 +766,7 @@ it.each([false, true])("preserves readiness budgets with wall clock rewind=%s", 
       if (!rewind && inspectTimeouts.length <= 2) {
         elapsedMs += 4 * 60_000;
       }
-      return commandResult({
-        stdout: inspectJson({ ready: rewind || inspectTimeouts.length > 1 }),
-      });
+      return inspectCommandResult({ ready: rewind || inspectTimeouts.length > 1 });
     }
     return commandResult();
   });
@@ -791,7 +793,7 @@ it("reserves the granted window, diagnostics, and full AWS cleanup after late en
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   const provider = providerWithRunner(async (argv, options) => {
     if (argv[1] === "inspect" || argv[1] === "status") {
-      return commandResult({ stdout: inspectJson() });
+      return inspectCommandResult();
     }
     if (argv[1] === "run" || argv[1] === "stop") {
       commandTimeouts.push(options.timeoutMs);
@@ -851,7 +853,7 @@ it.each(["warmup", "inspect"])(
         return commandResult({ code: null, killed: true, termination: "timeout" });
       }
       if (argv[1] === "inspect") {
-        return commandResult({ stdout: inspectJson({ id }) });
+        return inspectCommandResult({ id });
       }
       if (argv[1] === "stop") {
         live.delete(id);
@@ -914,12 +916,10 @@ it.each(["terminal", "different lease"] as const)(
     const secret = `sk-${"privatecredential".repeat(80)}`;
     const { provider, calls } = recordedProvider({
       warmup: commandResult({ code: 1, stderr }),
-      inspect: commandResult({
-        stdout: inspectJson({
-          id: inspection === "different lease" ? "cbx_012345abcdef" : LEASE_ID,
-          state: "failed",
-          failureError: `${diagnosis}\nAuthorization: Bearer ${secret}\n${"fallback failed; ".repeat(80)}`,
-        }),
+      inspect: inspectCommandResult({
+        id: inspection === "different lease" ? "cbx_012345abcdef" : LEASE_ID,
+        state: "failed",
+        failureError: `${diagnosis}\nAuthorization: Bearer ${secret}\n${"fallback failed; ".repeat(80)}`,
       }),
     });
 
@@ -1136,7 +1136,7 @@ it("maps deleted leases to unknown without renewing them", async () => {
 
 it("rejects deleted leases during provision even if SSH is ready", async () => {
   const { provider, calls } = recordedProvider({
-    inspect: commandResult({ stdout: inspectJson({ state: "deleted", ready: true }) }),
+    inspect: inspectCommandResult({ state: "deleted", ready: true }),
   });
   await expect(provider.provision(CLASSLESS_PROFILE)).rejects.toMatchObject({
     code: "cleanup_complete",
