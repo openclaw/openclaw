@@ -4,16 +4,20 @@ import {
   oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
 import {
-  isUiSelectedGlobalSessionKey,
-  resolveUiSelectedSessionAgentId,
-} from "../../lib/sessions/session-key.ts";
-import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
-import { chatHistoryOlderSelector, requestOlderChatHistoryPage } from "./chat-history-request.ts";
+  captureOlderHistoryClaim,
+  chatHistoryBoundarySelector,
+  chatHistoryOlderSelector,
+  requestOlderChatHistoryPage,
+} from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import { resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
+import { acceptsHistoryResult } from "./chat-history-state.ts";
 import { requiresChatHistoryReload } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatInputHistoryReader } from "./input-history.ts";
+
+// The error surface outlives a traversal; a successful retry must not clear another error.
+const recallErrors = new WeakMap<ChatState, string>();
 
 export function createChatInputHistoryReader(state: ChatState): ChatInputHistoryReader | undefined {
   const client = state.client;
@@ -22,74 +26,69 @@ export function createChatInputHistoryReader(state: ChatState): ChatInputHistory
     return undefined;
   }
 
-  const sessionKey = state.sessionKey;
   const sessionId = state.currentSessionId;
-  const sessions = state.sessions;
-  const selectedAgent = isUiSelectedGlobalSessionKey(state, sessionKey)
-    ? resolveUiSelectedSessionAgentId(state)
-    : undefined;
-  const ownsConnection = captureChatConnectionOwner(state);
-  const capturedBoundary =
-    "messageId" in selector
-      ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages))
-      : undefined;
+  const claim = captureOlderHistoryClaim(state, client);
+  const pagination = state.chatHistoryPagination;
+  let boundaryId = "messageId" in selector ? selector.messageId : undefined;
   const isCurrent = () =>
-    ownsConnection() &&
-    state.sessionKey === sessionKey &&
+    acceptsHistoryResult(state, claim) &&
     state.currentSessionId === sessionId &&
-    state.sessions === sessions &&
-    (isUiSelectedGlobalSessionKey(state, state.sessionKey)
-      ? resolveUiSelectedSessionAgentId(state)
-      : undefined) === selectedAgent;
-
-  return async () => {
-    if (!selector || !isCurrent()) {
-      return undefined;
-    }
-
-    const requested = selector;
-    try {
-      const result = await requestOlderChatHistoryPage(
-        client,
-        sessionKey,
-        selectedAgent,
-        requested,
-        isCurrent,
-      );
-      if (!isCurrent()) {
+    state.chatHistoryPagination === pagination &&
+    (!boundaryId || chatHistoryBoundarySelector(state)?.messageId === boundaryId);
+  return {
+    isCurrent,
+    async read(signal, ownsAction) {
+      const requested = selector;
+      const ownsRead = () => ownsAction() && isCurrent();
+      if (!requested || !ownsRead()) {
         return undefined;
       }
-      if (
-        requiresChatHistoryReload(
-          result,
-          sessionId?.trim() ?? "",
-          "messageId" in requested ? capturedBoundary : undefined,
-        )
-      ) {
-        throw new Error(t("chat.thread.earlierInterrupted"));
-      }
-
-      const nextPagination = resolveChatHistoryPagination(result);
-      if (nextPagination.hasMore) {
-        const nextCursor = nextPagination.olderCursor;
-        if (!nextCursor?.trim() || ("cursor" in requested && nextCursor === requested.cursor)) {
+      const boundary =
+        "messageId" in requested
+          ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages))
+          : undefined;
+      try {
+        const result = await requestOlderChatHistoryPage(
+          client,
+          claim.sessionKey,
+          claim.agentId,
+          requested,
+          ownsRead,
+          signal,
+        );
+        if (!ownsRead()) {
+          return undefined;
+        }
+        const next = resolveChatHistoryPagination(result);
+        if (
+          requiresChatHistoryReload(result, sessionId?.trim() ?? "", boundary) ||
+          (next.hasMore &&
+            (!next.olderCursor || ("cursor" in requested && requested.cursor === next.olderCursor)))
+        ) {
+          // Never retry a rejected private cursor. A later Up can reopen the held
+          // source anchor without reloading or publishing a transcript window.
+          selector = "cursor" in requested ? chatHistoryBoundarySelector(state) : null;
+          boundaryId = selector?.messageId;
           throw new Error(t("chat.thread.earlierInterrupted"));
         }
-        selector = { cursor: nextCursor };
-      } else {
-        selector = null;
+        selector = next.hasMore && next.olderCursor ? { cursor: next.olderCursor } : null;
+        const readError = recallErrors.get(state);
+        if (readError && state.chatError === readError) {
+          state.chatError = null;
+        }
+        recallErrors.delete(state);
+        return {
+          messages: "messageId" in requested ? [] : result.messages,
+          hasMore: selector !== null,
+        };
+      } catch (error) {
+        if (ownsRead()) {
+          const readError = formatChatHistoryLoadError(error);
+          recallErrors.set(state, readError);
+          state.chatError = readError;
+        }
+        return undefined;
       }
-
-      return {
-        // Boundary probes return the already loaded anchor, not older recall inputs.
-        messages: "messageId" in requested ? [] : result.messages,
-        hasMore: selector !== null,
-      };
-    } catch (error) {
-      if (isCurrent()) {
-        state.chatError = formatChatHistoryLoadError(error);
-      }
-      throw error;
-    }
+    },
   };
 }

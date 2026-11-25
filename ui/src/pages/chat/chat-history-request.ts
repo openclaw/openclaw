@@ -349,6 +349,10 @@ export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector
   if (pagination.olderCursor) {
     return { cursor: pagination.olderCursor };
   }
+  return chatHistoryBoundarySelector(state);
+}
+
+export function chatHistoryBoundarySelector(state: ChatState) {
   const sessionId = state.currentSessionId?.trim();
   const messageId = nativeHistoryMessageSourceId(oldestNativeHistoryMessage(state.chatMessages));
   return messageId && sessionId ? { messageId, sessionId } : null;
@@ -427,6 +431,21 @@ export type StagedOlderHistoryPage = NonNullable<
   Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
 >;
 
+// A read-only page borrows the transcript owner's generation without superseding its loads.
+export function captureOlderHistoryClaim(state: ChatState, client: GatewayBrowserClient) {
+  const sessionKey = state.sessionKey;
+  return {
+    client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey,
+    sessions: state.sessions,
+    version: chatHistoryRequests(state).historyVersion,
+    agentId: isUiSelectedGlobalSessionKey(state, sessionKey)
+      ? resolveUiSelectedSessionAgentId(state)
+      : undefined,
+  };
+}
+
 // The staged prefetch deliberately skips beginHistoryRequest: request
 // ownership is last-writer-wins, so a background fetch bumping the version
 // could invalidate a concurrent tail load's apply. The claim below carries the
@@ -440,24 +459,11 @@ export async function fetchStagedOlderHistoryPage(
     return undefined;
   }
   const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
-  const sessionKey = state.sessionKey;
-  const version = chatHistoryRequests(state).historyVersion;
-  const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
-    ? resolveUiSelectedSessionAgentId(state)
-    : undefined;
-  const claim = {
-    client,
-    connectionEpoch,
-    sessionKey,
-    sessions: state.sessions,
-    version,
-    agentId: requestAgentId,
-  };
+  const claim = captureOlderHistoryClaim(state, client);
   const result = await requestOlderChatHistoryPage(
     client,
-    sessionKey,
-    requestAgentId,
+    claim.sessionKey,
+    claim.agentId,
     { cursor },
     () => acceptsHistoryResult(state, claim),
     signal,

@@ -9,7 +9,7 @@ import {
 } from "./chat-pane-history.test-support.ts";
 import { handleChatDraftChange, handleChatInputHistoryKey } from "./input-history.ts";
 
-it("bounds recall by users and refreshes only after leaving a round", async () => {
+it("bounds recall by users and does not skip prompts prepended during a round", async () => {
   const seqs = Array.from({ length: 204 }, (_, i) => i + 1);
   const request = vi.fn(async () => ({
     messages: seqs.slice(0, -2).map((seq) => nativeHistoryMessage(seq)),
@@ -43,8 +43,12 @@ it("bounds recall by users and refreshes only after leaving a round", async () =
     expect.objectContaining(pageRequest),
     { signal: expect.any(AbortSignal) },
   );
-  // Loading an older page must not change an active traversal's order.
-  expect(press("ArrowUp").handled).toBe(false);
+  const rendered = state.chatMessages;
+  expect(press("ArrowUp").handled).toBe(true);
+  expect(state.chatMessage).toBe("message 201");
+  expect(state.chatMessages).toBe(rendered);
+  expect(press("ArrowDown").handled).toBe(true);
+  expect(state.chatMessage).toBe("message 203");
   expect(press("ArrowDown").handled).toBe(true);
   expect(state.chatMessage).toBe("Draft to retain");
 
@@ -115,19 +119,22 @@ it("consumes a boundary probe without recalling probe rows or mutating rendered 
   expect(state.chatHistoryPagination).toBe(pagination);
 });
 
-it.each(["missing", "repeated"] as const)(
-  "rejects a %s continuation cursor without replacing the recalled draft",
+it.each(["missing", "repeated", "reset"] as const)(
+  "reopens the held boundary after a %s continuation without publishing a page",
   async (cursor) => {
     const request = vi.fn().mockResolvedValueOnce({
       messages: [nativeHistoryMessage(201)],
       hasMore: true,
       sessionId: "session-id",
+      ...(cursor === "reset" ? { windowReset: true, olderCursor: "invalidated-edge" } : {}),
       ...(cursor === "repeated" ? { olderCursor: "older-2" } : {}),
     });
     const { state } = createNativeShowEarlierPane(request, 203);
     state.currentSessionId = "session-id";
     state.chatMessage = "Current draft";
     state.chatHistoryPagination = { hasMore: true, olderCursor: "older-2" };
+    const anchor = { ...nativeHistoryMessage(203), __openclaw: { seq: 203, id: "anchor" } };
+    state.chatMessages = [anchor, nativeHistoryMessage(204)];
     const rendered = state.chatMessages;
     const originalMessages = [...rendered];
 
@@ -139,10 +146,40 @@ it.each(["missing", "repeated"] as const)(
     expect(state.chatError).toBeTruthy();
     expect(state.chatMessage).toBe("message 203");
     expect(request).toHaveBeenCalledTimes(1);
+    request
+      .mockResolvedValueOnce({
+        messages: [anchor],
+        sessionId: "session-id",
+        olderCursor: "reopened",
+      })
+      .mockResolvedValueOnce({ messages: [nativeHistoryMessage(199)], sessionId: "session-id" });
+    await state.handleChatInputHistoryKey(recallKey("ArrowUp")).completion;
+    expect(
+      request.mock.calls.slice(1).map(([, params]) => params.cursor ?? params.messageId),
+    ).toEqual(["anchor", "reopened"]);
+    expect(state.chatMessage).toBe("message 199");
+    expect(state.chatError).toBeFalsy();
     expect(state.chatMessages).toBe(rendered);
     expect(state.chatMessages).toEqual(originalMessages);
   },
 );
+
+it("clears a recall error when a new traversal successfully retries", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("History unavailable"))
+    .mockResolvedValueOnce({ messages: [nativeHistoryMessage(201)] });
+  const { state } = createNativeShowEarlierPane(request, 203);
+  const press = (key: "ArrowUp" | "ArrowDown") => state.handleChatInputHistoryKey(recallKey(key));
+  press("ArrowUp");
+  await press("ArrowUp").completion;
+  expect(state.chatError).toBe("History unavailable");
+  press("ArrowDown");
+  press("ArrowUp");
+  await press("ArrowUp").completion;
+  expect(state.chatMessage).toBe("message 201");
+  expect(state.chatError).toBeFalsy();
+});
 
 it.each(["connection", "session"] as const)(
   "ignores a pending history page after the %s scope changes",
@@ -225,7 +262,7 @@ it.each(["reconnect", "navigate"] as const)(
       expect(await next.completion).toMatchObject({ handled: true });
     }
     expect(state.chatMessage).toBe("message 201");
-    expect(request).toHaveBeenCalledTimes(action === "reconnect" ? 2 : 1);
+    expect(request).toHaveBeenCalledTimes(2);
     press("ArrowDown");
     press("ArrowDown");
     expect(state.chatMessage).toBe("Saved draft");
@@ -254,7 +291,7 @@ it("recalls unloaded messages without loading the transcript and restores draft 
     messages: [201, 202].map((seq) => nativeHistoryMessage(seq)),
     hasMore: false,
   }));
-  const readerFactory = vi.fn(() => read);
+  const readerFactory = vi.fn(() => ({ read, isCurrent: () => true }));
   const press = (key: "ArrowUp" | "ArrowDown") =>
     handleChatInputHistoryKey(
       state,
@@ -283,39 +320,40 @@ it("recalls unloaded messages without loading the transcript and restores draft 
   expect(state.chatMessages).toBe(transcript);
 });
 
-it("continues past sparse and duplicate pages to the next older user message", async () => {
-  const { state } = createNativeShowEarlierPane(vi.fn(), 203);
-  const read = vi
-    .fn<() => Promise<{ messages?: unknown[]; hasMore: boolean }>>()
-    .mockResolvedValueOnce({ hasMore: true })
-    .mockResolvedValueOnce({
-      messages: [202, 203, 204].map((seq) => nativeHistoryMessage(seq)),
-      hasMore: true,
-    })
-    .mockResolvedValueOnce({
-      messages: [199, 200, 201].map((seq) => nativeHistoryMessage(seq)),
-      hasMore: false,
-    });
-  const readerFactory = vi.fn(() => read);
-  const press = () => handleChatInputHistoryKey(state, recallKey("ArrowUp"), readerFactory);
-
-  expect(press().handled).toBe(true);
-  const pending = press();
-  expect(pending.completion).toBeDefined();
-  await expect(pending.completion).resolves.toMatchObject({ handled: true });
+it("yields after three sparse pages and resumes from the next cursor on another Up", async () => {
+  const cursors: string[] = [];
+  const request = vi.fn(async (_method: string, { cursor }: { cursor: string }) => {
+    cursors.push(cursor);
+    const index = ["older-2", "page-2", "page-3", "page-4"].indexOf(cursor);
+    if (index < 0) {
+      throw new Error("Unexpected cursor");
+    }
+    return index === 3
+      ? { messages: [nativeHistoryMessage(201)], hasMore: false }
+      : { messages: [nativeHistoryMessage(202)], olderCursor: "page-" + (index + 2) };
+  });
+  const { state } = createNativeShowEarlierPane(request, 203);
+  // No user prompt in the loaded window. Hitting the budget still retains progress.
+  state.chatMessages = [nativeHistoryMessage(204)];
+  const transcript = state.chatMessages;
+  state.chatMessage = "Draft to retain";
+  const up = () => state.handleChatInputHistoryKey(recallKey("ArrowUp"));
+  await up().completion;
+  expect(cursors).toEqual(["older-2", "page-2", "page-3"]);
+  expect(state.chatMessage).toBe("Draft to retain");
+  await up().completion;
+  expect(cursors).toEqual(["older-2", "page-2", "page-3", "page-4"]);
   expect(state.chatMessage).toBe("message 201");
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(readerFactory).toHaveBeenCalledTimes(1);
-  expect(press().handled).toBe(true);
-  expect(state.chatMessage).toBe("message 199");
-  expect(read).toHaveBeenCalledTimes(3);
+  state.handleChatInputHistoryKey(recallKey("ArrowDown"));
+  expect(state.chatMessage).toBe("Draft to retain");
+  expect(state.chatMessages).toBe(transcript);
 });
 
 it("joins repeated Up presses to one pending read without skipping a message", async () => {
   const { state } = createNativeShowEarlierPane(vi.fn(), 203);
   const page = createDeferred<{ messages: unknown[]; hasMore: boolean }>();
   const read = vi.fn(() => page.promise);
-  const readerFactory = vi.fn(() => read);
+  const readerFactory = vi.fn(() => ({ read, isCurrent: () => true }));
   const press = () => handleChatInputHistoryKey(state, recallKey("ArrowUp"), readerFactory);
 
   expect(press().handled).toBe(true);
@@ -336,43 +374,62 @@ it("joins repeated Up presses to one pending read without skipping a message", a
   expect(read).toHaveBeenCalledTimes(1);
 });
 
-it.each(["edit", "down"] as const)(
-  "does not overwrite the draft when %s cancels pending recall",
+it.each(["down", "down in text", "edit", "replace edge"] as const)(
+  "ignores late pages and errors after %s cancels an older read",
   async (action) => {
-    const { state } = createNativeShowEarlierPane(vi.fn(), 203);
-    state.chatMessage = "@alex Draft to retain";
-    state.chatMentions = [{ profileId: "alex", start: 0, end: 5 }];
-    const transcript = state.chatMessages;
-    const page = createDeferred<{ messages: unknown[]; hasMore: boolean }>();
-    const read = vi.fn(() => page.promise);
-    const readerFactory = vi.fn(() => read);
-    const press = (key: "ArrowUp" | "ArrowDown") =>
-      handleChatInputHistoryKey(
-        state,
-        recallKey(key, key === "ArrowDown" ? state.chatMessage.length : 0),
-        readerFactory,
-      );
-
-    expect(press("ArrowUp").handled).toBe(true);
-    const pending = press("ArrowUp");
-    expect(pending.completion).toBeDefined();
-    expect(read).toHaveBeenCalledTimes(1);
-    if (action === "edit") {
-      handleChatDraftChange(state, "Edited draft");
-    } else {
-      expect(press("ArrowDown").handled).toBe(true);
-    }
-    const expectedDraft = action === "edit" ? "Edited draft" : "@alex Draft to retain";
-    expect(state.chatMessage).toBe(expectedDraft);
-    page.resolve({
-      messages: [201, 202].map((seq) => nativeHistoryMessage(seq)),
-      hasMore: false,
-    });
-    await pending.completion;
-    expect(state.chatMessage).toBe(expectedDraft);
-    expect(state.chatMessages).toBe(transcript);
-    if (action === "down") {
-      expect(state.chatMentions).toEqual([{ profileId: "alex", start: 0, end: 5 }]);
+    for (const reject of [false, true]) {
+      const page = createDeferred<{ messages: unknown[]; olderCursor: string }>();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(page.promise)
+        .mockResolvedValue({
+          messages: [nativeHistoryMessage(201)],
+          hasMore: false,
+        });
+      const { state } = createNativeShowEarlierPane(request, 203);
+      const transcript = state.chatMessages;
+      const mentions = [{ profileId: "alex", start: 0, end: 5 }];
+      state.chatMessage = "@alex Draft to retain";
+      state.chatMentions = mentions;
+      const press = (key: "ArrowUp" | "ArrowDown") =>
+        state.handleChatInputHistoryKey(recallKey(key));
+      press("ArrowUp");
+      const pending = press("ArrowUp");
+      expect(request).toHaveBeenCalledTimes(1);
+      if (action === "edit") {
+        handleChatDraftChange(state, "Edited draft");
+      } else if (action === "down") {
+        press("ArrowDown");
+      } else if (action === "down in text") {
+        expect(state.handleChatInputHistoryKey(recallKey("ArrowDown", 3)).handled).toBe(false);
+      } else {
+        state.chatHistoryPagination = { hasMore: true, olderCursor: "replacement" };
+      }
+      if (reject) {
+        page.reject(new Error("Obsolete read"));
+      } else {
+        page.resolve({ messages: [nativeHistoryMessage(202)], olderCursor: "obsolete" });
+      }
+      await pending.completion;
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.chatError).toBeFalsy();
+      if (action === "down in text") {
+        expect(state.chatMessage).toBe("message 203");
+        press("ArrowDown");
+      }
+      if (action === "replace edge") {
+        expect(state.chatMessage).toBe("message 203");
+        await press("ArrowUp").completion;
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: "replacement" });
+        expect(state.chatMessage).toBe("message 201");
+        press("ArrowDown");
+        press("ArrowDown");
+      }
+      expect(state.chatMessage).toBe(action === "edit" ? "Edited draft" : "@alex Draft to retain");
+      if (action !== "edit") {
+        expect(state.chatMentions).toEqual(mentions);
+      }
+      expect(state.chatMessages).toBe(transcript);
     }
   },
 );
