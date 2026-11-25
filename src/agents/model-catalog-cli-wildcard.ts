@@ -17,13 +17,13 @@ const ANTHROPIC_WILDCARD_REF = "anthropic/*";
 
 /**
  * Project the account menu onto canonical identities without admitting hosted-only models.
- * `catalogRows` is the effective catalog (bundled plus hosted): it describes a listed ID the
- * snapshot holds no Anthropic row for, and never lists one.
+ * `loadCatalogRows` supplies the effective catalog (bundled plus hosted): it describes a listed
+ * ID the snapshot holds no Anthropic row for, and never lists one. It runs only for a listing.
  */
 export function projectClaudeCliNativeCatalog(
   snapshot: ModelCatalogSnapshot,
   cliOnly: boolean,
-  catalogRows: readonly ModelCatalogEntry[] = [],
+  loadCatalogRows: () => readonly ModelCatalogEntry[] = () => [],
 ): ModelCatalogSnapshot {
   const listing = snapshot.providerOutcomes?.find(
     (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.listedModelIds !== undefined,
@@ -35,12 +35,7 @@ export function projectClaudeCliNativeCatalog(
   );
   const metadata = new Map(
     [
-      // Hosted rows may declare document input, which registry rows never carry.
-      ...catalogRows.map((entry) =>
-        entry.input
-          ? { ...entry, input: entry.input.filter((item) => item !== "document") }
-          : entry,
-      ),
+      ...(nativeRows.length ? loadCatalogRows() : []),
       ...(snapshot.staticEntries ?? []),
       ...snapshot.entries,
     ]
@@ -50,14 +45,17 @@ export function projectClaudeCliNativeCatalog(
   const enrichedNativeRows: ModelCatalogEntry[] = [];
   const canonical: ModelCatalogEntry[] = [];
   for (const entry of nativeRows) {
+    const donor = metadata.get(entry.id);
     const enriched = {
       ...entry,
-      ...metadata.get(entry.id),
+      ...donor,
       id: entry.id,
       provider: CLAUDE_CLI_RUNTIME_ID,
       name: entry.name,
       reasoning: entry.reasoning,
       thinkingLevelMap: entry.thinkingLevelMap,
+      // Hosted rows may declare document input, which registry rows never carry.
+      input: donor?.input?.filter((item) => item !== "document") ?? entry.input,
     };
     enrichedNativeRows.push(enriched);
     if (nativeOnly) {

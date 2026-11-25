@@ -72,10 +72,11 @@ export function createPreparedModelCatalogProjection(params: {
       sourceCatalog,
       !(getPreparedModelFullCatalogAuth(catalog)?.credentials ?? params.agentFacts.credentials)
         .anthropic,
-      loadManifestModelCatalog({
-        config: params.agentFacts.input.config,
-        metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      }),
+      () =>
+        loadManifestModelCatalog({
+          config: params.agentFacts.input.config,
+          metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        }),
     );
     const projected = materializePreparedModelCatalog(
       nativeCatalog,
