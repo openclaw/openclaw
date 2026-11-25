@@ -2763,8 +2763,10 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   if [ "$baseline_version" = "2026.9.6" ]; then
     phase refuse-sibling-candidate assert_sibling_published_refusal
   fi
+  # Isolate the successful update’s registrations from the baseline and refusal trial.
+  : > "$ARTIFACT_ROOT/sibling-registrations.jsonl"
   phase update-sibling-candidate update_candidate
-  phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
+  phase assert-sibling-update-imports node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-update-imports "$UPDATE_JSON"
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
   phase sibling-activation-previous-gateway-stop stop_gateway
   OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway
