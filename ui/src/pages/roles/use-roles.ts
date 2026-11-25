@@ -1,5 +1,8 @@
 import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
-import type { UserProfile } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UserProfile,
+} from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
@@ -79,7 +82,13 @@ export function useRoles() {
   );
   const catalog = createMemo(() => readRoleCatalog(config()));
   const profiles = createMemo<readonly RoleProfile[]>(
-    () => directory.read().result?.profiles.filter((profile) => !profile.mergedInto) ?? [],
+    // Roles never apply to the gateway owner, so it is not someone to show or assign here.
+    () =>
+      directory
+        .read()
+        .result?.profiles.filter(
+          (profile) => !profile.mergedInto && profile.id !== GATEWAY_OWNER_PROFILE_ID,
+        ) ?? [],
   );
   const people = createMemo(() => profilesByRole(profiles()));
   const editable = () =>

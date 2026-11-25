@@ -74,6 +74,8 @@ const PROFILES = [
   profile("p-dev", "Dev Patel", "operator", "default"),
   profile("p-lena", "Lena Fischer", "operator", "default"),
   profile("p-maya", "Maya Chen", "collaborator", "assigned"),
+  // Roles never apply to the gateway owner; the page neither counts nor lists it.
+  profile("gateway-owner", "gateway-owner", "operator", "default"),
 ];
 
 async function openRoles(
@@ -265,6 +267,7 @@ suite.define(() => {
       const self = dialog.locator(".roles-picker__row").filter({ hasText: "Dev Patel" });
       await expect.poll(() => self.textContent()).toContain("You → administrator");
       expect(await self.locator("input").isChecked()).toBe(true);
+      expect(await dialog.getByText("gateway-owner").count()).toBe(0);
       await proof(page, "roles-enable-default");
       await dialog.getByRole("button", { name: "Turn on roles" }).click();
       await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
