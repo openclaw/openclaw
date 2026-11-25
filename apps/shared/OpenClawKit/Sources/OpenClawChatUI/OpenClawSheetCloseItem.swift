@@ -15,16 +15,19 @@ public struct OpenClawSheetCloseItem: ToolbarContent {
 
     public var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            if #available(iOS 26.0, *) {
-                Button(role: .close, action: self.action)
-                    .accessibilityIdentifier(self.identifier ?? "")
-            } else {
-                Button(action: self.action) {
-                    Image(systemName: "xmark")
+            // Every sheet's close was drawn in the primary color; some sheets tint everything with the accent.
+            Group {
+                if #available(iOS 26.0, *) {
+                    Button(role: .close, action: self.action)
+                } else {
+                    Button(action: self.action) {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel(Text("Close"))
                 }
-                .accessibilityLabel(Text("Close"))
-                .accessibilityIdentifier(self.identifier ?? "")
             }
+            .tint(.primary)
+            .accessibilityIdentifier(self.identifier ?? "")
         }
     }
 }
