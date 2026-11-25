@@ -266,9 +266,7 @@ it("rearms parked retention from a committed worker history write", async () => 
       const now = Date.now();
       const clock = createGatewaySchedulerClock(now);
       const scheduler = createTestGatewayScheduler(clock.clock);
-      const lowMemory = vi
-        .spyOn(hostMemory, "isMemoryPressureHigh")
-        .mockReturnValue(false);
+      const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(false);
       try {
         // Keep-warm retains its own deadlines across maintenance lifecycles.
         await state.writeConfig({ agents: { defaults: { promptCacheKeepWarm: false } } });

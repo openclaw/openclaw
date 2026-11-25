@@ -77,7 +77,11 @@ export function readHostFreeMemoryBytes(): number {
 /** Defer optional background work before consuming the last 20% of process or host capacity. */
 export function isMemoryPressureHigh(): boolean {
   const limit = process.constrainedMemory();
-  if (Number.isSafeInteger(limit) && limit > 0 && readProcessAvailableMemoryBytes() <= limit * 0.2) {
+  if (
+    Number.isSafeInteger(limit) &&
+    limit > 0 &&
+    readProcessAvailableMemoryBytes() <= limit * 0.2
+  ) {
     return true;
   }
   // Node/Linux reports reclaimable host memory even without a process limit.
