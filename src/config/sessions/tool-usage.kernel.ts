@@ -118,15 +118,19 @@ function readAgentToolFirstSeenInDatabase(
     return undefined;
   }
   const value: unknown = JSON.parse(stored);
-  if (
-    !isRecord(value) ||
-    !Object.values(value).every(
-      (at) => typeof at === "number" && Number.isSafeInteger(at) && at >= 0,
-    )
-  ) {
+  if (!isRecord(value)) {
     throw new Error("Invalid tool first-seen metadata; repair the agent database before retrying");
   }
-  return value as Record<string, number>;
+  const firstSeen: Record<string, number> = {};
+  for (const [id, at] of Object.entries(value)) {
+    if (typeof at !== "number" || !Number.isSafeInteger(at) || at < 0) {
+      throw new Error(
+        "Invalid tool first-seen metadata; repair the agent database before retrying",
+      );
+    }
+    firstSeen[id] = at;
+  }
+  return firstSeen;
 }
 
 /**
