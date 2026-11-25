@@ -21,11 +21,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import {
-  assertUpdateRecoveryAdmission,
-  InterruptedStateRestoreError,
-} from "../../infra/update-run-recovery-admission.js";
-import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery-schema.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -52,6 +48,9 @@ import type {
   UpdateFinalizationLifecycle,
   UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+
+// Admission errors are not service outcomes, including ordinary filesystem/worker failures.
+class RepairRecoveryAdmissionError extends Error {}
 
 function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string {
   return `Gateway service remains stopped: ${reason}. After resolving this, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
@@ -180,6 +179,13 @@ export async function restoreRepairGateway(params: {
 }> {
   const { env, phase, originalRunId } = params;
   const runIds = [originalRunId, params.repairRunId];
+  const admitRecovery = async () => {
+    try {
+      await assertUpdateRecoveryAdmission({ env });
+    } catch (cause) {
+      throw new RepairRecoveryAdmissionError(formatErrorMessage(cause), { cause });
+    }
+  };
   // A mark stays on its run; a receipt from this or an earlier repair resolves it.
   const risk = () =>
     findUnverifiedDataAtRisk(
@@ -224,7 +230,7 @@ export async function restoreRepairGateway(params: {
     const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
     assertDoctorServiceSelection(env, state.env);
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
-    await assertUpdateRecoveryAdmission({ env });
+    await admitRecovery();
     const port = await resolveUpdatedGatewayRestartPort({
       config: params.config,
       serviceEnv: state.env,
@@ -253,6 +259,7 @@ export async function restoreRepairGateway(params: {
         stdout: params.json ? process.stderr : process.stdout,
         preserveDefinition: true,
         beforeMutation: async () => {
+          await admitRecovery();
           const current = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
           assertDoctorServiceSelection(env, current.env);
           const currentVerdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -319,8 +326,7 @@ export async function restoreRepairGateway(params: {
     if (
       hasCommandProcessCleanupError(error) ||
       risk() ||
-      error instanceof InterruptedStateRestoreError ||
-      error instanceof UpdateRecoveryRequiredError
+      error instanceof RepairRecoveryAdmissionError
     ) {
       throw error;
     }

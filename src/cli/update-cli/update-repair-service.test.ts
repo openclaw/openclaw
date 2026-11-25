@@ -273,6 +273,65 @@ it("fails repair when interrupted database publication appears before restoratio
   );
 });
 
+it("fails repair when database publication is interrupted during native preparation", async () => {
+  seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    const { resolveOpenClawStateSqlitePath } =
+      await import("../../state/openclaw-state-db.paths.js");
+    const path = await import("node:path");
+    await fs.mkdir(
+      path.join(
+        path.dirname(resolveOpenClawStateSqlitePath(process.env)),
+        ".openclaw-restore-late",
+      ),
+    );
+    await args.beforeMutation?.();
+    args.beforeEffect?.();
+    events.push("start");
+  });
+  await repair();
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+});
+
+it("fails repair when the recovery directory cannot be read", async () => {
+  seed(true);
+  const { resolveOpenClawStateSqlitePath } = await import("../../state/openclaw-state-db.paths.js");
+  const path = await import("node:path");
+  const parent = path.dirname(resolveOpenClawStateSqlitePath(process.env));
+  vi.mocked(service.readCommand).mockImplementation(async () => {
+    if (events.includes("finalized")) {
+      await fs.chmod(parent, 0o300);
+    }
+    return {
+      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
+      sourcePath: state.path("gateway.service"),
+    };
+  });
+  try {
+    await repair();
+    expect(events).not.toContain("start");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "warning" }),
+    );
+  } finally {
+    await fs.chmod(parent, 0o700);
+  }
+});
+
+it("prints manual Gateway recovery guidance in normal terminal output", async () => {
+  seed(true);
+  vi.mocked(service.start).mockRejectedValue(new Error("native start failed"));
+  await repair(false);
+  expect(defaultRuntime.log).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /native start failed.*openclaw gateway start.*openclaw gateway status --deep/,
+    ),
+  );
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+});
+
 it("does not revoke a successful repair start during post-effect authority checks", async () => {
   const original = seed(true);
   vi.mocked(service.start).mockImplementation(async (args) => {
