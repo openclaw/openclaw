@@ -68,7 +68,7 @@ function contextFor(runId: string, timeoutMs: number) {
   context.params.diagnosticOwner = owner;
   logSessionStateChange({ ...context.params, state: "processing" });
   markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
-  return { context, recoverStuckSession };
+  return { context, recoverStuckSession, operation };
 }
 
 beforeEach(() => {
@@ -87,7 +87,7 @@ afterEach(() => {
 });
 
 it("waits past both watchdogs for a background shell after the answer", async () => {
-  const { context, recoverStuckSession } = contextFor("held-answer", 4 * 60 * 60_000);
+  const { context, recoverStuckSession, operation } = contextFor("held-answer", 4 * 60 * 60_000);
   const answered = createDeferred();
   const shellFinished = createDeferred();
   context.executionTarget = {
@@ -141,6 +141,11 @@ it("waits past both watchdogs for a background shell after the answer", async ()
     expect(recoverStuckSession).not.toHaveBeenCalled();
     // Suspending the host past the original deadline must extend both watchdog owners.
     vi.setSystemTime(Date.now() + 4 * 60 * 60_000);
+    // Evaluate the controller first, before the CLI timer can publish suspension credit.
+    await expect(operation.watchdog.tick()).resolves.toMatchObject({
+      action: "observe",
+      reason: "runtime_owned",
+    });
     await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
     expect(
       getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,

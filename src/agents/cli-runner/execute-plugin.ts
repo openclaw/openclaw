@@ -417,9 +417,6 @@ export async function executePluginOwnedProcess(params: {
       context: params.context,
       abortSignal: signal,
     });
-    // This watchdog owns the suspension-adjusted execution budget. A second wall-clock
-    // deadline can stop the attempt before this timer credits a host pause.
-    run.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(undefined);
     watchdog = createCliPluginWatchdog({
       provider: run.provider,
       model: params.context.modelId,
@@ -484,6 +481,9 @@ export async function executePluginOwnedProcess(params: {
     const { prepareCredentialUse } = params.context.preparedBackend;
     // Warm transports retain their first turn's async context. Bind every host
     // callback here so reused transports enter the current turn's source scope.
+    // This watchdog owns the suspension-adjusted execution budget. A second wall-clock
+    // deadline can stop the attempt before this timer credits a host pause.
+    run.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(undefined);
     const execution = params.execute({
       command,
       argv0: params.executionArgv0,

@@ -468,6 +468,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   // Task ancestry is owned here, not reconstructed by the host watchdog.
   if (
     turn.awaitingContinuation &&
+    (!replayedTaskId || session.taskOwners.get(replayedTaskId) === turn.inputUuid) &&
     message.parent_tool_use_id == null &&
     ((message.type !== "system" && message.type !== "result") ||
       (message.subtype === "task_notification" &&
