@@ -257,6 +257,8 @@ const enCron = {
       to: "Recipient",
       toPlaceholder: "+1555… or chat ID",
       toHelp: "A chat ID, phone number, or user ID. Leave blank to use the channel’s default.",
+      recipientSuggestionsUnavailable:
+        "Couldn’t load recipient suggestions. You can enter the recipient in the editor under {advanced} → {results}. Details: {details}",
       advanced: "Advanced",
       advancedTask: "Task",
       advancedConditions: "Conditions",
