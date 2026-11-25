@@ -234,6 +234,11 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                   class="chip-remove"
                   aria-label={t("common.multiSelect.remove", { value: chipLabel() })}
                   disabled={props.disabled}
+                  onPointerDown={(event) => {
+                    if (event.button === 0) {
+                      event.preventDefault();
+                    }
+                  }}
                   onClick={() => removeAt(index())}
                 >
                   <Icon name="x" />
