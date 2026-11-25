@@ -46,8 +46,9 @@ struct ChatAssistantIntroCard: View {
     }
 }
 
-/// Opening a chat shows nothing at first, because most loads finish within the delay; a slower
-/// load then shows a plain centered spinner until the transcript arrives.
+#if os(macOS)
+/// macOS chat windows: opening a chat shows nothing at first, because most loads finish within the
+/// delay; a slower load then shows a plain centered spinner. iOS draws `ChatTranscriptSkeleton`.
 struct ChatDelayedLoadingIndicator: View {
     static let delay: Duration = .milliseconds(1500)
     @State private var isVisible = false
@@ -71,6 +72,7 @@ struct ChatDelayedLoadingIndicator: View {
         }
     }
 }
+#endif
 
 struct ChatNoticeCard: View {
     let systemImage: String

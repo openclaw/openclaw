@@ -484,8 +484,10 @@ extension OpenClawChatView {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         let notice = hasVisibleContent && !self.viewModel.isLoading && self.visibleEmptyAssistantIntro == nil
             ? self.activeErrorText : nil
+        let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
         return ZStack {
             self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                .chatTranscriptReveal(isWaiting: isWaitingForTranscript)
                 .accessibilityIdentifier("chat-transcript")
                 #if !os(macOS)
                 .scrollDismissesKeyboard(.interactively)
@@ -514,9 +516,9 @@ extension OpenClawChatView {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
-                ChatDelayedLoadingIndicator()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isWaitingForTranscript {
+                ChatTranscriptLoadingPlaceholder(columnLayout: self.columnLayout)
+                    .transition(ChatTranscriptLoadingPlaceholder.transition)
             }
 
             self.messageListOverlay(hasVisibleContent: hasVisibleContent)
