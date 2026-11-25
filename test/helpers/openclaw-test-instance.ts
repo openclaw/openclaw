@@ -367,7 +367,7 @@ async function waitForGatewayReady(
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
   record?: (diagnostic: GatewayReadinessDiagnostic) => void,
-  spawnedAtMs = Date.now(),
+  spawnedAtMs?: number,
 ) {
   const finishPhase = beginUiE2ePhase("gateway-readiness");
   const startedAt = Date.now();
@@ -506,7 +506,8 @@ async function waitForGatewayReady(
             }
             if (
               probe.uptimeMs !== undefined &&
-              probe.uptimeMs > Date.now() - spawnedAtMs + GATEWAY_READINESS_UPTIME_SKEW_MS
+              probe.uptimeMs >
+                Date.now() - (spawnedAtMs ?? startedAt) + GATEWAY_READINESS_UPTIME_SKEW_MS
             ) {
               probe.error = "foreign-responder";
               return false;

@@ -151,14 +151,17 @@ it("records every completed probe and one success timing line", async () => {
     .mockResolvedValueOnce(
       new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
     )
+    .mockResolvedValueOnce(
+      new Response('{"ready":true,"failing":[],"uptimeMs":60000}', { status: 200 }),
+    )
     .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
     .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
   await waitForReady(fetchImpl, 60_000);
   const { artifact, entries, entry } = evidence();
-  expect(entry).toMatchObject({ outcome: "ready", attempts: 3, omittedProbes: 0, logs: null });
+  expect(entry).toMatchObject({ outcome: "ready", attempts: 4, omittedProbes: 0, logs: null });
   expect(entry.deadlineMs - entry.startedAtMs).toBe(60_000);
   const outcomes = entry.probes.map((probe) => probe.outcome);
-  expect(outcomes).toEqual(["fetch-failed", "not-ready", "ready"]);
+  expect(outcomes).toEqual(["fetch-failed", "not-ready", "foreign-responder", "ready"]);
   const notReady = entry.probes[1];
   expect(notReady).toMatchObject({ status: 503, ready: false, failing: ["startup-sidecars"] });
   expect(
