@@ -2,7 +2,10 @@ import { listMessageReceiptPlatformIds } from "../../channels/message/receipt.js
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { ChannelDeliveryOutcome } from "../../channels/turn/delivery-outcome.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
-import { projectMessageActionPartialDelivery } from "../../infra/outbound/message-action-execution.js";
+import {
+  projectGatewayQueuedDeliveryResult,
+  projectMessageActionPartialDelivery,
+} from "../../infra/outbound/message-action-execution.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { readToolStringParam } from "./common.js";
 
@@ -83,6 +86,16 @@ export function projectMessageActionPartialFailureResult(params: {
       ? `Delivered ${messageIds.length} message(s) before the send failed; the remaining content is unconfirmed. Do not resend the accepted message(s).`
       : "The provider accepted some content before the send failed; the remaining content is unconfirmed. Do not resend accepted content.",
   };
+}
+
+export function projectMessageActionFailureResult(params: {
+  error: unknown;
+  action: ChannelMessageActionName;
+}): Record<string, unknown> | undefined {
+  return (
+    projectGatewayQueuedDeliveryResult(params.error) ??
+    projectMessageActionPartialFailureResult(params)
+  );
 }
 
 export function shouldRevalidateCompletedMessageAction(params: {

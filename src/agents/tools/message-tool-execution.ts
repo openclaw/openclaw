@@ -23,7 +23,6 @@ import {
   validateExplicitMessageAccountSelection,
 } from "../../infra/outbound/message-account-selection.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
-import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
@@ -70,7 +69,7 @@ import {
   normalizeMessageToolIdempotencyKeyPart,
 } from "./message-tool-idempotency.js";
 import {
-  projectMessageActionPartialFailureResult,
+  projectMessageActionFailureResult,
   projectScheduledMessageActionPartialResult,
   shouldRevalidateCompletedMessageAction,
 } from "./message-tool-scheduled-execution.js";
@@ -646,9 +645,7 @@ function* createMessageToolSteps(
               // caches this outcome under the same idempotency key, so a model resend
               // of the same content collapses instead of minting a second send.
               // A partial failure keeps its provider-accepted ids on the same result.
-              const projectedFailure =
-                projectGatewayQueuedDeliveryResult(error) ??
-                projectMessageActionPartialFailureResult({ error, action });
+              const projectedFailure = projectMessageActionFailureResult({ error, action });
               if (projectedFailure) {
                 return jsonResult(projectedFailure);
               }
