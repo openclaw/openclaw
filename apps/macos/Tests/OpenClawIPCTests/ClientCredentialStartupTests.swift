@@ -18,7 +18,7 @@ struct ClientCredentialStartupTests {
             environment: fixture.environment)
 
         let expectedArguments = (profileName == "default" ? [] : ["--profile", profileName]) +
-            ["doctor", "--client-credentials", "--fix", "--non-interactive"]
+            ["doctor", "--client-credentials", "--fix", "--non-interactive", "--json"]
         let observed = try String(contentsOf: fixture.capture, encoding: .utf8)
             .split(separator: "\n").map(String.init)
         #expect(observed == [
@@ -48,6 +48,45 @@ struct ClientCredentialStartupTests {
         }
         #expect(FileManager.default.fileExists(atPath: fixture.capture.path))
         #expect(!FileManager.default.fileExists(atPath: fixture.externalMarker.path))
+    }
+
+    @Test(arguments: [
+        ("client_credentials_maintenance_blocked", true),
+        ("some_other_refusal", false),
+    ])
+    func `only the CLI's maintenance-blocked code offers in-place recovery`(
+        code: String, heldByGateway: Bool) async throws
+    {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var environment = fixture.environment
+        environment["TEST_EXIT_CODE"] = "2"
+        environment["TEST_STDOUT"] =
+            #"{"ok":false,"error":{"type":"cli_error","message":"synthetic busy state","code":"\#(code)"}}"#
+        do {
+            try await ClientCredentialStartup.prepare(
+                executionRoot: fixture.executionRoot,
+                configURL: fixture.configURL,
+                bundle: fixture.bundle,
+                profile: AppProfile(environment: [:]),
+                environment: environment)
+            Issue.record("Failed credential preparation was reported as ready")
+        } catch let error as ClientCredentialStartup.MaintenanceBlockedError {
+            #expect(heldByGateway)
+            #expect(error.detail == "synthetic busy state")
+        } catch let error as OpenClawNativeStateError {
+            #expect(!heldByGateway)
+            #expect(error.message.contains("synthetic busy state"))
+        }
+    }
+
+    @Test func `maintenance recovery keeps the lock path with its conditional guidance`() {
+        let path = "/tmp/synthetic-openclaw/legacy.lock"
+        let condition = "Remove that file only after its owner has stopped."
+        let detail = "Legacy Gateway lock " + path + String(repeating: " diagnostic", count: 60) + condition
+        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
+        #expect(recovery.detail.contains(path))
+        #expect(recovery.detail.contains(condition))
     }
 
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
@@ -87,7 +126,7 @@ struct ClientCredentialStartupTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.capture.path))
     }
 
-    private struct Fixture {
+    struct Fixture {
         let root: URL
         let app: URL
         let bundle: Bundle
@@ -148,6 +187,7 @@ struct ClientCredentialStartupTests {
                 printf '%s\\n' "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_PROFILE" \\
                   "$OPENCLAW_SQLITE_LIBRARY" "$@" > "$TEST_CAPTURE"
                 if [ "${TEST_EXIT_CODE:-0}" != 0 ]; then
+                  printf '%s' "${TEST_STDOUT:-}"
                   printf '%s\\n' 'synthetic preparation failure' >&2
                   exit "$TEST_EXIT_CODE"
                 fi

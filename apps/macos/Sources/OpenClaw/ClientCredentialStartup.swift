@@ -5,8 +5,24 @@ import OpenClawNativeState
 enum ClientCredentialStartup {
     typealias CommandRunner = @Sendable ([String], String, [String: String]) async -> ShellExecutor.ShellResult
 
-    /// Run the app's matching migration owner before native credential admission.
-    /// The selected Gateway may still use an older runtime; PATH is not an update authority.
+    /// The matching CLI reports a maintenance refusal without guessing the process owner.
+    struct MaintenanceBlockedError: LocalizedError {
+        let detail: String
+        var errorDescription: String? {
+            "Could not prepare local client credentials. " + self.detail
+        }
+    }
+
+    /// Contention and unverifiable lock owners both require operator recovery, not manager guesses.
+    nonisolated static func maintenanceBlockedRecovery(detail: String)
+    -> (title: String, message: String, detail: String) {
+        let message = [
+            "Credential maintenance is blocked by another OpenClaw process, or the lock owner could not be verified. The app did not stop or replace it.",
+            "Resolve the reported conflict, then choose Retry. Change versions only if the matching CLI identifies incompatibility.",
+        ].joined(separator: "\n\n")
+        return ("Local credential maintenance is blocked", message, detail)
+    }
+
     static func prepare(
         executionRoot: URL,
         configURL: URL,
@@ -29,13 +45,20 @@ enum ClientCredentialStartup {
         childEnvironment["OPENCLAW_CONFIG_PATH"] = configURL.path
         let command = profile.localCLICommand(
             prefix: runtime.cliCommand,
-            arguments: ["doctor", "--client-credentials", "--fix", "--non-interactive"])
+            arguments: ["doctor", "--client-credentials", "--fix", "--non-interactive", "--json"])
         let result = await runCommand(command, runtime.packageRoot.path, childEnvironment)
         try Task.checkCancellation()
         guard result.success, !result.timedOut, result.exitCode == 0 else {
-            let detail = [result.preflightError, result.stderr, result.errorMessage]
-                .compactMap { $0?.nonEmpty }.first ?? "Credential preparation did not complete."
-            throw OpenClawNativeStateError("Could not prepare local client credentials. " + detail.suffix(4000))
+            // --json reports the failure on stdout; stderr keeps warnings and pre-dispatch errors.
+            let output = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+            let failure = output?["error"] as? [String: Any]
+            let candidates = [failure?["message"] as? String, result.preflightError, result.stderr, result.errorMessage]
+            let message = candidates.compactMap { $0?.nonEmpty }.first ?? "Credential preparation did not complete."
+            let detail = String(message.suffix(4000))
+            if failure?["code"] as? String == "client_credentials_maintenance_blocked" {
+                throw MaintenanceBlockedError(detail: detail)
+            }
+            throw OpenClawNativeStateError("Could not prepare local client credentials. " + detail)
         }
     }
 }

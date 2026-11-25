@@ -143,6 +143,18 @@ async function prepareNativeStartupRuntimePins(
   await withDaemonRuntimePinMigration(env, () => undefined, stateEngine);
 }
 
+/**
+ * Shared-state maintenance is blocked. Native startup offers neutral recovery without
+ * attributing an unverifiable lock or saved service definition to a running process.
+ */
+export class ClientCredentialMaintenanceBlockedError extends Error {
+  readonly code = "client_credentials_maintenance_blocked";
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ClientCredentialMaintenanceBlockedError";
+  }
+}
+
 /** Complete the selected root's cutover before any client acquires credentials. */
 export async function prepareStartupClientCredentials(
   params: {
@@ -228,12 +240,14 @@ export async function prepareStartupClientCredentials(
       const [
         { collectNestedErrorCandidates },
         { GatewayStateOwnerContentionError },
+        { GatewayLockError },
         { DoctorMaintenanceRefusalError },
         { hasCommandProcessCleanupError },
         { resolveCommandProcessSignal },
       ] = await Promise.all([
         import("../infra/error-graph-internal.js"),
         import("../infra/gateway-state-owner.js"),
+        import("../infra/gateway-lock.js"),
         import("../infra/update-doctor-result.js"),
         import("../process/exec-result.js"),
         import("../process/exec-spawn.js"),
@@ -256,6 +270,17 @@ export async function prepareStartupClientCredentials(
         }
         // Admission has settled. A peer may have completed required recovery meanwhile.
         return;
+      }
+      const maintenanceBlocked = causes.some(
+        (cause) =>
+          cause instanceof GatewayStateOwnerContentionError || cause instanceof GatewayLockError,
+      );
+      if (
+        maintenanceBlocked &&
+        !causes.some((cause) => cause instanceof AggregateError) &&
+        !hasCommandProcessCleanupError(error)
+      ) {
+        throw new ClientCredentialMaintenanceBlockedError(error);
       }
       throw error;
     }

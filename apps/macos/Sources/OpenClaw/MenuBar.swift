@@ -186,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
     private var credentialStartupTask: Task<Void, Never>?
+    private let credentialRecoveryAlerts = DashboardAlertPresenter()
     private var credentialsReady = false
     private var pendingOpenURLs: [URL] = []
     private var pendingDashboardOpen = false
@@ -344,60 +345,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.credentialStartupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.credentialStartupTask = nil }
-            do {
-                let root = DeviceIdentityStore.stateDirectoryURL
-                let executionRoot = OpenClawPaths.stateDirURL
-                if BundledRuntime.isBundledApp {
-                    let prepare = {
-                        try await ClientCredentialStartup.prepare(
-                            executionRoot: executionRoot,
-                            configURL: OpenClawPaths.configURL)
-                    }
-                    if let replacement = await StaleGatewayServiceReplacement.detect() {
+            // Retry stays inside this task so termination still settles one migration child.
+            while await !self.prepareCredentialsAndFinishLaunching(
+                launchPlan: launchPlan, startUpdater: startUpdater)
+            {}
+        }
+    }
+
+    /// Returns false only when the operator chose Retry after a recoverable failure.
+    private func prepareCredentialsAndFinishLaunching(
+        launchPlan: AppLaunchRuntimePlan, startUpdater: Bool) async -> Bool
+    {
+        do {
+            let root = DeviceIdentityStore.stateDirectoryURL
+            let executionRoot = OpenClawPaths.stateDirURL
+            if BundledRuntime.isBundledApp {
+                let prepare = {
+                    try await ClientCredentialStartup.prepare(
+                        executionRoot: executionRoot,
+                        configURL: OpenClawPaths.configURL)
+                }
+                if let replacement = await StaleGatewayServiceReplacement.detect() {
+                    self.credentialLogger
+                        .info("Replacing the previous build's Gateway service before credential preparation")
+                    if let error = try await replacement.run(prepareCredentials: prepare) {
                         self.credentialLogger
-                            .info("Replacing the previous build's Gateway service before credential preparation")
-                        if let error = try await replacement.run(prepareCredentials: prepare) {
-                            self.credentialLogger
-                                .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
-                        }
-                    } else {
-                        try await prepare()
+                            .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
                     }
+                } else {
+                    try await prepare()
                 }
-                try Task.checkCancellation()
-                // Independent native identities retain their native import owner.
-                // The shared execution root is prepared by its matching CLI first.
-                try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
-                guard await MacControlServer.shared.startAndWait() else {
-                    throw GatewayHostingError(message: "The local credential control server could not start.")
+            }
+            try Task.checkCancellation()
+            // Independent native identities retain their native import owner.
+            // The shared execution root is prepared by its matching CLI first.
+            try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
+            guard await MacControlServer.shared.startAndWait() else {
+                throw GatewayHostingError(message: "The local credential control server could not start.")
+            }
+            try Task.checkCancellation()
+            if startUpdater {
+                if OpenClawConfigFile.gatewayUpdateChannel() == nil {
+                    self.updaterController.startAfterResolvingGatewayUpdateChannel()
+                } else {
+                    self.updaterController.start()
                 }
-                try Task.checkCancellation()
-                if startUpdater {
-                    if OpenClawConfigFile.gatewayUpdateChannel() == nil {
-                        self.updaterController.startAfterResolvingGatewayUpdateChannel()
-                    } else {
-                        self.updaterController.start()
-                    }
-                }
-                self.finishLaunchingWithCredentials(launchPlan: launchPlan)
-                self.credentialsReady = true
-                if self.pendingDashboardOpen {
-                    self.pendingDashboardOpen = false
-                    self.openDashboardAction()
-                }
-                let pendingURLs = self.pendingOpenURLs
-                self.pendingOpenURLs.removeAll()
-                self.handleOpenURLs(pendingURLs)
-            } catch {
+            }
+            self.finishLaunchingWithCredentials(launchPlan: launchPlan)
+            self.credentialsReady = true
+            if self.pendingDashboardOpen {
+                self.pendingDashboardOpen = false
+                self.openDashboardAction()
+            }
+            let pendingURLs = self.pendingOpenURLs
+            self.pendingOpenURLs.removeAll()
+            self.handleOpenURLs(pendingURLs)
+            return true
+        } catch {
+            DeviceCredentialAccess.close()
+            guard !Task.isCancelled else { return true }
+            self.credentialLogger
+                .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
+            // The matching CLI owns maintenance admission; the app never infers a process manager.
+            guard let held = error as? ClientCredentialStartup.MaintenanceBlockedError else {
                 self.pendingOpenURLs.removeAll()
                 self.pendingDashboardOpen = false
-                DeviceCredentialAccess.close()
-                guard !Task.isCancelled else { return }
-                self.credentialLogger
-                    .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
                 self.showCredentialStartupFailure()
+                return true
+            }
+            let retry = await self.retryAfterCredentialMaintenanceFailure(detail: held.detail)
+            guard !Task.isCancelled else { return true }
+            if retry { return false }
+            self.pendingOpenURLs.removeAll()
+            self.pendingDashboardOpen = false
+            Self.requestTermination()
+            return true
+        }
+    }
+
+    /// Resolve the CLI-reported maintenance refusal without guessing or changing its owner.
+    /// Background launches report the same recovery and quit, as before.
+    private func retryAfterCredentialMaintenanceFailure(detail: String) async -> Bool {
+        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
+        guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation,
+              AppLaunchRuntimePlan.current.allowsActivation
+        else {
+            fputs("\(recovery.title). \(recovery.message)\n\(recovery.detail)\n", stderr)
+            return false
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = recovery.title
+        alert.informativeText = recovery.message
+        // Keep the complete CLI diagnosis reachable without pushing recovery controls offscreen.
+        let details = NSTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 160))
+        details.string = recovery.detail
+        details.isEditable = false
+        details.isSelectable = true
+        details.isRichText = false
+        details.drawsBackground = false
+        details.isVerticallyResizable = true
+        details.isHorizontallyResizable = false
+        details.autoresizingMask = [.width]
+        details.minSize = .zero
+        details.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        details.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(recovery.title)
+        details.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let scroll = NSScrollView(frame: details.frame)
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.documentView = details
+        NSLayoutConstraint.activate([
+            scroll.widthAnchor.constraint(equalToConstant: 360),
+            scroll.heightAnchor.constraint(equalToConstant: 160),
+        ])
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Retry")
+        alert.addButton(withTitle: "Quit OpenClaw")
+        let response = await withCheckedContinuation { continuation in
+            self.credentialRecoveryAlerts.present(alert, over: nil) { response in
+                continuation.resume(returning: response)
             }
         }
+        return response == .alertFirstButtonReturn
     }
 
     private func showCredentialStartupFailure() {
@@ -546,6 +618,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
         let credentialStartup = self.credentialStartupTask
         credentialStartup?.cancel()
+        // Settle the suspended startup before awaiting it; do not leave a modal
+        // run loop or unanswered continuation blocking termination cleanup.
+        self.credentialRecoveryAlerts.dismissAll()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             // Settle the migration child before releasing credentials; a late
             // startup completion must not reacquire custody during shutdown.

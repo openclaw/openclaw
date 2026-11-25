@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ import {
 } from "../infra/device-identity.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import {
   acquireGatewayStateOwner,
   GatewayStateOwnerContentionError,
@@ -37,6 +39,7 @@ import { readStartupMigrationWarning } from "../infra/state-migrations.messages.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { stateV24Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -47,7 +50,10 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import * as doctorMaintenance from "./doctor-maintenance.js";
-import { prepareStartupClientCredentials } from "./startup-client-credentials.js";
+import {
+  ClientCredentialMaintenanceBlockedError,
+  prepareStartupClientCredentials,
+} from "./startup-client-credentials.js";
 
 describe("automatic client credential preparation", () => {
   const dirs = useStateDatabaseTempDirs();
@@ -453,29 +459,70 @@ describe("automatic client credential preparation", () => {
     await expectCredentials(fixture);
   });
 
-  it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
+  it("reports confirmed legacy Gateway contention to native credential recovery", async () => {
     const fixture = await bootstrap();
-    restoreLegacyBootstrapReceipt(fixture.env);
-    const before = fs.readFileSync(fixture.local);
-    const serving = acquireGatewayStateOwner({
-      databasePath: fixture.shared,
-      payload: {
+    changeRecordedFile(fixture.env, "ino");
+    vi.spyOn(os, "tmpdir").mockReturnValue(fixture.root);
+    const uid = process.getuid?.();
+    const lockDir = path.join(fixture.root, uid === undefined ? "openclaw" : `openclaw-${uid}`);
+    fs.mkdirSync(lockDir, { recursive: true });
+    const { configLockPath } = resolveGatewayLockPaths(fixture.env, lockDir);
+    fs.writeFileSync(
+      configLockPath,
+      JSON.stringify({
         pid: process.pid,
         processNamespace: readGatewayLockProcessNamespace(),
-        role: "gateway",
+        startTime: getFileLockProcessStartTime(process.pid),
         createdAt: new Date().toISOString(),
         configPath: fixture.env.OPENCLAW_CONFIG_PATH,
-        stateDir: fixture.root,
-      },
-    });
-    try {
-      await fixture.prepare();
-      expect(fs.readFileSync(fixture.local)).toEqual(before);
-      await expectCredentials(fixture);
-    } finally {
-      serving.release();
-    }
+      }),
+    );
+    await expect(fixture.prepare()).rejects.toBeInstanceOf(ClientCredentialMaintenanceBlockedError);
   });
+
+  it.each([
+    ["gateway", false],
+    ["gateway", true],
+    ["agent-embedded", true],
+  ] as const)(
+    "preserves credentials while %s owns state (maintenance required=%s)",
+    async (role, required) => {
+      const fixture = await bootstrap();
+      if (required) {
+        changeRecordedFile(fixture.env, "ino");
+      } else {
+        restoreLegacyBootstrapReceipt(fixture.env);
+      }
+      const before = fs.readFileSync(fixture.local);
+      const owner = acquireGatewayStateOwner({
+        databasePath: fixture.shared,
+        payload: {
+          pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
+          role,
+          createdAt: new Date().toISOString(),
+          configPath: fixture.env.OPENCLAW_CONFIG_PATH,
+          stateDir: fixture.root,
+        },
+      });
+      try {
+        if (required) {
+          const failure = await fixture.prepare().then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure).toBeInstanceOf(ClientCredentialMaintenanceBlockedError);
+        } else {
+          await fixture.prepare();
+          await expectCredentials(fixture);
+        }
+        expect(fs.readFileSync(fixture.local)).toEqual(before);
+      } finally {
+        owner.release();
+      }
+    },
+  );
 
   it.each([
     { label: "readable credentials", required: false, recoveryPreview: false },
