@@ -519,7 +519,6 @@ it(
               message: `Try again: ${scenario.prompt}`,
               idempotencyKey: randomUUID(),
             }),
-            // Role loss hides the session before the new request reaches dispatch scopes.
           ).rejects.toThrow(`Session "${scenario.sessionKey}" was not found.`);
           const refusedDrained = await wait(waitForGatewayActiveWork(30_000));
           expect(refusedDrained.drained).toBe(true);
