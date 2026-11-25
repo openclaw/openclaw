@@ -179,7 +179,10 @@ extension OpenClawChatComposer {
                     self.cleanInlineModelPicker(compact: false)
                     self.cleanInlineEffortMenu
                 }
-                self.cleanCaptureAndPrimaryControls
+                // The mic and the primary button come as separate views; keep them on one row.
+                HStack(spacing: 0) {
+                    self.cleanCaptureAndPrimaryControls
+                }
             }
         } else {
             self.cleanInlineControls(compactModel: false)
