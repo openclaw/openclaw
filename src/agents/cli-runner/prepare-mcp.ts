@@ -1,4 +1,6 @@
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
+import { getActiveMcpLoopbackRuntime } from "../../gateway/mcp-http.loopback-runtime.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -175,4 +177,23 @@ export function prepareCliMcpGrant(
       run,
     ),
   };
+}
+
+/** Start the gateway bridge and require its published runtime before constructing CLI grants. */
+export async function startCliMcpLoopbackRuntime() {
+  try {
+    await ensureMcpLoopbackServer();
+  } catch (error) {
+    throw new Error(
+      `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
+      { cause: error },
+    );
+  }
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error(
+      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
+    );
+  }
+  return runtime;
 }

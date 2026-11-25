@@ -5,12 +5,18 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
+import {
+  captureSqliteDatabaseDescriptorCustodyLocations,
+  readSqliteDatabaseCleanClose,
+} from "../infra/sqlite-database-admission.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   openClawStateDatabaseCache as cache,
   readOpenClawStateWalHealth,
+  releaseOpenClawStateDatabaseCustody,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -53,6 +59,37 @@ describe("shared-state disposal ownership", () => {
     // The live reader must not consume the normal five-second write busy timeout.
     expect(elapsed).toBeLessThan(1_000);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "releases registered descriptor custody after the closed database path is unlinked",
+    async () => {
+      const root = tempDirs.make("openclaw-state-unlinked-custody-");
+      const owner = openOpenClawStateDatabase({ path: path.join(root, "old.sqlite") });
+      // Vitest runs outside admission's host; register the host's real identity descriptor.
+      const descriptor = fs.openSync(owner.path, "r");
+      const registry = sqliteDatabaseAdmissionState.registry;
+      registry.retainDescriptorCustody(
+        owner.path,
+        descriptor,
+        fs.fstatSync(descriptor, { bigint: true }),
+      );
+      await closeOpenClawStateDatabaseAsync();
+      expect(owner.db.isOpen).toBe(false);
+      expect(
+        [...registry.records.values()].filter((record) => record.location === owner.path),
+      ).toEqual([]);
+      expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toContain(owner.path);
+      expect(fs.fstatSync(descriptor).isFile()).toBe(true);
+
+      fs.unlinkSync(owner.path);
+      expect(fs.existsSync(owner.path)).toBe(false);
+      expect(fs.fstatSync(descriptor).nlink).toBe(0);
+
+      await expect(releaseOpenClawStateDatabaseCustody()).resolves.toBeUndefined();
+      expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual([]);
+      expect(() => fs.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    },
+  );
 
   it("disposes a revoked owner's exact handle without changing a successor SQLite family", async () => {
     await using cleanup = new AsyncDisposableStack();

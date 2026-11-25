@@ -53,7 +53,6 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
       getActiveMcpLoopbackRuntime: () => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       }),
       mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,

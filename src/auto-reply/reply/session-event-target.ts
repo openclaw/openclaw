@@ -58,7 +58,7 @@ import {
 } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
 
 const targetScopes = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionEvents.targetScopes"),
@@ -399,7 +399,6 @@ export async function prepareSessionEventTargetForHost(
       restored = await restoreScheduledAutomationOperator({
         agentId: target.agentId,
         source: { kind: "gateway", snapshot: scope.operatorSource.snapshot },
-        operatorSource: scope.operatorSource,
         context,
         assertCurrent: assertAcceptance,
       });

@@ -1,15 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import type { SqliteSchemaCatalog } from "../infra/sqlite-schema-catalog-types.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { readGeneratedSqliteCatalog } from "./postgres-schema.generated/sqlite-catalogs.js";
 
 const AUDIT_EVENT_STATE_SCHEMA_VERSION = 2;
 const CANONICAL_AUDIT_TABLES = ["audit_events", "audit_identity_keys"].map((name) => ({
   name,
   sql: normalizeSchemaSql(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, name)),
 }));
+let auditSchemaCatalog: SqliteSchemaCatalog | undefined;
 
 const AUDIT_EVENT_LEGACY_COLUMNS = [
   "sequence",
@@ -145,6 +150,25 @@ export function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
       readSqliteUserVersion(db) < AUDIT_EVENT_STATE_SCHEMA_VERSION &&
       !tableExists(db, "audit_identity_keys")
     );
+  }
+  // Schema generation imports migration owners before its new catalog exists.
+  auditSchemaCatalog ??= {
+    tables: expectDefined(
+      readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL),
+      "canonical shared-state catalog",
+    )
+      .tables.filter((table) => CANONICAL_AUDIT_TABLES.some(({ name }) => name === table.name))
+      .map((table) =>
+        Object.assign({}, table, { indexes: table.indexes.filter((index) => index.unique === 1) }),
+      ),
+    views: [],
+  };
+  if (
+    collectSqliteSchemaIssues(db, auditSchemaCatalog, {
+      allowCompatibleAdditiveColumns: true,
+    }).length === 0
+  ) {
+    return true;
   }
   return (
     hasCanonicalAuditEventTable(db, AUDIT_EVENT_V2_COLUMNS, [

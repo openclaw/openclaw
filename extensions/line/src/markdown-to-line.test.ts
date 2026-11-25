@@ -23,6 +23,37 @@ function cardBody(result: ReturnType<typeof processLineMessage>) {
 const spans = (...cells: object[]) => ({ contents: cells.map((cell) => ({ contents: [cell] })) });
 
 describe("processLineMessage table cards", () => {
+  it("keeps inline-code edge spaces in both the card and the oversized table text", () => {
+    const table = [
+      "| ID | Value |",
+      "|---|---|",
+      "| `  first  ` | `  go  ` |",
+      "| blank | `   ` |",
+      "|   following   |   done   |",
+    ];
+    expect(cardBody(processLineMessage(table.join("\n")))[2]).toMatchObject({
+      contents: [
+        { contents: [{ text: " first " }, { text: " go " }] },
+        { contents: [{ text: "blank" }, { text: "   " }] },
+        { contents: [{ text: "following" }, { text: "done" }] },
+      ],
+    });
+
+    const extra = Array.from({ length: 9 }, (_, i) => `row ${i}`);
+    const fallback = [...table, ...extra.map((name) => `| ${name} | x |`), "| last | `end \t ` |"];
+    const result = processLineMessage(fallback.join("\n"));
+    expect(result.segments).toHaveLength(1);
+    expect(result.text).toBe(
+      [
+        " first \n• Value:  go ",
+        "blank\n• Value:    ",
+        "following\n• Value: done",
+        ...extra.map((name) => `${name}\n• Value: x`),
+        "last\n• Value: end \t ",
+      ].join("\n\n"),
+    );
+  });
+
   it("renders empty cells and a mailto link labelled with its address like plain text", () => {
     const card = (cell: string) =>
       cardBody(processLineMessage(`| A | B |\n|---|---|\n| | ${cell} |`));

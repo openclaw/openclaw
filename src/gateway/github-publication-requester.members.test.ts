@@ -1,6 +1,7 @@
 // Install transport fixtures before publication owners enter the module cache.
 // oxfmt-ignore
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -81,6 +82,19 @@ it("refuses unattested membership and member-attributed System publication snaps
   expect(
     decodeGitHubPublicationRequester(JSON.stringify({ ...snapshot, actor: { kind: "system" } })),
   ).toBeUndefined();
+});
+
+it("keeps stored requester records from before participation byte-identical", () => {
+  // The 2026.11.8 encoder wrote only version/actor/scopes/grant; main later added origin.
+  for (const stored of [
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null}',
+    '{"version":1,"actor":{"kind":"system"},"scopes":[],"grant":null}',
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null,"origin":{"agentId":"main","sessionKey":"agent:main:main","sessionId":"session","lifecycleRevision":null,"runId":"run"}}',
+  ]) {
+    const decoded = expectDefined(decodeGitHubPublicationRequester(stored), stored);
+    expect(decoded).not.toHaveProperty("participation");
+    expect(encodeGitHubPublicationRequester(decoded)).toBe(stored);
+  }
 });
 
 describe("member publication authority", () => {

@@ -657,7 +657,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     } else {
       assertSupportedStateSchemaVersion(db, pathname);
       assertSqliteIntegrity(db, pathname, { check: options.integrityCheck });
-      if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      if (readStateSchemaContentVersion(db) >= OPENCLAW_STATE_SCHEMA_VERSION) {
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
       }
     }

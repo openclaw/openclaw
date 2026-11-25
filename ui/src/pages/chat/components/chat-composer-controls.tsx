@@ -367,7 +367,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     <openclaw-tooltip
       prop:content={
         props.preparingAttachments
-          ? t("chat.composer.preparingAttachments")
+          ? (props.videoPreparationStatus?.message ?? t("chat.composer.preparingAttachments"))
           : showShortcutTooltip()
             ? ""
             : (sendStatus() ?? label())
@@ -404,7 +404,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
         aria-label={sendStatus() ?? description()}
-        aria-busy={sendBusy() || props.preparingAttachments ? "true" : "false"}
+        aria-busy={
+          sendBusy() || (props.videoPreparationStatus?.busy ?? props.preparingAttachments)
+            ? "true"
+            : "false"
+        }
       >
         {sendBusy() ? <span class="btn__spinner" aria-hidden="true" /> : <Icon name="arrowUp" />}
         <span class="agent-chat__control-label">{label()}</span>

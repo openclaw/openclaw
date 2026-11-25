@@ -14,6 +14,7 @@ type TypingBroadcastState = {
     signature: string;
     intervalMs: number;
     emit: () => boolean;
+    release?: () => void;
   };
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -29,6 +30,9 @@ type SessionTypingState = {
 };
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
+  for (const entry of state.broadcasts.values()) {
+    entry.pending?.release?.();
+  }
   for (const entries of [state.broadcasts, state.connections]) {
     for (const entry of entries.values()) {
       clearTimeout(entry.timer);
@@ -72,6 +76,7 @@ function rememberTypingBroadcast(key: string, state: TypingBroadcastState): void
   if (!oldestKey) {
     return;
   }
+  typingBroadcastState.get(oldestKey)?.pending?.release?.();
   clearTimeout(typingBroadcastState.get(oldestKey)?.timer);
   typingBroadcastState.delete(oldestKey);
 }
@@ -83,11 +88,18 @@ export function broadcastTypingThrottled(params: {
   intervalMs: number;
   now: number;
   emit: () => boolean;
+  release?: () => void;
 }): boolean {
   const previous = typingBroadcastState.get(params.key);
   if (!previous || params.now - previous.at >= params.intervalMs) {
     clearTimeout(previous?.timer);
-    const emitted = params.emit();
+    previous?.pending?.release?.();
+    let emitted: boolean;
+    try {
+      emitted = params.emit();
+    } finally {
+      params.release?.();
+    }
     rememberTypingBroadcast(params.key, {
       at: params.now,
       signature: params.signature,
@@ -97,10 +109,12 @@ export function broadcastTypingThrottled(params: {
 
   if (params.signature === previous.signature && previous.pending?.signature !== params.signature) {
     clearTimeout(previous.timer);
+    previous.pending?.release?.();
     delete previous.pending;
     delete previous.timer;
     if (!params.typing) {
       rememberTypingBroadcast(params.key, previous);
+      params.release?.();
       return false;
     }
   }
@@ -109,7 +123,9 @@ export function broadcastTypingThrottled(params: {
     clearTimeout(previous.timer);
     delete previous.timer;
   }
+  previous.pending?.release?.();
   previous.pending = {
+    release: params.release,
     signature: params.signature,
     intervalMs: params.intervalMs,
     emit: params.emit,
@@ -126,7 +142,11 @@ export function broadcastTypingThrottled(params: {
           at: Date.now(),
           signature: pending.signature,
         } satisfies TypingBroadcastState;
-        pending.emit();
+        try {
+          pending.emit();
+        } finally {
+          pending.release?.();
+        }
         rememberTypingBroadcast(params.key, next);
       },
       params.intervalMs - (params.now - previous.at),

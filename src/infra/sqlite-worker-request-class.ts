@@ -234,6 +234,7 @@ const coreCommands = new Set([
   "source.replace.group",
   "source.replace.inline",
   "source.state",
+  "set-access",
   "stage.append",
   "stage.discard",
   "stage.start",

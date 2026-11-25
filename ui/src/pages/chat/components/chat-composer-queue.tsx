@@ -629,7 +629,10 @@ function ChatQueueItem(rowProps: {
           <button
             class="chat-queue__remove"
             type="button"
-            disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
+            disabled={
+              item().removing || (item().serverQueued && !rowProps.controls.canRemoveServerQueued)
+            }
+            aria-busy={item().removing ? "true" : undefined}
             aria-label={t("chat.queue.removeQueuedMessage")}
             onClick={(event: MouseEvent) => {
               // Chromium retargets click 2 after row removal; detail still owns the gesture.
@@ -639,7 +642,11 @@ function ChatQueueItem(rowProps: {
             }}
             onDblClick={(event: MouseEvent) => event.stopPropagation()}
           >
-            <Icon name="trash" />
+            {item().removing ? (
+              <span class="btn__spinner" aria-hidden="true" />
+            ) : (
+              <Icon name="trash" />
+            )}
           </button>
         )}
         {editing() || !editable() ? null : (

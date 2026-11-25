@@ -526,8 +526,14 @@ it.each([
     const listPage = vi.fn(async (source?: fixture.CodexCatalogHome) => ({
       sessions: [catalogSession(`thread-${source?.sourceHomeId ?? "missing"}`)],
     }));
+    const requireEligibleThread = vi.fn(async (id: string) =>
+      fixture.idleThread({ id, source: "cli", name: "selected native title" }),
+    );
     const forRequest = vi.fn((agentId: string, source?: fixture.CodexCatalogHome) =>
-      fixture.createControl({ listPage: async () => await listPage(source) }),
+      fixture.createControl({
+        listPage: async () => await listPage(source),
+        requireEligibleThread,
+      }),
     );
     const provider = fixture.createCatalogTestProvider({
       startupConfig: runtimeConfig,
@@ -565,6 +571,41 @@ it.each([
       expect(hosts.map((host) => host.sessions[0]?.exportPolicy)).toEqual(
         hosts.map(() => (automatic ? { origin: "native-local", automatic: true } : undefined)),
       );
+      const host = hosts[0]!;
+      const row = host.sessions[0]!;
+      const exact = await provider.list({
+        agentId: "beta",
+        hostIds: [host.hostId],
+        exportSource: {
+          hostId: host.hostId,
+          threadId: row.threadId,
+          sourceHomeId: row.sourceHomeId,
+        },
+      });
+      expect(listPage).toHaveBeenCalledTimes(3);
+      expect(requireEligibleThread).toHaveBeenCalledTimes(automatic ? 1 : 0);
+      if (automatic) {
+        expect(exact[0]?.sessions[0]).toMatchObject({
+          threadId: row.threadId,
+          sourceHomeId: row.sourceHomeId,
+          name: "selected native title",
+          exportPolicy: { origin: "native-local", automatic: true },
+        });
+        requireEligibleThread.mockRejectedValueOnce(new Error("native membership changed"));
+        await expect(
+          provider.list({
+            agentId: "beta",
+            hostIds: [host.hostId],
+            exportSource: {
+              hostId: host.hostId,
+              threadId: row.threadId,
+              sourceHomeId: row.sourceHomeId,
+            },
+          }),
+        ).rejects.toThrow("native membership changed");
+      } else {
+        expect(exact).toEqual([]);
+      }
       expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
       expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
         true,

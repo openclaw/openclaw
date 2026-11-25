@@ -37,6 +37,7 @@ export type ApplyPatchFileOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Host default: false; sandbox default: true. */
   workspaceOnly?: boolean;
+  strictWorkspaceRoot?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   prepareHostFileMutation?: HostFileMutationPreparer;
 };
@@ -152,7 +153,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
-    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+    const selectedRoot = await resolveHostRootAsync(
+      containmentRoot,
+      filePath,
+      options.strictWorkspaceRoot,
+    );
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
@@ -163,7 +168,10 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     }
     const assertBeforeMutation = () => {
       options.signal?.throwIfAborted();
-      toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
+      toRelativeSandboxPath(
+        resolveHostWorkspaceRoot(containmentRoot, filePath, options.strictWorkspaceRoot),
+        filePath,
+      );
     };
     return { root, relative, assertBeforeMutation };
   };
@@ -171,7 +179,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   // absolute paths keep a literal "~" component from becoming home expansion.
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: async (filePath) => {
-      const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+      const selectedRoot = await resolveHostRootAsync(
+        containmentRoot,
+        filePath,
+        options.strictWorkspaceRoot,
+      );
       const opened = await openRootFile({
         absolutePath: filePath,
         rootPath: selectedRoot,

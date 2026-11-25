@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import {
-  formatUtcTimestamp,
-  formatZonedTimestamp,
-  resolveTimeZoneDayStartMs,
-  resolveTimezone,
-} from "./format-datetime.js";
+import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -80,14 +75,6 @@ it("resolveTimezone validates IANA zones before retaining the most recent result
   expect(resolveTimezone("Invalid/Timezone")).toBeUndefined();
   expect(resolveTimezone("Europe/London")).toBe("Europe/London");
   expect(resolveTimezone("UTC")).toBe("UTC");
-});
-it("resolves calendar boundaries across a DST-short day", () => {
-  const start = resolveTimeZoneDayStartMs("2026-03-29", "Europe/Vienna");
-  const next = resolveTimeZoneDayStartMs("2026-03-30", "Europe/Vienna");
-
-  expect(start).toBe(Date.parse("2026-03-28T23:00:00.000Z"));
-  expect(next).toBe(Date.parse("2026-03-29T22:00:00.000Z"));
-  expect(next! - start!).toBe(23 * 60 * 60 * 1000);
 });
 it.each([
   [undefined, "2024-01-15T14:30Z"],

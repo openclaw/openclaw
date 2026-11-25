@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { boundInFlightRunSnapshotForChatHistory } from "../../../../src/gateway/chat-history-budget.js";
+import { projectInFlightRunSnapshot } from "../../../../src/gateway/chat-inflight-snapshot.js";
+import { createChatRunState } from "../../../../src/gateway/server-chat-state.js";
 import {
   projectAgentHistoryActivity,
   projectAgentToolActivity,
 } from "../../../../src/infra/agent-activity-events.js";
+import { jsonUtf8Bytes } from "../../../../src/infra/json-utf8-bytes.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -68,19 +72,15 @@ function activeSnapshot(
   runId = "active-run",
   text = "",
   messages: ChatHistoryResult["messages"] = [],
-) {
-  const result = activeHistory(runId);
-  result.inFlightRun!.text = text;
-  result.messages = messages;
-  return result;
+): ChatHistoryResult {
+  return { ...activeHistory(runId), messages, inFlightRun: { runId, text } };
 }
 
 it.each([
   ["waiting_for_model", "First result.", "slot"],
   ["waiting_for_state", "", undefined],
 ] as const)("restores %s without a retry or a new run", async (phase, text, waitReason) => {
-  const history = activeHistory("run-live");
-  history.inFlightRun!.text = text;
+  const history = activeSnapshot("run-live", text);
   history.inFlightRun!.events = [
     event(3, "run_status", { phase, ...(waitReason ? { reason: waitReason } : {}) }),
   ];
@@ -160,6 +160,214 @@ it("restores cleared activity alongside an owned run's current text", async () =
     runId: "run-live",
     toolCallId: "call-reconnected",
   });
+});
+
+const SWATCH_RUN = "run-live";
+const SWATCH_OPENING = "Amber marks the first swatch.";
+const SWATCH_SUFFIX = " The tool returned amber.";
+
+function swatchRows(...texts: string[]) {
+  const imported = (id: string, content: unknown[]) => ({
+    role: "assistant",
+    provider: "claude-cli",
+    content,
+    __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "swatches", externalId: id },
+  });
+  return [
+    message("user", "Read the swatches.", { id: "input", idempotencyKey: SWATCH_RUN + ":user" }),
+    ...texts.flatMap((text, i) => [
+      imported("text-" + i, [{ type: "text", text }]),
+      imported("call-" + i, [{ type: "toolcall", id: "read-" + i, name: "read" }]),
+    ]),
+  ];
+}
+
+it.each(["full", "bounded", "without input"])(
+  "restores both native tool boundaries on a %s page",
+  async (page) => {
+    const parts = [SWATCH_OPENING, "Cobalt marks the next swatch."];
+    const runId = SWATCH_RUN;
+    const chatRunState = createChatRunState();
+    const buffer = (text: string) =>
+      chatRunState.updateBuffer(runId, { itemId: "assistant", text });
+    for (const [i] of parts.entries()) {
+      buffer(parts.slice(0, i + 1).join("\n\n"));
+      const start = toolEvent("read-" + i);
+      start.seq += i;
+      start.data.textLengthBeforeTool = chatRunState.resolveBuffer(runId).text.length;
+      chatRunState.recordProgressEvent(runId, start);
+    }
+    const text = [...parts, "Final result."].join("\n\n");
+    buffer(text);
+    const snapshot = projectInFlightRunSnapshot({ chatRunState, runId, startedAtMs: 1000 });
+    const rows = swatchRows(...parts).slice(page === "without input" ? 1 : 0);
+    const maxBytes = jsonUtf8Bytes(rows) + jsonUtf8Bytes({ ...snapshot, events: [] });
+    const run =
+      page === "bounded"
+        ? boundInFlightRunSnapshotForChatHistory({ snapshot, messages: rows, maxBytes })
+        : snapshot;
+    if (page === "bounded") {
+      expect(run?.events).toEqual([]);
+      expect(jsonUtf8Bytes(rows) + jsonUtf8Bytes(run)).toBeLessThanOrEqual(maxBytes);
+    }
+    const state = createState({ ...activeHistory(runId), messages: rows, inFlightRun: run });
+    vi.stubGlobal("window", globalThis);
+    try {
+      await loadChatHistory(state);
+      expect(renderedText(state).filter(Boolean)).toEqual(
+        [page !== "without input" && "Read the swatches.", ...parts, "Final result."].filter(
+          Boolean,
+        ),
+      );
+      assistant(state, runId, text + "\n\n" + SWATCH_OPENING);
+      expect(tail(state)?.trim()).toBe("Final result.\n\n" + SWATCH_OPENING);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it.each([
+  ["cumulative", ""],
+  ["cumulative", SWATCH_SUFFIX],
+  ["cold", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["commentary", ""],
+  ["commentary", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["independent", SWATCH_OPENING],
+  ["independent", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["retired", SWATCH_OPENING],
+  ["retired", SWATCH_OPENING + SWATCH_SUFFIX],
+])("keeps each occurrence in full and bounded %s history with reply %j", async (mode, reply) => {
+  const rows = mode === "cold" ? swatchRows() : swatchRows(SWATCH_OPENING);
+  const chatRunState = createChatRunState();
+  const runId = SWATCH_RUN;
+  const buffer = (text: string) => chatRunState.updateBuffer(runId, { itemId: "assistant", text });
+  const start = toolEvent("read-0");
+  const cumulative = mode === "cumulative" || mode === "cold";
+  if (cumulative || mode === "retired") {
+    buffer(SWATCH_OPENING);
+    start.data.textLengthBeforeTool = chatRunState.resolveBuffer(runId).text.length;
+  } else if (mode === "commentary") {
+    chatRunState.recordProgressEvent(
+      runId,
+      event(1, "item", {
+        kind: "preamble",
+        itemId: "commentary-1",
+        phase: "end",
+        progressText: SWATCH_OPENING,
+      }),
+    );
+  }
+  chatRunState.recordProgressEvent(runId, start);
+  const raw = (cumulative ? SWATCH_OPENING : "") + reply;
+  if (mode === "retired") {
+    chatRunState.retireBuffer(runId, ["assistant"]);
+    chatRunState.updateBuffer(runId, { itemId: "later-reply", text: reply });
+  } else if (reply) {
+    buffer(raw);
+  }
+  const snapshot = projectInFlightRunSnapshot({ chatRunState, runId, startedAtMs: 1000 });
+  if (mode === "retired") {
+    expect(snapshot.text).toBe(reply);
+    expect(snapshot.events?.[0]?.data).toMatchObject({
+      textLengthBeforeTool: SWATCH_OPENING.length,
+    });
+    expect(snapshot.events?.[0]?.data.bufferEnd).toBeUndefined();
+  }
+  const maxBytes = jsonUtf8Bytes(rows) + jsonUtf8Bytes({ ...snapshot, events: [] });
+  const bounded = boundInFlightRunSnapshotForChatHistory({ snapshot, messages: rows, maxBytes });
+  expect(bounded?.events).toEqual([]);
+  expect(jsonUtf8Bytes(rows) + jsonUtf8Bytes(bounded)).toBeLessThanOrEqual(maxBytes);
+  for (const run of [snapshot, bounded]) {
+    const history = activeSnapshot(SWATCH_RUN, "", rows);
+    history.inFlightRun = run;
+    const state = createState(history);
+    await (run === snapshot ? loadWithTools(state) : loadChatHistory(state));
+    const hasOpening = mode !== "cold" || run === snapshot;
+    const visible = (hasOpening ? reply : raw).trim();
+    expect(renderedText(state).filter(Boolean)).toEqual(
+      ["Read the swatches.", hasOpening && SWATCH_OPENING, visible].filter(Boolean),
+    );
+    expect(tail(state)?.trim() ?? "").toBe(visible);
+    assistant(state, SWATCH_RUN, raw + "\n\nResult.");
+    expect(tail(state)?.trim()).toBe((visible + "\n\nResult.").trim());
+  }
+});
+
+it.each([
+  [SWATCH_OPENING + " New answer.", false],
+  [SWATCH_OPENING + "\n\nCobalt.", true],
+  [SWATCH_OPENING + "\n\nCobalt.", false],
+] as const)(
+  "keeps a reply that repeats imported text (reply %j, events evicted: %s)",
+  async (reply, evicted) => {
+    const history = activeSnapshot(SWATCH_RUN, reply, swatchRows(SWATCH_OPENING, "Cobalt."));
+    if (evicted) {
+      history.inFlightRun!.events = [];
+    }
+    const state = createState(history);
+    await loadChatHistory(state);
+    expect(tail(state)).toBe(reply);
+  },
+);
+
+it("does not apply a stale tool span to a newer live reply with the same opening", async () => {
+  const history = activeSnapshot(SWATCH_RUN, SWATCH_OPENING, swatchRows(SWATCH_OPENING));
+  const start = toolEvent("read-0");
+  start.data.bufferEnd = SWATCH_OPENING.length;
+  history.inFlightRun!.events = [start];
+  const { state, response } = delayed(history);
+  const reply = SWATCH_OPENING + SWATCH_SUFFIX;
+  vi.stubGlobal("window", globalThis);
+  try {
+    assistant(state, SWATCH_RUN, SWATCH_OPENING, { seq: 1 });
+    const loading = loadChatHistory(state);
+    assistant(state, SWATCH_RUN, reply, { seq: 2, replace: true, deltaText: reply });
+    response.resolve(history);
+    await loading;
+    expect(tail(state)).toBe(reply);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("resolves a bounded prefix on its wire page before filling a held history gap", async () => {
+  const rows = swatchRows(SWATCH_OPENING);
+  const history = activeSnapshot(SWATCH_RUN, "", rows);
+  history.sessionInfo!.sessionId = "swatches";
+  const earlier = message("assistant", "Earlier turn.", { id: "earlier", seq: 1 });
+  const held = { messages: [earlier], sessionInfo: history.sessionInfo, totalMessages: 1 };
+  const state = createState(history);
+  vi.spyOn(state.client!, "request")
+    .mockResolvedValueOnce({ ...held, deltaCursor: "prior" })
+    .mockResolvedValueOnce({ kind: "reset" })
+    .mockResolvedValueOnce({
+      ...history,
+      inFlightRun: { runId: SWATCH_RUN, text: "", textFromMessage: 1, events: [] },
+      hasMore: true,
+      nextOffset: rows.length,
+      totalMessages: rows.length + 1,
+      olderCursor: "before-swatch",
+    })
+    .mockResolvedValueOnce(held);
+  await loadChatHistory(state);
+  await loadChatHistory(state);
+  expect(state.chatMessages).toEqual([earlier, ...rows]);
+  assistant(state, SWATCH_RUN, SWATCH_OPENING + "\n\nResult.");
+  expect(tail(state)?.trim()).toBe("Result.");
+});
+
+it("does not bind an earlier start to a later history buffer without an imported call", async () => {
+  const opening = "Amber.";
+  const reply = "Amber. New page.";
+  const snapshot = activeSnapshot("run-live", reply);
+  const start = toolEvent("native-read");
+  start.data.textLengthBeforeTool = opening.length;
+  snapshot.inFlightRun!.events = [start];
+  const state = createState(snapshot);
+  await loadWithTools(state);
+  expect(tail(state)).toBe(reply);
+  expect(renderedText(state).filter((text) => text?.includes(opening))).toEqual([reply]);
 });
 
 it("retains unchanged stream segments when history replaces the live text", async () => {
