@@ -14,14 +14,13 @@ enum ClientCredentialStartup {
     }
 
     /// Contention and unverifiable lock owners both require operator recovery, not manager guesses.
-    nonisolated static func maintenanceBlockedRecovery(detail: String) -> (title: String, message: String) {
+    nonisolated static func maintenanceBlockedRecovery(detail: String)
+    -> (title: String, message: String, detail: String) {
         let message = [
-            "Local client credential maintenance could not acquire the shared state. Another OpenClaw process may hold it, or its owner could not be verified. The app did not stop or replace that process.",
-            "Resolve the reported maintenance conflict through the matching CLI, service manager, or original terminal, then choose Retry.",
-            "Change the Gateway or app version only if recovery identifies a version incompatibility.",
-            "Details: " + detail,
+            "Credential maintenance is blocked by another OpenClaw process or an owner that could not be verified. The app did not stop or replace it.",
+            "Resolve the reported conflict, then choose Retry. Change versions only if the matching CLI identifies incompatibility.",
         ].joined(separator: "\n\n")
-        return ("Local credential maintenance is blocked", message)
+        return ("Local credential maintenance is blocked", message, detail)
     }
 
     static func prepare(

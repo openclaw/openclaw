@@ -92,8 +92,8 @@ struct ClientCredentialStartupTests {
         let condition = "Remove that file only after its owner has stopped."
         let detail = "Legacy Gateway lock " + path + String(repeating: " diagnostic", count: 60) + condition
         let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
-        #expect(recovery.message.contains(path))
-        #expect(recovery.message.contains(condition))
+        #expect(recovery.detail.contains(path))
+        #expect(recovery.detail.contains(condition))
     }
 
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {

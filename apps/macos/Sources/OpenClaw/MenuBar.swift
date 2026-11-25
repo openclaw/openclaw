@@ -430,13 +430,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation,
               AppLaunchRuntimePlan.current.allowsActivation
         else {
-            fputs("\(recovery.title). \(recovery.message)\n", stderr)
+            fputs("\(recovery.title). \(recovery.message)\n\(recovery.detail)\n", stderr)
             return false
         }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = recovery.title
         alert.informativeText = recovery.message
+        // Keep the complete CLI diagnosis reachable without pushing recovery controls offscreen.
+        let details = NSTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 160))
+        details.string = recovery.detail
+        details.isEditable = false
+        details.isSelectable = true
+        details.isRichText = false
+        details.drawsBackground = false
+        details.isVerticallyResizable = true
+        details.isHorizontallyResizable = false
+        details.autoresizingMask = [.width]
+        details.minSize = .zero
+        details.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        details.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(recovery.title)
+        details.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let scroll = NSScrollView(frame: details.frame)
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.documentView = details
+        NSLayoutConstraint.activate([
+            scroll.widthAnchor.constraint(equalToConstant: 360),
+            scroll.heightAnchor.constraint(equalToConstant: 160),
+        ])
+        alert.accessoryView = scroll
         alert.addButton(withTitle: "Retry")
         alert.addButton(withTitle: "Quit OpenClaw")
         let response = await withCheckedContinuation { continuation in
