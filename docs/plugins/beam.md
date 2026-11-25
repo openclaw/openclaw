@@ -332,7 +332,7 @@ beam bundle create task.beam.json --attach screenshot.png --out task.beam.zip
 beam share task.beam.zip --to https://gateway.example
 ```
 
-Open the returned snapshot link to view or download the image. The Gateway advertises `publishScreenshot` only to callers with publishing access. Each PNG can contain up to 512 KiB and 16,777,216 pixels. The screenshot is part of the reviewed publication and retains its original metadata. Its visibility and seven-day lifetime follow the snapshot. The original packet stays text-only for pull and continuation.
+Open the returned snapshot link to view or download the image. The Gateway advertises `publishScreenshot` only to callers with publishing access. Each PNG can contain up to 512 KiB and 16,777,216 pixels. The screenshot is part of the reviewed publication and retains its original metadata. Its visibility and seven-day lifetime follow the snapshot. Sharing the packet alone removes the screenshot. Handing off the same packet keeps the existing preview. Pull and continuation use the original text packet.
 
 ## Troubleshooting
 

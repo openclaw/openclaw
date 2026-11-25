@@ -145,7 +145,7 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   const unchanged =
     currentDigest === digest &&
     row?.publicationId !== undefined &&
-    (!input.image || input.image.digest === row.presentationDigest);
+    input.image?.digest === row.presentationDigest;
   if (!unchanged) {
     const written = persistBeamUpload(input, tx, {
       packetText: input.packetText,

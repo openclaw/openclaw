@@ -705,6 +705,29 @@ it("publishes one reviewed PNG for a shared reader, preserves packet bytes and c
       requiredGrantPluginId: "visitor-access",
     });
     expect((await fetch(resource + "/image")).status).toBe(404);
+    actor = beamTestAuthority({ personProfileId: "alice", scopes: ["operator.write"] });
+    const removed = await fetch(target, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "if-match": renamed.revision,
+        "idempotency-key": "12345678-1234-4123-abcd-000000000009",
+      },
+      body: packet,
+    });
+    expect(removed.status).toBe(200);
+    const plain = await removed.json();
+    expect(plain.digest).toBe(renamed.digest);
+    expect(plain).not.toHaveProperty("presentationDigest");
+    expect(plain.revision).not.toBe(renamed.revision);
+    expect((await fetch(resource + "/image")).status).toBe(404);
+    expect(await store.getScreenshot?.(upload.beamId, renamed.presentationDigest)).toBeUndefined();
+    const restored = await put(
+      "renamed.png",
+      "12345678-1234-4123-abcd-000000000010",
+      plain.revision,
+    );
+    expect(restored.status).toBe(200);
     expect(await store.delete(upload.beamId)).toBe(true);
     expect(await store.getScreenshot?.(upload.beamId, renamed.presentationDigest)).toBeUndefined();
     actor = beamTestAuthority({ personProfileId: "alice", scopes: ["operator.read"] });
