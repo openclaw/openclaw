@@ -1361,7 +1361,8 @@ extension OpenClawChatComposer {
         } else {
             self.composerChrome == .clean ? 48 : 64
         }
-        return max(base, self.scaledBodyLineHeight * 4)
+        // The clean draft grows to six lines, then scrolls inside the composer.
+        return max(base, self.scaledBodyLineHeight * (self.composerChrome == .clean ? 6 : 4))
     }
 
     private var sendButtonSize: CGFloat {
