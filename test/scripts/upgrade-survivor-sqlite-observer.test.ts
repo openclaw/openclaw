@@ -5,6 +5,7 @@ import { DatabaseSync, constants } from "node:sqlite";
 import type * as NativeSqlite from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import {
   installSqliteMigrationObserver,
@@ -91,25 +92,33 @@ it("separates cached prepare intentions, execution, live reprepare and iterator 
     "iterate",
     "run",
   ]);
-  expect(observation.statements[4].preparedAuthorizations).toEqual([]);
-  expect(observation.statements[0].preparedAuthorizations).toContainEqual(
-    expect.objectContaining({
-      action: constants.SQLITE_READ,
-      argument1: "bulk",
-    }),
-  );
-  expect(observation.statements[2].executedAuthorizations).toContainEqual(
+  expect(
+    expectDefined(observation.statements[4], "no-op execution").preparedAuthorizations,
+  ).toEqual([]);
+  expect(
+    expectDefined(observation.statements[0], "cached execution").preparedAuthorizations,
+  ).toContainEqual(
     expect.objectContaining({
       action: constants.SQLITE_READ,
       argument1: "bulk",
     }),
   );
   expect(
-    observation.statements[1].after.tables
-      .find((table) => table.name === "bulk")
+    expectDefined(observation.statements[2], "reprepared execution").executedAuthorizations,
+  ).toContainEqual(
+    expect.objectContaining({
+      action: constants.SQLITE_READ,
+      argument1: "bulk",
+    }),
+  );
+  expect(
+    expectDefined(observation.statements[1], "schema change")
+      .after.tables.find((table) => table.name === "bulk")
       ?.columns.map((column) => column.name),
   ).toEqual(["id", "extra"]);
-  expect(observation.statements[0].sql).toBe("SELECT id FROM bulk WHERE id > ?");
+  expect(expectDefined(observation.statements[0], "cached execution").sql).toBe(
+    "SELECT id FROM bulk WHERE id > ?",
+  );
 });
 
 it("attributes integrity only to its own async chain and rethrows original failures", async () => {
@@ -125,12 +134,13 @@ it("attributes integrity only to its own async chain and rethrows original failu
   expect(observation.statements.map((entry) => entry.ownerIntegrity)).toEqual([false, true]);
   expect(observation.integrityChecks).toEqual(["owner-check"]);
   const failure = new Error("original");
+  Object.freeze(failure);
   await expect(
     guard.observe(() => {
       throw failure;
     }),
   ).rejects.toBe(failure);
-  expect(failure).toHaveProperty("observation.coverageFailures", []);
+  expect(guard.readFailureObservation(failure)?.coverageFailures).toEqual([]);
 });
 
 it("fails coverage for unsupported APIs even when the chain catches their errors", async () => {

@@ -41,6 +41,8 @@ export type SqliteMigrationObserver = {
     run: () => T | Promise<T>,
   ): Promise<{ value: T; observation: SqliteMigrationObservation }>;
   withOwnerIntegrity<T>(name: string, run: () => T): T;
+  withMigrationWork<T>(run: () => T): T;
+  readFailureObservation(error: unknown): SqliteMigrationObservation | undefined;
   dispose(): void;
 };
 
@@ -61,12 +63,17 @@ export function installSqliteMigrationObserver(): SqliteMigrationObserver {
   const iterators = new WeakMap<object, Prepared>();
   const restores: Array<() => void> = [];
   const faults = new Set<string>();
+  const failures = new WeakMap<object, SqliteMigrationObservation>();
   let disposed = false;
   let retained = 0;
   // A bounded receipt must fail setup, never silently become partial evidence.
   const limit = 200_000;
   const nativePrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
-  const nativeAll = Reflect.get(StatementSync.prototype, "all") as StatementSync["all"];
+  // Catalog queries use the checked zero-binding overload, not the named-bind overload.
+  const nativeAll: (this: StatementSync) => ReturnType<StatementSync["all"]> = Reflect.get(
+    StatementSync.prototype,
+    "all",
+  ) as StatementSync["all"];
   const nativeSetAuthorizer = Reflect.get(
     DatabaseSync.prototype,
     "setAuthorizer",
@@ -567,7 +574,11 @@ export function installSqliteMigrationObserver(): SqliteMigrationObserver {
     const scratch = new DatabaseSync(":memory:");
     try {
       const statement = nativePrepare.call(scratch, "SELECT 1");
-      const iterator = StatementSync.prototype.iterate.call(statement);
+      const iterate: (this: StatementSync) => ReturnType<StatementSync["iterate"]> = Reflect.get(
+        StatementSync.prototype,
+        "iterate",
+      ) as StatementSync["iterate"];
+      const iterator = iterate.call(statement);
       const iteratorPrototype: object = Object.getPrototypeOf(iterator);
       statementIteratorPrototype = iteratorPrototype;
       const next = Reflect.get(iterator, "next") as typeof iterator.next;
@@ -672,15 +683,8 @@ export function installSqliteMigrationObserver(): SqliteMigrationObserver {
             fail(fault);
           }
           // Rethrow even undefined/null/false. Never turn a falsey rejection into success.
-          if (error instanceof Error) {
-            try {
-              Object.defineProperty(error, "observation", {
-                value: observation,
-                configurable: true,
-              });
-            } catch {
-              // Frozen errors cannot carry a receipt; preserving identity wins.
-            }
+          if ((typeof error === "object" && error !== null) || typeof error === "function") {
+            failures.set(error, observation);
           }
           throw error;
         }
@@ -693,6 +697,14 @@ export function installSqliteMigrationObserver(): SqliteMigrationObserver {
         observation.integrityChecks.push(name);
       }
       return integrity.run(name, run);
+    },
+    withMigrationWork<T>(run: () => T): T {
+      return integrity.exit(run);
+    },
+    readFailureObservation(error: unknown) {
+      return (typeof error === "object" && error !== null) || typeof error === "function"
+        ? failures.get(error)
+        : undefined;
     },
     dispose,
   };

@@ -290,9 +290,12 @@ embedding, or FTS rows, including `WHERE 0`, and index builds over those rows.
 Constant-time metadata DDL is allowed, but touching a bulk table while raising
 that store's reader floor fails. Failures name the store and version range.
 Real owner integrity checks still run unchanged; only their dynamic test-side
-boundary is excluded from migration-access classification. Unsupported observation
-APIs fail coverage instead of silently passing. The sanitized
-`migration-bulk-access.json` receipt is retained even when the guard fails.
+boundary is excluded from migration-access classification; migration-supplied
+callbacks remain observed. Unsupported observation APIs fail coverage instead of
+silently passing. The sanitized `migration-bulk-access.json` receipt is retained
+even when observation fails, with the attempted version range. Failed observations
+retain statement identity, method, SQL source, and integrity/coverage facts, not
+database objects, catalog snapshots, or queried row values.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with

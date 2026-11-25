@@ -5,11 +5,14 @@ import {
   assertMigrationBulkSafe,
   classifyMigrationBulkAccess,
 } from "../../scripts/e2e/lib/upgrade-survivor/sqlite-bulk-access.mts";
+import type { SqliteMigrationObservation } from "../../scripts/e2e/lib/upgrade-survivor/sqlite-migration-observation.mts";
 import { installSqliteMigrationObserver } from "../../scripts/e2e/lib/upgrade-survivor/sqlite-migration-observer.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 // Loading-boundary test: static owner imports would capture native APIs before instrumentation.
 const observer = installSqliteMigrationObserver();
 await observer.qualifyNativeBindings().catch((error: unknown) => {
+  writeMigrationFailure(error, { stage: "native-bindings" });
   observer.dispose();
   throw error;
 });
@@ -36,7 +39,54 @@ const original = {
 const configuredBaseline = Number(
   process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE ?? target - 1,
 );
-let fixtureBulkStep = false;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type FixtureStep = "step" | "callback" | "unsupported";
+let fixtureBulkStep: FixtureStep | undefined;
+const forbiddenSql = "UPDATE transcript_events SET event_json=event_json WHERE 0";
+
+function writeMigrationReceipt(facts: Record<string, unknown>) {
+  const filename = process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT;
+  if (filename) {
+    fs.writeFileSync(
+      filename,
+      JSON.stringify(
+        {
+          previousSource: process.env.OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA,
+          candidateSource: process.env.GIT_COMMIT,
+          ...facts,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+}
+function writeMigrationFailure(error: unknown, facts: Record<string, unknown>) {
+  const observation = observer.readFailureObservation(error);
+  try {
+    writeMigrationReceipt({
+      ...facts,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      observation: observation
+        ? {
+            integrityChecks: observation.integrityChecks,
+            coverageFailures: observation.coverageFailures,
+            statements: observation.statements.map(
+              ({ databaseId, method, sql, ownerIntegrity }) => ({
+                databaseId,
+                method,
+                sql,
+                ownerIntegrity,
+              }),
+            ),
+          }
+        : null,
+    });
+  } catch (receiptError) {
+    console.error("Could not retain migration failure receipt:", receiptError);
+  }
+}
 beforeEach(() => {
   for (const name of [
     "assertSqliteIntegrity",
@@ -59,18 +109,36 @@ beforeEach(() => {
     ),
   );
   vi.spyOn(helpers, "finishAgentSchemaMigration").mockImplementation((...args) => {
-    if (fixtureBulkStep) {
-      args[0].exec("UPDATE transcript_events SET event_json=event_json WHERE 0");
+    if (fixtureBulkStep === "step") {
+      args[0].exec(forbiddenSql);
     }
+    if (fixtureBulkStep === "unsupported") {
+      try {
+        args[0].createTagStore();
+      } catch {
+        // Deliberately caught: observation must still fail and retain its evidence.
+      }
+    }
+    const assertMigration = args[6];
+    args[6] = () =>
+      observer.withMigrationWork(() => {
+        if (fixtureBulkStep === "callback") {
+          args[0].exec(forbiddenSql);
+        }
+        return assertMigration();
+      });
     return observer.withOwnerIntegrity("finishAgentSchemaMigration", () =>
       original.finishAgentSchemaMigration(...args),
     );
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 afterAll(() => observer.dispose());
 
-async function migrate(bulk: boolean, baseline: number) {
+async function migrate(bulk: FixtureStep | undefined, baseline: number) {
   fixtureBulkStep = bulk;
   expect(Number.isInteger(baseline) && baseline > 0 && baseline <= target).toBe(true);
   return withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -89,11 +157,24 @@ async function migrate(bulk: boolean, baseline: number) {
         ANALYZE;`);
     }
     // Lease admission is outside SQL observation; the real migration retains that lease throughout.
-    const { observation } = await withAgentDatabaseMaintenanceLease(options, (maintenance) =>
-      observer.observe(() =>
-        migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
-      ),
-    );
+    let observation: SqliteMigrationObservation;
+    try {
+      ({ observation } = await withAgentDatabaseMaintenanceLease(options, (maintenance) =>
+        observer.observe(() =>
+          migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
+        ),
+      ));
+    } catch (error) {
+      writeMigrationFailure(error, {
+        stage: "migration",
+        store: "agent/main",
+        fromVersion: baseline,
+        toVersion: target,
+        beforeMinReader: baseline,
+        afterMinReader: null,
+      });
+      throw error;
+    }
     using db = new DatabaseSync(pathname);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: target });
     expect(db.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()).toEqual({
@@ -125,32 +206,50 @@ async function migrate(bulk: boolean, baseline: number) {
 }
 it("enforces bulk-data access on the real main migration chain with its integrity checks", async () => {
   const { observation, range, receipt } = await migrate(
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_FIXTURE_STEP === "1",
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_FIXTURE_STEP === "1" ? "step" : undefined,
     configuredBaseline,
   );
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT) {
-    fs.writeFileSync(
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT,
-      JSON.stringify(
-        {
-          previousSource: process.env.OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA,
-          candidateSource: process.env.GIT_COMMIT,
-          ...range,
-          ...receipt,
-        },
-        null,
-        2,
-      ),
-    );
-  }
+  writeMigrationReceipt({ ...range, ...receipt });
   assertMigrationBulkSafe(observation, range);
 });
-it("rejects a real WHERE 0 fixture step before the delegated finalizer", async () => {
-  const { observation, range, receipt } = await migrate(true, target - 1);
-  expect(receipt.violations).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ table: "transcript_events", store: "agent/main" }),
-    ]),
+it.each(["step", "callback"] as const)(
+  "rejects a real WHERE 0 fixture %s around the finalizer",
+  async (location) => {
+    const { observation, range, receipt } = await migrate(location, target - 1);
+    expect(receipt.violations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "transcript_events", store: "agent/main" }),
+      ]),
+    );
+    expect(() => assertMigrationBulkSafe(observation, range)).toThrow(/agent\/main.*bulk-data/u);
+  },
+);
+
+it("retains sanitized coverage evidence and rethrows the original observation failure", async () => {
+  const filename = path.join(tempDirs.make("bulk-coverage-"), "receipt.json");
+  vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT", filename);
+  const failure = await migrate("unsupported", target - 1).then(
+    () => undefined,
+    (error: unknown) => error,
   );
-  expect(() => assertMigrationBulkSafe(observation, range)).toThrow(/agent\/main.*bulk-data/u);
+  const coverageFailures = ["Unsupported SQLite observation API: createTagStore"];
+  expect(failure).toBeInstanceOf(Error);
+  expect(observer.readFailureObservation(failure)?.coverageFailures).toEqual(coverageFailures);
+  const receipt = JSON.parse(fs.readFileSync(filename, "utf8"));
+  expect(receipt).toMatchObject({
+    status: "failed",
+    stage: "migration",
+    store: "agent/main",
+    fromVersion: target - 1,
+    toVersion: target,
+    afterMinReader: null,
+    observation: {
+      coverageFailures,
+      integrityChecks: expect.arrayContaining(["finishAgentSchemaMigration"]),
+    },
+  });
+  expect(receipt.observation.statements.length).toBeGreaterThan(0);
+  for (const statement of receipt.observation.statements) {
+    expect(statement).not.toHaveProperty("databasePath");
+  }
 });
