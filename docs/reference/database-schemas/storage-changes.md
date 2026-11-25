@@ -3297,6 +3297,27 @@ This version phase does not rewrite transcripts; the scoped restore leaves
 those canonical rows and other undeclared tables intact. It is not a general
 rollback for other migrations or external effects.
 
+## Session member access levels
+
+Agent schema 44 adds a nullable `session_members.access` column. A value of
+`read`, `suggest`, or `send` records the most an invited person may do in a
+shared session. Null means no level was ever set; existing memberships keep
+null, and readers treat it exactly as they treated membership before this
+version. The membership writer is the only writer. It sets the level inside the
+same sharing-worker transaction as other membership changes and publishes the
+change through the existing session collaboration facts. The session actor's
+member snapshot carries the same value.
+
+The version migration adds the column with a `CHECK` constraint and touches no
+other table. Validating the constraint can scan the existing rows once; they
+are all null, and `session_members` holds one row per invited person per
+session. There is no rewrite, backfill, or new index.
+The declared scoped migration backup covers `session_members` and the version
+markers. Older binaries refuse an agent44 store. To go back, stop writers and
+restore the verified scoped backup with
+`openclaw database restore-migration-backup` before the matching older build
+opens the store.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

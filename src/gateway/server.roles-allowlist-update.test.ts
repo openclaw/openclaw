@@ -371,9 +371,14 @@ test("an authorized client starts a package release update and observes its reco
           status: { root, installKind: "package", packageManager: "pnpm" },
           installReceipt: null,
         });
-      const prepare = vi
-        .spyOn(releaseUpdate, "prepareUpdate")
-        .mockRejectedValue(new Error("synthetic candidate unavailable"));
+      const prepare = vi.spyOn(releaseUpdate, "prepareUpdate");
+      const link = fs.link;
+      const lockFailure = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+        if (path.basename(destination.toString()) === ".update.lock") {
+          throw new Error("synthetic update lock failure");
+        }
+        return await link(source, destination);
+      });
       try {
         const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
           sessionKey: "agent:main:whatsapp:dm:+15555550123",
@@ -394,6 +399,7 @@ test("an authorized client starts a package release update and observes its reco
           });
         }, FAST_WAIT_OPTS);
       } finally {
+        lockFailure.mockRestore();
         prepare.mockRestore();
         installation.mockRestore();
       }

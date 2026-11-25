@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.11.7",
+  "version": "2026.11.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
@@ -18,7 +18,7 @@
     ],
     "schemaVersions": {
       "state": 41,
-      "agent": 43
+      "agent": 44
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",

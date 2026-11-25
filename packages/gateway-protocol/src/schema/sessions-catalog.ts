@@ -96,6 +96,8 @@ export const SessionCatalogSessionSchema = closedObject({
     closedObject({
       origin: stringLiteralUnion(["native-local", "imported", "federated"]),
       automatic: Type.Boolean(),
+      /** Host and thread retain one publication ID across restarts, and the provider binds the read to the selected backing source. */
+      stableHostThreadIdentity: Type.Optional(Type.Literal(true)),
     }),
   ),
   name: Type.Optional(Type.String()),

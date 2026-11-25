@@ -1387,7 +1387,9 @@ async function inspectQualificationStatus(plan, runId, client) {
           operationDeadline,
         );
         evidence = (await client.verifySeal(runId, plan, operationDeadline, attempts))
-          ? "accepted"
+          ? plan.rerunGroup === "build-only"
+            ? "prepared-validation-skipped"
+            : "accepted"
           : "needs-refresh";
       } catch {
         evidence = "unavailable";
@@ -1397,18 +1399,20 @@ async function inspectQualificationStatus(plan, runId, client) {
   }
   const qualification = {
     state:
-      evidence === "accepted"
-        ? "passed"
-        : evidence === "unavailable"
-          ? "observation-unavailable"
-          : decision && !["qualifying", "passed"].includes(decision.state)
-            ? "blocked"
-            : parent.status === "completed" ||
-                status.failed.length ||
-                status.missing.length ||
-                blockers.length
+      evidence === "prepared-validation-skipped"
+        ? "prepared-not-validated"
+        : evidence === "accepted"
+          ? "passed"
+          : evidence === "unavailable"
+            ? "observation-unavailable"
+            : decision && !["qualifying", "passed"].includes(decision.state)
               ? "blocked"
-              : "running",
+              : parent.status === "completed" ||
+                  status.failed.length ||
+                  status.missing.length ||
+                  blockers.length
+                ? "blocked"
+                : "running",
     evidence,
   };
   let candidate = releaseCandidateIdentity(plan);
@@ -1420,7 +1424,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   const nextCommand = `pnpm frv ${
     status.active.length || parent.status !== "completed"
       ? "watch"
-      : qualification.state === "blocked"
+      : qualification.state === "blocked" && plan.rerunGroup !== "build-only"
         ? "continue --failed --dry-run"
         : "verify"
   } --run ${runId}`;
@@ -1480,7 +1484,7 @@ export function createClient(repository, dependencies = {}) {
       process.execPath,
       [
         "scripts/release-ci-summary.mjs",
-        "--validate-run",
+        plan.rerunGroup === "build-only" ? "--verify-build-only" : "--validate-run",
         runId,
         "--repo",
         repository,
@@ -2601,8 +2605,16 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
   if (plan.attemptEvidenceVersion === undefined) {
     throw new Error("run predates attempt-aware immutable plans; run a fresh all-group FRV");
   }
-  if (plan.rerunGroup !== "all") {
-    throw new Error("FRV continuation requires an all-group root");
+  if (
+    plan.rerunGroup !== "all" &&
+    !(
+      plan.rerunGroup === "build-only" &&
+      ["status", "watch", "verify", "cancel"].includes(options.command)
+    )
+  ) {
+    throw new Error(
+      "FRV continuation requires an all-group root; build-only permits status, watch, verify and cancel only",
+    );
   }
   return plan;
 }

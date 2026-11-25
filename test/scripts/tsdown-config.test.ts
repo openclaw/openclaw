@@ -2002,6 +2002,7 @@ worker.once("message", value => { assert.equal(value, 42); console.log("relocate
     for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
       expect(config?.plugins).toEqual([
+        expect.objectContaining({ name: "openclaw:empty-runtime-chunks" }),
         expect.objectContaining({ name: "openclaw:standalone-source-module-urls" }),
       ]);
       expect(config?.outputOptions).toEqual({ codeSplitting: false });

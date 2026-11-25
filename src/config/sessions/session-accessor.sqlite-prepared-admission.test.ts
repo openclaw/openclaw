@@ -277,7 +277,7 @@ function nativeRegistry(
 }
 
 function invalidateAdmission(f: Fixture) {
-  invalidateValidation(f.databasePath);
+  invalidateValidation(f.databasePath, "a maintenance write");
   revokeAdmission(f.databasePath);
 }
 

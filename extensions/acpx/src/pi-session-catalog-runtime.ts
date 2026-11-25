@@ -106,26 +106,37 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
           );
         },
         list: async (query) => {
-          const page = await listLocalPiSessionPage({
-            limit: query.limitPerHost,
-            ...(query.search ? { searchTerm: query.search } : {}),
-            cursor: query.cursors?.[PI_LOCAL_SESSION_HOST_ID],
-          });
+          const page = await listLocalPiSessionPage(
+            {
+              limit: query.limitPerHost,
+              ...(query.search ? { searchTerm: query.search } : {}),
+              cursor: query.cursors?.[PI_LOCAL_SESSION_HOST_ID],
+            },
+            true,
+            query.exportSource,
+          );
           return {
             ...page,
             sessions: page.sessions.map((session) =>
               Object.assign(session, {
-                exportPolicy: { origin: "native-local" as const, automatic: true },
+                exportPolicy: {
+                  origin: "native-local" as const,
+                  automatic: true,
+                  stableHostThreadIdentity: true as const,
+                },
               }),
             ),
           };
         },
         read: async (request) =>
-          await readLocalPiTranscriptPage({
-            threadId: request.threadId,
-            ...(request.limit ? { limit: request.limit } : {}),
-            ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
-          }),
+          await readLocalPiTranscriptPage(
+            {
+              threadId: request.threadId,
+              ...(request.limit ? { limit: request.limit } : {}),
+              ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
+            },
+            request.sourceHomeId,
+          ),
         assertAccess: assertPiLocalAccess,
       },
       node: {
