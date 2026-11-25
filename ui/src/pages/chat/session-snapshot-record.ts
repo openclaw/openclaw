@@ -208,7 +208,7 @@ export async function createSnapshotRecord(
     const changes: Partial<ChatSessionSnapshot> = {};
     let start = Math.max(0, source.messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
     const order = start > 0 ? chatHistoryTrimOrder(source.messages) : undefined;
-    const messages = order ? order.map((index) => source.messages[index]) : source.messages;
+    const messages = order ? Array.from(order, (index) => source.messages[index]) : source.messages;
     // A history entry can project multiple rows; retain its whole sequence group.
     while (start > 0) {
       const seq = readSessionMessageSequence(messages[start]);

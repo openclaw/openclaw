@@ -777,11 +777,11 @@ it.each(["disk", "memory"] as const)(
       deltaCursor: "persisted",
       pagination: pagination(physical.length),
     };
-    expect(snapshot.messages[1]?.__openclaw.seq).toBe(8);
+    expect(nativeHistorySeq(snapshot.messages[1])).toBe(8);
     const request = vi.fn(
       async (_method: string, params: { messageId?: string; cursor?: string }) => {
         if (params.messageId) {
-          const index = physical.findIndex((row) => row.__openclaw.id === params.messageId);
+          const index = physical.findIndex((row) => row["__openclaw"].id === params.messageId);
           expect(index).toBeGreaterThan(0);
           return { messages: [physical[index]], olderCursor: String(index), sessionId: "current" };
         }
@@ -808,7 +808,7 @@ it.each(["disk", "memory"] as const)(
     expect(state.chatHistoryPagination.hasMore).toBe(false);
     expect(state.chatMessages).toHaveLength(physical.length);
     expect(new Set(state.chatMessages.map(nativeHistorySeq))).toEqual(
-      new Set(physical.map((row) => row.__openclaw.seq)),
+      new Set(physical.map(nativeHistorySeq)),
     );
   },
 );

@@ -8,9 +8,9 @@ export function nativeHistoryMessagePosition(message: unknown) {
 }
 
 /** A trimmed snapshot must retain a physical suffix that its older cursor can refill. */
-export function chatHistoryTrimOrder(messages: readonly unknown[]): number[] | undefined {
+export function chatHistoryTrimOrder(messages: readonly unknown[]): Uint32Array | undefined {
   const positions = messages.map(nativeHistoryMessagePosition);
-  let order: number[] | undefined;
+  let order: Uint32Array | undefined;
   for (let start = 0; start < positions.length;) {
     const first = positions[start];
     let end = start + 1;
@@ -30,13 +30,11 @@ export function chatHistoryTrimOrder(messages: readonly unknown[]): number[] | u
         end++;
       }
       if (relocated && inverted) {
-        order ??= messages.map((_, index) => index);
+        order ??= Uint32Array.from({ length: messages.length }, (_, index) => index);
         const physical = order
-          .slice(start, end)
-          .sort((a, b) => positions[a]!.rawSeq - positions[b]!.rawSeq);
-        for (const [offset, index] of physical.entries()) {
-          order[start + offset] = index;
-        }
+          .subarray(start, end)
+          .toSorted((a, b) => positions[a]!.rawSeq - positions[b]!.rawSeq);
+        order.set(physical, start);
       }
     }
     start = end;

@@ -603,7 +603,8 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
+function boundChatSessionSnapshot(incoming: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
+  let snapshot = incoming;
   let messageWeights: number[] = [];
   for (const message of snapshot.messages) {
     const weight = serializedArrayItemWeight(message);
@@ -613,13 +614,12 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     messageWeights.push(weight);
   }
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
-  let start = 0;
   // Every trim before the row display window shares one envelope; measure it once,
   // not once per dropped message group.
   const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
   const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
   let sharedEnvelope: ReturnType<typeof measureChatSnapshotEnvelope> | undefined;
-  while (true) {
+  for (let start = 0; ;) {
     if (start > 0 && start === snapshot.messages.length) {
       return null;
     }
@@ -656,8 +656,8 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     if (start === 0) {
       const order = chatHistoryTrimOrder(snapshot.messages);
       if (order) {
-        snapshot = { ...snapshot, messages: order.map((index) => snapshot.messages[index]) };
-        messageWeights = order.map((index) => messageWeights[index]!);
+        snapshot = { ...incoming, messages: Array.from(order, (i) => incoming.messages[i]) };
+        messageWeights = Array.from(order, (index) => messageWeights[index]!);
       }
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
