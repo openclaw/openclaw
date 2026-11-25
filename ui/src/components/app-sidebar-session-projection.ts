@@ -19,8 +19,8 @@ import {
   catalogSessionActivity,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import { sidebarPinnedSessionRows } from "./app-sidebar-session-types.ts";
 import {
+  sidebarPinnedSessionRows,
   sidebarSessionPagination,
   isListedInPinnedSection,
   type SidebarPinZone,
