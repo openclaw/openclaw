@@ -399,6 +399,9 @@ describe("delivery-queue recovery", () => {
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
+    // Exercise settlement, not deadline expiry under host load. The pacing test
+    // covers real recovery budget deferral with a controlled clock.
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const { result, log } = await recover({ deliver });
     expect(result.recovered, JSON.stringify(log.warn.mock.calls)).toBe(1);
     expect(await getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
