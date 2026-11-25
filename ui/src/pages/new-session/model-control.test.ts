@@ -100,7 +100,11 @@ it("does not borrow a provider for an ambiguous draft target", async () => {
   });
   const agent = { id: "main", model: { primary: "model" } };
   control.load(context, "main", true, { agent });
-  const { find: agentOption } = controlQueries(control, context, "main", agent);
+  const { draw, find: agentOption } = controlQueries(control, context, "main", agent);
+  draw();
+  expect(control.metadataRead).toBeDefined();
+  await control.metadataRead;
+  await vi.dynamicImportSettled();
   await vi.waitFor(() => expect(agentOption("model-option", "openai/model")).not.toBeNull());
   expect(agentOption("thinking-option", "high")).toBeNull();
   expect(agentOption("thinking-slider")).toBeNull();
