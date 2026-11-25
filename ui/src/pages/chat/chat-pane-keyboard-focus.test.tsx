@@ -101,7 +101,7 @@ it.each([
     thread.firstElementChild!.dispatchEvent(
       new KeyboardEvent("keydown", { ...fixture, key, bubbles: true, cancelable: true }),
     );
-    await Promise.resolve();
+    await vi.dynamicImportSettled();
     expect(request).toHaveBeenCalledTimes(loadsHistory ? 1 : 0);
     expect(pane.historyAutoLoadBlocked).toBe(!loadsHistory);
   },
