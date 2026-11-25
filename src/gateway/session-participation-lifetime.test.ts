@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import {
   retainSessionParticipation,
   publishSessionParticipationMemberChange,
@@ -17,7 +17,7 @@ it("keeps inherited invocation custody through retention and authorized incarnat
   };
   const lifetime = retainSessionParticipation(target);
   const released = vi.fn(lifetime.release);
-  const inherited = createAdmittedRunOperatorAuthority({
+  const inherited = createTestOperatorAuthority({
     canonicalIdentity: null,
     profileId: target.profileId,
     scopes: ["operator.sessions.read"],
@@ -66,7 +66,7 @@ it("keeps inherited invocation custody through retention and authorized incarnat
 
 it("participant Stop follows the original profile and exact target, never a matching transport", () => {
   const target = { agentId: "main", sessionKey: "agent:main:scope", sessionId: "current" };
-  const initiator = createAdmittedRunOperatorAuthority({
+  const initiator = createTestOperatorAuthority({
     canonicalIdentity: null,
     profileId: "participant",
     scopes: [],

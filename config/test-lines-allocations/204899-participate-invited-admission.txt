@@ -1,6 +1,6 @@
-5464
+5465
 # Participate split, part 4 of 6 (invited admission): measured with
-# check-test-lines-ratchet against the part-3 branch tip; 5,864 net lines minus
+# check-test-lines-ratchet against the part-3 branch tip; 5,865 net lines minus
 # the ordinary 400-line allowance. This part is the opt-in switch, so it carries
 # the Gateway suites that prove the lower parts' participant limits through the
 # real admission path; before it, nothing can admit a participant run. Reuses the
