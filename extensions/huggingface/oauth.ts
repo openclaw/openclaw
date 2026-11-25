@@ -331,6 +331,16 @@ export function createHuggingfaceOAuthAuthMethod(): ProviderAuthMethod {
     label: "Hugging Face OAuth",
     hint: "Device code (public OAuth app required)",
     kind: "device_code",
+    wizard: {
+      choiceId: "huggingface-oauth",
+      choiceLabel: "Hugging Face OAuth",
+      choiceHint: "Device code (public OAuth app required)",
+      groupId: "huggingface",
+      groupLabel: "Hugging Face",
+      groupHint: "OAuth or API key",
+      methodId: "oauth",
+      onboardingScopes: ["text-inference"],
+    },
     run: login,
   };
 }

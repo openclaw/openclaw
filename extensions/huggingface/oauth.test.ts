@@ -3,6 +3,7 @@ import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sd
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const NOW = 1_800_000_000_000;
 const device = {
@@ -98,7 +99,7 @@ describe("Hugging Face device login", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses a public client and inference-only scope, respects polling backoff, and returns refreshable credentials", async () => {
+  it("resolves the onboarding choice, uses inference-only scope, respects backoff, and returns refreshable credentials", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(respond(device))
@@ -106,7 +107,16 @@ describe("Hugging Face device login", () => {
       .mockResolvedValueOnce(respond({ error: "slow_down" }, 400))
       .mockResolvedValueOnce(respond(token));
     const ctx = context();
-    const result = login(ctx);
+    const choice = manifest.providerAuthChoices.find(
+      (entry) => entry.choiceId === "huggingface-oauth",
+    );
+    const method = registerProvider().auth.find(
+      (entry) => entry.id === choice?.method && entry.wizard?.choiceId === choice?.choiceId,
+    );
+    if (!method) {
+      throw new Error("Hugging Face OAuth onboarding choice was not registered");
+    }
+    const result = method.run(ctx);
     await vi.advanceTimersByTimeAsync(4_999);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0]?.[0]).toBe("https://huggingface.co/oauth/device");
