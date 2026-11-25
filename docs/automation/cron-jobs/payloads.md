@@ -485,6 +485,11 @@ The script may return an object with these optional fields:
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
 
+Before starting a script or condition check that reuses a prepared Docker sandbox,
+OpenClaw checks the container's state. If it has stopped, sandbox provisioning starts
+the existing container before the evaluation begins. A stop during an evaluation
+can still fail that run. Recovery happens before the next evaluation begins.
+
 Plugin reloads invalidate cached script preparation. If a plugin retires during setup,
 OpenClaw refreshes the tools once before starting the script, within the original
 deadline. A failure after the script starts never triggers this setup retry.
