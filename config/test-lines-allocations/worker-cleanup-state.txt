@@ -1,0 +1,3 @@
+# Exact excess for v42 predecessor and bounded rollback coverage after separation.
+# Keeps historical SQLite row/custody preservation and PostgreSQL catalog parity.
+11

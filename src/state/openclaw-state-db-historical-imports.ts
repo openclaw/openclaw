@@ -10,6 +10,7 @@ import {
   migratePredicateColumnsV21,
   statePredicateColumnMigration,
 } from "./openclaw-state-db-schema-v21-columns.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const table = "worker_session_placements";
@@ -26,7 +27,10 @@ function migrateHistoricalRepositoryPreparation(db: DatabaseSync): boolean {
   if (!tableHasColumn(db, table, "repository_preparation")) {
     return false;
   }
-  const canonical = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table).replace(
+  // The v21 fingerprint and fenced rebuild predate the v42 recovery column.
+  const canonical = withLegacyWorkerLossRecovery(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table),
+  ).replace(
     "  remote_workspace_dir TEXT,",
     "  " + archivalColumn + ",\n  remote_workspace_dir TEXT,",
   );

@@ -68,6 +68,8 @@ export const fixtureUpdateMigration = {
 `,
 );
 const maintenance = "src/state/openclaw-state-db-maintenance.ts";
+const migrationTail =
+  previous.schema === 42 ? "stateWorkerLossRecoveryMigration" : "stateApprovalProfileMigration";
 patch(
   maintenance,
   'import type { DatabaseSync } from "node:sqlite";',
@@ -75,13 +77,13 @@ patch(
 );
 patch(
   maintenance,
-  "  stateApprovalProfileMigration,\n] as const;",
-  "  stateApprovalProfileMigration,\n  fixtureUpdateMigration,\n] as const;",
+  `  ${migrationTail},\n] as const;`,
+  `  ${migrationTail},\n  fixtureUpdateMigration,\n] as const;`,
 );
 patch(
   maintenance,
-  "    stateApprovalProfileMigration,\n  ];",
-  "    stateApprovalProfileMigration,\n    fixtureUpdateMigration,\n  ];",
+  `    ${migrationTail},\n  ];`,
+  `    ${migrationTail},\n    fixtureUpdateMigration,\n  ];`,
 );
 patch(
   "src/state/openclaw-state-schema-runtime.ts",
@@ -105,8 +107,8 @@ patch(
 );
 patch(
   "src/infra/database-engine/state-port-descriptor.ts",
-  "38, 39, 40].includes(sourceVersion)",
-  `38, 39, 40, ${previous.schema}].includes(sourceVersion)`,
+  `${previous.schema - 3}, ${previous.schema - 2}, ${previous.schema - 1}].includes(`,
+  `${previous.schema - 3}, ${previous.schema - 2}, ${previous.schema - 1}, ${previous.schema}].includes(`,
 );
 const env = {
   ...process.env,

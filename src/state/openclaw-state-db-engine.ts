@@ -51,6 +51,7 @@ import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker
 import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
 import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -176,14 +177,21 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
+  const statePostgresSchemaV41 = {
+    postgres: withLegacyWorkerLossRecovery(statePostgresSchema.postgres),
+    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyWorkerLossRecovery(fragment.sql),
+    })),
+  };
   const statePostgresSchemaV40 = {
-    ...statePostgresSchema,
-    postgres: withLegacyApprovalProfile(statePostgresSchema.postgres),
+    ...statePostgresSchemaV41,
+    postgres: withLegacyApprovalProfile(statePostgresSchemaV41.postgres),
   };
   const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres);
   const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
   const statePostgresSchemaV39 = {
-    ...statePostgresSchema,
+    ...statePostgresSchemaV40,
     postgres: v39Postgres,
     // Main builds used both shapes while the numeric state version was 39.
     postgresWithoutOptionalColumn: {
@@ -193,7 +201,7 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     },
   };
   const statePostgresSchemaV38 = {
-    ...statePostgresSchema,
+    ...statePostgresSchemaV40,
     postgres: withLegacyWorkerRetention(v39WithoutBootstrapDeferred),
   };
   const statePostgresSchemaV37 = {
@@ -425,9 +433,17 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 41,
       fromSchema: statePostgresSchemaV40,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV41,
       sql: `ALTER TABLE operator_approvals ADD COLUMN requested_by_profile_id text COLLATE "C";
         ${statePostgresVersionSql(41)}`,
+    },
+    {
+      version: 42,
+      fromSchema: statePostgresSchemaV41,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE IF EXISTS session_repository_workspaces ADD COLUMN recovery_json text COLLATE "C";
+        ALTER TABLE worker_session_placements ADD COLUMN confirmed_loss_recovery_json text COLLATE "C";
+        ${statePostgresVersionSql(42)}`,
     },
   ];
 }
@@ -556,8 +572,8 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     admitStatePostgres(db, false);
     return;
   }
-  const repositorySql =
-    facts.version < 38 ? withLegacyRepositoryDiskAuthority(fragment.sql) : fragment.sql;
+  const lossSql = facts.version < 42 ? withLegacyWorkerLossRecovery(fragment.sql) : fragment.sql;
+  const repositorySql = facts.version < 38 ? withLegacyRepositoryDiskAuthority(lossSql) : lossSql;
   const templateSql =
     facts.version < 36 ? withLegacyTemplateStateSchema(repositorySql) : repositorySql;
   const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(templateSql) : templateSql;
@@ -577,7 +593,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     storeId: facts.storeId,
     store: facts.store,
     version: facts.version,
-    schema: stateEngineSchema,
+    schema,
     recordSchema: true,
   });
   admitStatePostgres(db, false);

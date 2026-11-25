@@ -78,6 +78,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
           "operator_approvals",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
+          "worker_session_placements",
           "worker_environments",
           "schema_meta",
           "config_machine_state",
@@ -111,6 +112,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         expect(database.db.prepare("SELECT * FROM session_repository_workspaces").get()).toEqual({
           ...f.repository,
           disk_authority_json: null,
+          recovery_json: null,
         });
       } else {
         expect(

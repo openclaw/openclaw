@@ -30,7 +30,6 @@ import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-sto
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
-import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -60,12 +59,13 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  for (const version of [41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
+  for (const version of [42, 41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
-  // An already-loaded updater can read replacement catalog assets after a build swap.
-  const beforeApprovalProfile = withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL);
-  const beforeProvisionSource = withLegacyWorkerProvisionSource(beforeApprovalProfile);
+  // An already-loaded v40 updater can read replacement catalog assets after a build swap.
+  const beforeProvisionSource = withLegacyWorkerProvisionSource(
+    getOpenClawStatePredecessorSchema(40),
+  );
   add("state-before-provision-source", "state", beforeProvisionSource);
   const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(beforeProvisionSource);
   add("state-before-bootstrap-deferred", "state", beforeBootstrap);
@@ -152,9 +152,10 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
         }),
       );
       for (const [era, schema] of [
-        ["before-v41", beforeApprovalProfile],
+        ["before-v42", getOpenClawStatePredecessorSchema(41)],
         ["before-provision-source", beforeProvisionSource],
         ["before-bootstrap-deferred", beforeBootstrap],
+        ["before-v41", getOpenClawStatePredecessorSchema(40)],
         ["before-v40", getOpenClawStatePredecessorSchema(39)],
       ] as const) {
         add(
