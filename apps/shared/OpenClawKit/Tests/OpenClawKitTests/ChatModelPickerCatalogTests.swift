@@ -51,7 +51,7 @@ struct ChatModelPickerCatalogTests {
     }
 
     @Test func `the current model leads Recent unless it is a favorite, and the stored recents stay as they are`() {
-        let choices = ["a/1", "a/2", "a/3", "a/4", "a/5"].map { catalogModel($0) }
+        let choices = ["a/1", "a/2", "a/3", "a/4", "a/5"].map { catalogModel($0) } + [catalogModel("b/1")]
         let recents = ["a/2", "a/3", "a/4"]
         func recentIDs(current: String?, favorites: [String] = []) -> [String] {
             ChatModelPickerStore.catalog(choices: choices, favorites: favorites, recents: recents, current: current)
@@ -76,6 +76,23 @@ struct ChatModelPickerCatalogTests {
             recents: recents,
             current: "a/6")
         #expect(locked.recents.map(\.selectionID) == recents)
+    }
+
+    @Test func `with one provider the current model stays in its list, not in Recent`() {
+        let choices = ["a/1", "a/2", "a/3"].map { catalogModel($0) }
+        let catalog = ChatModelPickerStore.catalog(
+            choices: choices,
+            favorites: [],
+            recents: ["a/2"],
+            current: "a/1")
+
+        #expect(catalog.providers.count == 1)
+        #expect(catalog.recents.map(\.selectionID) == ["a/2"])
+        // A stored recent or favorite that is current keeps its place, as before.
+        #expect(ChatModelPickerStore.catalog(choices: choices, favorites: [], recents: ["a/1"], current: "a/1")
+            .recents.map(\.selectionID) == ["a/1"])
+        #expect(ChatModelPickerStore.catalog(choices: choices, favorites: ["a/1"], recents: [], current: "a/1")
+            .favorites.map(\.selectionID) == ["a/1"])
     }
 
     @Test func `one provider gives one section with all of its models`() {

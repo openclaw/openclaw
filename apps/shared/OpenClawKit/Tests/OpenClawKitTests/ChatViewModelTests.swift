@@ -9547,7 +9547,8 @@ struct ChatViewModelTests {
 
     @Test @MainActor func `the picker shows the session's model in Recent without storing it`() async throws {
         let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
-        let other = modelChoice(id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "openai")
+        // A second provider, so the root lists providers rather than one provider's models.
+        let other = modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic")
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse(
