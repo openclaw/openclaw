@@ -185,7 +185,9 @@ export async function upgradeStateDirectory(params: {
         stateDir,
         restore.generation,
         readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
-        new Set(protectedTargets.map((target) => target.path)),
+        new Set(
+          restore.existing?.files.filter((file) => file.preimage !== null).map((file) => file.live),
+        ),
         { config, activeAnchors: inventory.targets.map((target) => target.path), warn: log.warn },
       );
     }

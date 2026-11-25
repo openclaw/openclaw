@@ -10,6 +10,8 @@ import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import type { DatabaseTarget } from "./state-upgrade-databases.js";
 import { beginStateUpgradeRestore, publishStateUpgradeRestore } from "./state-upgrade-restore.js";
 
@@ -250,4 +252,68 @@ it("publishes an empty trial receipt once and preserves complete existing receip
   expect(fs.statSync(f.image).ino).toBe(image.ino);
   expect(value(f.image)).toBe("original");
   expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
+});
+
+it("lets the frozen launcher remove a newly created canonical agent store and restore existing rows", async () => {
+  const f = await fixture();
+  const agentPath = path.join(f.root, "agents", "new", "agent", "openclaw-agent.sqlite");
+  const target: DatabaseTarget = {
+    kind: "agent",
+    agentId: "new",
+    path: agentPath,
+    version: 0,
+    minReader: 0,
+    engine: "sqlite",
+  };
+  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), {
+    targets: [...f.capture.targets, target],
+    config: {},
+  });
+  const manifest = JSON.parse(fs.readFileSync(f.manifest, "utf8")) as {
+    files: Array<{ live: string; preimage: string | null }>;
+  };
+  const agentFiles = ["", "-wal", "-shm", "-journal", ".seal"].map(
+    (suffix) => `${agentPath}${suffix}`,
+  );
+  expect(manifest.files.filter((entry) => entry.live.startsWith(agentPath))).toEqual(
+    agentFiles.map((live) => ({ live, preimage: null })),
+  );
+  expect(fs.existsSync(agentPath)).toBe(false);
+  fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+  {
+    using agent = new DatabaseSync(agentPath);
+    ensureOpenClawAgentSchema(agent, "new", agentPath);
+    expect(
+      agent
+        .prepare(
+          "SELECT role, agent_id, schema_version FROM schema_meta WHERE meta_key = 'primary'",
+        )
+        .get(),
+    ).toEqual({ role: "agent", agent_id: "new", schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value = 'candidate'");
+  }
+  // A failed candidate can leave committed WAL companions for the old launcher to remove.
+  const crashed = spawnSync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE schema_meta SET app_version='candidate'");
+    process.kill(process.pid, "SIGKILL");
+  `,
+    agentPath,
+  ]);
+  expect(crashed.error).toBeUndefined();
+  expect(crashed.status, crashed.stderr?.toString()).not.toBe(0);
+  expect(fs.statSync(`${agentPath}-wal`).size).toBeGreaterThan(0);
+  runInNewContext(
+    `${ROLLBACK_SOURCE}\nretirePlans(stateDir,generation); restoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
+    { fs, path, stateDir: f.root, generation: f.generation, suffix: `.pre-${f.generation}` },
+  );
+  for (const file of agentFiles) {
+    expect(fs.existsSync(file)).toBe(false);
+  }
+  expect(value(f.file)).toBe("original");
 });

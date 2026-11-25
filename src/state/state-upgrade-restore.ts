@@ -22,6 +22,7 @@ type RestoreManifest = {
 };
 export type StateUpgradeRestore = {
   file: string;
+  stateDir: string;
   runId: string;
   generation: string;
   existing: RestoreManifest | undefined;
@@ -100,6 +101,7 @@ export async function beginStateUpgradeRestore(
   const existing = readManifest(file);
   return {
     file,
+    stateDir: path.dirname(prefix),
     runId: trial.runId,
     generation: resolveRuntimeServiceBuildId() ?? VERSION,
     existing,
@@ -151,7 +153,7 @@ export async function publishStateUpgradeRestore(
     if (
       plan.targets.some(
         ({ path: live }) =>
-          !files.get(live)?.preimage ||
+          !files.has(live) ||
           COMPANIONS.some((suffix) => files.get(`${live}${suffix}`)?.preimage !== null),
       )
     ) {
@@ -166,6 +168,12 @@ export async function publishStateUpgradeRestore(
   const files: RestoreFile[] = [];
   for (const target of plan.targets) {
     const live = target.path;
+    if (!fs.existsSync(live)) {
+      for (const suffix of ["", ...COMPANIONS]) {
+        files.push({ live: `${live}${suffix}`, preimage: null });
+      }
+      continue;
+    }
     const preimage = `${live}.pre-${restore.generation}`;
     const temporary = `${preimage}.tmp-${process.pid}`;
     if (target.engine === "postgres") {
@@ -200,6 +208,24 @@ export async function publishStateUpgradeRestore(
     }
   }
   const manifest: RestoreManifest = { v: 1, runId: restore.runId, files };
+  // Frozen launchers consume this shipped receipt to remove stores the trial
+  // creates. No copied paths, replacements or forward swap operations remain.
+  const targets = new Set(plan.targets.map((target) => target.path));
+  const additions = files
+    .filter((entry) => entry.preimage === null && targets.has(entry.live))
+    .flatMap(({ live }) =>
+      ["", ...COMPANIONS].map((suffix) => ({ kind: "add", live: `${live}${suffix}` })),
+    );
+  if (additions.length > 0) {
+    const applied = path.join(restore.stateDir, `.upgraded-${restore.generation}.json`);
+    const pending = `${applied}.tmp`;
+    fs.writeFileSync(pending, JSON.stringify({ appVersion: restore.generation, ops: additions }), {
+      mode: 0o600,
+    });
+    fsyncPath(pending);
+    fs.renameSync(pending, applied);
+    fsyncPath(restore.stateDir, true);
+  }
   const temporary = `${restore.file}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(manifest), { mode: 0o600 });
   fsyncPath(temporary);
@@ -259,7 +285,7 @@ export async function pruneGenerations(
   const retainedAnchors = [
     ...postgres.activeAnchors,
     ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
-  ];
+  ].filter((file) => fs.existsSync(file));
   const protectedNamespaces = new Set(
     retainedAnchors.flatMap((file) => {
       const engine = readBackupEngine(file);

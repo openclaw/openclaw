@@ -88,9 +88,7 @@ export async function discoverDatabases(
           `Database family ${pathname} is incomplete. Preserve its WAL/journal and restore the matching database backup before retrying the update.`,
         );
       }
-      if (kind === "agent" && configuredAgents.some((target) => target.path === pathname)) {
-        targets.push({ kind, agentId, path: pathname, version: 0, minReader: 0, engine: "sqlite" });
-      }
+      targets.push({ kind, agentId, path: pathname, version: 0, minReader: 0, engine: "sqlite" });
       return;
     }
     if (!isSqliteFile(pathname)) {
@@ -211,14 +209,14 @@ export function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseT
 
 /** Only a raised reader floor needs a rollback image. Keep classification with inventory. */
 export function floorRaisingDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
-  return outdatedDatabases(targets).filter((target) => {
+  return targets.filter((target) => {
     const supported = expectedVersion(target);
     const additive =
       target.kind === "agent" &&
       target.version === AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
       supported === AGENT_MEMBER_ACCESS_SCHEMA_VERSION &&
       getAgentMemberAccessMinReader() < supported;
-    return !additive && supported > target.minReader;
+    return target.version < supported && !additive && supported > target.minReader;
   });
 }
 
@@ -236,6 +234,10 @@ export function stateUpgradeRefusal(
   for (const target of protectedTargets) {
     const relative = path.relative(stateDir, target.path);
     const stat = fs.statSync(target.path, { throwIfNoEntry: false });
+    // An absent store is restored by the existing addition-removal receipt, not the scan.
+    if (!stat) {
+      continue;
+    }
     if (
       !isUpgradeRestorePath(stateDir, target.path) ||
       path.relative(realStateDir, resolvePathViaExistingAncestorSync(target.path)) !== relative ||

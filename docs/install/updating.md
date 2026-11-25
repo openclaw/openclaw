@@ -247,6 +247,10 @@ release's receipt. The complete manifest and independent images are durable
 before live mutation. Retries reuse their immutable originals rather than
 re-imaging changed state. A trial with no floor-raising step records an empty
 database restore plan.
+Stores that do not exist before boot have null preimages. The existing
+`.upgraded-<build-generation>.json` receipt retains only their `kind: add` entries,
+so installed launchers remove those stores and their companions on rollback.
+It no longer records copied paths or replacement operations.
 
 The `.restore` receipt stays with its prepared release. Independent
 `.pre-<build-generation>` images remain under the existing `pruneGenerations`
