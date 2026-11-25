@@ -41,6 +41,12 @@ import { readTrial, resolvePrefix, switchLink } from "./store.js";
 import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
+// Keep the fixed November fixtures independent of the checked-out release version.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.11.20",
+}));
+
 const exec = promisify(execFile);
 describe("release preparation", () => {
   it("keeps the repository HEAD recognizable as release-aware", async () => {
