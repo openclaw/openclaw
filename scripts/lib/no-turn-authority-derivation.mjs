@@ -52,11 +52,7 @@ export const OWNER_PRODUCER_FILES = new Set([
   "extensions/facetime/src/call-events.ts", // allowlisted caller claim, host trust-gated
   "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
   "src/plugins/registry-runtime.ts", // host trust gate for a plugin's ingress owner claim
-  "src/agents/agent-command-local.ts", // CLI `--local`, local host
-  "src/commands/message.ts", // CLI `message`, local host
-  "src/mcp/codex-supervision-tools-serve.ts", // standalone MCP on the local host
-  "src/gateway/mcp-http.request.ts", // MCP loopback owner token
-  "src/worker/embedded-agent.runtime.ts", // worker placement inside an admitted Gateway run
+  "src/worker/embedded-agent.runtime.ts", // remote worker: its run's grant is not on the protocol
   // Requests, not turns: owner = the connection's admin scope (OA3 request grant).
   "src/gateway/openai-compatible-http.ts",
   "src/gateway/server-methods/conversations.ts",

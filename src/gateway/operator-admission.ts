@@ -244,6 +244,9 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   });
 }
 
+/** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
+export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
+
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<
   UserChannelIdentity & { authentication: "verified" | "asserted" }
