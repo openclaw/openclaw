@@ -12,6 +12,7 @@ export type RoleDefinition = {
     maxInvitedAccess?: InvitedAccess;
     invitedPermission?: InvitedPermission;
     invitedTools?: string[];
+    invitedAlsoAllow?: string[];
   };
   sandbox?: "inherit" | "required";
   agents: "*" | string[];
@@ -74,9 +75,10 @@ export function isAdminRole(definition: RoleDefinition): boolean {
   return definition.scopes.includes(ADMIN_SCOPE);
 }
 
-/** Effective participant tools: the explicit list, or every default. */
+/** Effective participant tools: the explicit list, or every default plus any additions. */
 export function participantTools(definition: RoleDefinition): readonly string[] {
-  return definition.sessions.invitedTools ?? DEFAULT_PARTICIPANT_TOOLS;
+  const { invitedTools, invitedAlsoAllow } = definition.sessions;
+  return invitedTools ?? [...new Set([...DEFAULT_PARTICIPANT_TOOLS, ...(invitedAlsoAllow ?? [])])];
 }
 
 /** Drops fields the Gateway would reject for the chosen session access. */
@@ -86,9 +88,11 @@ export function normalizeRoleDefinition(definition: RoleDefinition): RoleDefinit
     delete sessions.maxInvitedAccess;
     delete sessions.invitedPermission;
     delete sessions.invitedTools;
+    delete sessions.invitedAlsoAllow;
   } else if (sessions.maxInvitedAccess !== "send") {
     delete sessions.invitedPermission;
     delete sessions.invitedTools;
+    delete sessions.invitedAlsoAllow;
   }
   return { ...definition, sessions };
 }

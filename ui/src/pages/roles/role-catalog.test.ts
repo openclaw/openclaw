@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
+import { GatewayOperatorRoleDefinitionSchema } from "../../../../src/config/zod-schema.gateway-roles.js";
 import {
   buildDefaultRole,
   buildRoleCreate,
   buildRoleDelete,
   buildRoleEdit,
   normalizeRoleDefinition,
+  participantTools,
   planAdminRole,
   presetDefinition,
   profilesByRole,
@@ -62,6 +64,22 @@ describe("role catalog", () => {
         sessions: { ...collaborator.sessions, maxInvitedAccess: "read", invitedPermission: "full" },
       }).sessions,
     ).toEqual({ others: "invited", maxInvitedAccess: "read" });
+  });
+
+  it("keeps a role with additional participant tools valid through edits", () => {
+    const extended: RoleDefinition = {
+      ...collaborator,
+      sessions: { others: "invited", maxInvitedAccess: "send", invitedAlsoAllow: ["browser"] },
+    };
+    expect(participantTools(extended)).toContain("browser");
+    expect(participantTools(extended)).toContain("read");
+    const valid = (definition: RoleDefinition) =>
+      GatewayOperatorRoleDefinitionSchema.safeParse(normalizeRoleDefinition(definition)).success;
+    expect(valid(extended)).toBe(true);
+    expect(valid({ ...extended, sessions: { ...extended.sessions, others: "write" } })).toBe(true);
+    expect(
+      valid({ ...extended, sessions: { ...extended.sessions, maxInvitedAccess: "read" } }),
+    ).toBe(true);
   });
 
   it("flags roles that could not connect or start work", () => {

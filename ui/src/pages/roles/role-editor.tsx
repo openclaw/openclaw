@@ -432,7 +432,9 @@ export function RoleEditor(props: {
                     onChange={(value) =>
                       edit((role) => {
                         if (value === "custom") {
-                          role.sessions.invitedTools = [...DEFAULT_PARTICIPANT_TOOLS];
+                          // The explicit list replaces defaults plus additions; both can't be set.
+                          role.sessions.invitedTools = [...participantTools(role)];
+                          delete role.sessions.invitedAlsoAllow;
                         } else {
                           delete role.sessions.invitedTools;
                         }

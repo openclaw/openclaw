@@ -297,6 +297,84 @@ suite.define(() => {
     });
   });
 
+  it("finishes turning roles on after assigning yourself closes your connection", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const config = rolesConfig();
+      const { default: _default, ...roles } = config.gateway.roles;
+      const gateway = await openRoles(page, undefined, "", {
+        config: { gateway: { roles: roles as typeof config.gateway.roles } },
+        selfProfileId: "p-dev",
+      });
+      await page.getByLabel("Role for people without one").selectOption("operator");
+      const dialog = page.locator(".roles-dialog");
+      await dialog.locator(".roles-picker__row").filter({ hasText: "Lena Fischer" }).click();
+      await gateway.setMethodDelay("users.setRole", 1500);
+      await dialog.getByRole("button", { name: "Turn on roles" }).click();
+      // Others are assigned first; the Gateway closes your connection when your own role changes.
+      await expect.poll(async () => (await gateway.getRequests("users.setRole")).length).toBe(2);
+      const requests = await gateway.getRequests("users.setRole");
+      expect(requests.map((request) => request.params)).toEqual([
+        { profileId: "p-lena", role: "administrator" },
+        { profileId: "p-dev", role: "administrator" },
+      ]);
+      await gateway.closeLatest(1008, "role changed");
+      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+      const [request] = await gateway.getRequests("config.patch");
+      assert(request && isRecord(request.params) && typeof request.params.raw === "string");
+      expect(JSON.parse(request.params.raw)).toEqual({
+        gateway: { roles: { default: "operator" } },
+      });
+    });
+  });
+
+  it("reads the config again when a save is refused", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await openRoles(page, undefined, "?role=collaborator");
+      await page.getByText("What this role allows").waitFor();
+      await gateway.setMethodResponse("config.patch", {
+        __mockError: { code: "INVALID_REQUEST", message: "config changed since last load" },
+      });
+      await page
+        .locator("label.roles-scope")
+        .filter({ hasText: "Approve agent actions" })
+        .locator("input")
+        .check();
+      const reads = (await gateway.getRequests("config.get")).length;
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(reads);
+    });
+  });
+
+  it("moves saved assignments off a deleted role before roles are turned on", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const config = rolesConfig();
+      const { default: _default, ...roles } = config.gateway.roles;
+      const gateway = await openRoles(page, undefined, "?role=collaborator", {
+        config: { gateway: { roles: roles as typeof config.gateway.roles } },
+      });
+      // Without a default role, a saved assignment is not yet anyone's effective role.
+      await gateway.setMethodResponse("users.list", {
+        profiles: [
+          {
+            ...profile("p-sam", "Sam Ortiz", "collaborator", "assigned"),
+            effectiveRole: undefined,
+            roleSource: undefined,
+          },
+        ],
+      });
+      await page.getByText("What this role allows").waitFor();
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      const dialog = page.locator(".roles-dialog");
+      await dialog.getByRole("button", { name: "Move people and delete" }).click();
+      await expect.poll(async () => (await gateway.getRequests("users.setRole")).length).toBe(1);
+      const [moved] = await gateway.getRequests("users.setRole");
+      expect(moved?.params).toEqual({ profileId: "p-sam", role: expect.any(String) });
+    });
+  });
+
   it("tells non-administrators that only administrators manage roles", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await openRoles(page, ["operator.read", "operator.write"]);

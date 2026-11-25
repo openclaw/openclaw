@@ -368,14 +368,18 @@ function DeleteRoleDialog(props: DialogProps) {
     return fallback && fallback !== props.role ? fallback : (others()[0]?.name ?? "");
   };
   const [replacement, setReplacement] = createSignal(() => initialReplacement());
-  const people = () => props.roles.people().get(props.role) ?? [];
+  // Saved assignments count even before roles turn on, when they are not yet anyone's effective role.
+  const people = () =>
+    props.roles
+      .profiles()
+      .filter((profile) => profile.effectiveRole === props.role || profile.role === props.role);
   const mappings = () =>
     Object.values(catalog().githubMappings).filter((value) => value === props.role).length;
   const remove = async () => {
     const role = props.role;
     const target = replacement();
     // Mapped people follow their repointed GitHub mapping; only explicit assignments move here.
-    const assigned = people().filter((profile) => profile.roleSource === "assigned");
+    const assigned = people().filter((profile) => profile.role === role);
     if (assigned.length && !(await props.roles.assign(assigned, target))) {
       return;
     }
@@ -457,18 +461,35 @@ function EnableDefaultDialog(props: DialogProps) {
     ) {
       return;
     }
-    if (chosen().length && !(await props.roles.assign(chosen(), admin.name))) {
+    const finish = async () => {
+      if (
+        await props.roles.patch(
+          (base) => buildDefaultRole(base, role),
+          "Set default role " + role,
+          t("rolesPage.saved"),
+        )
+      ) {
+        props.onClose();
+      }
+    };
+    // Assigning yourself closes your own connection, so you go last and the default is set
+    // once you reconnect as an administrator.
+    const others = chosen().filter((profile) => profile.id !== self());
+    const mine = chosen().filter((profile) => profile.id === self());
+    if (others.length && !(await props.roles.assign(others, admin.name))) {
       return;
     }
-    if (
-      await props.roles.patch(
-        (base) => buildDefaultRole(base, role),
-        "Set default role " + role,
-        t("rolesPage.saved"),
-      )
-    ) {
-      props.onClose();
+    if (mine.length) {
+      props.roles.resumeAfterReconnect(() => void finish());
+      if (!(await props.roles.assign(mine, admin.name))) {
+        if (props.roles.state().error) {
+          props.roles.cancelResume();
+        }
+        return;
+      }
+      props.roles.cancelResume();
     }
+    await finish();
   };
   return (
     <Frame

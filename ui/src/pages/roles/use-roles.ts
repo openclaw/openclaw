@@ -5,6 +5,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -29,6 +30,8 @@ export function useRoles() {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const writer = new RolesWriter(() => setRevision((value) => value + 1));
   let lifetime = Promise.withResolvers<void>();
+  // Assigning yourself closes your own connection; a step left to finish runs on the next one.
+  let resume: { scope: ReturnType<GatewayPageBinding["capture"]>; task: () => void } | null = null;
   function retirePresentation() {
     lifetime.resolve();
     lifetime = Promise.withResolvers<void>();
@@ -37,11 +40,18 @@ export function useRoles() {
     getGateway: () => context.gateway,
     onIdentityChange: () => writer.update({ busy: false, error: null, notice: null }),
     onSnapshot: ({ snapshot }) => {
-      if (
-        snapshot.phase === "connected" &&
-        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
-      ) {
+      if (snapshot.phase !== "connected") {
+        return;
+      }
+      if (!canCallGatewayMethod(snapshot, "config.patch", "operator.admin")) {
         retirePresentation();
+        resume = null;
+        return;
+      }
+      if (resume && !(resume.scope && gateway.isCurrent(resume.scope))) {
+        const { task } = resume;
+        resume = null;
+        queueMicrotask(task);
       }
     },
     invalidateRequests: () => {
@@ -129,7 +139,15 @@ export function useRoles() {
       return row?.mergedInto ?? id ?? null;
     },
     clearMessages: () => writer.update({ error: null, notice: null }),
-    reload: () => context.runtimeConfig.ensureLoaded(),
+    /** Runs `task` once the connection is replaced, e.g. after assigning yourself a role. */
+    resumeAfterReconnect: (task: () => void) => {
+      resume = { scope: gateway.capture(), task };
+    },
+    cancelResume: () => {
+      resume = null;
+    },
+    /** Reads the current config again, e.g. after another administrator's change was refused. */
+    reload: () => context.runtimeConfig.refresh(),
     patch(
       build: (base: Readonly<Record<string, unknown>>) => RolePatch | RolePatchError,
       note: string,
@@ -147,6 +165,9 @@ export function useRoles() {
         // Awaited: a refresh joins any read in flight, so the next write waits for a fresh one.
         if (ok) {
           await directorySource.load(true);
+        } else if (isCurrent()) {
+          // A refused write usually means the config moved; read it so Reload shows the new version.
+          await context.runtimeConfig.refresh({ background: true });
         }
         return ok;
       });
