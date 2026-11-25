@@ -93,6 +93,27 @@ compare actual operands: changing the command cannot turn normal admission into 
 
 ## Check the hosted npm source and package build
 
+For a **new publish-purpose all-group FRV**, add `-f preflight_first=true` to
+the `pnpm ci:full-release` command above to hold expensive validation until the
+candidate passes its hosted source and package build checks. Admission tooling
+(P) and qualification tooling (Q) must both support this input. The default
+starts independent jobs in parallel.
+
+**Prepare initial release npm artifacts** starts the usual npm producer once. On the
+first parent attempt it waits for the source aggregate and verified raw package
+descriptor before CI, plugin, Docker, performance, and other requested validation
+jobs can start. The parallel schedule’s **Prepare release npm artifacts** job shows as skipped.
+When existing publication artifacts pass their normal reuse checks, the npm
+preparation job returns them directly. SDK, dependency, and package qualification
+retain their existing checks and publication requirements.
+
+This ordering saves downstream runner time when source or packaging fails.
+For a healthy candidate those jobs start later. Changing this scheduling option
+keeps green evidence eligible under the existing coverage rules. On failure, inspect the source or package job, repair the
+candidate and start a fresh all-group request if the other children never
+started. Retrying the parent can recover previously dispatched children. It
+cannot turn a failed initial preflight into a successful one.
+
 An all-group Full Release Validation run already starts these checks in its
 **Prepare npm artifacts** child. Follow that child when one exists. Its
 `*-artifacts-npm-dispatch` artifact contains `dispatch.json`: match
