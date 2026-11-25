@@ -10,11 +10,8 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearInternalHooks,
-  registerInternalHook,
-  type AgentBootstrapHookContext,
-} from "../hooks/internal-hooks.js";
+import type { AgentBootstrapHookContext } from "../hooks/internal-hook-types.js";
+import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -221,6 +218,37 @@ describe("resolveBootstrapFilesForRun", () => {
         "excluding automatic memory context: selected memory runtime does not support provenance classification",
       );
     }
+  });
+
+  it("reports a provenance exclusion once per file across runs", async () => {
+    const workspaceDir = await workspace({
+      "MEMORY.md": "quarantined memory",
+      "USER.md": "trusted user",
+    });
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [
+        { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
+        { relativePath: DEFAULT_USER_FILENAME, originClass: "agent" },
+      ],
+    });
+    const warnings: string[] = [];
+    for (const sessionLabel of ["agent:main:first", "agent:main:second"]) {
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+        warn: makeBootstrapWarn({
+          sessionLabel,
+          workspaceDir,
+          warn: (message) => warnings.push(message),
+        }),
+      });
+      expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    }
+    expect(warnings).toEqual([
+      "excluding MEMORY.md from automatic memory context: memory provenance is untrusted; run `openclaw doctor` for the last recorded write (sessionKey=agent:main:first)",
+    ]);
   });
   afterEach(async () => {
     clearInternalHooks();

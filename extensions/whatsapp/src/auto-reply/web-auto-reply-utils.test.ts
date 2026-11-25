@@ -67,7 +67,7 @@ it("uses @lid reverse mapping for mentions and self identity", async () => {
       }),
     ).toBe(true);
 
-    expect(mentionsBot({ body: "1777 ping", selfJid: "777@lid" })).toBe(true);
+    expect(mentionsBot({ body: "@1777 ping", selfJid: "777@lid" })).toBe(true);
   });
 });
 

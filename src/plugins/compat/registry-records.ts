@@ -161,6 +161,19 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
   PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD,
   CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD,
+  sdkCompatRecord("plugin-sdk-implicit-default-model", {
+    deprecated: "2026-11-21",
+    warningStarts: "2026-11-21",
+    removalGate: "stable-deprecation-period",
+    replacement:
+      "Read the agent's model with `resolveDefaultModelForAgent` (or `runtime.modelConfig.resolveDefaultModelForAgent`), which returns undefined when no model is configured; write provider/model refs instead of relying on a bare-id provider",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#implicit-default-model",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-runtime.DEFAULT_PROVIDER",
+      "PluginRuntime.agent.defaults",
+    ],
+    diagnostics: ["TypeScript @deprecated annotation and shipped Plugin SDK surface check"],
+  }),
   sdkCompatRecord("plugin-sdk-session-header-link", {
     deprecated: "2026-10-12",
     warningStarts: "2026-10-12",

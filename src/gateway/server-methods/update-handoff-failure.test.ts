@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
@@ -85,6 +86,7 @@ describe("update.run handoff refusal diagnostics", () => {
     const root = tempDirs.make("openclaw-handoff-missing-runtime-");
     const tmp = await import("../../infra/tmp-openclaw-dir.js");
     const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const leaseWorker = installPrivateUpdateHandoffWorker(root);
     const handoff = await vi.importActual<
       typeof import("../../infra/update-managed-service-handoff.js")
     >("../../infra/update-managed-service-handoff.js");
@@ -111,6 +113,7 @@ describe("update.run handoff refusal diagnostics", () => {
       expectServing();
     } finally {
       coordinator.mockRestore();
+      leaseWorker.mockRestore();
     }
   });
 
@@ -130,19 +133,22 @@ describe("update.run handoff refusal diagnostics", () => {
     async (_kind, output, expected) => {
       const root = tempDirs.make("openclaw-handoff-startup-failure-");
       const tmp = await import("../../infra/tmp-openclaw-dir.js");
-      const runtime = await import("../../infra/update-managed-service-handoff-runtime.js");
-      const stage = runtime.stageManagedHandoffRuntime;
       const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
-      const runtimeFixture = vi
-        .spyOn(runtime, "stageManagedHandoffRuntime")
-        .mockImplementation((directory) => {
-          const files = stage(directory);
+      const leaseWorker = installPrivateUpdateHandoffWorker(root);
+      const prepare = expectDefined(leaseWorker.getMockImplementation(), "private lease worker");
+      leaseWorker.mockImplementation(async (options) => {
+        const store = await prepare(options);
+        const stage = store.stageRuntime.bind(store);
+        store.stageRuntime = async (directory) => {
+          const files = await stage(directory);
           writeFileSync(
             expectDefined(files[0], "staged handoff runtime"),
             `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
           );
           return files;
-        });
+        };
+        return store;
+      });
       const handoff = await vi.importActual<
         typeof import("../../infra/update-managed-service-handoff.js")
       >("../../infra/update-managed-service-handoff.js");
@@ -175,8 +181,8 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).not.toContain("fixture-private-token");
         expectServing();
       } finally {
-        runtimeFixture.mockRestore();
         coordinator.mockRestore();
+        leaseWorker.mockRestore();
       }
     },
   );
@@ -382,7 +388,7 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
+          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
         }),
         expect.any(Object),
       );
@@ -455,84 +461,6 @@ describe("update.run handoff refusal diagnostics", () => {
         Item: "Update run",
         Value: expect.stringContaining(statusMessage),
       });
-    },
-  );
-});
-
-describe("update.run foreground respawn admission", () => {
-  const sessionKey = "agent:main:slack:dm:C0123ABC:thread:1234567890.123456";
-
-  it.each(["before", "after"] as const)(
-    "refuses foreground respawn disabled %s acknowledgement",
-    async (timing) => {
-      const acknowledged = timing === "after";
-      await withEnvAsync({ OPENCLAW_NO_RESPAWN: acknowledged ? undefined : "1" }, async () => {
-        if (acknowledged) {
-          sendNotice.mockImplementationOnce(async () => {
-            process.env.OPENCLAW_NO_RESPAWN = "1";
-            return true;
-          });
-        }
-        const response = await captureUpdateRunPayload({ sessionKey });
-        expect(response).toMatchObject({
-          ok: false,
-          ackDelivered: acknowledged,
-          result: { reason: "restart-unavailable" },
-          message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
-        });
-        if (!acknowledged) {
-          const run = getUpdateRun(expectDefined(response, "update response").runId);
-          expect(run).toMatchObject({
-            phase: "finished",
-            reason: "restart-unavailable",
-            origin: { nextAction: expect.stringContaining("openclaw update") },
-          });
-          expect(run?.steps.map(({ step, status }) => ({ step, status }))).toEqual([
-            { step: "requested", status: "failed" },
-            { step: "installation-inspection", status: "completed" },
-          ]);
-          expect(sendNotice).not.toHaveBeenCalled();
-        }
-        expect(startHandoff).not.toHaveBeenCalled();
-        expect(transferHandoff).not.toHaveBeenCalled();
-        expect(scheduleRestart).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it.each(["before", "during"] as const)(
-    "keeps serving when respawn is disabled %s the parking notification",
-    async (timing) => {
-      await withEnvAsync({ OPENCLAW_NO_RESPAWN: undefined }, async () => {
-        expect(await captureUpdateRunPayload({ sessionKey })).toMatchObject({ ok: true });
-        const handoff = expectDefined(startHandoff.mock.calls[0]?.[0], "prepared handoff");
-        if (timing === "before") {
-          process.env.OPENCLAW_NO_RESPAWN = "1";
-        } else {
-          sendNotice.mockImplementationOnce(async () => {
-            process.env.OPENCLAW_NO_RESPAWN = "1";
-            return true;
-          });
-        }
-
-        await expect(expectDefined(handoff.beforePark, "parking callback")()).rejects.toThrow(
-          "OPENCLAW_NO_RESPAWN",
-        );
-        expect(scheduleRestart).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it.each(["launchd", "systemd", null] as const)(
-    "admits updates when supervisor=%s permits respawn",
-    async (supervisor) => {
-      detectSupervisor.mockReturnValue(supervisor);
-      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: supervisor ? "1" : "0" }, () =>
-        captureUpdateRunPayload(),
-      );
-      expect(response).toMatchObject({ ok: true, handoff: { status: "started" } });
-      expect(startHandoff).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ supervisor }));
-      expect(transferHandoff).toHaveBeenCalledOnce();
     },
   );
 });

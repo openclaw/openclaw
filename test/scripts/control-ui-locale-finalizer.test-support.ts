@@ -34,7 +34,7 @@ export type FinalizerScenario = {
   ref?: string;
   fullRefresh?: boolean;
   preflightAllowed?: boolean;
-  change?: "glossary" | "canonical";
+  change?: "metadata" | "canonical";
   artifactFault?: "foreign-run" | "path" | "fallback";
   publish?: boolean;
   advanceDuringCheckout?: boolean;
@@ -90,6 +90,7 @@ function commit(root: string, message: string) {
 export function createLocaleFinalizerHarness() {
   const temporary = createTempDirTracker();
   let template: string;
+  let initialOriginVerified = false;
   return {
     cleanup: temporary.cleanup,
     async prepare() {
@@ -134,11 +135,7 @@ export function createLocaleFinalizerHarness() {
         fs.mkdirSync(target(directory), { recursive: true });
       }
       for (const file of fs.readdirSync(assets)) {
-        if (
-          file.endsWith(".tm.jsonl") ||
-          file.endsWith(".meta.json") ||
-          file.startsWith("glossary.")
-        ) {
+        if (file.endsWith(".tm.jsonl") || file.endsWith(".meta.json")) {
           fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
         }
       }
@@ -343,8 +340,48 @@ export function createLocaleFinalizerHarness() {
           scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
       );
       fs.writeFileSync(svFile, canonicalSv.join("\n") + "\n");
-      commit(root, "canonical source before workers");
-      runGit(root, ["push", "--quiet", "origin", "main"]);
+      const initialSource = commit(root, "canonical source before workers");
+      const origin = fixture.env.FAKE_ORIGIN;
+      const originConfig = fs.readFileSync(path.join(origin, "config"));
+      const worktreeConfig = fs.readFileSync(at(".git", "config"));
+      const alternates = path.join("objects", "info", "alternates");
+      expect(fs.existsSync(at(".git", alternates))).toBe(false);
+      // Construct the initial remote without packing the warm translation memories.
+      // Later workflow and catch-up pushes still exercise the real transport.
+      fs.rmSync(origin, { recursive: true });
+      runGit(root, ["clone", "--quiet", "--bare", "--no-hardlinks", ".", origin]);
+      // Bare cloning adds a reverse remote; retain the fixture's original configuration.
+      fs.writeFileSync(path.join(origin, "config"), originConfig);
+      runGit(root, ["update-ref", "refs/remotes/origin/main", initialSource]);
+      if (!initialOriginVerified) {
+        // Prove the real seed boundary once; keep later cases focused on publication.
+        expect(fs.readFileSync(path.join(origin, "config"))).toEqual(originConfig);
+        expect(fs.readFileSync(at(".git", "config"))).toEqual(worktreeConfig);
+        const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
+        expect(originGit("symbolic-ref", "HEAD")).toBe("refs/heads/main");
+        expect(originGit("rev-parse", "HEAD")).toBe(initialSource);
+        expect(originGit("for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
+        expect(
+          originGit("merge-base", "--is-ancestor", fixture.env.FAKE_INITIAL_MAIN, initialSource),
+        ).toBe("");
+        expect(runGit(root, ["rev-parse", "refs/remotes/origin/main"])).toBe(initialSource);
+        expect(fs.existsSync(path.join(origin, alternates))).toBe(false);
+        const object = path.join("objects", initialSource.slice(0, 2), initialSource.slice(2));
+        const sourceObject = at(".git", object);
+        const originObject = path.join(origin, object);
+        const objectBytes = fs.readFileSync(sourceObject);
+        expect(fs.readFileSync(originObject)).toEqual(objectBytes);
+        expect(fs.statSync(originObject).ino).not.toBe(fs.statSync(sourceObject).ino);
+        const corrupted = Buffer.from(objectBytes);
+        corrupted.writeUInt8(corrupted.readUInt8(0) ^ 0xff, 0);
+        try {
+          fs.writeFileSync(originObject, corrupted);
+          expect(fs.readFileSync(sourceObject)).toEqual(objectBytes);
+        } finally {
+          fs.writeFileSync(originObject, objectBytes);
+        }
+        initialOriginVerified = true;
+      }
       const resolved = execute(workflow.jobs["resolve-base"].steps[0]);
       states["resolve-base"] = jobResult(resolved, context.steps!.base?.outputs);
       if (!resolved || !gate("publisher-preflight")) {
@@ -387,8 +424,12 @@ export function createLocaleFinalizerHarness() {
       const english = read(at(sourceFile));
       expect(english).toContain(before);
       fs.writeFileSync(at(sourceFile), english.replace(before, after));
-      if (scenario.change === "glossary") {
-        put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
+      if (scenario.change === "metadata") {
+        const file = at(assets, "sv.meta.json");
+        const metadata = JSON.parse(read(file));
+        metadata.fallbackKeys.push("localeWorkflowProof.keep");
+        metadata.translatedKeys -= 1;
+        fs.writeFileSync(file, JSON.stringify(metadata) + "\n");
       }
       if (scenario.change === "canonical") {
         const packed = JSON.parse(read(path.join(artifacts, "sv.json")));

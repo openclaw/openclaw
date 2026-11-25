@@ -25,8 +25,10 @@ import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
+import type { LearnContribution } from "./registry-contribution-types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { hasKind } from "./slots.js";
 import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginCliRegistrationOptions,
@@ -38,6 +40,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -369,7 +372,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
 
   const registerService = (
     record: PluginRecord,
-    service: OpenClawPluginService | OpenClawPluginServiceV2,
+    service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3,
   ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {
@@ -474,6 +477,45 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record.commands.push(name);
   };
 
+  const registerLearnContribution = (record: PluginRecord, contribution: LearnContribution) => {
+    if (typeof contribution?.buildGuidance !== "function" || !contribution.toolNames?.length) {
+      reportRegistrationError(record, "learn contribution missing toolNames or buildGuidance");
+      return;
+    }
+    // Memory lessons go to the selected provider only, like its recall grant.
+    if (
+      contribution.medium === "memory" &&
+      !(hasKind(record.kind, "memory") && record.memorySlotSelected === true)
+    ) {
+      reportRegistrationWarning(
+        record,
+        "memory learn contribution skipped: only the selected memory slot owner may contribute memory lessons",
+      );
+      return;
+    }
+    // The dispatcher calls these callbacks after registration and runs plugin code (skill
+    // writes, state reads), so each one enters the registering instance's call scope. Bind each
+    // callable: values read back out of a wrapped array (e.g. by `find`) are the raw originals.
+    const instance = getPluginInstance(record);
+    const bind = <T>(callback: T): T => (instance ? instance.wrap(callback) : callback);
+    registry.learnContributions.push({
+      pluginId: record.id,
+      contribution: {
+        ...contribution,
+        buildGuidance: bind(contribution.buildGuidance),
+        ...(contribution.subcommands
+          ? {
+              subcommands: contribution.subcommands.map((subcommand) => ({
+                ...subcommand,
+                handle: bind(subcommand.handle),
+                ...(subcommand.matchArgs ? { matchArgs: bind(subcommand.matchArgs) } : {}),
+              })),
+            }
+          : {}),
+      },
+    });
+  };
+
   return {
     registerWidgetPresenter,
     registerCli,
@@ -486,5 +528,6 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,
+    registerLearnContribution,
   };
 }

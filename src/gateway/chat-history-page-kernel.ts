@@ -12,10 +12,10 @@ import {
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
-  isProjectedHistoryTurnBoundaryMessage,
+  projectedHistoryTurnBoundary,
 } from "./chat-display-projection.history.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import { isChatHistoryResponsePageByteLimited } from "./chat-history-response-page.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import {
   dropChatHistoryOverreadContextMessage,
@@ -163,7 +163,7 @@ export async function readChatHistoryPageKernel(
         ...(options.deferProfileDisplay
           ? {}
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
-        turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(overreadContextMessage),
+        turnBoundaryPending: projectedHistoryTurnBoundary(overreadContextMessage),
       });
     const projection = project(localMessages);
     let projected = projection.messages;
@@ -229,8 +229,7 @@ export async function readChatHistoryPageKernel(
     includePluginSteering: params.includePluginSteering,
     maxBytes: maxHistoryBytes,
     isPageFull: (projection) =>
-      prepareChatHistoryResponsePage(projection, params, options.readMessageSequence).omission
-        ?.byteLimited === true,
+      isChatHistoryResponsePageByteLimited(projection, params, options.readMessageSequence),
     offset,
     ...options,
   });

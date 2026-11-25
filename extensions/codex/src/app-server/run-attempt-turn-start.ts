@@ -116,6 +116,7 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
+          prompt.adoptThreadBaseInstructions(resourceState.thread);
           void emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
@@ -129,6 +130,7 @@ export async function startCodexAttemptTurn(
     if (started === undefined) {
       const startupFailure = await resolveCodexTurnStartError({
         client: resourceState.client,
+        model: params.modelId,
         error: turnStartError,
         errorNotification: state.latestStartupErrorNotification,
         rateLimitsRevisionBeforeTurnStart: state.rateLimitsRevisionBeforeLastTurnStart,

@@ -2,7 +2,7 @@
 
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -62,6 +62,31 @@ function publishHistory(
     check();
   }
 }
+
+it.each([false, true])(
+  "replaces the full reply error without disclosure (mobile=%s)",
+  async (mobile) => {
+    const { container, publish } = publishedComposer(
+      { runError: { summary: "First diagnostic\nAdditional detail" } },
+      mobile,
+    );
+    const message = await waitForElement(container, ".app-toast__message", "first diagnostic");
+    expect(message.textContent).toBe("First diagnostic\nAdditional detail");
+    publish({ messages: [], runError: { summary: "Second diagnostic\nReplacement detail" } });
+    await waitForSolid(() => {
+      expect(message.textContent).toBe("Second diagnostic\nReplacement detail");
+      expect(container.querySelector("details, [aria-expanded], .report-issue-link")).toBeNull();
+    });
+  },
+);
+it("preserves caller-owned recovery instructions in request notices", async () => {
+  const error = "Session is busy; wait for the current run to finish.";
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-error .app-toast__message")?.textContent).toBe(error);
+    expect(container.querySelector("details")).toBeNull();
+  });
+});
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",
   phase: "failed" as const,
@@ -75,11 +100,11 @@ afterEach(() => document.body.replaceChildren());
 it.each(["transferring", "installing"] as const)("shows %s worker progress", async (phase) => {
   const installing = phase === "installing";
   const title = installing
-    ? "Installing worker runtime"
-    : "Updating worker runtime · 25 MB of 100 MB (25%)";
+    ? "Preparing this device…"
+    : "Preparing this device · 25 MB of 100 MB (25%)";
   const body = installing
-    ? "Installing the new worker runtime on this device."
-    : "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.";
+    ? "Installing the update on this device."
+    : "Transferring the update to this device: 25 MB of 100 MB (25%). The next reply starts when it finishes.";
   const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
     workerRuntimeInstall: {
       phase,
@@ -175,15 +200,13 @@ it.each([
   await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
   const notice = container.querySelector(".chat-error");
   if (contention) {
-    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
-    expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
-    expect(notice?.getAttribute("role")).toBe("status");
-    const details = notice?.querySelector("details");
-    expect(details).toMatchObject({ open: false });
-    expect(details?.querySelector("strong")?.textContent).toBe(
-      "OpenClaw is busy. Check status before trying again.",
-    );
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(notice?.classList.contains("chat-error--reply")).toBe(true);
+    expect(notice?.classList.contains("app-toast")).toBe(false);
+    expect(notice?.querySelector(".app-toast__message")?.getAttribute("role")).toBe("status");
+    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe(diagnostic);
+    expect(notice?.querySelector("details, [aria-expanded], .lazy-view-error__detail")).toBeNull();
+    expect(notice?.querySelector(".app-toast__description")).toBeNull();
+    expect(notice?.querySelector(".report-issue-link")).toBeNull();
     expect(notice?.querySelector("img")).toBeNull();
   }
   const action = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
@@ -196,29 +219,25 @@ it.each([
   }
 });
 
-it.each([
-  ["run", false],
-  ["run", true],
-  ["placement", false],
-] as const)("preserves expanded diagnostics and focus (%s, mobile=%s)", async (kind, mobile) => {
+it("preserves expanded startup diagnostics and focus", async () => {
   const diagnostic = "Synthetic failure\n  at workspace/session.ts:42";
   const initial: ComposerProps = {
     messages: [],
-    runError: kind === "run" ? { summary: diagnostic } : undefined,
-    placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
+    placementStartup: failedPlacement(diagnostic),
   };
-  const { container, publish } = publishedComposer(initial, mobile);
+  const { container, publish } = publishedComposer(initial);
   await waitForSolid(() => expect(container.querySelector("details")).not.toBeNull());
   const details = container.querySelector("details")!;
-  const summary = details.querySelector("summary")!;
-  details.open = true;
+  const summary = container.querySelector("summary")!;
+  summary.click();
+  flush();
   summary.focus();
   publishHistory(publish, initial, () => {
     expect(container.querySelector("details")).toBe(details);
     expect(details.open).toBe(true);
     expect(document.activeElement).toBe(summary);
-    expect(details.querySelector("pre")?.textContent).toBe(
-      kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
+    expect(details.querySelector(".lazy-view-error__detail")?.textContent).toBe(
+      t("newSession.placementStartFailed", { error: diagnostic }),
     );
   });
 });
@@ -275,20 +294,19 @@ it.each(["refresh", "details", "message"] as const)(
     expect(notice.textContent).toContain(
       diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
     );
-    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    expect(notice.querySelector(".app-toast__dismiss")).toBeNull();
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();
-      expect(notice.querySelector("button")).toBeNull();
-      return;
+    } else {
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+      details!.open = true;
+      expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+        t("chat.copyError"),
+      );
     }
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
-    details!.open = true;
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
-    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
-      t("chat.copyError"),
-    );
     const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
     if (variant === "refresh") {
       refresh!.click();
@@ -314,62 +332,105 @@ describe("chat view notice integration", () => {
   });
 
   describe("chat run error", () => {
-    it.each(["run", "request"])(
-      "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
-      async (source) => {
-        const writeText = vi.fn().mockResolvedValue(undefined);
-        vi.stubGlobal("navigator", { clipboard: { writeText } });
+    it.each([false, true])(
+      "keeps the full redacted reply error and recovery focus (mobile=%s)",
+      async (mobile) => {
         const diagnostic =
-          "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+          "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\npassword=synthetic-secret\nFinal diagnostic line  ";
         const renderedDiagnostic =
-          "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
-        const onDismissError = vi.fn();
-        const onRetrySessionPlacementStartup = vi.fn();
-        const container = renderChatView({
-          ...(source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic }),
-          onDismissError,
-          onRetrySessionPlacementStartup,
-        });
-
-        const alert = await waitForElement(container, ".chat-error", "chat run error");
-        expect(alert.getAttribute("role")).toBe("alert");
-        const details = requireElement(alert, "details", "error disclosure");
-        expect(details.hasAttribute("open")).toBe(false);
-        const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
-        expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
-        expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
-        expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
-        expect(alert.textContent).toContain("🧭");
-        expect(alert.querySelector("img")).toBeNull();
-        const summary = requireElement(details, "summary", "error header");
-        expect(summary.textContent).toContain("Details");
-        expect(summary.textContent).not.toContain("Error details");
-        expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
-        const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
-        expect(copy).not.toBeNull();
-        for (const open of [false, true]) {
-          details.toggleAttribute("open", open);
-          copy?.click();
-          await waitForFast(() => expect(copy?.disabled).toBe(false));
-          await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
-          expect(writeText).toHaveBeenLastCalledWith(diagnostic);
-          expect(details.hasAttribute("open")).toBe(open);
-        }
-        (summary as HTMLElement).click();
-        expect(onDismissError).not.toHaveBeenCalled();
-        expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+          "Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\npassword=[redacted]\nFinal diagnostic line";
+        const onRefresh = vi.fn();
+        const onDismissRunError = vi.fn();
+        const initial: ComposerProps = {
+          connected: true,
+          messages: [],
+          runError: { summary: diagnostic },
+          onRefresh,
+          onDismissRunError,
+        };
+        const { container, publish } = publishedComposer(initial, mobile);
+        const notice = await waitForElement(container, ".chat-error.chat-error--reply");
+        const message = requireElement(notice, ".app-toast__message", "reply diagnostic");
+        expect(notice.classList.contains("app-toast")).toBe(false);
+        expect(message.getAttribute("role")).toBe("alert");
+        expect(message.textContent).toBe(renderedDiagnostic);
+        expect(notice.textContent).not.toContain("synthetic-secret");
         expect(
-          alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null,
-        ).toBe(source === "request");
-        expect(
-          alert.closest(
-            source === "run" ? ".agent-chat__composer-notices" : ".chat-topbar-notices",
+          notice.querySelector(
+            "img, details, summary, [aria-expanded], .lazy-view-error__chevron, .lazy-view-error__detail, .report-issue-link",
           ),
-        ).not.toBeNull();
-        alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-        expect(onDismissError).toHaveBeenCalledTimes(source === "request" ? 1 : 0);
+        ).toBeNull();
+        expect(notice.querySelectorAll("button")).toHaveLength(2);
+        const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh")!;
+        const dismiss = notice.querySelector<HTMLButtonElement>(
+          ".chat-error__dismiss.app-toast__dismiss",
+        )!;
+        expect(refresh.textContent).toBe("Refresh");
+        expect(dismiss.getAttribute("aria-label")).toBe("Dismiss error");
+        refresh.focus();
+        publishHistory(publish, initial, () => {
+          expect(container.querySelector(".chat-error--reply")).toBe(notice);
+          expect(message.textContent).toBe(renderedDiagnostic);
+          expect(document.activeElement).toBe(refresh);
+        });
+        refresh.click();
+        expect(onRefresh).toHaveBeenCalledOnce();
+        expect(onDismissRunError).not.toHaveBeenCalled();
+        dismiss.click();
+        expect(onDismissRunError).toHaveBeenCalledOnce();
       },
     );
+
+    it("keeps request errors in the shared toast with raw diagnostic copy", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const diagnostic =
+        "⚠️ 🛠️ Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const renderedDiagnostic =
+        "  Error:  gateway disconnected near 🧭\n  indented\tdetail\n<img src=x onerror=alert(1)>\nFinal diagnostic line  ";
+      const onDismissError = vi.fn();
+      const onRetrySessionPlacementStartup = vi.fn();
+      const container = renderChatView({
+        error: diagnostic,
+        onDismissError,
+        onRetrySessionPlacementStartup,
+      });
+      const alert = await waitForElement(container, ".chat-error.app-toast");
+      expect(alert.getAttribute("role")).toBe("alert");
+      const details = requireElement(alert, "details", "request disclosure");
+      expect(details.hasAttribute("open")).toBe(false);
+      const fullDiagnostic = requireElement(
+        details,
+        ".lazy-view-error__detail",
+        "request diagnostic",
+      );
+      expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
+      expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
+      expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
+      expect(alert.querySelector("img")).toBeNull();
+      const summary = requireElement(details, "summary", "request header");
+      assert(summary instanceof HTMLElement);
+      expect(summary.textContent).toContain("Show details");
+      expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
+      const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')!;
+      for (const open of [false, true]) {
+        if (open) {
+          summary.click();
+          flush();
+        }
+        copy.click();
+        await waitForFast(() => expect(copy.disabled).toBe(false));
+        await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+        expect(details.hasAttribute("open")).toBe(open);
+      }
+      summary.click();
+      expect(onDismissError).not.toHaveBeenCalled();
+      expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+      expect(alert.closest(".chat-topbar-notices")).not.toBeNull();
+      alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')!.click();
+      expect(onDismissError).toHaveBeenCalledOnce();
+    });
 
     it.each([true])("keeps startup Retry owned by retryable=%s", async (retryable) => {
       const writeText = vi.fn().mockResolvedValue(undefined);
@@ -387,21 +448,27 @@ describe("chat view notice integration", () => {
         onRetrySessionPlacementStartup,
       });
       const alert = await waitForElement(container, ".chat-error", "startup error");
-      expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
-        "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
+      expect(
+        requireElement(alert, ".lazy-view-error__detail", "startup diagnostic").textContent,
+      ).toBe(
+        "Couldn’t start this session. Retry setup.  Provisioning failed\n  Final diagnostic line  ",
       );
       expect(alert.textContent).not.toContain("⚠");
       const details = requireElement(alert, "details", "startup disclosure");
-      expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
-      expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
-        "Error details",
+      expect(requireElement(details, "summary", "startup header").textContent).toContain(
+        "Show details",
       );
-      const copy = details.querySelector<HTMLButtonElement>('summary [aria-label="Copy error"]');
+      expect(
+        requireElement(details, ".lazy-view-error__detail", "startup diagnostic").getAttribute(
+          "aria-label",
+        ),
+      ).toBe("Error details");
+      const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
       expect(copy).not.toBeNull();
       copy?.click();
       await waitForFast(() =>
         expect(writeText).toHaveBeenCalledWith(
-          "The session was created, but startup needs attention: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+          "Couldn’t start this session. Retry setup. ⚠️ Provisioning failed\n  Final diagnostic line  ",
         ),
       );
       expect(details.hasAttribute("open")).toBe(false);
@@ -533,5 +600,32 @@ describe("chat view notice integration", () => {
       });
       expect(container.querySelector(".chat-cloud-disk-space-notice")).toBeNull();
     });
+  });
+});
+
+it("offers a static issue form without including error text or diagnostics", async () => {
+  const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: "Synthetic private error ws://private.invalid/?token=secret session:private",
+    errorDetail: { message: "Synthetic diagnostic", credential: "never-share-this" },
+  });
+  await waitForSolid(() => {
+    const link = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
+    expect(link?.textContent).toBe("Report a bug");
+    const url = new URL(link!.href);
+    expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      template: "bug_report.yml",
+      title: "[Bug]: Control UI: ",
+    });
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(link?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(link?.target).toBe("_blank");
+  });
+  const destination = container.querySelector<HTMLAnchorElement>("a.report-issue-link")!.href;
+  publish({ error: "Another synthetic error with private user content", errorDetail: undefined });
+  await waitForSolid(() => {
+    expect(container.querySelector<HTMLAnchorElement>("a.report-issue-link")?.href).toBe(
+      destination,
+    );
   });
 });

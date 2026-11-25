@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isRegularFile,
@@ -19,9 +18,9 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = normalizeLowercaseStringOrEmpty(
-    path.basename(expectDefined(argv[0], "argv entry at 0")),
-  ).replace(/\.(cmd|exe|bat)$/, "");
+  const command = argv[0] ?? "";
+  // Only bare aliases opt into bundled npm; explicit paths and native executables keep their identity.
+  const basename = normalizeLowercaseStringOrEmpty(command).replace(/\.(cmd|bat)$/, "");
   const entryName = basename === "npx" ? "npx" : basename === "npm" ? "npm" : null;
   if (!entryName) {
     return null;
@@ -37,7 +36,6 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   }
   // Bun-based runs don't ship npm-cli.js next to process.execPath. The .cmd
   // fallback remains inside the trusted cmd.exe wrapper below.
-  const command = argv[0] ?? "";
   const extension = normalizeLowercaseStringOrEmpty(path.extname(command));
   return [extension ? command : `${command}.cmd`, ...argv.slice(1)];
 }

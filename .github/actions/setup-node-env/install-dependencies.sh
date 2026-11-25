@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+# Selecting Node must not shadow a prepared pnpm launcher and its cache environment.
+pnpm_bin="$(command -v pnpm || true)"
 export PATH="$NODE_BIN:$PATH"
+pnpm_bin="${pnpm_bin:-$(command -v pnpm)}"
 which node
 node -v
 case "$FROZEN_LOCKFILE" in
@@ -16,7 +19,7 @@ case "$FROZEN_LOCKFILE" in
     exit 2
     ;;
 esac
-pnpm -v
+"$pnpm_bin" -v
 
 install_args=(
   install
@@ -55,7 +58,7 @@ append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
 append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
 run_pnpm_install() {
   local fetch_mode="$1"
-  pnpm "${install_args[@]}" "$fetch_mode"
+  "$pnpm_bin" "${install_args[@]}" "$fetch_mode"
 }
 clear_dependency_modules() {
   rm -rf "$GITHUB_WORKSPACE/node_modules"

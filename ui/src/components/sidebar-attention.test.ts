@@ -67,6 +67,9 @@ function selection(selectedId: string, scopeId: string | null = selectedId) {
 
 function respond(responses: Record<string, unknown>) {
   return vi.fn(async (method: string) => {
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
     if (!Object.hasOwn(responses, method)) {
       throw new Error(`Unexpected request: ${method}`);
     }
@@ -77,6 +80,12 @@ function respond(responses: Record<string, unknown>) {
 
 function queuedResponses(responses: Record<string, unknown[]>) {
   return vi.fn((method: string) => {
+    if (method === "users.prefs.get") {
+      return Promise.resolve({ status: "ok", entries: {} });
+    }
+    if (method === "cron.acknowledgeFailure") {
+      return Promise.resolve({ acknowledgedAtMs: 0 });
+    }
     const response = responses[method]?.shift();
     if (!response) {
       throw new Error(`Unexpected request: ${method}`);
@@ -89,18 +98,12 @@ function eventGateway(
   snapshot: object,
   connection: Partial<ApplicationGateway["connection"]> = { gatewayUrl: "ws://gateway.test" },
 ) {
-  let listener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  const harness = createGatewayHarness(null);
+  harness.update(snapshot);
+  Object.assign(harness.gateway.connection, connection);
   return {
-    gateway: {
-      snapshot,
-      connection,
-      subscribe: () => () => undefined,
-      subscribeEvents: (next: NonNullable<typeof listener>) => {
-        listener = next;
-        return () => undefined;
-      },
-    } as unknown as ApplicationGateway,
-    emit: (event: string) => listener?.({ type: "event", event, payload: {} }),
+    gateway: harness.gateway,
+    emit: (event: string) => harness.emitEvent(event, {}),
   };
 }
 
@@ -126,6 +129,74 @@ async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
 }
 
 describe("model auth attention", () => {
+  it.each([undefined, "expired"] as const)(
+    "does not require sign-in for routine OAuth expiry (%s)",
+    (reasonCode) => {
+      const items = authItems("main", {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profiles: [
+              { profileId: "openai:account", type: "oauth", status: "expired", reasonCode },
+            ],
+          },
+        ],
+      });
+      expect(items).toEqual([]);
+    },
+  );
+  it.each([
+    ["oauth", "Sign-in required", "Sign in"],
+    ["api_key", "API key needs attention", "Update API key"],
+    ["token", "Account needs attention", "Review account"],
+  ] as const)("offers the right recovery for %s", (type, status, action) => {
+    const snapshot = authStatus(1);
+    snapshot.providers = [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        status: "missing",
+        profiles: [{ profileId: "openai:test", type, status: "missing" }],
+      },
+    ];
+    const item = authItems("main", snapshot)[0];
+    expect(item?.meta?.status).toBe(status);
+    expect(item?.inlineAction?.label).toBe(action);
+    expect(item?.detail).toContain(status);
+  });
+  it.each([
+    ["setup_inactive", "refresh_failed", "Sign in", "openai:z-login"],
+    [undefined, "refresh_failed", "Review account", "main"],
+    ["missing_credential", "expired", "Review account", "main"],
+    ["setup_inactive", "expired", undefined, undefined],
+  ] as const)(
+    "handles mixed account inventory with reason %s and OAuth %s",
+    (reasonCode, oauthReason, action, context) => {
+      const snapshot = authStatus(1);
+      snapshot.providers = [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "expired",
+          profiles: [
+            { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
+            {
+              profileId: "openai:z-login",
+              type: "oauth",
+              status: "expired",
+              reasonCode: oauthReason,
+            },
+          ],
+        },
+      ];
+      const item = authItems("main", snapshot)[0];
+      expect(item?.inlineAction?.label).toBe(action);
+      expect(item?.meta?.context).toBe(context);
+    },
+  );
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
@@ -152,7 +223,7 @@ describe("model auth attention", () => {
     const item = authItems("main")[0];
     expect(item).toMatchObject({
       label: "OpenAI",
-      inlineAction: { label: "Reconnect", routeId: "model-providers" },
+      inlineAction: { label: "Review account", routeId: "model-providers" },
     });
     const action = item?.action;
     expect(action).toMatchObject({ kind: "askCustodian" });
@@ -185,6 +256,7 @@ describe("sidebar attention refresh ownership", () => {
     overrides: Partial<Pick<ApplicationContext, "agentSelection" | "gateway" | "overlays">> = {},
   ) {
     const sources = {
+      config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
       gateway: {
         snapshot: { phase: "connected", client: null, hello: null },
         connection: { gatewayUrl: "" },
@@ -325,7 +397,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
     await openPanel(element, trigger);
     const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
-    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__more")!;
     const summary = details.querySelector("summary")!;
     const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
     const wrap = (from: HTMLElement, shiftKey = false) => {
@@ -356,7 +428,17 @@ describe("sidebar attention refresh ownership", () => {
     flush();
     expect(attention(element, "modelAuthExpired")).toBeNull();
     wrap(issues(element, "panel__list")!);
-    expect(document.activeElement).toBe(element.querySelector(".sidebar-brand__icon[href]"));
+    expect(document.activeElement).toBe(first);
+
+    // Escape closes the open header menu alone and leaves focus on its trigger.
+    first.click();
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("true"));
+    first.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("false"));
+    expect(issues(element, "panel__list")).not.toBeNull();
+    expect(document.activeElement).toBe(first);
   });
 
   it.each([false, true])(
@@ -428,14 +510,10 @@ describe("sidebar attention refresh ownership", () => {
         ".sidebar-mention-row .sidebar-issues-panel__dismiss",
       )?.disabled,
     ).toBe(true);
-    expect(
-      element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-    ).toBe(true);
+    expect(element.querySelector('[data-value="dismiss-shown"]')).toBeNull();
     harness.update(connected);
     await waitForFast(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-      ).toBe(false),
+      expect(element.querySelector('[data-value="dismiss-shown"]')).not.toBeNull(),
     );
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -734,10 +812,14 @@ describe("sidebar attention refresh ownership", () => {
       await waitForFast(() => expect(attention(element, "modelAuthExpired")).not.toBeNull());
 
       now = 200_000;
-      emit("cron");
+      emit("cron.inventory.changed");
+      const healthReads = () =>
+        request.mock.calls.filter(([method]) =>
+          ["cron.list", "cron.status", "models.authStatus"].includes(method),
+        );
       invalidateModelAuthStatusRequests(client);
       emit("chat.metadata.changed");
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+      await waitForFast(() => expect(healthReads()).toHaveLength(6));
 
       selectionState.selectedId = "writer";
       for (const listener of selectionListeners) {
@@ -755,7 +837,7 @@ describe("sidebar attention refresh ownership", () => {
           request.mock.calls.filter(([method]) => method === "models.authStatus"),
         ).toHaveLength(3),
       );
-      emit("cron");
+      emit("cron.inventory.changed");
       expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
       switchedAuth.resolve(authStatus(2));
       await waitForFast(() => expect(authText(element)).toContain("writer"));
@@ -851,7 +933,7 @@ describe("sidebar attention refresh ownership", () => {
     }
     await openPanel(element, trigger);
 
-    emit("cron");
+    emit("cron.inventory.changed");
     await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());
   });
 });

@@ -14,6 +14,8 @@ import { isSessionTranscriptProjectionUnavailableError } from "../../config/sess
 import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
+import { resolveControlUiBootstrapPresentation } from "../control-ui-bootstrap-presentation.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { CANVAS_WIDGET_FORBIDDEN, retainCanvasWidgetRead } from "./canvas-widget-read.js";
 import { respondError } from "./response.js";
@@ -51,6 +53,7 @@ async function respondWithCanvasHtml(
     invocation.signal?.throwIfAborted();
     invocation.sessionMutationCommitGuard?.();
     assertReadCurrent?.();
+    const config = context.getRuntimeConfig();
     if (
       !resolveContext ||
       resolveContext() !== context ||
@@ -59,30 +62,32 @@ async function respondWithCanvasHtml(
       client?.invalidated === true ||
       (client?.connId && context.isConnectionActive?.(client.connId) === false) ||
       isGatewaySubordinateWorkAdmissionClosed() ||
-      !isCoreCanvasHostEnabled(context.getRuntimeConfig())
+      !isCoreCanvasHostEnabled(config)
     ) {
       throw new Error(unavailableMessage);
     }
+    return config;
   };
   try {
     assertActive();
     const [html, sandboxPort] = await Promise.all([
       readHtml(),
-      context.getMcpAppSandboxPort?.() ?? context.ensureSandboxHostPort?.(),
+      // Bind failures can recover; a failed source must keep its own classification.
+      Promise.resolve(context.getMcpAppSandboxPort?.() ?? context.ensureSandboxHostPort?.()).catch(
+        () => undefined,
+      ),
     ]);
-    // The bytes and listener must still belong to the admitted caller and Gateway.
-    assertActive();
+    // Revalidate caller and host, then use the post-await policy snapshot for this reply.
+    const config = assertActive();
     if (sandboxPort === undefined) {
-      throw new Error(unavailableMessage);
+      respondError(respond, ErrorCodes.UNAVAILABLE, unavailableMessage, { retryable: true });
+      return;
     }
-    const ingress = client?.remoteControlUiIngress;
-    const configuredOrigin =
-      ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
-      sandboxUrl: ingress ? new URL(sandboxUrl, ingress.sandboxOrigin).href : sandboxUrl,
+      ...resolveSandboxView(sandboxUrl, client, config.mcp?.apps?.sandboxOrigin),
       sandboxPort,
-      ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+      embedSandbox: resolveControlUiBootstrapPresentation(config).embedSandbox,
     };
     respond(true, result);
   } catch (error) {
@@ -114,7 +119,8 @@ export const canvasHandlers: GatewayRequestHandlers = {
         await respondWithCanvasHtml(
           invocation,
           async () => {
-            const document = await readCanvasDocumentHtmlSource(invocation.params.docId);
+            const document =
+              retained?.document ?? (await readCanvasDocumentHtmlSource(invocation.params.docId));
             if (
               document.cspSandbox !== "scripts" ||
               Buffer.byteLength(document.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES

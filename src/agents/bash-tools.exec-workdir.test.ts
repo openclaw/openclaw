@@ -32,11 +32,11 @@ const resolveSandbox = (workdir: string | undefined, config = sandbox()) =>
   resolveExecWorkdir({ host: "sandbox", workdir, sandbox: config });
 const local = (options: { workdir?: string; defaultCwd?: string } = {}) =>
   resolveExecWorkdir({ host: "gateway", ...options });
-const resolved = (
-  hostCwd: string,
-  containerCwd: string,
-  scriptPreflightCwd: string | null = hostCwd,
-) => ({ kind: "sandbox", hostCwd, containerCwd, scriptPreflightCwd });
+const resolved = (hostCwd: string, containerCwd: string) => ({
+  kind: "sandbox",
+  hostCwd,
+  containerCwd,
+});
 const unavailable = (requestedCwd: string) => ({ kind: "unavailable", requestedCwd });
 const expectUnavailable = (workdir: string, config = sandbox()) =>
   expect(resolveSandbox(workdir, config)).resolves.toEqual(unavailable(workdir));
@@ -152,7 +152,7 @@ it.each([
     const validateWorkdir = vi.fn(async (cwd: string) => cwd);
     await expect(
       resolveSandbox(workdir, backend({ ...overrides, validateWorkdir })),
-    ).resolves.toEqual(resolved(workspaceDir, expected, null));
+    ).resolves.toEqual(resolved(workspaceDir, expected));
     expect(validateWorkdir).toHaveBeenCalledWith(expected);
   },
 );
@@ -169,4 +169,19 @@ it("prefers backend skill mounts over an overlapping host workspace path", async
     resolved(demo, `${containerRoot}/demo`),
   );
   expect(validateWorkdir).toHaveBeenCalledWith(`${containerRoot}/demo`);
+});
+
+it("confines backend participant cwd independently of its local placeholder", async () => {
+  const config = backend({ workdirRoots: ["/agent"] });
+  const run = (workdir: string) =>
+    resolveExecWorkdir({
+      host: "sandbox",
+      workdir,
+      sandbox: config,
+      participationRoot: workspaceDir,
+    });
+  await expect(run("/agent/project")).rejects.toThrow("participation root");
+  await expect(run("/remote/workspace/build")).resolves.toEqual(
+    resolved(workspaceDir, "/remote/workspace/build"),
+  );
 });

@@ -1,3 +1,5 @@
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { assertParticipationWorkerExecution } from "../../agents/participation-ceiling.js";
 import { withRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import type {
   PreparedSessionPlacementSandbox,
@@ -55,6 +57,7 @@ import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-acce
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
+const loadRetainedWorkerTurn = createLazyRuntimeModule(() => import("./worker-turn-retained.js"));
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
@@ -153,6 +156,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             return await runLocalTurn(prepared);
           }
           prepared.release();
+          assertParticipationWorkerExecution(
+            readRunOperatorAuthority(inputTurn)?.participationCeiling,
+          );
           let identity = resolvePlacementIdentity(claim, current);
           const reportProvisioning = () =>
             emitAgentRunStatusEvent({
@@ -167,7 +173,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           const initialSetupSource = createDynamicSessionSourceAssertion(
             () => initialSetup?.assertCurrent,
             () => {
-              throw new Error("Worker setup authority changed during turn admission");
+              throw new Error("Worker setup ended during turn admission. Start a new turn.");
             },
           );
           const assertAdmissionCurrent = composeSessionSourceAssertion(
@@ -282,8 +288,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               );
               continue;
             }
+            // A live compute window does not attest the current Gateway build.
+            const retained = options.environments.get(environmentId)?.retention
+              ? await (
+                  await loadRetainedWorkerTurn()
+                ).prepareRetainedWorkerTurn({
+                  options,
+                  placement,
+                  turn,
+                  assertCurrent: assertAdmissionCurrent,
+                })
+              : undefined;
+            if (retained) {
+              placement = retained.placement;
+            }
             const assertClaimCurrent = () => {
               assertAdmissionCurrent();
+              retained?.assertCurrent();
               if (options.environments.readRuntimeRefresh?.(environmentId)) {
                 throw new WorkerRuntimeRefreshPendingError(
                   "Worker runtime refresh started during turn admission",
@@ -295,6 +316,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             try {
               admitted = await claimWorkerTurn({
                 placements: options.placements,
+                environments: options.environments,
                 identity,
                 placement,
                 runId: claim.runId,
@@ -335,6 +357,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 error,
               );
               continue;
+            } finally {
+              await retained?.release();
             }
             if (!admitted) {
               routablePlacement = await readRoutablePlacement(

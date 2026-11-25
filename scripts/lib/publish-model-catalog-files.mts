@@ -60,7 +60,7 @@ export async function publishModelCatalogPair(
     return { ...output, file, parent: path.dirname(file) };
   });
   if (new Set(prepared.map((output) => output.file)).size !== outputs.length) {
-    throw new Error("--out and --out-v2 must name different files");
+    throw new Error("--out, --out-v2 and --out-v3 must name different files");
   }
   const plans = prepared.map((output) =>
     Object.assign(output, { previous: snapshot(output.file) }),

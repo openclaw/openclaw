@@ -5,7 +5,7 @@ import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js"
 import { createExecTool } from "./bash-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "./tool-effect-receipt.js";
 
 describe("resolveExecTarget", () => {
   it("authenticates the sandbox escape rejection once, not copies or invalid syntax", () => {
@@ -248,4 +248,23 @@ describe("foreground node exec wait budgets", () => {
       }
     },
   );
+});
+
+it("offers interruption only for locally owned foreground execution", () => {
+  for (const createTool of [createExecTool, createLazyExecTool]) {
+    const tool = createTool();
+    if (typeof tool.interruptible !== "function") {
+      throw new Error("Expected exec interruption policy");
+    }
+    expect(tool.interruptible({ command: ":" })).toBe(true);
+    for (const args of [
+      { host: "node" as const },
+      { node: "remote" },
+      { durable: true, background: true },
+      { background: true },
+    ]) {
+      expect(tool.interruptible({ command: ":", ...args })).toBe(false);
+    }
+    expect(pinExecToolTarget(tool, { host: "node" }).interruptible).toBeUndefined();
+  }
 });

@@ -9,6 +9,7 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   startOpenClawStateLeaseHeartbeat,
+  startOpenClawStateLeaseTimer,
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -23,11 +24,17 @@ type ControlledWorker = EventEmitter & {
 };
 
 const controls = vi.hoisted(() => ({
+  warn: vi.fn(),
   constructions: 0,
   workers: [] as ControlledWorker[],
   constructorError: undefined as Error | undefined,
   processOwner: undefined as { assertCurrent(): void } | undefined,
   prepareAccess: vi.fn<() => Promise<() => void>>(),
+}));
+
+// mock-isolation: Capture warnings without writing process-global logs from the clock-controlled fixture.
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: controls.warn }),
 }));
 
 // This fixture controls transport lifetime independently of real filesystem ownership.
@@ -151,7 +158,12 @@ function options() {
   };
   return {
     path: databasePath,
-    identity: { scope: "core:test", key: "command", owner: "original-owner" },
+    identity: {
+      scope: "core:test",
+      key: "command",
+      owner: "original-owner",
+      leaseLabel: "command lease",
+    },
     leaseMs: 60_000,
     acquiredAt: Date.now(),
     heartbeatMs: 20_000,
@@ -206,6 +218,42 @@ function expectMessage(error: unknown, ...parts: string[]) {
 }
 
 describe("state lease heartbeat lifetime", () => {
+  it.each([false, true])("redacts renewal failures and honors release=%s", async (released) => {
+    vi.useFakeTimers();
+    const observation = new BigInt64Array(new SharedArrayBuffer(32));
+    Atomics.store(observation, state.expiresAt, BigInt(Date.now() + 1_000));
+    const failure = Object.assign(new Error("secret /private/database.sqlite"), {
+      code: "SQLITE_IOERR",
+    });
+    const onLost = vi.fn();
+    const onRenewError = vi.fn();
+    const timer = startOpenClawStateLeaseTimer({
+      identity: { scope: "core:test", key: "workspace" },
+      observation,
+      leaseMs: 1_000,
+      heartbeatMs: 300,
+      renew: () => Promise.reject(failure),
+      onRenewError,
+      onLost,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(released ? 900 : 1_000);
+      if (released) {
+        await timer.close();
+        expect(onLost).not.toHaveBeenCalled();
+      } else {
+        expect(onLost).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: expect.stringContaining("state lease expired") }),
+        );
+      }
+      expect(onRenewError).toHaveBeenCalledWith(failure);
+      expect(controls.warn).toHaveBeenCalled();
+      expect(JSON.stringify(controls.warn.mock.calls)).not.toMatch(/secret|\/private/);
+    } finally {
+      await timer.close();
+    }
+  });
+
   it.each(["failure", "uncertain"] as const)(
     "preserves heartbeat handoff after late startup renewal %s",
     async (settlement) => {
@@ -323,7 +371,7 @@ describe("state lease heartbeat lifetime", () => {
     expect(() => heartbeat.assertRunning()).toThrow("not running");
   });
 
-  it.each(["synchronous", "timer"] as const)(
+  it.each(["synchronous", "timer", "exit"] as const)(
     "preserves the first worker loss through %s observation",
     async (observation) => {
       const { params, heartbeat, worker } = await readyHeartbeat(Date.now() + 100);
@@ -340,17 +388,42 @@ describe("state lease heartbeat lifetime", () => {
         [],
       );
       Atomics.store(worker.shared, state.status, state.lost);
-      const message =
-        "state lease heartbeat is not running (lossPath=automatic-renewal, lossOutcome=no-current-owned-unexpired-row)";
+      const reason =
+        observation === "exit"
+          ? "state lease heartbeat exited: lease expired or ownership lost"
+          : "state lease heartbeat is not running";
       if (observation === "synchronous") {
-        expect(() => heartbeat.assertRunning()).toThrow(message);
+        expect(() => heartbeat.assertRunning()).toThrow(reason);
+      } else if (observation === "exit") {
+        worker.finishExit();
       } else {
         await vi.advanceTimersByTimeAsync(100);
       }
       expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message, code: "OPENCLAW_STATE_LEASE_LOST", loss: leaseLoss }),
+        expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST", loss: leaseLoss }),
       );
-      worker.emit("error", new Error("later error delivery"));
+      const error = params.onLost.mock.calls[0]?.[0];
+      expectMessage(
+        error,
+        "command lease core:test/command was lost",
+        reason,
+        "(lossPath=automatic-renewal, lossOutcome=no-current-owned-unexpired-row)",
+      );
+      expect(error.message).not.toContain("original-owner");
+      expect(error.cause).toBeInstanceOf(Error);
+      expect(error.cause.message).toContain(reason);
+      if (observation === "exit") {
+        expectMessage(
+          error,
+          "exitCode=0",
+          `acquiredAt=${params.acquiredAt}`,
+          "lastRenewedAt=never",
+        );
+      }
+      // A native Worker's exit is its final event.
+      if (observation !== "exit") {
+        worker.emit("error", new Error("later error delivery"));
+      }
       expect(params.onLost).toHaveBeenCalledOnce();
     },
   );
@@ -421,7 +494,8 @@ describe("state lease heartbeat lifetime", () => {
       if (delivery === "lost-before-request") {
         const result = await outcome;
         expect(result).toMatchObject({
-          message: "state lease heartbeat is not running",
+          message:
+            "command lease core:test/command was lost; retry the operation: state lease heartbeat is not running",
           code: "OPENCLAW_STATE_LEASE_LOST",
         });
         expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
@@ -447,7 +521,8 @@ describe("state lease heartbeat lifetime", () => {
       if (delivery === "lost") {
         assert(result instanceof Error);
         expect(result).toMatchObject({
-          message: "state lease heartbeat is not running",
+          message:
+            "command lease core:test/command was lost; retry the operation: state lease heartbeat is not running",
           code: "OPENCLAW_STATE_LEASE_LOST",
         });
         expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);

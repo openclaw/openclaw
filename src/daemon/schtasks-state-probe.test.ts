@@ -17,7 +17,9 @@ const respond = (value: unknown) => native.mockReturnValue(nativeResult(JSON.str
 const timeout = Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), {
   code: "ETIMEDOUT",
 });
-beforeEach(() => native.mockReset());
+beforeEach(() => {
+  native.mockReset();
+});
 
 it.each([
   [true, "S-1-5-18", 1, "allowed"],
@@ -34,6 +36,21 @@ it.each([
 function nativeResult(stdout = "", status: number | null = 0, error?: Error) {
   return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null, error };
 }
+
+it.each(["ERR_ACCESS_DENIED", "EPERM"])("reports denied launches as unknown (%s)", (code) => {
+  const error = Object.assign(new Error(`spawnSync powershell.exe ${code}`), {
+    code,
+    errno: -4048,
+  });
+  native.mockImplementation(() => {
+    throw error;
+  });
+  expect(probeState("Synthetic Gateway")).toEqual({
+    status: "unknown",
+    detail: error.message,
+    diagnostic: { kind: "spawn", errno: -4048 },
+  });
+});
 
 it.each([false, true])(
   "reads task actions without a hidden console (inventory=%s)",
@@ -82,7 +99,9 @@ it.each([
   ["inventory", 2_400_000, 60_000],
   ["process", 699.5, 699],
   ["process", 0.75, 0],
-  ["process", 10_000, 5_000],
+  ["process", undefined, 60_000],
+  ["process", 10_000, 10_000],
+  ["process", 2_400_000, 2_400_000],
 ] as const)("bounds %s inspection (budget=%s, timeout=%s)", (scope, budget, expected) =>
   withMockedPlatform("win32", () => {
     if (scope === "process") {
@@ -116,4 +135,13 @@ it.each([
       ]);
     }
   }),
+);
+
+it.each([nativeResult("", null, timeout), nativeResult('[{"ProcessId":1234}]', 1)])(
+  "keeps failed process snapshots unknown",
+  (failure) =>
+    withMockedPlatform("win32", () => {
+      native.mockReturnValue(failure);
+      expect(readWindowsProcessSnapshot()).toBeNull();
+    }),
 );

@@ -1,4 +1,13 @@
 // Synthetic state only. Run with node --import ./scripts/tsx.mjs.
+// --seed-usage --seed-months 6 records May–October usage on the default fixture.
+// Cache expiry proof: --projection detail --same-query --pause-ms 31000 --rounds 6.
+// Interleave A1/B/A2 with --owner-dir containing only the baseline owner. Require
+// identical resultDigest/totals and zero usage reads on unchanged candidate polls.
+// elapsedMs is RPC latency; settledMs and CPU also charge post-response owner work.
+// Run allocation separately. --cold evicts the Linux file cache before each poll;
+// retained SQLite pages can remain warm. readers.readBytes is kernel storage I/O,
+// unavailable on macOS; it is neither returned payload bytes nor logical pager I/O.
+// After priming rollups, --stale-cache-stats models growth since a sparse ANALYZE.
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,6 +21,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { SessionsUsageResult } from "../../src/shared/usage-types.ts";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -26,6 +36,9 @@ const { values } = parseArgs({
     "same-query": { type: "boolean", default: false },
     "reset-usage": { type: "boolean", default: false },
     "seed-usage": { type: "boolean", default: false },
+    "seed-months": { type: "string", default: "1" },
+    "stale-cache-stats": { type: "boolean", default: false },
+    cold: { type: "boolean", default: false },
     "cpu-profile-dir": { type: "string" },
     "owner-dir": { type: "string" },
     "sample-allocations": { type: "boolean", default: false },
@@ -38,6 +51,7 @@ const rounds = Number(values.rounds);
 assert(Number.isInteger(port) && port >= 40000 && port <= 65535);
 assert(Number.isInteger(rounds) && rounds > 0);
 assert(values.projection === "overview" || values.projection === "detail");
+assert(!values.cold || process.platform === "linux", "--cold requires Linux file eviction");
 const fixture: { format: string; sessionCount: number; agentDatabaseBytes: number; now: number } =
   JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 assert.equal(fixture.format, "openclaw-team-shape-v1");
@@ -59,7 +73,33 @@ config.agents = {
   ...config.agents,
   defaults: { ...config.agents?.defaults, model: "synthetic/model" },
 };
+// Keep the historical fixture fixed while measuring its report readers.
+config.session = {
+  ...config.session,
+  maintenance: { ...config.session?.maintenance, mode: "warn", coldStorage: { enabled: false } },
+};
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+if (values["stale-cache-stats"]) {
+  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
+    await import("../../src/state/openclaw-agent-db.js");
+  const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+  db.exec("ANALYZE cache_entries");
+  for (const row of db
+    .prepare("SELECT idx, stat FROM sqlite_stat1 WHERE tbl = 'cache_entries'")
+    .all()) {
+    db.prepare("UPDATE sqlite_stat1 SET stat = ? WHERE tbl = 'cache_entries' AND idx = ?").run(
+      String(row.stat)
+        .split(" ")
+        .map(() => "1")
+        .join(" "),
+      String(row.idx),
+    );
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  rmSync(temporaryRoot, { recursive: true });
+  console.log("Seeded sparse usage-cache statistics");
+  process.exit(0);
+}
 if (values["reset-usage"]) {
   assert(!values["seed-usage"], "choose one offline fixture operation");
   const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
@@ -69,7 +109,7 @@ if (values["reset-usage"]) {
   const { prepareSessionCostUsageRefreshLock } =
     await import("../../src/infra/session-cost-usage-cache.sqlite.js");
   const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const lock = prepareSessionCostUsageRefreshLock("main", database.path);
+  const lock = await prepareSessionCostUsageRefreshLock("main", database.path);
   let removed = 0;
   try {
     assert(await lock.acquire(), "fixture usage refresh is still active");
@@ -85,6 +125,8 @@ if (values["reset-usage"]) {
   process.exit(0);
 }
 if (values["seed-usage"]) {
+  const months = Number(values["seed-months"]);
+  assert(Number.isInteger(months) && months > 0 && months <= 12);
   const marker = path.join(root, "usage-measure-seeded.json");
   assert(!existsSync(marker), "fixture usage is already seeded");
   const {
@@ -112,11 +154,13 @@ if (values["seed-usage"]) {
           appendTranscriptEventsInTransaction(
             opened,
             { agentId: "main", sessionId: row.session_id, sessionKey: row.session_key },
-            [
-              {
+            Array.from({ length: months }, (_, month) => {
+              const timestamp = new Date(fixture.now);
+              timestamp.setUTCMonth(timestamp.getUTCMonth() - (months - month - 1));
+              return {
                 type: "message",
-                id: `usage-measure-${row.session_id}`,
-                timestamp: new Date(fixture.now).toISOString(),
+                id: `usage-measure-${row.session_id}-${month}`,
+                timestamp: timestamp.toISOString(),
                 message: {
                   role: "assistant",
                   provider: "synthetic",
@@ -124,8 +168,8 @@ if (values["seed-usage"]) {
                   content: [{ type: "text", text: "Synthetic measured usage" }],
                   usage: { input: 100, output: 25, totalTokens: 125, cost: { total: 0.001 } },
                 },
-              },
-            ],
+              };
+            }),
           );
         }
       },
@@ -138,8 +182,9 @@ if (values["seed-usage"]) {
     marker,
     JSON.stringify({
       sessions: windows.length,
-      tokens: windows.length * 125,
-      cost: windows.length * 0.001,
+      months,
+      tokens: windows.length * Math.min(months, 2) * 125,
+      cost: windows.length * Math.min(months, 2) * 0.001,
     }),
   );
   console.log(`Seeded usage for ${windows.length} synthetic sessions`);
@@ -150,6 +195,8 @@ let ownerTimings: Array<{ owner: string; kind?: string; elapsedMs: number }> = [
 Reflect.set(globalThis, Symbol.for("usage-measure-timings"), ownerTimings);
 const enteredOwners = new Set<string>();
 Reflect.set(globalThis, Symbol.for("usage-measure-entered"), enteredOwners);
+const pendingOwners = new Set<Promise<unknown>>();
+Reflect.set(globalThis, Symbol.for("usage-measure-pending"), pendingOwners);
 // Preserve source URLs and apply the same baseline to every database worker.
 const preload = `${values.output}.preload.mjs`;
 writeFileSync(
@@ -177,9 +224,15 @@ registerHooks({ load(url, context, nextLoad) {
   if (relative.startsWith("..")) return nextLoad(url, context);
   const replacement = baseline && path.join(baseline, relative);
   const owner = owners.get(relative);
+  const cacheOwner = relative === "src/gateway/server-methods/usage-cache.ts";
   const workerArgs = cpuProfileDir && relative === "src/infra/runtime-worker-url.ts";
-  if ((!replacement || !existsSync(replacement)) && !owner && !workerArgs) return nextLoad(url, context);
+  if ((!replacement || !existsSync(replacement)) && !owner && !workerArgs && !cacheOwner) return nextLoad(url, context);
   let source = readFileSync(replacement && existsSync(replacement) ? replacement : fileURLToPath(url), "utf8");
+  if (cacheOwner) {
+    const call = "params\n      .load()";
+    if (!source.includes(call)) throw new Error("Usage cache load declaration changed");
+    source = source.replace(call, "(async () => { const pending = globalThis[Symbol.for('usage-measure-pending')]; const work = params.load(); pending?.add(work); try { return await work; } finally { pending?.delete(work); } })()");
+  }
   if (workerArgs) {
     source = source.replace("export function resolveRuntimeWorkerThreadExecArgv(", "function measuredWorkerArgs(");
     source += "\nexport function resolveRuntimeWorkerThreadExecArgv(...args) { return [...measuredWorkerArgs(...args), '--cpu-prof', " + JSON.stringify("--cpu-prof-dir=" + cpuProfileDir) + "]; }";
@@ -191,7 +244,7 @@ registerHooks({ load(url, context, nextLoad) {
     source = source.replace(declaration, "async function " + original + "(");
     if (owner === "executeUsageCostWorker") {
       source += "\nexport async function executeUsageCostWorker(...args) { const profiler = new (await import('node:inspector/promises')).Session(); if (" + allocations + ") { profiler.connect(); await profiler.post('HeapProfiler.startSampling', {samplingInterval:32768, includeObjectsCollectedByMajorGC:true, includeObjectsCollectedByMinorGC:true}); } const cpu = process.threadCpuUsage(); const startedAt = Date.now(); const started = performance.now(); try { return await measured_executeUsageCostWorker(...args); } finally { const elapsedMs = performance.now() - started; const used = process.threadCpuUsage(cpu); let allocatedBytes; if (" + allocations + ") { const {profile} = await profiler.post('HeapProfiler.stopSampling'); const sum = node => node.selfSize + node.children.reduce((n, child) => n + sum(child), 0); allocatedBytes = sum(profile.head); profiler.disconnect(); } const fs = await import('node:fs'); fs.appendFileSync(" + JSON.stringify(workerMetrics) + ", JSON.stringify({startedAt, kind:args[0].operation.kind, elapsedMs, cpuMs:(used.user+used.system)/1000, allocatedBytes}) + String.fromCharCode(10)); } }";
-    } else source += "\nexport async function " + owner + "(...args) { const timings = globalThis[Symbol.for('usage-measure-timings')]; globalThis[Symbol.for('usage-measure-entered')]?.add('" + owner + "'); const started = performance.now(); try { return await " + original + "(...args); } finally { timings?.push({owner: '" + owner + "', kind: args[1]?.kind, elapsedMs: performance.now() - started}); } }";
+    } else source += "\nexport async function " + owner + "(...args) { const timings = globalThis[Symbol.for('usage-measure-timings')]; globalThis[Symbol.for('usage-measure-entered')]?.add('" + owner + "'); const started = performance.now(); const pending = globalThis[Symbol.for('usage-measure-pending')]; const work = " + original + "(...args); pending?.add(work); try { return await work; } finally { pending?.delete(work); timings?.push({owner: '" + owner + "', kind: args[1]?.kind, elapsedMs: performance.now() - started}); } }";
   }
   return { format: "module", source: transformSync(source, { loader: "ts", format: "esm", target: "esnext", sourcefile: fileURLToPath(url) }).code, shortCircuit: true };
 }});
@@ -205,6 +258,7 @@ process.env.NODE_OPTIONS = [
   .join(" ");
 await import(pathToFileURL(preload).href);
 const { startGatewayServer } = await import("../../src/gateway/server.js");
+const { snapshotSqliteReaderMetrics } = await import("../../src/infra/sqlite-reader-metrics.js");
 const { createGatewayWsClient } = await import("../lib/gateway-ws-client.ts");
 const { PROTOCOL_VERSION } = await import("../../packages/gateway-protocol/src/version.ts");
 const { buildDeviceAuthPayloadV3 } =
@@ -305,11 +359,17 @@ try {
     !lastResult.partial;
   const assertTotals = (result: SessionsUsageResult) => {
     if (existsSync(path.join(root, "usage-measure-seeded.json"))) {
-      assert.equal(result.totals.totalTokens, fixture.sessionCount * 125);
-      assert(Math.abs(result.totals.totalCost - fixture.sessionCount * 0.001) < 1e-8);
+      const expected = JSON.parse(
+        readFileSync(path.join(root, "usage-measure-seeded.json"), "utf8"),
+      );
+      assert.equal(result.totals.totalTokens, expected.tokens);
+      assert(Math.abs(result.totals.totalCost - expected.cost) < 1e-8);
     }
   };
   for (let round = 0; round < rounds; round++) {
+    if (values.cold) {
+      evictLinuxFilePageCache(path.join(root, "agents/main/agent/openclaw-agent.sqlite"));
+    }
     if (values["sample-allocations"]) {
       await inspector.post("HeapProfiler.startSampling", {
         samplingInterval: 32768,
@@ -321,6 +381,7 @@ try {
     Reflect.set(globalThis, Symbol.for("usage-measure-timings"), ownerTimings);
     enteredOwners.clear();
     const memory = process.memoryUsage();
+    const readersBefore = new Map(snapshotSqliteReaderMetrics().map((row) => [row.operation, row]));
     const cpu = process.cpuUsage();
     const threadCpu = process.threadCpuUsage();
     const startedAt = Date.now();
@@ -335,6 +396,11 @@ try {
       limit: 50,
     })) as SessionsUsageResult;
     const elapsedMs = performance.now() - started;
+    // Expired detail results can return before their refresh. Charge that work to this poll.
+    while (pendingOwners.size) {
+      await Promise.all(pendingOwners);
+    }
+    const settledMs = performance.now() - started;
     lastResult = result;
     if (!values["same-query"]) {
       assert(enteredOwners.has("selectUsageSessions"), "sample reused the outer report cache");
@@ -357,6 +423,17 @@ try {
       enteredOwners: [...enteredOwners],
       ownerTimings: [...ownerTimings],
       elapsedMs,
+      settledMs,
+      readers: snapshotSqliteReaderMetrics()
+        .map((row) => ({
+          operation: row.operation,
+          count: row.count - (readersBefore.get(row.operation)?.count ?? 0),
+          readBytes: row.readBytes - (readersBefore.get(row.operation)?.readBytes ?? 0),
+        }))
+        .filter((row) => row.count > 0),
+      resultDigest: createHash("sha256")
+        .update(JSON.stringify({ ...result, updatedAt: 0 }))
+        .digest("hex"),
       processCpuMs: (used.user + used.system) / 1000,
       mainThreadCpuMs: (threadUsed.user + threadUsed.system) / 1000,
       mainThreadAllocatedBytes,

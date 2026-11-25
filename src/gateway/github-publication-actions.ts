@@ -4,19 +4,13 @@ import type {
   SessionGitHubActionResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import {
-  getGatewayToolCallerIdentity,
-  resolveGatewayToolOperatorSelection,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
 import {
   assertExpectedSharedGitHubPublisher,
   currentGitHubPublicationConfig,
-  matchesCurrentGitHubPublicationIdentity,
-  prepareCurrentGitHubPublicationIdentity,
 } from "./github-publication-availability.js";
 import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
@@ -25,13 +19,17 @@ import {
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  captureGitHubPublicationActionAuthority,
+  prepareGitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
+import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   params: Exclude<
     SessionGitHubActionParams,
-    { action: "refresh_base" | "inspect_pr" | "prepare_pr" }
+    { action: "refresh_base" | "inspect_pr" | "prepare_pr" | "create_issue" }
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
@@ -48,9 +46,6 @@ function assertPreservedPublicationFooter(before: string, after: string) {
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
-  const callerOperator = caller
-    ? resolveGatewayToolOperatorSelection().operatorAuthority
-    : undefined;
   if (
     caller &&
     (params.sessionKey !== caller.sessionKey ||
@@ -59,9 +54,12 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
-  const explicitPullRequestUrl = edit?.pullRequestUrl;
+  const explicitPullRequestUrl = "pullRequestUrl" in params ? params.pullRequestUrl : undefined;
   if (explicitPullRequestUrl && params.requestId) {
     throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
+  }
+  if (explicitPullRequestUrl && "publishingSessionKey" in params && params.publishingSessionKey) {
+    throw new Error("Select a PR by pullRequestUrl or publishingSessionKey, not both.");
   }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
@@ -91,7 +89,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   using resources = new DisposableStack();
   const target = await preparePublishingSession(
     { ...params, agentId: caller?.agentId ?? params.agentId },
-    () => options.sessionMutationAuthorization?.assertCurrent(),
+    () => options.signal?.throwIfAborted(),
     resources,
   );
   const loaded = target.selected.readCurrent();
@@ -104,31 +102,21 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   resources.defer(admitted.release);
-  // The in-process bridge is System-backed; it cannot mint the tool caller's operator authority.
-  const actionScopes = caller
-    ? intersectOperatorScopes(admitted.requester.snapshot.scopes, callerOperator?.scopes ?? [])
-    : admitted.requester.snapshot.scopes;
-  const requiresOperatorWrite =
+  // Rights come from the tool caller's turn grant (or this direct request's admission).
+  if (
     !ownPublicationAction &&
-    !(params.action === "ready" && params.publishingSessionKey === undefined);
+    !(params.action === "ready" && params.publishingSessionKey === undefined) &&
+    !captureGitHubPublicationActionAuthority(admitted.requester).operatorWrite
+  ) {
+    throw new Error(
+      `The ${params.action} action needs operator write permission. Ask a Gateway admin to run it, or to give your role operator.write.`,
+    );
+  }
+  // Stop and session revision fences only; authority was admitted when the turn started.
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
-    if (requiresOperatorWrite) {
-      callerOperator?.assertCurrent();
-    }
-    if (
-      requiresOperatorWrite &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: actionScopes,
-      })
-    ) {
-      throw new Error("GitHub pull request actions require full operator write permission.");
-    }
   };
-  assertRequester();
   const explicit = explicitPullRequestUrl
     ? await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -165,7 +153,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (receipt?.result.status === "failed") {
     receipt = await service.latestPublishedShared(session, readCurrent);
   }
-  assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
   if (!explicit && !binding && !publication) {
     throw new Error(
@@ -196,53 +183,28 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     (binding
       ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
       : publication!);
-  const identity = await prepareCurrentGitHubPublicationIdentity(session.agentId);
-  assertRequester();
+  const nativeReader = await prepareSelectedGitHubPullRequestReader({
+    session,
+    pullRequest,
+    binding,
+    requester: admitted.requester,
+    assertCurrent: assertRequester,
+  });
+  const { identity, endpoint } = nativeReader;
+  const host = identity.host ?? "github.com";
+  const number = endpoint.split("/").at(-1);
   if (publication) {
     assertExpectedSharedGitHubPublisher(publication.publisher, {
       source: identity.source,
       ...identity.account,
     });
   }
-  const fullWrite = roleScopesAllow({
-    role: "operator",
-    requestedScopes: ["operator.write"],
-    allowedScopes: admitted.requester.snapshot.scopes,
-  });
-  const assertIdentity = () => {
-    assertRequester();
-    if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
-      throw new Error(
-        "The GitHub publisher changed; inspect the current identity before retrying.",
-      );
-    }
-  };
+  const assertIdentity = nativeReader.assertCurrent;
   const assertCurrent = () => {
     assertIdentity();
     inspection?.assertCurrent();
   };
-  const url = URL.parse(pullRequest.url);
-  const host = identity.host ?? "github.com";
-  const expectedPath = `/${pullRequest.repository}/pull/`;
-  const number = url?.pathname.slice(expectedPath.length);
-  if (
-    !url ||
-    url.protocol !== "https:" ||
-    url.host !== host ||
-    (originalTarget && originalTarget.host !== host) ||
-    url.username ||
-    url.password ||
-    !url.pathname.startsWith(expectedPath) ||
-    !number ||
-    !/^[1-9][0-9]*$/u.test(number) ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error("The publication's GitHub target is invalid.");
-  }
-  const endpoint = `repos/${pullRequest.repository}/pulls/${number}`;
   const read = async () => {
-    assertCurrent();
     if (explicitPullRequestUrl) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -250,7 +212,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });
-      assertCurrent();
       return pullRequestState(
         inspection.details,
         pullRequest,
@@ -258,30 +219,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         explicit?.result.author.accountId,
       );
     }
-    if (binding && !fullWrite) {
-      inspection = await inspectOwnGitHubPullRequest({
-        pullRequestUrl: binding.url,
-        session,
-        requester: admitted.requester,
-        assertCurrent: assertIdentity,
-      });
-    }
-    const result = await runPublicationCommand(githubPublicationApiArgs(endpoint, "GET", host), {
-      env: identity.env,
-      beforeRun: assertCurrent,
-    });
-    assertCurrent();
-    if (result.code !== 0) {
-      throw new Error(
-        "GitHub PR state is unavailable; check the publisher's repository access and retry inspect.",
-      );
-    }
-    return pullRequestState(
-      JSON.parse(result.stdout.toString("utf8")),
-      pullRequest,
-      binding,
-      inspection?.result.author.accountId,
-    );
+    const value = await nativeReader.readJson(endpoint);
+    inspection = nativeReader.inspection;
+    return pullRequestState(value, pullRequest, binding, inspection?.result.author.accountId);
   };
   const present = (
     state: ReturnType<typeof pullRequestState>,
@@ -319,11 +259,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   assertHead(before);
   const prepareImportedEffect = async () => {
     if (explicitPullRequestUrl) {
-      // Metadata does not require permission to push source or an unprotected head branch.
+      // Metadata and lifecycle actions do not require permission to push source or an unprotected head branch.
       const current = await read();
       assertHead(current);
       if (current.state === "closed" || current.state === "merged") {
-        throw new Error("The PR is closed; no metadata action was performed.");
+        throw new Error("The PR is closed; no action was performed.");
       }
       return current;
     }
@@ -334,10 +274,8 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         assertCurrent,
         requirePublicRepositories: inspection.requirePublicRepositories,
       });
-      assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);
     }
-    assertCurrent();
     return null;
   };
   if (evidenceUpload) {
@@ -446,7 +384,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
           excludeAccountId: identity.account.accountId,
         })
       : undefined;
-  assertCurrent();
   if (binding && attribution) {
     const current = await read();
     assertHead(current);

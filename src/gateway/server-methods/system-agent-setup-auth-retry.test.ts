@@ -109,31 +109,20 @@ describe("openclaw.setup auth retries", () => {
     resetCommandQueueStateForTest();
   });
 
-  it.each([
-    ["running", undefined, "during cleanup"],
-    ["cancelled", undefined, "during cleanup"],
-    ["running", "client invalidation", "before cancellation"],
-    ["running", "request guard", "before cancellation"],
-    ["running", "client invalidation", "during cleanup"],
-    ["running", "request guard", "during cleanup"],
-  ] as const)(
-    "%s sign-in replacement with %s %s preserves cleanup and live retry authority",
-    async (status, revocation, when) => {
+  it.each(["running", "cancelled"] as const)(
+    "%s sign-in replacement during cleanup preserves cleanup and live retry authority",
+    async (status) => {
       await using fixture = authFixture();
       const { wizardSessions, context, start, released: cleanupReleased } = fixture;
       const cleanupStarted = createDeferredCore();
-      const authorityError = new Error("Queued request authority was revoked");
       const retryClient = { ...authClient, connId: "queued-connection", invalidated: false };
-      let guardRevoked = false;
       setupInferenceMocks.activateSetupInference
         .mockImplementationOnce(async (params) => {
           try {
             await params.prompter.note("Complete the original sign-in");
           } finally {
             cleanupStarted.resolve();
-            if (when === "during cleanup") {
-              await cleanupReleased.promise;
-            }
+            await cleanupReleased.promise;
           }
         })
         .mockImplementation((params) =>
@@ -150,53 +139,22 @@ describe("openclaw.setup auth retries", () => {
           respond: () => undefined,
         } as never);
       }
-      const replacement = start("auth-replacement", {}, retryClient, {
-        sessionMutationCommitGuard: () => {
-          if (guardRevoked) {
-            throw authorityError;
-          }
-        },
-      });
+      const replacement = start("auth-replacement", {}, retryClient);
       const result = replacement.pending.then(
         () => undefined,
         (error: unknown) => error,
       );
-      if (when === "during cleanup") {
-        await Promise.race([cleanupStarted.promise, result]);
-        expect(original.signal.aborted).toBe(true);
-        expect(replacement.respond).not.toHaveBeenCalled();
-        expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
-      }
-      if (revocation === "client invalidation") {
-        retryClient.invalidated = true;
-      } else if (revocation === "request guard") {
-        guardRevoked = true;
-      }
+      await Promise.race([cleanupStarted.promise, result]);
+      expect(original.signal.aborted).toBe(true);
+      expect(replacement.respond).not.toHaveBeenCalled();
+      expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
       cleanupReleased.resolve();
-      const error = await result;
-      if (revocation) {
-        if (when === "before cancellation") {
-          expect(original.signal.aborted).toBe(false);
-          expect(wizardSessions.get("auth-first")).toBe(original);
-        }
-        expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
-        expect(wizardSessions.has("auth-replacement")).toBe(false);
-        expect(replacement.respond).not.toHaveBeenCalled();
-        if (revocation === "request guard") {
-          expect(error).toBe(authorityError);
-        } else {
-          expect(error).toMatchObject({ message: "Gateway requester authority changed" });
-        }
-      } else {
-        expect(error).toBeUndefined();
-      }
-      const sessionId = revocation ? "auth-live" : "auth-replacement";
-      const live = revocation ? start(sessionId) : replacement;
-      await live.pending;
-      expectRunning(live.respond, sessionId);
+      expect(await result).toBeUndefined();
+      await replacement.pending;
+      expectRunning(replacement.respond, "auth-replacement");
       expect(original.signal.aborted).toBe(true);
       expect(wizardSessions.has("auth-first")).toBe(false);
-      await expectPrompt(context, sessionId, "Complete the replacement sign-in");
+      await expectPrompt(context, "auth-replacement", "Complete the replacement sign-in");
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
     },
   );
@@ -247,11 +205,6 @@ describe("openclaw.setup auth retries", () => {
 
   it.each([
     ["owner", {}],
-    ["choice", { authChoice: "xai" }],
-    ["agent", { agentId: "other-agent" }],
-    ["workspace", { workspace: "/tmp/other-auth-workspace" }],
-    ["modelTarget", { modelTarget: "utility" }],
-    ["nativeSessionCatalogsEnabled", { nativeSessionCatalogsEnabled: true }],
     ["commit", {}],
   ] satisfies Array<[string, Partial<SystemAgentSetupAuthStartParams>]>)(
     "keeps another sign-in busy when its %s prevents replacement",

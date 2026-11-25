@@ -61,9 +61,8 @@ it("renders outbox attention and stays quiet when empty", () => {
   expect(renderBadges({ outboxAttentionCount: 0 }).querySelector(".session-row-badges")).toBeNull();
 });
 
-it("keeps child placement badges hidden while showing PR and approval", () => {
+it("prioritizes PR and approval over healthy placement", () => {
   const container = renderBadges({
-    isChild: true,
     ...pr("open", 111532),
     hasApproval: true,
     placementState: "active",
@@ -76,16 +75,15 @@ it("keeps child placement badges hidden while showing PR and approval", () => {
 });
 
 it.each([
-  ["active", false, 3, "Placement: active · 3 workspace conflicts"],
-  ["active", false, 1, "Placement: active · 1 workspace conflict"],
-  ["reclaimed", false, 2, "Placement: reclaimed · 2 workspace conflicts"],
-  ["reclaimed", true, 2, "Placement: reclaimed · 2 workspace conflicts"],
-  [undefined, false, 2, "Cloud worker children: 2 workspace conflicts"],
+  ["active", 3, "Placement: active · 3 workspace conflicts"],
+  ["active", 1, "Placement: active · 1 workspace conflict"],
+  ["reclaimed", 2, "Placement: reclaimed · 2 workspace conflicts"],
+  [undefined, 2, "Cloud worker children: 2 workspace conflicts"],
 ] as const)(
-  "keeps conflict attention for %s placement (child: %s, count: %s)",
-  (placementState, isChild, count, label) => {
+  "keeps conflict attention for %s placement (count: %s)",
+  (placementState, count, label) => {
     const indicator = renderBadge(
-      { placementState, isChild, workspaceConflictCount: count },
+      { placementState, workspaceConflictCount: count },
       "cloud",
       label,
     );
@@ -115,7 +113,10 @@ it("retains PR artwork when a receipt confirms the displayed count", () => {
   expect(badge(container, "pull-request")).toBe(original);
   setCount(2);
   flush();
-  expect(badge(container, "pull-request")?.textContent).toBe("2");
+  expect(badge(container, "pull-request")?.textContent).toBe("");
+  expect(badge(container, "pull-request")?.getAttribute("aria-label")).toBe(
+    "2 pull requests · #17 · Open",
+  );
 });
 
 it("keeps the two most urgent badges in reading order and caps counts", () => {
@@ -137,11 +138,29 @@ it("keeps the two most urgent badges in reading order and caps counts", () => {
   );
 });
 
-it("shows cloud placement only when it needs attention", () => {
-  expect(badge(renderBadges({ placementState: "active" }), "cloud")).toBeNull();
-  expect(badge(renderBadges({ placementState: "provisioning" }), "cloud")).toBeNull();
+it("shows cloud placement in every worker state", () => {
+  expect(badge(renderBadges({ placementState: "active" }), "cloud")).not.toBeNull();
+  expect(badge(renderBadges({ placementState: "provisioning" }), "cloud")).not.toBeNull();
   expect(badge(renderBadges({ placementState: "failed" }), "cloud")).not.toBeNull();
+  expect(badge(renderBadges({ placementState: "local" }), "cloud")).toBeNull();
+});
+
+it("keeps the pull request over a healthy placement at the badge limit", () => {
+  const container = renderBadges({
+    ...pr("open", 1, 2),
+    placementState: "active",
+    hasComposerDraft: true,
+  });
+  expect(badge(container, "pull-request")).not.toBeNull();
+  expect(badge(container, "draft")).not.toBeNull();
+  expect(badge(container, "cloud")).toBeNull();
   expect(
-    badge(renderBadges({ placementState: "active", diskSpaceStatus: "warning" }), "cloud"),
+    badge(renderBadges({ ...pr("open", 1, 2), placementState: "active" }), "cloud"),
   ).not.toBeNull();
+  expect(
+    badge(
+      renderBadges({ ...pr("open", 1, 2), placementState: "failed", hasComposerDraft: true }),
+      "pull-request",
+    ),
+  ).toBeNull();
 });

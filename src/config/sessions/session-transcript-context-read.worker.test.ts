@@ -32,6 +32,7 @@ import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 function createTranscriptTarget(sessionId: string, storePath: string) {
@@ -43,32 +44,135 @@ function createTranscriptTarget(sessionId: string, storePath: string) {
   };
 }
 
-it("lets writers progress and consumes fresh model context after repeated contention", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ label: "model-context-writer-progress" }, async (state) => {
-    const target = createTranscriptTarget("context-progress", state.statePath("transcript.sqlite"));
+it.for(["same", "unrelated"] as const)(
+  "reads model context while %s-session writers progress",
+  async (writerScope, { signal }) => {
+    await withOpenClawTestState({ label: "model-context-writer-progress" }, async (state) => {
+      const target = createTranscriptTarget(
+        "context-progress",
+        state.statePath("transcript.sqlite"),
+      );
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const manager = await SessionManager.openAsync(target);
+      await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
+      const writerTarget =
+        writerScope === "same" ? target : createTranscriptTarget("other", target.storePath);
+      await upsertSessionEntryCore(writerTarget, {
+        sessionId: writerTarget.sessionId,
+        updatedAt: 1,
+      });
+      const writingManager =
+        writerScope === "same" ? manager : await SessionManager.openAsync(writerTarget);
+      const { databaseClaim } = await loadSessionEntryForAdmission(target);
+      if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+        throw new Error("Expected admitted durable session reader");
+      }
+      const gates = Array.from({ length: writerScope === "same" ? 2 : 1 }, () => ({
+        entered: createDeferred(),
+        release: createDeferred(),
+      }));
+      let reads = 0;
+      const read = contextWorker.readSessionTranscriptModelContextInWorker;
+      const delayed = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementation(async (...args) => {
+          const value = await read(...args);
+          const gate = gates[reads++];
+          gate?.entered.resolve();
+          await gate?.release.promise;
+          return value;
+        });
+      let reading: Promise<unknown> | undefined;
+      let writer: Promise<unknown> | undefined;
+      try {
+        await withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: target,
+            sessionReader: databaseClaim.reader,
+            withTranscriptWrite: async (write) => write(),
+          },
+          async () => {
+            const consume = vi.fn((context) => JSON.stringify(context.events));
+            reading = readSessionTranscriptModelContextAsync(
+              target,
+              consume,
+              undefined,
+              undefined,
+              undefined,
+              { maxBytes: 4096, maxEvents: 10 },
+              true,
+            );
+            for (const [index, gate] of gates.entries()) {
+              await withinTest(
+                awaitGateBeforeSettlement(gate.entered.promise, reading, "Read bypassed worker"),
+                signal,
+              );
+              writer = writingManager.appendMessageAsync({
+                role: "user",
+                content: `later-${index}`,
+                timestamp: index + 2,
+              });
+              await withinTest(
+                awaitGateBeforeSettlement(writer, reading, "Read settled before writer finished"),
+                signal,
+              );
+              expect(consume).not.toHaveBeenCalled();
+              gate.release.resolve();
+            }
+            await expect(withinTest(reading, signal)).resolves.toContain(
+              writerScope === "same" ? "later-1" : "committed",
+            );
+            expect(consume).toHaveBeenCalledTimes(1);
+            expect(reads).toBe(writerScope === "same" ? 3 : 1);
+          },
+        );
+      } finally {
+        gates.forEach((gate) => gate.release.resolve());
+        await Promise.allSettled([reading, writer]);
+        delayed.mockRestore();
+        await databaseClaim.release();
+      }
+    });
+  },
+);
+
+it("loads bounded model context across large transcript sequence gaps", async () => {
+  await withOpenClawTestState({ label: "model-context-sparse-sequences" }, async (state) => {
+    const target = createTranscriptTarget("sparse", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const original = await SessionManager.openAsync(target);
+    const parentId = await original.appendMessageAsync({
+      role: "user",
+      content: "before the gap",
+      timestamp: 1,
+    });
+    const answer = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "after the gap" }],
+    });
+    const options = { agentId: target.agentId, path: target.storePath };
+    // Retain a sparse persisted sequence as an imported transcript can.
+    await runOpenClawAgentWriteAdmission(options, () => {
+      const { db } = openOpenClawAgentDatabase(options);
+      createTranscriptEventInserter(
+        db,
+        target.sessionId,
+      )({
+        seq: 4_000_000,
+        createdAt: 2,
+        eventJson: JSON.stringify({
+          type: "message",
+          id: "abc123ef",
+          parentId,
+          timestamp: new Date(2).toISOString(),
+          message: answer,
+        }),
+      });
+    });
     const manager = await SessionManager.openAsync(target);
-    await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
     const { databaseClaim } = await loadSessionEntryForAdmission(target);
     if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
       throw new Error("Expected admitted durable session reader");
     }
-    const gates = [0, 1].map(() => ({ entered: createDeferred(), release: createDeferred() }));
-    let reads = 0;
-    const read = contextWorker.readSessionTranscriptModelContextInWorker;
-    const delayed = vi
-      .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-      .mockImplementation(async (...args) => {
-        const value = await read(...args);
-        const gate = gates[reads++];
-        gate?.entered.resolve();
-        await gate?.release.promise;
-        return value;
-      });
-    let reading: Promise<unknown> | undefined;
-    let writer: Promise<unknown> | undefined;
     try {
       await withOwnedSessionTranscriptWrites(
         {
@@ -77,41 +181,18 @@ it("lets writers progress and consumes fresh model context after repeated conten
           withTranscriptWrite: async (write) => write(),
         },
         async () => {
-          const consume = vi.fn((context) => JSON.stringify(context.events));
-          reading = readSessionTranscriptModelContextAsync(
-            target,
-            consume,
-            undefined,
-            undefined,
-            undefined,
-            { maxBytes: 4096, maxEvents: 10 },
-            true,
-          );
-          for (const [index, gate] of gates.entries()) {
-            await withinTest(
-              awaitGateBeforeSettlement(gate.entered.promise, reading, "Read bypassed worker"),
-              signal,
-            );
-            writer = manager.appendMessageAsync({
-              role: "user",
-              content: `later-${index}`,
-              timestamp: index + 2,
-            });
-            await withinTest(
-              awaitGateBeforeSettlement(writer, reading, "Read settled before writer finished"),
-              signal,
-            );
-            expect(consume).not.toHaveBeenCalled();
-            gate.release.resolve();
-          }
-          await expect(withinTest(reading, signal)).resolves.toContain("later-1");
-          expect(consume).toHaveBeenCalledTimes(1);
+          const readContext = async () =>
+            (
+              await SessionManager.openModelContextAsync(target, {
+                limits: { maxBytes: 4096, maxEvents: 10 },
+              })
+            ).buildSessionContext().messages;
+          await expect(readContext()).resolves.toEqual(manager.buildSessionContext().messages);
+          await manager.appendMessageAsync({ role: "user", content: "follow-up", timestamp: 2 });
+          await expect(readContext()).resolves.toEqual(manager.buildSessionContext().messages);
         },
       );
     } finally {
-      gates.forEach((gate) => gate.release.resolve());
-      await Promise.allSettled([reading, writer]);
-      delayed.mockRestore();
       await databaseClaim.release();
     }
   });

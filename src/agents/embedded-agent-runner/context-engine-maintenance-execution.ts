@@ -5,17 +5,22 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { SessionManager } from "../sessions/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "./run/compaction-accounting-bridge.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 function buildContextEngineMaintenanceRuntimeContext(
@@ -24,7 +29,7 @@ function buildContextEngineMaintenanceRuntimeContext(
   },
 ): ContextEngineRuntimeContext {
   const { abortSignal, assertActive } = params;
-  return {
+  const runtimeContext = {
     ...params.runtimeContext,
     ...resolveContextEngineCapabilities({
       config: params.config,
@@ -71,11 +76,9 @@ function buildContextEngineMaintenanceRuntimeContext(
             undefined,
             abortSignal,
           );
-          sessionManager = await SessionManager.openAsync(
-            runtimeTarget,
-            undefined,
-            undefined,
-            abortSignal,
+          const target = runtimeTarget;
+          sessionManager = await withSessionTranscriptHydrationCaller("maintenance", () =>
+            SessionManager.openAsync(target, undefined, undefined, abortSignal),
           );
         }
         const manager = sessionManager;
@@ -96,7 +99,12 @@ function buildContextEngineMaintenanceRuntimeContext(
       }
       return result;
     },
-  };
+  } satisfies ContextEngineRuntimeContext;
+  const source = readCompactionAccountingRecorder(params.runtimeContext);
+  if (source) {
+    attachCompactionAccountingRecorder(runtimeContext, source);
+  }
+  return runtimeContext;
 }
 
 export async function executeContextEngineMaintenance(

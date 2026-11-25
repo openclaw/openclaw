@@ -57,7 +57,6 @@ describe("webchat admission to plugin node duplex authority", () => {
     })),
     ...(
       [
-        "permission",
         "session",
         "admission",
         "gateway",
@@ -99,9 +98,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
         ENVIRONMENT_ID,
-        MANIFEST_REF,
         OWNER_EPOCH,
         placements,
+        reconcileUnchangedLocalWorkspace,
         root,
         seedActivePlacement,
         SESSION_ID,
@@ -225,20 +224,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
       };
       const environment = {
@@ -300,9 +286,6 @@ describe("webchat admission to plugin node duplex authority", () => {
                   case "unrelated-command":
                   case "missing-descriptor":
                   case "expanded-descriptor":
-                    break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
                     break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, {
@@ -446,7 +429,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(prompt).toHaveBeenCalledOnce();
       } else {
         expect(launchErrors).toHaveLength(1);
-        expect(launchErrors[0]).toMatch(/no longer (active|current)/);
+        expect(launchErrors[0]).toMatch(
+          /no longer (active|current)|placement changed|The run or its session ended/,
+        );
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       }

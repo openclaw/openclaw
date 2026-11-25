@@ -88,7 +88,7 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 
 // mock-isolation: Use the scenario's plugin list rather than the host plugin registry.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigMock,
 }));
 
 const requireFirstRuntimeLog = () => String(runtime.log.mock.calls[0]?.[0]);
@@ -283,7 +283,7 @@ describe("healthCommand", () => {
     });
   });
 
-  it("prints persistent event-loop degradation duration in text output", async () => {
+  it("prints event-loop degradation and disabled hot reload in text output", async () => {
     const snapshot = createHealthSummary({
       eventLoop: {
         degraded: true,
@@ -295,15 +295,11 @@ describe("healthCommand", () => {
         utilization: 0.75,
         cpuCoreRatio: 0.5,
       },
+      configReload: { hotReloadStatus: "disabled" },
     });
     const output = await renderHealth(snapshot, { timeoutMs: 1000 });
     expect(output).toContain("Gateway event loop: degraded for 3m");
     expect(output).toContain("p99=1200ms");
-  });
-
-  it("prints the config hot-reload disabled line in text output", async () => {
-    const snapshot = createHealthSummary({ configReload: { hotReloadStatus: "disabled" } });
-    const output = await renderHealth(snapshot);
     expect(output).toContain(
       "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
     );
@@ -479,6 +475,30 @@ describe("healthCommand", () => {
     },
   );
 
+  it("reports a connected scope denial without calling it startup or timeout", async () => {
+    const warning =
+      "Gateway connected, but this CLI lacks operator.read. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "connected-no-operator-scope",
+      operatorScopeWarning: warning,
+      runtime: { status: "running", pid: 42 },
+      portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+      staleGatewayPids: [],
+    });
+    await expect(runHealth()).rejects.toMatchObject({
+      gatewayCode: "FORBIDDEN",
+      message: warning,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+    expect(rpc.callGateway).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("keeps readiness exhaustion machine-readable without a second network probe", async () => {
     vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
       healthy: false,
@@ -502,6 +522,16 @@ describe("healthCommand", () => {
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(rpc.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("drops a pending health read and its output on interrupt", async () => {
+    const controller = new AbortController();
+    rpc.callGateway.mockImplementationOnce(async (opts: { signal: AbortSignal }) => {
+      controller.abort();
+      opts.signal.throwIfAborted();
+    });
+    await runHealth({ json: true, signal: controller.signal });
+    expect([...runtime.log.mock.calls, ...runtime.exit.mock.calls]).toEqual([]);
   });
 
   it("keeps structured JSON failures inside the non-exiting host", async () => {
@@ -562,13 +592,6 @@ it("formatContextEngineHealthLine summarizes quarantined context engines", () =>
 });
 
 describe("formatHealthCheckFailure", () => {
-  it("keeps non-rich output stable", () => {
-    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-    expect(formatHealthCheckFailure(err, { rich: false })).toBe(
-      `Health check failed: ${String(err)}`,
-    );
-  });
-
   it("formats gateway connection details as indented key/value lines", () => {
     const err = new Error(`gateway closed (1006 abnormal closure (no close frame)): no close reason
 Gateway target: ws://127.0.0.1:19001

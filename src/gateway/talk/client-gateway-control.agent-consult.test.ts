@@ -44,7 +44,7 @@ vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
 }));
 vi.mock("../../talk/agent-run-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-run-control.js")>()),
-  controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun: mocks.controlTalkAgentRun,
 }));
 
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -61,7 +61,7 @@ const agentId = "researcher";
 const sessionId = "session-talk";
 const sessionKey = "agent:researcher:talk";
 type ControlParams = Parameters<
-  typeof import("../../talk/agent-run-control.js").controlRealtimeVoiceAgentRun
+  typeof import("../../talk/agent-run-control.js").controlTalkAgentRun
 >[0];
 const cleanups: Array<() => void> = [];
 const finalizers: Array<() => void> = [];
@@ -116,7 +116,7 @@ function mockConsult(run: (params: ConsultParams) => Promise<void>) {
 }
 
 async function projectSteering(params: ControlParams) {
-  const overlay = params.getToolAuthorityOverlay?.();
+  const overlay = await params.getToolAuthorityOverlayAsync?.();
   if (overlay) {
     await params.prepareToolAuthorityOverlay?.(overlay);
   }
@@ -284,7 +284,7 @@ describe("Talk client agent consult admission", () => {
               )
             : runner.runPrompt({ prompt: "first task" }),
         );
-        mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params: ControlParams) => {
+        mocks.controlTalkAgentRun.mockImplementationOnce(async (params: ControlParams) => {
           const recorder = params.createUserTurnTranscriptRecorder?.(params.text);
           if (entrypoint === "runPrompt") {
             expect(recorder).toBeDefined();
@@ -307,16 +307,14 @@ describe("Talk client agent consult admission", () => {
           }
           await awaitGateBeforeSettlement(entered.promise, run, "Talk backend must register");
           await Promise.resolve();
-          expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+          expect(mocks.controlTalkAgentRun).not.toHaveBeenCalled();
           publish.resolve();
           await steering;
           if (entrypoint === "runOwnedArgs") {
             expect(assertCurrent).toHaveBeenCalledBefore(mocks.consultRealtimeVoiceAgent);
           }
           expect(mocks.prepareAgentRunAdmission).toHaveBeenCalledBefore(mocks.runEmbeddedAgentCore);
-          expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledBefore(
-            mocks.controlRealtimeVoiceAgentRun,
-          );
+          expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledBefore(mocks.controlTalkAgentRun);
           expect(project).toHaveBeenCalledOnce();
           expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).toMatchObject({
             senderIsOwner: true,
@@ -444,7 +442,7 @@ describe("Talk client agent consult admission", () => {
           "attempt",
         );
       });
-      mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(async (params) => {
+      mocks.controlTalkAgentRun.mockImplementationOnce(async (params) => {
         const result = await projectSteering(params);
         outbound();
         return result;
@@ -493,7 +491,7 @@ describe("Talk client agent consult admission", () => {
         published = pendingBackend("current-owner", handle, async (instance) => {
           await publishBackend(handle, instance, project, "attempt");
         }).published.promise;
-        mocks.controlRealtimeVoiceAgentRun.mockImplementationOnce(projectSteering);
+        mocks.controlTalkAgentRun.mockImplementationOnce(projectSteering);
       }
       const { runner, run: first } = startOwnedConsult({ registerRun });
       await waiting[0]!.promise;

@@ -8,6 +8,7 @@ import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../lib/toast-host.tsx";
@@ -743,7 +744,7 @@ describe("workspace file tabs", () => {
     expect(readFileDraft(content)?.content).toBe("UNSAVED");
   });
 
-  it("shows a held preview and recovers an unavailable file without duplicating its tab", async () => {
+  it("browses from an unavailable preview and retries without duplicating its tab", async () => {
     const state = createSessionWorkspaceHost();
     const first = createDeferred<SessionWorkspaceGetResult>();
     const retry = createDeferred<SessionWorkspaceGetResult>();
@@ -751,6 +752,7 @@ describe("workspace file tabs", () => {
     state.sessions.getFile = getFile;
     const panel = mountWorkspacePanel(state);
     panel.presentation = "desktop";
+    panel.onSelect = (id) => selectSessionWorkspacePreview(state, id);
     panel.renderDetail = () =>
       Object.assign(document.createElement("div"), { textContent: "Ready" });
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
@@ -761,6 +763,15 @@ describe("workspace file tabs", () => {
     const preview = getSessionWorkspace(state).previews[0]!;
     first.reject(new Error("temporary failure"));
     await waitForSolid(() => expect(panel.textContent).toContain("temporary failure"));
+    const browse = panel.querySelector<HTMLButtonElement>("openclaw-panel-empty-state button");
+    expect(browse?.textContent).toBe("Browse files");
+    browse!.focus();
+    browse!.click();
+    const catalog = panel.querySelector<HTMLElement>(".chat-files-panel__catalog");
+    await waitForSolid(() => expect(document.activeElement).toBe(catalog));
+    expect(catalog?.hidden).toBe(false);
+    expect(getSessionWorkspace(state).activePreviewId).toBeNull();
+    expect(getSessionWorkspace(state).previews).toEqual([preview]);
     const paths = [...panel.querySelectorAll<HTMLElement>(".sidebar-file-view__path")];
     expect(paths).toHaveLength(2);
     panel.previews = [{ ...preview, label: "renamed.txt" }];
@@ -868,6 +879,7 @@ describe("workspace file tabs", () => {
                 title: "Parts tray",
                 toolName: "tray",
                 resourceUri: "ui://parts/tray",
+                icons: [{ src: "https://example.test/parts.svg", mimeType: "image/svg+xml" }],
                 entrypoint: { type: "thread" },
               },
             },
@@ -886,6 +898,12 @@ describe("workspace file tabs", () => {
       await panel.updateComplete;
       flush();
       editor.value = "Unsaved draft";
+      const { container: tabIcon } = mountSolid(
+        () => readPanelHostedTabs(panel)!.hostedTabs[0]!.icon,
+      );
+      expect(tabIcon.querySelector("img")?.getAttribute("src")).toBe(
+        "https://example.test/parts.svg",
+      );
 
       await panel.closeHostedTab("app");
       flush();

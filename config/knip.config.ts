@@ -7,7 +7,11 @@ import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
-import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import {
+  isInlineUpdateCompatibilityExport,
+  readUpdateCompatibilityInventory,
+  resolveUpdateCompatibilityOrigin,
+} from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
@@ -31,29 +35,88 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/ui-e2e-worker-affinity-measure.mts",
+  "scripts/perf/isolated-completion-registry-measure.ts!",
+  "scripts/perf/audit-retention-fixture.mjs!",
+  "scripts/perf/file-log-main-thread-measure.mjs!",
+  "scripts/perf/session-history-page-reads-measure.ts!",
+  "scripts/diagnostics/windows-link-service.mjs!",
+  "scripts/boat-release-runner.mjs!",
+  "scripts/build-iroh.mjs!",
+  // The macOS packager verifies the staged app before signing.
+  "scripts/lib/mac-runtime-portability.mjs!",
+  "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/template-retirement-measure.mts",
+  "scripts/windows-release-promotion.mjs!",
+  "scripts/windows-gateway-release.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
   "scripts/compose-installed-runtime.mts!",
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/persisted-turn-admission-measure.ts!",
+  "scripts/perf/exec-safe-bin-io-measure.mjs!",
+  "scripts/perf/usage-cost-source-measure.mjs!",
+  "scripts/perf/clickclack-account-snapshot.ts!",
+  "scripts/perf/clickclack-credential-read.ts!",
+  "scripts/perf/github-managed-profile-read.ts!",
+  "scripts/perf/github-managed-profile-write.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
+  // Spawned directly by mantis-telegram-failure.test.ts.
+  "test/scripts/fixtures/mantis-telegram-failure.mts",
+  // Spawned directly by beam-handoff.joined.e2e.test.ts.
+  "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Spawned directly by fs-safe-drvfs-calls.test.ts under Node and Bun.
+  "test/fixtures/fs-safe-drvfs-calls.mjs!",
+  // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
+  "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-ci-lint-plan.mts!",
+  "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
+  "scripts/bench-ios-release-note-overlap.mjs!",
+  "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
+  "scripts/bench-template-detail.mts!",
+  "scripts/bench-session-source-notifications.mjs!",
+  "scripts/bench-pr-dependency-cache.mjs!",
+  // scripts/pr injects this cache-lifetime preload through NODE_OPTIONS.
+  "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
+  // The Windows benchmark launches this observer with Node --import by exact path.
+  "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
+  "scripts/lib/agent-planner-statistics-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/gateway-crash-record-measure.mts!",
+  "scripts/perf/native-pr-bootstrap-measure.mjs!",
+  "scripts/perf/native-image-replay-measure.ts!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/browser-protocol-retention.ts!",
+  "scripts/perf/browser-protocol-comparison.ts!",
+  "scripts/perf/browser-protocol-retention-preload.ts!",
+  "scripts/perf/fswatcher-retention-preload.mjs!",
+  "scripts/perf/podman-exec-measure.ts!",
+  "scripts/perf/responses-policy-fingerprint-measure.ts!",
+  "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
+  "scripts/perf/state-private-store-modes-measure.mjs!",
+  "scripts/perf/workspace-inventory-spawn-measure.ts!",
+  "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
+  "scripts/lib/plugin-npm-build-and-pack-batch.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Package scripts execute these maintained generators, whose inputs are production contracts.
@@ -81,16 +144,22 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  "scripts/ci-test-observations.mjs!",
+  "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-evaluate.mjs!",
+  "scripts/ci-adaptive-jev.mjs!",
+  "scripts/ci-adaptive-priors.mjs!",
+  "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
-  // db:postgres:gen/check invoke this generator through the source loader.
-  "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
+  // Full release validation invokes child-evidence reuse through a shell variable.
+  "scripts/find-reusable-release-child.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -103,22 +172,38 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Stable closeout imports its recovery verifier from the trusted tooling checkout.
+  ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
+  // Release validation imports shared policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
+  ".github/actions/setup-node-env/transform-fingerprint.mjs!",
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // Its companion guide invokes the isolated RPC payload census by path.
+  "scripts/bench-control-ui-rpc-payloads.ts!",
   // scripts/README.md invokes the real-Gateway Usage benchmark; it spawns this exact child path.
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
   "scripts/lib/usage-bench-observer.mjs!",
+  // scripts/README.md invokes the trusted Usage route/open benchmark by path.
+  "scripts/bench-usage-open.ts!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
+  // The event-load guide invokes the isolated Gateway wire fixture directly.
+  "scripts/bench-control-ui-event-load-wire.ts!",
+  // Its companion guide invokes the same-document aged-tab census by path.
+  "scripts/bench-control-ui-aged-tab.ts!",
+  "scripts/bench-control-ui-aged-tab-compare.ts!",
+  "scripts/bench-control-ui-tab-return.ts!",
+  "scripts/bench-control-ui-tab-return-native.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
@@ -130,6 +215,13 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  "scripts/analyze-control-ui-coverage.mts!",
+  // scripts/README.md invokes the adjacent-build cache inventory comparison.
+  "scripts/compare-control-ui-update-cache.ts!",
+  // The history-depth benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-control-ui-history-depth.ts!",
+  // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
+  "scripts/perf/hosted-doctor-measure.mts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
@@ -140,9 +232,13 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // Opt-in append benchmark CLI documented in its source header.
+  "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
+  "scripts/perf/slow-wait-holder-measure.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
   "scripts/perf/session-lifecycle-delete-sql-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
@@ -153,6 +249,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
+  // Its source header documents this opt-in Node worker allocation preload.
+  "scripts/lib/gateway-bench-heap-profile.mjs!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
   "scripts/perf/cron-delivery-gateway-entry.ts!",
@@ -170,11 +268,11 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/bench-codex-validators.mts!",
   "scripts/bench-control-ui-navigation.ts!",
+  // Per-method delay census and cross-engine readiness comparison.
+  "scripts/bench-control-ui-rpc-hostage.ts!",
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
-  "scripts/bench-media-completion-gateway.mts!",
-  "scripts/bench-media-completion-wait.mts!",
   "scripts/bench-memory-keyword.mjs!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",
@@ -185,6 +283,13 @@ const repositoryScriptEntries = [
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/github-detail-retention.ts!",
+  "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/workspace-snapshot-read-measure.ts!",
+  "scripts/perf/workspace-git-main-thread-measure.mjs!",
+  "scripts/perf/session-create-root-measure.mjs!",
+  "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -213,6 +318,9 @@ const repositoryScriptEntries = [
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
   "scripts/test-macos-native.mts!",
+  // CI invokes the settings owner and its per-source producer by path.
+  "scripts/test-macos-mlx-settings.mts!",
+  "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",
@@ -318,9 +426,16 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
-  // Installed recovery launches its driver and preloads its fault observer by path.
+  // git-release.sh runs this helper and preloads the launcher-kill hook by path.
+  "scripts/e2e/lib/upgrade-survivor/git-release.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/git-release-launcher-kill.mjs!",
+  // Installed recovery launches its driver/access probe and preloads its fault observer by path.
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
@@ -329,6 +444,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
   "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
+  // Published driver CI and documented Crabbox runs invoke the native matrix.
+  "scripts/e2e/lib/upgrade-survivor/native-systemd.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
@@ -338,6 +455,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
+  // Published driver CI executes the PostgreSQL upgrade against its service database.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -355,15 +475,19 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
+  // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
-  // db:postgres:gen and db:postgres:check invoke the canonical schema generator by path.
-  "scripts/generate-postgres-schema.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
@@ -393,15 +517,19 @@ const repositoryScriptEntries = [
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
   // Reachability for auditing is not registration or permission to execute it.
   "scripts/openclaw-release-clawhub-plan.ts!",
-  "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Standalone Linux workload compares pinned boundary-reference initialization.
+  "scripts/perf/boundary-reference-measure.mts!",
+  "scripts/perf/extension-boundary-compile-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
   "scripts/preflight-frozen-target-contracts.mjs!",
+  // The documented stable-to-candidate Goal upgrade proof runs as a standalone CLI.
+  "scripts/proof-control-ui-goal-upgrade.ts!",
   // #175328 invokes this real agent-exec streaming proof by path.
   "scripts/proof-final-answer-stream.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
@@ -411,6 +539,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/correction-review.mjs!",
   // prepare-core.sh invokes correction continuation and recovery by path.
   "scripts/pr-lib/correction-continuation.mjs!",
+  // worktree.sh executes the selected-task inventory and artifact closeout helper.
+  "scripts/pr-lib/finalized-task.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -428,6 +558,7 @@ const repositoryScriptEntries = [
   // worktree.sh invokes explicit, supervised checkout-file salvage by path.
   "scripts/pr-lib/review-transition-recovery.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
+  "scripts/pr-lib/dependency-hold-release.mjs!",
   // worktree.sh launches the locked cold-worktree adapter by path.
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -447,6 +578,16 @@ const repositoryScriptEntries = [
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
+  // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
+  "test/manual-release-approval.config.ts",
+  "test/manual-release-approval.checks.ts",
+  "test/manual-build-only-workflow.checks.ts",
+  "test/manual-build-only-artifacts.checks.ts",
+  "test/manual-build-only-evidence.checks.ts",
+  "test/manual-build-only-parent.checks.ts",
+  "test/manual-fast-track-button.checks.ts",
+  "test/manual-fast-track-publication.checks.ts",
+  "test/manual-fast-track-receipt.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -461,6 +602,8 @@ const repositoryScriptEntries = [
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // scripts/update-gateway.sh runs this source-update build by path.
+  "scripts/update-gateway-build.mts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
@@ -473,8 +616,11 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
-  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
+  "skills/create-blobster/scripts/cli.mjs!",
+  // create-template/SKILL.md runs inventory.mjs, which calls the bundled CLI bridge.
   "skills/create-template/scripts/cli.mjs!",
+  "skills/create-template/scripts/inventory.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
@@ -497,15 +643,23 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+  const stagedToolingRoot =
+    path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")
+      ? ".release-harness"
+      : path.resolve(filePath) ===
+          path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
+        ? ".closeout-tooling"
+        : path.resolve(filePath) === path.resolve(".github/workflows/full-release-validation.yml")
+          ? "workflow"
+          : undefined;
+  if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling)|workflow)\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
-      .map(
-        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
-      )
+      .filter((match) => match[2] === stagedToolingRoot)
+      .map((match) => `import {${match[1]}} from ${JSON.stringify(`../../${match[3]}`)};`)
       .join("\n");
   }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
@@ -545,9 +699,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
@@ -625,6 +795,9 @@ const rootEntries = [
   // PR #174294 stages the local credential owner without activating production consumers.
   // Remove this audit root when the client credential cutover wires those consumers.
   "src/infra/client-credential-store.ts!",
+  // PR #202654 stages the restricted writer transport ahead of its Session Share handlers.
+  // Remove this audit root when they consume prepareGatewayPublicationTransportV1.
+  "src/gateway/publication-reader.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -634,6 +807,7 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-log.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
@@ -651,6 +825,7 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/logging/logger-file.worker.ts!",
   // Offline port foundations precede orchestration; remove with their first production callers.
   "src/infra/database-engine/port.worker.ts!",
   "src/snapshot/export-envelope.ts!",
@@ -705,8 +880,6 @@ const rootEntries = [
   // Required metadata readers load this tsdown entry by computed source/dist path.
   "src/plugins/plugin-metadata-readers.runtime.ts!",
   "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts!",
-  // Released Gateways still import this stable entry after an on-disk update.
-  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -723,6 +896,8 @@ const rootEntries = [
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
+  // The vendored updater registers this asset through Rust global_api_script_path.
+  "apps/linux/src-tauri/updater-plugin/api-iife.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
   // The native window-chrome owner injects this script through Rust include_str!.
@@ -813,6 +988,15 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // Inline-command benchmarks resolve Codex from each measured checkout's
+  // extensions/codex/package.json, never from the tooling root.
+  "@openai/codex",
+  // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
+  // dependency tree via createRequire(npmCli), never from the root workspace.
+  "@npmcli/arborist",
+  "@npmcli/config",
+  "cacache",
+  "pacote",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
@@ -829,6 +1013,8 @@ const rootToolingAndWorkspaceDependencies = [
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
+  // The rule-cache benchmark resolves this dependency from extensions/tokenjuice/package.json.
+  "tokenjuice",
 ] as const;
 
 function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {
@@ -854,11 +1040,16 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
     return compileViteConfigConsumers(source, filePath);
   }
   if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
-    // The trusted manifest resolves this planner from the target checkout by file URL.
-    return source.replace(
-      /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
-      '$1import("./lib/ci-changed-node-test-plan.mts");',
-    );
+    // The trusted manifest resolves these planners from the target checkout by file URL.
+    return source
+      .replace(
+        /(const changedNodeTestPlan = await )importTargetPlan\([\s\S]*?\n\);/u,
+        '$1import("./lib/ci-changed-node-test-plan.mts");',
+      )
+      .replace(
+        'import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))',
+        'import("./lib/postgres-conformance-shards.mts")',
+      );
   }
   if (path.resolve(filePath) === path.resolve("scripts/prepare-native-protocol.mjs")) {
     // The temporary esbuild bundle exports this source module's unchanged API.
@@ -897,6 +1088,10 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
     `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
   );
   for (const [index, origin] of origins.entries()) {
+    // Inline historical implementations consume no current source binding.
+    if (isInlineUpdateCompatibilityExport(origin)) {
+      continue;
+    }
     const sourceFile = path.join(rootDir, origin.module);
     if (graph.names(sourceFile).includes(origin.symbol)) {
       imports.push(
@@ -904,9 +1099,8 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
       );
       continue;
     }
-    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    const currentOrigin = resolveUpdateCompatibilityOrigin(origin, rootDir, graph);
     if (
-      !currentOrigin ||
       (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
       !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
     ) {
@@ -914,6 +1108,9 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
         `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
       );
     }
+    imports.push(
+      `import { ${currentOrigin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${currentOrigin.module}`)};`,
+    );
   }
   return imports;
 }
@@ -1052,11 +1249,23 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // Direct release-checkout and global-package boundary tests consume these helpers;
+    // the full-tree scan still audits their exports against those consumers.
+    "src/cli/update-cli/update-command-git.ts": ["exports"],
+    // These in-module helpers are direct seams in compaction-floor.test.ts and
+    // package-release-retention.test.ts. The full-tree scan verifies those consumers.
+    "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
+    "src/infra/package-release-retention.ts": ["exports"],
+    "src/infra/package-release-slot.ts": ["exports"],
     // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
     // Remove these production-only exceptions when the offline port caller lands;
     // the full-tree audit still checks all exports against their boundary tests.
     "src/infra/database-port-recovery.ts": ["exports"],
     "src/infra/sqlite-snapshot.ts": ["exports"],
+    // Participate split part 1 stores member access levels; part 4 adds the
+    // session.members.setAccess handler that calls these writers. Remove then.
+    "src/config/sessions/session-sharing-store.ts": ["exports"],
+    "src/config/sessions/session-sharing-store.async.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.
@@ -1071,6 +1280,16 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // Cron regression fixtures reset the process-wide provider backoff between cases.
+    "src/cron/service/provider-backoff.ts": ["exports"],
+    // Cookie and plugin-route tests exercise the authorization step directly.
+    "src/gateway/http-auth-plugin-cookie.ts": ["exports"],
+    // Post-ready release tests drive the lean deferral clock with these bounds.
+    "src/gateway/server-post-ready-release.ts": ["exports"],
+    // Launcher rollback tests age the trial record against this budget.
+    "src/update/launcher.ts": ["exports"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
@@ -1159,6 +1378,16 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
+    // OpenClaw ID focused tests drive retry timers, mailbox handling, tunnel supervision and
+    // browser key seams through these exports; the full-tree scan still audits those tests.
+    "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
+    "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-principal.ts": ["types"],
+    "src/gateway/openclaw-id/tunnel-runtime.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-supervisor.ts": ["exports", "types"],
+    "extensions/openclaw-id-access/browser/owner-signing.ts": ["exports"],
+    "extensions/openclaw-id-access/browser/people-format.ts": ["exports"],
   },
   workspaces: {
     ".": {
@@ -1194,9 +1423,17 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // Workspace benchmarks inspect and synchronize native btrfs fixtures.
+        "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
+        // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
+        "filefrag",
+        // shutdown-loaded-measure.ts uses the host fio utility for disk pressure.
+        "fio",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
@@ -1204,14 +1441,24 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // The release-update upgrade-survivor scenario mints its registry TLS certificate with it.
+        "openssl",
+        // Native checkpoint measurements run their synthetic guest through the host engine.
+        "podman",
         "sleep",
+        // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
+        "sqlite3",
         "swiftlint",
+        // The Windows session-source benchmark terminates its own child process tree.
+        "taskkill.exe",
         "uptime",
         "xcrun",
       ],
+      // napi generates these optional platform artifacts; pnpm build:iroh builds only the host.
+      ignoreUnresolved: [/^\.\/iroh-node\.[a-z0-9-]+\.node$/, "./iroh-node.wasi.cjs"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
-      // Maintained package commands select these opt-in Vitest configs outside
+      // Maintained commands select these opt-in Vitest configs outside
       // the default root patterns. Config ownership keeps their defaults live.
       vitest: {
         config: [
@@ -1219,6 +1466,8 @@ const config = {
           "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
+          "test/vitest.codex-worker-authority.config.ts",
+          "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
         ],
       },
       project: [
@@ -1352,6 +1601,10 @@ const config = {
       "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/beam`]: bundledPluginWorkspace([
+      // Invoked by the plugin's release packaging hook.
+      "scripts/package-cleaners.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",
@@ -1422,6 +1675,7 @@ const config = {
         // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
         "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
         "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/slack-read-normalize.mjs!",
         "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
         // skill-packaging.test.ts runs this skill-reference generator with --check.
         "scripts/sync-skill-references.mjs",
@@ -1486,6 +1740,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",

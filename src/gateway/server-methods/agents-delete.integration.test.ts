@@ -34,6 +34,8 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../../infra/worker-task-capacity.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
@@ -48,10 +50,7 @@ import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../../test-utils/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   withOpenClawTestState,
@@ -68,6 +67,7 @@ import {
   deletionGatewayEnv,
   expectDeletedStorage,
 } from "./agents-delete.fixture.test-support.js";
+import { deleteGatewayAgent } from "./agents-delete.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 
 const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
@@ -248,7 +248,7 @@ it.for(["active", "restart-draining"] as const)(
         expect(created.status).toBe("created");
         const agentId = "doomed";
         const sessionId = "deletion-active-session";
-        const sessionKey = `agent:${agentId}:active`;
+        const sessionKey = `agent:${agentId}:${scenario === "active" ? "active" : "subagent:interrupted"}`;
         const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
         const writeEntry = (
           key: string,
@@ -267,6 +267,15 @@ it.for(["active", "restart-draining"] as const)(
             : {}),
         };
         writeEntry(sessionKey, session);
+        // Restart recovery must drain idle history larger than the pool's pending-task budget.
+        if (scenario === "restart-draining") {
+          for (let index = 0; index < 3 * DEFAULT_WORKER_PENDING_TASKS; index++) {
+            writeEntry(`agent:${agentId}:subagent:idle-${index}`, {
+              sessionId: `idle-deletion-${index}`,
+              updatedAt: 1,
+            });
+          }
+        }
         await fs.mkdir(state.sessionsDir(agentId), { recursive: true });
         await fs.writeFile(
           path.join(state.sessionsDir(agentId), "owned-attachment.txt"),
@@ -623,16 +632,19 @@ it.for(["active", "restart-draining"] as const)(
             }
             return;
           }
-          const pending = {
-            agentId,
-            operationId: "interrupted-deletion",
-            agentDir: state.agentDir(agentId),
-            workspaceDir: workspace,
-            sessionsDir: state.sessionsDir(agentId),
-            deleteFiles: true,
-            phase: "draining" as const,
-          };
-          beginAgentDeletionJournal(pending);
+          const overloaded = vi
+            .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+            .mockRejectedValue(new WorkerTaskError("worker task capacity reached", "overloaded"));
+          await expect(deleteGatewayAgent(agentId, true, context)).rejects.toThrow(
+            "worker task capacity reached",
+          );
+          overloaded.mockRestore();
+          expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
+          expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
+          expect(context.logGateway.warn).toHaveBeenCalledWith(
+            expect.stringContaining("retry agents.delete"),
+          );
+          vi.mocked(context.logGateway.warn).mockClear();
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
           resetConfigRuntimeState();
           await captureRuntimeConfigAsyncReader()();
@@ -643,20 +655,60 @@ it.for(["active", "restart-draining"] as const)(
           ).rejects.toThrow("deletion cleanup is still pending");
           const inventory = vi
             .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
-            .mockRejectedValueOnce(new Error("synthetic recovery failure"));
+            .mockRejectedValueOnce(
+              new AggregateError(
+                Array.from({ length: 349 }, () => new Error("synthetic recovery failure")),
+                "repeated session failures",
+              ),
+            );
           await deletionRecovery.resumeAgentDeletions(context);
           inventory.mockRestore();
           expect(context.logGateway.warn).toHaveBeenCalledWith(
             expect.stringContaining("synthetic recovery failure"),
           );
+          expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
+          expect(
+            vi
+              .mocked(context.logGateway.warn)
+              .mock.calls[0]?.[0]?.match(/synthetic recovery failure/g),
+          ).toHaveLength(1);
           vi.mocked(context.logGateway.warn).mockClear();
           await expect(
             patchSessionEntryCore(scope, () => ({ label: "refused after recovery failure" })),
           ).rejects.toThrow("deletion cleanup is still pending");
-          await deletionRecovery.resumeAgentDeletions(context);
-          expect(context.logGateway.warn).not.toHaveBeenCalled();
+          const recovered = createDeferred();
+          const resume = deletionRecovery.resumeAgentDeletions;
+          const recovery = vi
+            .spyOn(deletionRecovery, "resumeAgentDeletions")
+            .mockImplementation(async (...args) => {
+              await resume({ ...args[0], logGateway: context.logGateway }, args[1]);
+              recovered.resolve();
+            });
+          const transient = vi
+            .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+            .mockRejectedValueOnce(
+              new WorkerTaskError("worker task capacity reached", "overloaded"),
+            );
+          const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const restarted = await startGatewayServer(claim.port, {
+            bind: "loopback",
+            auth: { mode: "token", token: "agent-delete-test-token" },
+            controlUiEnabled: false,
+          });
+          try {
+            await restarted.startupSettled;
+            await withinTest(recovered.promise, signal);
+            expect(context.logGateway.warn).not.toHaveBeenCalled();
+            expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
+          } finally {
+            recovery.mockRestore();
+            transient.mockRestore();
+            await restarted.close();
+            await claim.release();
+          }
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
           await expectDeletedStorage(state, agentId, workspace, databasePath);
+          await captureRuntimeConfigAsyncReader()();
           expect(getRuntimeConfig().agents?.entries).not.toHaveProperty(agentId);
           expect(
             await createAgent({ name: agentId, workspace, skipBootstrap: true }),

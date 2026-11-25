@@ -1,52 +1,63 @@
 openclaw-chat-clawhub-card {
   display: block;
+  container-type: inline-size;
+  width: 384px;
+  max-width: 100%;
   margin-block: 12px 20px;
 }
 
-.chat-clawhub-card {
+.card.chat-clawhub-card {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-height: 63px;
+  padding: 9px 12px;
+  border-radius: 15px;
+
+  @container (width < 384px) {
+    gap: var(--space-2);
+    padding-inline: 10px;
+  }
 }
 
 .chat-clawhub-card__listing {
   display: flex;
   align-items: center;
-  flex: 1;
-  gap: var(--space-3);
+  flex: 1 1 10rem;
+  gap: inherit;
   min-width: 0;
   padding: 0;
   border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  background: none;
   text-align: start;
 }
 
 .chat-clawhub-card__icon {
   display: grid;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
+  flex: 0 0 32px;
+  height: 32px;
+  padding: 6px;
+  border-radius: 9px;
+  background: var(--brand-logo-chip-bg);
   place-items: center;
-  color: var(--muted);
-}
 
-.chat-clawhub-card__icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-}
+  & img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+  }
 
-.chat-clawhub-card__icon > svg {
-  width: 24px;
-  height: 24px;
+  & > svg {
+    width: 20px;
+    height: 20px;
+  }
 }
 
 .chat-clawhub-card__identity {
   display: grid;
-  min-width: 0;
+  gap: 2px;
   overflow-wrap: anywhere;
 }
 
@@ -54,54 +65,59 @@ openclaw-chat-clawhub-card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  font-size: 15px;
+  line-height: 22px;
+
+  & .plugin-card-author {
+    font-size: var(--control-ui-text-sm);
+    font-weight: 400;
+  }
 }
 
-.chat-clawhub-card__name .plugin-card-author {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: normal;
-}
+.chat-clawhub-card__status {
+  min-height: 18px;
+  font-size: 13px;
+  line-height: 18px;
 
-.chat-clawhub-card .card-sub {
-  margin-top: 2px;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  & > span {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
 }
 
 .chat-clawhub-card__actions {
   display: flex;
-  flex-shrink: 0;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: end;
+  max-width: 100%;
+  margin-inline-start: auto;
   gap: var(--space-2);
-}
 
-.chat-clawhub-card__installed {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  white-space: nowrap;
-}
-
-.chat-clawhub-card__installed svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (max-width: 640px) {
-  .chat-clawhub-card {
-    flex-wrap: wrap;
-  }
-
-  .chat-clawhub-card__actions {
-    justify-content: flex-end;
-    width: 100%;
+  & .btn {
+    min-height: 34px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
   }
 }
 
-.chat-clawhub-card__status-skeleton {
-  width: 144px;
-  height: 38px;
+/* The Template sign-in handoff changes two labels without moving the card. */
+.template-creator__sign-in {
+  & .chat-clawhub-card__identity {
+    flex: 1;
+    min-width: 0;
+  }
+
+  & [data-approval-code] {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    user-select: all;
+  }
+}
+
+.chat-clawhub-card__details {
+  border-color: transparent;
+  background: none;
 }

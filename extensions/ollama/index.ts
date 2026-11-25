@@ -251,6 +251,7 @@ async function discoverAppGuidedOllamaModel(
       },
       showInfo,
       configuredCloudModel,
+      configuredMaxTokens: requestedConfiguredModel?.maxTokens,
     });
     if (model) {
       break;

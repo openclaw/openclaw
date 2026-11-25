@@ -24,6 +24,7 @@ const held = createCronJob("held", "Held automation", {
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 600_000 },
   sessionTarget: `session:${sessionKey}`,
+  state: { nextRunAtMs: now + 3_600_000 },
 });
 const other = createCronJob("other", "Other session automation", {
   agentId: "main",
@@ -48,12 +49,12 @@ function inventory(jobs: CronJob[], revision = "inventory-1") {
   ]);
 }
 
-async function fixture(page: Page, supported = true) {
+async function fixture(page: Page) {
   await page.clock.install({ time: now });
   const gateway = await installMockGateway(page, {
     sessionKey,
     operatorScopes: ["operator.read"],
-    featureEvents: supported ? [changed] : [],
+    featureEvents: [changed],
     featureMethods: ["progressCard.get", "cron.list", "cron.status"],
     methodResponses: {
       "progressCard.get": { card: null },
@@ -70,7 +71,8 @@ async function fixture(page: Page, supported = true) {
   await row(held.name).waitFor();
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
-  await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
+  const childRoster = { source: "chat-pane", spawnedBy: sessionKey };
+  await gateway.waitForRequest("sessions.list", { match: childRoster });
   return { page, gateway, details, row, settled };
 }
 
@@ -93,41 +95,35 @@ function runtime(job: CronJob, action: "started" | "finished", revision: number)
 }
 
 suite.define(() => {
-  it.each([
-    { mode: "advertised", supported: true, tabs: 3, stateOnly: false },
-    { mode: "unadvertised", supported: false, tabs: 1, stateOnly: false },
-    { mode: "advertised state-only", supported: true, tabs: 3, stateOnly: true },
-    { mode: "unadvertised state-only", supported: false, tabs: 1, stateOnly: true },
-  ])(
-    "handles unrelated cron churn with an $mode inventory event",
-    async ({ supported, tabs, stateOnly }) => {
+  it("shows the scheduler's next run when hovering an automation row", async () => {
+    await suite.withPage({ locale: "en-US", timezoneId: "UTC" }, async ({ page }) => {
+      const { row } = await fixture(page);
+      await row(held.name).hover();
+      await page.clock.runFor(1_000);
+      await expect
+        .poll(async () => (await page.getByRole("tooltip").textContent())?.trim())
+        .toBe("Next run today at 7:00 AM");
+    });
+  });
+
+  it.each([false, true])(
+    "handles unrelated cron churn without list reads (stateOnly=%s)",
+    async (stateOnly) => {
       await suite.withPage(pageOptions, async ({ page, context }) => {
         const clients = [];
-        for (let index = 0; index < tabs; index += 1) {
-          clients.push(await fixture(index === 0 ? page : await context.newPage(), supported));
+        for (let index = 0; index < 3; index += 1) {
+          clients.push(await fixture(index === 0 ? page : await context.newPage()));
         }
         const counts = [];
         for (const { page: clientPage, gateway, row, settled } of clients) {
           const before = (await gateway.getRequests("cron.list")).length;
           const sessionsBefore = (await gateway.getRequests("sessions.list")).length;
           for (let index = 0; index < runtimeEvents; index += 1) {
-            const reads = (await gateway.getRequests("cron.list", { sessionKey })).length;
             await gateway.emitGatewayEvent("cron", {
               ...runtime(other, index % 2 ? "finished" : "started", index + 2),
               ...(stateOnly ? { action: "updated" } : {}),
             });
-            // The server regression proves state-only commits no longer publish this old companion.
-            if (stateOnly && !supported) {
-              await gateway.emitGatewayEvent("sessions.changed", {
-                sessionKey,
-                reason: "cron-binding",
-                ts: now + index,
-              });
-            }
             await clientPage.clock.runFor(1_000);
-            if (!supported) {
-              await gateway.waitForRequest("cron.list", { after: reads, match: { sessionKey } });
-            }
             await settled();
           }
           const current = row(held.name);
@@ -149,22 +145,16 @@ suite.define(() => {
             additional,
             additionalSessions,
           });
-          if (stateOnly && !supported) {
-            expect(additional).toBeGreaterThanOrEqual(runtimeEvents);
-          } else {
-            expect(additional).toBe(supported ? 0 : runtimeEvents);
-            expect(additionalSessions).toBe(0);
-          }
+          expect(additional).toBe(0);
+          expect(additionalSessions).toBe(0);
         }
-        console.log(JSON.stringify({ cronInventoryEvents: supported, stateOnly, clients: counts }));
-        if (supported) {
-          await page.reload();
-          const details = await openChatDetails(page);
-          await details.getByRole("link", { name: /Held automation/ }).waitFor();
-          expect((await clients[0]!.gateway.getRequests("cron.list")).length).toBeLessThanOrEqual(
-            counts[0]!.startup,
-          );
-        }
+        console.log(JSON.stringify({ stateOnly, clients: counts }));
+        await page.reload();
+        const details = await openChatDetails(page);
+        await details.getByRole("link", { name: /Held automation/ }).waitFor();
+        expect((await clients[0]!.gateway.getRequests("cron.list")).length).toBeLessThanOrEqual(
+          counts[0]!.startup,
+        );
       });
     },
   );
@@ -205,11 +195,10 @@ suite.define(() => {
       await row(retargeted.name).waitFor({ state: "detached" });
       await row(held.name).waitFor();
       await settled();
-      expect(
-        (await gateway.getRequests()).filter(({ method }) =>
-          ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(method),
-        ),
-      ).toEqual([]);
+      const writes = (await gateway.getRequests()).filter(({ method: rpc }) =>
+        ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(rpc),
+      );
+      expect(writes).toHaveLength(0);
     });
   });
 });

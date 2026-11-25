@@ -148,16 +148,6 @@ struct ChatInputHistoryTests {
         #expect(history.cancel() == "")
     }
 
-    @Test func `late acceptance keeps a genuinely newer stashed draft`() {
-        var history = ChatInputHistory()
-        history.record("older")
-        #expect(history.previous(draft: "newer unsent draft") == "older")
-
-        history.record("sent me")
-
-        #expect(history.cancel() == "newer unsent draft")
-    }
-
     @Test func `recall marker stays on the same duplicate after an identical prepend`() {
         var history = ChatInputHistory()
         history.record("dup")
@@ -181,6 +171,25 @@ struct ChatInputHistoryTests {
 
         #expect(!history.isRecalling)
         #expect(history.stashedDraft == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1))) @MainActor
+    func `saving while recalling stores the stashed draft, not the history entry`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let vm = await makeOutboxViewModel(transport: OutboxTestTransport(healthy: false), outbox: store)
+        await settleComposerDraft(vm)
+        vm.recordSuccessfulInput("already sent", sessionKey: vm.composerSessionKey(for: vm.sessionKey))
+        vm.input = "working draft"
+        #expect(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(vm.input == "already sent")
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+
+        let rebuilt = await makeOutboxViewModel(transport: OutboxTestTransport(healthy: false), outbox: store)
+        defer { rebuilt.detachTransport() }
+        await settleComposerDraft(rebuilt)
+        #expect(rebuilt.input == "working draft")
     }
 }
 

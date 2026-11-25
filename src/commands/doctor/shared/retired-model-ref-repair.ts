@@ -8,7 +8,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles/store-runtime.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -115,12 +115,12 @@ export function createRetiredModelRefRepairResolver(params: {
         const defaultRef = resolveConfiguredModelRef({
           ...modelOptions,
           defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
         });
-        const defaultProvider = defaultRef.provider;
+        const defaultProvider = defaultRef?.provider ?? DEFAULT_PROVIDER;
         const aliasIndex = buildModelAliasIndex({ ...modelOptions, defaultProvider });
         return {
           defaultRef,
+          defaultProvider,
           resolve: (raw: string) =>
             resolveModelRefFromString({ ...modelOptions, raw, defaultProvider, aliasIndex })?.ref,
         };
@@ -159,7 +159,7 @@ export function createRetiredModelRefRepairResolver(params: {
                 cfg: params.cfg,
                 catalog: [],
                 agentId,
-                defaultProvider: currentModel.defaultRef.provider,
+                defaultProvider: currentModel.defaultProvider,
                 defaultModel: currentModel.defaultRef,
                 manifestPlugins: metadataSnapshot.plugins,
               })
@@ -490,7 +490,7 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
         ? decision.reason === "reference-preservation"
           ? `Preserved ${path} model "${modelRef}" as "${decision.modelRef}" after config repair.`
           : `Replaced retired ${path} "${modelRef}" with "${decision.modelRef}".`
-        : `Removed retired ${path} "${modelRef}" so it inherits the configured default model.`,
+        : `Removed retired ${path} "${modelRef}"${path.endsWith(".decisionModel") ? "; decisions use the inherited Decision model, or stay off without one" : " so it inherits the configured default model"}.`,
     );
     return decision.kind === "replace" ? decision.modelRef : null;
   };
@@ -512,7 +512,7 @@ function createRetiredModelSlotRewriter(params: ModelRefRewriteContext) {
 export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
   const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
-  for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
+  for (const key of ["model", "utilityModel", "imageModel", "pdfModel", "decisionModel"] as const) {
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
     const selector = asOptionalRecord(params.owner[key]);
     if (selector && Object.keys(selector).length === 0) {

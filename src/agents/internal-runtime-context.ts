@@ -29,7 +29,7 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGI
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
 /** Notice inserted into runtime-generated context blocks. */
-export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -98,6 +98,9 @@ const INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 
 /** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
+  if (!value.includes("OPENCLAW_INTERNAL_CONTEXT")) {
+    return value;
+  }
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);

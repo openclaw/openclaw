@@ -13,7 +13,7 @@ import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type { CronStandingGrantLookupInput } from "../gateway/operator-approval-standing-grants.types.js";
 import type { ListTerminalOperatorApprovalsInput } from "../gateway/operator-approval-store.types.js";
-import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-store.types.js";
 import type { WorkerPlacementConflictBinding } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { DevicePairingReadCommand } from "../infra/device-pairing-read.types.js";
@@ -22,8 +22,8 @@ import type { ConversationRef } from "../infra/outbound/session-binding.types.js
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { UpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import type { UpdateRunListInput } from "../infra/update-run-read.kernel.js";
-import type { UpdateRunReconciliationInput } from "../infra/update-run-reconciliation.types.js";
 import type { PluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { PluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -33,16 +33,24 @@ import type {
   TranscriptExportResult,
 } from "../transcripts/store-export-contract.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
-import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
+import type {
+  AgentDatabaseDeletionWorkerSnapshot,
+  AgentDeletionJournalPurpose,
+} from "./agent-deletion-journal.types.js";
 import type {
   GitHubPublicationReceiptTarget,
   RepositoryGitHubPublicationReceiptTarget,
 } from "./github-publication-read.types.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import type {
   RegisteredStateReadCommand,
   RegisteredStateReadResult,
 } from "./openclaw-state-read-operation-registry.js";
+import type {
+  prepareOpenClawStateReadSnapshotSource,
+  StateReadSnapshotSource,
+} from "./openclaw-state-read-snapshot-source.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { RepositoryWorkspaceOwner } from "./session-repository-workspaces.types.js";
@@ -52,6 +60,25 @@ import type {
   UserChannelIdentitySelector,
   CachedGitHubIdentityBinding,
 } from "./user-profiles.types.js";
+
+export type OpenClawStateReadSnapshotScope = RetainedReadScope & {
+  readSource(): StateReadSnapshotSource | undefined;
+  prepareSource?: () => Promise<void>;
+  forkSource: Awaited<ReturnType<typeof prepareOpenClawStateReadSnapshotSource>>["forkSource"];
+  recoverRollbackJournal: () => void;
+  env: NodeJS.ProcessEnv;
+  callerSignal?: AbortSignal;
+};
+
+export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
+  admissionTimeoutMs?: number;
+  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
+  allowStartupRollbackRecovery?: true;
+  /** Selected reports acquire shared bytes only when a reader actually needs them. */
+  lazy?: boolean;
+  /** Command owners may cancel preparation before the callback acquires its read scope. */
+  signal?: AbortSignal;
+};
 
 export type OpenClawStateReadLocation = {
   context: OpenClawStateWorkerContext;
@@ -137,7 +164,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
   | { type: "agentDeletionJournal.retainedIds" }
-  | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -148,7 +174,13 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
+  | {
+      type: "userProfiles.githubAttribution.resolve";
+      profileIds: readonly string[];
+      host?: string;
+      organizationDefaults?: string;
+      githubAvailability?: boolean;
+    }
   | { type: "userProfiles.catalog" }
   | {
       type: "userProfiles.catalogIdentity";
@@ -180,11 +212,11 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
-  | { type: "updateRuns.reconciliationCandidates"; input: UpdateRunReconciliationInput }
-  | { type: "updateRuns.reconciliationCandidate"; runId: string }
+  | UpdateRunAdmissionReadCommand
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
   | { type: "updateRuns.pluginCohortRecoveries" }
+  | { type: "updateRuns.pluginSnapshotCollection" }
   | { type: "worktrees.cleanupState" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }
@@ -194,7 +226,6 @@ export type OpenClawStateReadCommand =
   | { type: "voicewake.triggers" }
   | { type: "voicewake.routing" }
   | { type: "operator.channelPolicy" }
-  | { type: "preparedPoolPresence.read" }
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly RepositoryWorkspaceOwner[];
@@ -203,16 +234,12 @@ export type OpenClawStateReadCommand =
       type: "sessionRows.sharedFacts";
       entries: readonly {
         acp?: AcpSessionReadInput;
+        worktreeId?: string;
         repositoryWorkspace?: RepositoryWorkspaceOwner & { workspaceId: string };
       }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
-  | { type: "sandboxRegistry.list"; workspaceDir?: string }
-  | { type: "sandboxRegistry.get"; containerName: string }
-  | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
-  | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
-  | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }
   | { type: "workers.placementEnvironmentOwner"; environmentId: string }
   | { type: "workers.placementPendingResults"; sessionId?: string }
@@ -238,11 +265,14 @@ type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "source
 export type OpenClawStateReadResult =
   | ReadResult<
       ReturnType<
-        typeof import("./openclaw-state-read-handlers.js").readOpenClawStateDatabaseCommand
+        Awaited<
+          ReturnType<typeof import("./openclaw-state-read-handlers.js").prepareOpenClawStateRead>
+        >
       >
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
+  | { type: "agentDatabaseDeletion.snapshot"; snapshot: AgentDatabaseDeletionWorkerSnapshot }
   | { type: "localWorkspace.manifest"; snapshot: Uint8Array<ArrayBuffer> }
   | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {

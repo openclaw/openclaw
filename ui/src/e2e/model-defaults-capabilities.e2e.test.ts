@@ -53,6 +53,8 @@ suite.define(() => {
         expect(await pickers.first().textContent()).not.toContain("API");
         expect(await pickers.first().getAttribute("aria-label")).not.toContain("API");
         expect(await pickers.first().locator(".picker-select__description").count()).toBe(0);
+        // Every picker lines up, the folded ones included.
+        await defaults.locator("[data-models-more-settings]").click();
         await defaults.scrollIntoViewIfNeeded();
         const boxes = await pickers.evaluateAll((elements) =>
           elements.map((element) => {
@@ -60,7 +62,7 @@ suite.define(() => {
             return { left: box.left, width: box.width, height: box.height };
           }),
         );
-        expect(boxes).toHaveLength(5);
+        expect(boxes).toHaveLength(6);
         for (const box of boxes) {
           expect(Math.abs(box.left - boxes[0]!.left)).toBeLessThan(1);
           expect(Math.abs(box.width - boxes[0]!.width)).toBeLessThan(1);

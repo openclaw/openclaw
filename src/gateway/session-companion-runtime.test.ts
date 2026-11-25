@@ -3,10 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   readRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import * as internalSessions from "../agents/internal-session-effects.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
@@ -266,10 +266,9 @@ describe("Side chat with a published Gateway runtime", () => {
           return;
         }
         const operatorAuthority = (allow: string[]) =>
-          createAdmittedRunOperatorAuthority({
+          createTestOperatorAuthority({
             profileId: "companion-reader",
             scopes: ["operator.read"],
-            assertCurrent: () => {},
             modelPolicy: prepareOperatorModelPolicy({
               cfg,
               policy: { sourceAgent: "main", allow },

@@ -1,3 +1,6 @@
+import { collectUpdateCaptureInventory } from "../commands/update-capture-cleanup.js";
+import { resolveStateDir } from "../config/paths.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   hasUpdateRecoveryForwardResolution,
@@ -36,18 +39,68 @@ function unreadableCapture(directory: string, error: string) {
 
 /** Backup-local pending markers cannot override the update's durable terminal result. */
 export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) {
-  const evidence = await readUpdateRecoveryBackups(readRun);
+  // Inventory and restoration diagnostics share one ledger snapshot. Status skips
+  // payload byte measurement; cleanup alone needs those totals for confirmation.
+  const { captures, evidence } = await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      const inventory = collectUpdateCaptureInventory({
+        stateDir: resolveStateDir(process.env),
+        env: process.env,
+        measureBytes: false,
+      });
+      const invalidRoot = inventory.artifacts.find(
+        (item) => item.reason === "capture-directory-alias",
+      );
+      if (invalidRoot) {
+        throw new Error(`Capture root is aliased or not a directory: ${invalidRoot.path}`);
+      }
+      const byDirectory = new Map(
+        inventory.artifacts.filter((item) => item.captureSource).map((item) => [item.path, item]),
+      );
+      return {
+        captures: byDirectory,
+        evidence: await readUpdateRecoveryBackups(readRun, [...byDirectory.keys()]),
+      };
+    },
+    { lazy: true },
+  );
   const classified = await Promise.all(
     evidence.map(async (entry) => {
       if (entry.kind === "unreadable") {
         return unreadableCapture(entry.directory, entry.error);
       }
+      const directory = entry.kind === "sealed" ? entry.ref.directory : entry.directory;
+      const cleanup = captures.get(directory)!;
+      if (
+        cleanup.outcome === "candidate" ||
+        cleanup.reason === "superseded-unsealed-capture" ||
+        (cleanup.reason === "orphan-update-capture" &&
+          entry.kind === "sealed" &&
+          !entry.run &&
+          entry.outcome.status === "pending")
+      ) {
+        const nextAction =
+          cleanup.outcome === "candidate"
+            ? "openclaw update cleanup --dry-run"
+            : `openclaw update cleanup --dry-run --include-unmanifested "${directory}"`;
+        return Object.assign(
+          {
+            directory,
+            status: "warning" as const,
+            nextAction,
+            message: `Update capture at ${directory}: ${cleanup.reason}. ${cleanup.detail ?? ""} Preview retirement with \`${nextAction}\`; remove --dry-run to retire it after confirmation.`,
+          },
+          entry.kind === "sealed"
+            ? { runId: entry.manifest.runId, manifestPath: entry.ref.manifestPath }
+            : {},
+        );
+      }
       if (entry.kind === "incomplete") {
         return {
           directory: entry.directory,
           status: "incomplete" as const,
-          nextAction: "openclaw update status --json",
-          message: `Update capture at ${entry.directory} is incomplete: no sealed manifest is available. Retained files are unverified evidence for manual inspection.`,
+          nextAction: "openclaw update cleanup --dry-run",
+          message: `Update capture at ${entry.directory} is incomplete: no sealed manifest is available. Retained files are unverified evidence for manual inspection; cleanup explains their protection (${cleanup.reason}).`,
         };
       }
       const { ref, manifest, outcome, run } = entry;
@@ -64,7 +117,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
           captureStatus: outcome.status,
           status: "forward-resolved" as const,
           terminalOutcome: undefined,
-          nextAction: "openclaw update status --json",
+          nextAction: "openclaw update cleanup --dry-run",
           message: `Update recovery set ${ref.manifestPath}: current state repaired forward; failed history and all generations retained.`,
         };
       }
@@ -82,8 +135,8 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
           captureStatus: outcome.status,
           status: "manual" as const,
           terminalOutcome: undefined,
-          nextAction: "openclaw update status --json",
-          message: `Standalone Doctor capture ${ref.manifestPath}: pre-repair state retained for manual inspection. No repair outcome is recorded.`,
+          nextAction: "openclaw update cleanup --dry-run",
+          message: `Standalone Doctor capture ${ref.manifestPath}: pre-repair state retained for manual inspection. No repair outcome is recorded. Cleanup retention: ${cleanup.reason}.`,
         };
       }
       let terminalOutcome = resolveUpdateRecoveryTerminalOutcome(run, ref.manifestSha256);
@@ -110,11 +163,17 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   );
   // Completed captures cannot compete with a failed capture for recovery. Count
   // only after all outcomes are known; unreadable and manual evidence stays conservative.
-  const competing = classified.filter((entry) =>
-    entry.status === undefined
+  const competing = classified.filter((entry) => {
+    if (entry.status === "warning") {
+      const cleanup = captures.get(entry.directory)!;
+      // Released originals and unsealed evidence cannot compete for restoration;
+      // orphan warnings with an unknown outcome still require conservative inspection.
+      return cleanup.outcome !== "candidate" && cleanup.reason !== "superseded-unsealed-capture";
+    }
+    return entry.status === undefined
       ? !entry.terminalOutcome && !entry.unchanged
-      : entry.status !== "forward-resolved" && entry.status !== "incomplete",
-  );
+      : entry.status !== "forward-resolved" && entry.status !== "incomplete";
+  });
   const inspected = classified.map((entry) => {
     if (entry.status !== undefined) {
       return entry;
@@ -132,7 +191,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
         ? `Preserve current state and inspect ${ref.manifestPath} before manual recovery. See https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures`
         : unchanged
           ? "openclaw update cleanup"
-          : "openclaw update status --json";
+          : "openclaw update cleanup --dry-run";
     const reason = terminalOutcome
       ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
       : unchanged

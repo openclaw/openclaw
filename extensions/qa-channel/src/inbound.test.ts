@@ -222,9 +222,7 @@ describe("handleQaInbound", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await receiveAttachments(...attachments);
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-    expect(
-      firstRunAssembledParams(runtime).ctxPayload.media?.every((fact) => fact.path === undefined),
-    ).toBe(true);
+    expect(firstRunAssembledParams(runtime).ctxPayload.media).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(attachments.length);
   });
 
@@ -359,6 +357,9 @@ describe("QA preview terminal ownership", () => {
     turn.error("dispatch failed");
     await turn.partial("late");
     expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1" }),
+    );
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
   });
 

@@ -12,7 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
@@ -34,6 +34,7 @@ const suite = createControlUiE2eSuite({
   resources: {
     retainedState: () => state?.root,
     async run(signal) {
+      const cronBindingsLoaded = createDeferred();
       state = await createOpenClawTestState({
         label: "chat-catalog-mutation",
         env: {
@@ -70,6 +71,14 @@ const suite = createControlUiE2eSuite({
         configPath: state.configPath,
         token,
         scopes: ["operator.admin"],
+        onEvent: (event) => {
+          if (
+            event.event === "sessions.changed" &&
+            asOptionalRecord(event.payload)?.reason === "cron-bindings-loaded"
+          ) {
+            cronBindingsLoaded.resolve();
+          }
+        },
         cfg: {
           gateway: {
             mode: "local",
@@ -104,8 +113,8 @@ const suite = createControlUiE2eSuite({
         },
       });
       realGateway = await gatewayStartup;
-      // Startup cron hydration publishes a separate sessions.changed invalidation.
-      await realGateway.server.startupSettled;
+      // Post-ready cron hydration invalidates catalogs separately from sidecar startup.
+      await withinTest(cronBindingsLoaded.promise, signal);
       signal.throwIfAborted();
     },
     async close() {
@@ -257,7 +266,7 @@ suite.define(() => {
           'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
         );
         const trigger = picker.locator('[data-chat-model-select][aria-disabled="false"]');
-        const account = picker.locator("[data-chat-account-group-toggle]");
+        const account = picker.locator(".chat-controls__account-trigger");
         await trigger.click();
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => account.textContent()).toContain("Account A");
@@ -364,7 +373,7 @@ suite.define(() => {
                 'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
               );
               const accountElement = pickerElement?.querySelector(
-                "[data-chat-account-group-toggle]",
+                ".chat-controls__account-trigger",
               );
               return {
                 catalogPickerPresent: Boolean(pickerElement),

@@ -85,7 +85,7 @@ export function selectDelegatedToolPolicy(params: {
   const continuation = params.floor?.continuation;
   const requesterSessionKey = continuation?.requesterSessionKey ?? params.requesterSessionKey;
   if (
-    params.inheritedToolPolicySource === "sender" ||
+    params.inheritedToolPolicySource !== undefined ||
     (continuation &&
       (params.requesterAgentId !== continuation.targetAgentId ||
         params.targetAgentId !== continuation.targetAgentId)) ||
@@ -177,7 +177,7 @@ export function resolveDelegatedExecutionToolPolicy(params: {
   if (
     !params.config ||
     !floor ||
-    params.inheritedToolPolicySource === "sender" ||
+    params.inheritedToolPolicySource !== undefined ||
     !child ||
     !(child.rest.startsWith("subagent:") || child.rest.startsWith("dashboard:")) ||
     child.agentId !== floor.targetAgentId ||

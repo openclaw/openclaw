@@ -29,13 +29,17 @@ struct StaleGatewayServiceReplacement {
     /// policies keep the operator's Gateway.
     nonisolated static func admits(
         connectionMode: AppState.ConnectionMode,
+        hostsLocalGateway: Bool,
         isPaused: Bool,
         launchAgentUsesManagedCLI: Bool,
         gatewayUpdateChannel: String?,
         installPolicy: String?,
         launchAgentWriteDisabled: Bool) -> Bool
     {
-        connectionMode == .local && !isPaused && CLIInstallPrompter.managedRepairGatesOpen(
+        GatewayAutostartPolicy.shouldStartGateway(
+            mode: connectionMode,
+            paused: isPaused,
+            hostsLocalGateway: hostsLocalGateway) && CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: launchAgentUsesManagedCLI,
             gatewayUpdateChannel: gatewayUpdateChannel,
             installPolicy: installPolicy,
@@ -44,33 +48,38 @@ struct StaleGatewayServiceReplacement {
 
     static func detect(bundle: Bundle = .main, profile: AppProfile = .current) async -> Self? {
         let app = AppStateStore.shared
+        let hostsLocalGateway = app.hostsLocalGatewayWithRemotePrimary
+        let allowUnconfigured = app.connectionMode == .remote && hostsLocalGateway
         let runtimes = profile.stateDirectoryURL().appendingPathComponent("runtime", isDirectory: true)
         guard let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
               let previous = GatewayLaunchAgentManager.installedServiceCLI()
         else { return nil }
         let appManaged = CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: previous.prefix + ["gateway"])
         guard Self.admits(
-                  connectionMode: app.connectionMode,
-                  isPaused: app.isPaused,
-                  launchAgentUsesManagedCLI: appManaged,
-                  gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
-                  installPolicy: CLIInstallPolicy.storedPolicy(),
-                  launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
-              GatewayLaunchAgentManager.bundledRuntimeReplacementError(
-                  appManaged: appManaged,
-                  installedRuntimePath: previous.prefix.first,
-                  stateDirectory: profile.stateDirectoryURL()) == nil,
-              // Ordinary launches stop here; only a stale service seeds this build early.
-              !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
-              let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
+            connectionMode: app.connectionMode,
+            hostsLocalGateway: hostsLocalGateway,
+            isPaused: app.isPaused,
+            launchAgentUsesManagedCLI: appManaged,
+            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            installPolicy: CLIInstallPolicy.storedPolicy(),
+            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
+            GatewayLaunchAgentManager.bundledRuntimeReplacementError(
+                appManaged: appManaged,
+                installedRuntimePath: previous.prefix.first,
+                stateDirectory: profile.stateDirectoryURL()) == nil,
+            // Ordinary launches stop here; only a stale service seeds this build early.
+            !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
+            let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
         else { return nil }
-        return Self.replacing(previous, with: runtime)
+        return Self.replacing(previous, with: runtime, allowUnconfigured: allowUnconfigured)
     }
 
     /// Every lifecycle call keeps the service custody captured at detection, so a service the
     /// operator reassigns while this build seeds or migrates is refused before dispatch.
     static func replacing(
-        _ previous: GatewayLaunchAgentManager.InstalledServiceCLI, with runtime: BundledRuntime) -> Self?
+        _ previous: GatewayLaunchAgentManager.InstalledServiceCLI,
+        with runtime: BundledRuntime,
+        allowUnconfigured: Bool) -> Self?
     {
         guard let authority = previous.serviceAuthority else { return nil }
         let checkCurrent: @MainActor @Sendable () async throws -> Void = {
@@ -95,6 +104,7 @@ struct StaleGatewayServiceReplacement {
                 await GatewayLaunchAgentManager.reinstallBundledRuntime(
                     runtime: runtime,
                     port: GatewayEnvironment.gatewayPort(),
+                    allowUnconfigured: allowUnconfigured,
                     environment: try? GatewayProcessManager.shared.appHostedEnvironment(
                         runtime: runtime, capturedServiceEnvironment: previous.environment),
                     expectedServiceAuthority: authority,

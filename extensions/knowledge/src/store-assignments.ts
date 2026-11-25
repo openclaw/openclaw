@@ -73,7 +73,10 @@ export function createStoreOperations(stores: Stores) {
   const writable = () => typeof api.runtime.config.mutateConfigFile === "function";
 
   /** Non-provisioning inventory. Counts come only from stores already running. */
-  async function snapshot(context: FeatureInvocationContext): Promise<StoresSnapshot> {
+  async function snapshot(
+    context: FeatureInvocationContext,
+    includeRecordCounts = true,
+  ): Promise<StoresSnapshot> {
     let registry: RegistrySnapshot | undefined, failure: string | undefined;
     try {
       registry = await stores.ensure();
@@ -150,7 +153,9 @@ export function createStoreOperations(stores: Stores) {
         });
       }
     }
-    await countRecords(entries, registry, context);
+    if (includeRecordCounts) {
+      await countRecords(entries, registry, context);
+    }
     const canChange = canChangeAssignments(context) && writable() && !failure && !registry?.pending;
     const grants = stores.grants(),
       client = context.source === "session-action" ? context.action.client : undefined;
@@ -579,9 +584,12 @@ export function createStoreOperations(stores: Stores) {
   }
 
   return {
-    stores_snapshot: async (_: unknown, context: FeatureInvocationContext) => {
+    stores_snapshot: async (
+      input: { includeRecordCounts?: boolean },
+      context: FeatureInvocationContext,
+    ) => {
       requireOperator(context);
-      return snapshot(context);
+      return snapshot(context, input.includeRecordCounts);
     },
     stores_change: change,
     stores_grant: grant,

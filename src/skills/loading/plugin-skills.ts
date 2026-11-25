@@ -113,6 +113,37 @@ export function capturePluginSkillContributions(params: {
   }));
 }
 
+/** Folder names of active plugins' per-agent learned skills; each agent's state folder anchors them. */
+export function capturePluginAgentSkillsDirs(params: {
+  config?: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+}): string[] {
+  const contributions = iteratePluginRootContributions({
+    metadataSnapshot: params.metadataSnapshot,
+    config: params.config ?? {},
+    contribution: "agentSkillsDir",
+  });
+  return [...new Set([...contributions].flatMap(({ roots }) => roots))];
+}
+
+export function resolvePluginAgentSkillsDirs(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+}): string[] {
+  const workspaceDir = (params.workspaceDir ?? "").trim();
+  if (!workspaceDir || params.config?.plugins?.enabled === false) {
+    return [];
+  }
+  return capturePluginAgentSkillsDirs({
+    config: params.config,
+    metadataSnapshot: resolvePluginMetadataSnapshotRequiredRuntime({
+      workspaceDir,
+      config: params.config,
+      env: process.env,
+    }),
+  });
+}
+
 /** Validate and publish selected roots on the filesystem-owning thread. */
 export function resolvePluginSkillRootsFromContributions(params: {
   contributions: readonly PluginSkillContribution[];

@@ -18,6 +18,7 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams as createThreadLifecycleParams,
+  readEmptyNativeConfig,
   resetThreadLifecycleTestFixtures,
   startOrResumeThreadWithoutSkills as startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -36,17 +37,11 @@ function createThreadLifecycleAppServerOptions(): ReturnType<typeof createAppSer
   };
 }
 
-function readEmptyNativeConfig(method: string) {
-  if (method === "config/read") {
-    return { config: {}, origins: {}, layers: [] };
-  }
-  if (method === "configRequirements/read") {
-    return { requirements: null };
-  }
-  throw new Error(`unexpected method: ${method}`);
-}
-
-async function seedAdoptedThreadBinding(params: EmbeddedRunAttemptParams, cwd: string) {
+async function seedAdoptedThreadBinding(
+  params: EmbeddedRunAttemptParams,
+  cwd: string,
+  appServer = createThreadLifecycleAppServerOptions(),
+) {
   const threadId = "thread-adopted";
   const request = vi.fn(async (method: string) => {
     if (method === "thread/start") {
@@ -59,7 +54,7 @@ async function seedAdoptedThreadBinding(params: EmbeddedRunAttemptParams, cwd: s
     params,
     cwd,
     dynamicTools: [],
-    appServer: createThreadLifecycleAppServerOptions(),
+    appServer,
   });
   const identity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -89,12 +84,13 @@ describe("Codex app-server adopted thread lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetThreadLifecycleTestFixtures();
     vi.restoreAllMocks();
   });
 
-  it.each(["native-tools", "delegation", "host-only-delegation"] as const)(
-    "preserves expected native ownership instead of starting a fresh %s-restricted thread",
+  it.each(["native-tools", "delegation", "host-only-delegation", "runtime identity"] as const)(
+    "preserves expected native ownership when %s would replace its thread",
     async (restriction) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -104,16 +100,20 @@ describe("Codex app-server adopted thread lifecycle", () => {
       await testCodexAppServerBindingStore.mutate(identity, {
         kind: "patch",
         threadId,
-        patch: { model: nativeModel.model, modelProvider: nativeModel.modelProvider },
+        patch: {
+          model: nativeModel.model,
+          modelProvider: nativeModel.modelProvider,
+          ...(restriction === "runtime identity" ? { appServerRuntimeFingerprint: "before" } : {}),
+        },
       });
       params.expectedSessionRuntimeOwnership = {
         model: "native",
         auth: "host",
         modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
       };
-      if (restriction !== "native-tools") {
+      if (restriction === "delegation" || restriction === "host-only-delegation") {
         params.delegationCapability = restriction === "delegation" ? "report_only" : "host_only";
-      } else {
+      } else if (restriction === "native-tools") {
         params.disableTools = true;
       }
       const before = testCodexAppServerBindingStore.read(identity);
@@ -130,9 +130,15 @@ describe("Codex app-server adopted thread lifecycle", () => {
             cwd: workspaceDir,
             dynamicTools: [],
             appServer: createThreadLifecycleAppServerOptions(),
+            ...(restriction === "runtime identity" ? { appServerRuntimeFingerprint: "after" } : {}),
             ...(restriction === "native-tools" ? { nativeCodeModeEnabled: false } : {}),
           }),
-        ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        ).rejects.toMatchObject({
+          name: "AgentHarnessPreflightError",
+          ...(restriction === "runtime identity"
+            ? { message: expect.stringContaining("changing runtime identity") }
+            : {}),
+        });
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
         );
@@ -258,6 +264,107 @@ describe("Codex app-server adopted thread lifecycle", () => {
         await retryOwnership?.release(threadId);
         expect(release).toHaveBeenCalledOnce();
       } finally {
+        harness.client.close();
+      }
+    },
+  );
+
+  it.each(["completed", "cancelled", "revoked"] as const)(
+    "waits without interrupting a remote turn that survived the Gateway restart: %s",
+    async (outcome) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.inputProvenance = { kind: "internal_system", sourceTool: "restart" };
+      params.disableTools = false;
+      const local = createThreadLifecycleAppServerOptions();
+      const appServer = {
+        ...local,
+        start: { ...local.start, transport: "websocket" as const, url: "ws://127.0.0.1:47123" },
+      };
+      const { identity, threadId } = await seedAdoptedThreadBinding(
+        params,
+        workspaceDir,
+        appServer,
+      );
+      const harness = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: (method) =>
+          method === "thread/resume" ? threadStartResult(threadId) : readEmptyNativeConfig(method),
+        unsubscribe: () => ({ status: "notLoaded" }),
+      });
+      const seeded = threadStartResult(threadId);
+      harness.seed(
+        {
+          ...seeded,
+          thread: { ...(seeded.thread as object), status: { type: "active" } },
+        },
+        { loaded: true, subscribed: false },
+      );
+      const before = testCodexAppServerBindingStore.read(identity);
+      const controller = new AbortController();
+      let revoked = false;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const resuming = startOrResumeThread({
+        client: harness.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer,
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("restart authority revoked");
+          }
+        },
+      });
+      void resuming.catch(() => {});
+      const methods = () => harness.request.mock.calls.map(([method]) => method);
+      const sentReads = () =>
+        harness.writes.filter((line) => JSON.parse(line).method === "thread/read").length;
+      try {
+        await harness.waitForMethod("thread/read");
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        // The active turn is only observed: no subscription change, interrupt or new input.
+        expect(methods()).toEqual(["config/read", "configRequirements/read", "thread/read"]);
+        expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        if (outcome === "completed") {
+          harness.notify({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: { id: "turn-before-restart", status: "completed", items: [] },
+            },
+          });
+          await vi.advanceTimersByTimeAsync(1_000);
+          vi.useRealTimers();
+          const resumed = await resuming;
+          expect(resumed.threadId).toBe(threadId);
+          expect(resumed.lifecycle.action).toBe("resumed");
+          expect(sentReads()).toBe(2);
+        } else {
+          if (outcome === "cancelled") {
+            // A Gateway shutdown aborts the run; the wait ends without another poll.
+            controller.abort(new Error("Gateway shutting down"));
+          } else {
+            revoked = true;
+            await vi.advanceTimersByTimeAsync(1_000);
+          }
+          await expect(resuming).rejects.toThrow(
+            outcome === "cancelled" ? "Gateway shutting down" : "restart authority revoked",
+          );
+          expect(sentReads()).toBe(1);
+          expect(methods()).not.toContain("thread/resume");
+          expect(methods()).not.toContain("thread/unsubscribe");
+          expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        }
+        expect(methods()).not.toContain("turn/interrupt");
+        expect(methods()).not.toContain("turn/start");
+        expect(methods()).not.toContain("thread/start");
+      } finally {
+        controller.abort();
+        await Promise.allSettled([resuming]);
         harness.client.close();
       }
     },

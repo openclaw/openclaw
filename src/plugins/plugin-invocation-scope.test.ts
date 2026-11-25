@@ -65,13 +65,14 @@ it("derives independent retained authority with each registry's provenance", asy
   const inboundTool = inbound.wrap(registry);
   try {
     parent.release();
-    expect(() => parent.run(primaryTool)).toThrow("Plugin invocation scope is closed");
+    // A released scope stops routing: the late call takes ordinary admission and is refused while retiring.
+    expect(() => parent.run(primaryTool)).toThrow(PluginInstanceUnavailableError);
     expect(child.run(primaryTool)).toBe(primaryRegistry);
     expect(child.run(inboundTool)).toBe(inboundRegistry);
     expect(() => primaryTool()).toThrow(PluginInstanceUnavailableError);
     const cleanup = child.beginCleanup();
     try {
-      expect(() => child.run(inboundTool)).toThrow("Plugin invocation scope is closed");
+      expect(() => child.run(inboundTool)).toThrow(PluginInstanceUnavailableError);
       expect(cleanup.scope.wrap(primaryTool)()).toBe(primaryRegistry);
       expect(cleanup.scope.wrap(inboundTool)()).toBe(inboundRegistry);
     } finally {
@@ -111,13 +112,47 @@ it("creates only final teardown views while fencing each retained owner's callba
     const cleanupCallback = cleanup.scope.wrap(callback);
     expect(cleanupCallback()).toBe("owner");
     await cleanup.release();
-    expect(() => cleanupCallback()).toThrow(/closed/);
+    // Teardown authority ends with its owner; a retiring instance refuses the ordinary call.
+    expect(() => cleanupCallback()).toThrow(PluginInstanceUnavailableError);
     expect(() => firstCallback()).toThrow(/closed/);
     expect(secondCallback()).toBe("owner");
   } finally {
     views.mockRestore();
     second.release();
     await cleanup.release();
+  }
+});
+
+it("finishes retained consumer teardown inside its closed caller scope", async () => {
+  const instance = createOwnedTestInstance("closed-consumer-caller");
+  const registry = instance.owner!.registry!;
+  const caller = new PluginInvocationScope(registry, [instance]);
+  const consumer = instance.retainConsumer(undefined, registry);
+  const callback = instance.wrap(() => getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+  const retiredCallback = caller.wrap(callback);
+  const consumerCallback = consumer.wrap(callback);
+  const unrelated = createOwnedTestInstance("unrelated-consumer-cleanup");
+  const forbidden = unrelated.wrap(() => "unrelated");
+  instance.quiesce();
+  unrelated.quiesce();
+  try {
+    await caller.run(async () => {
+      caller.release();
+      await consumer.close(async () => {
+        await Promise.resolve();
+        expect(callback()).toBe(registry);
+        // The released caller no longer routes; teardown's own admission carries the call.
+        expect(retiredCallback()).toBe(registry);
+        expect(() => consumerCallback()).toThrow(/consumer is closed/);
+        expect(() => forbidden()).toThrow(PluginInstanceUnavailableError);
+      });
+    });
+    expect(instance.retainedWorkCount).toBe(0);
+    expect(() => callback()).toThrow(PluginInstanceUnavailableError);
+    expect(() => retiredCallback()).toThrow(PluginInstanceUnavailableError);
+  } finally {
+    caller.release();
+    consumer.release();
   }
 });
 
@@ -163,10 +198,16 @@ it.each(["idle", "active"])(
       };
       late = mode === "active" ? second.wrap(resume)() : resume();
     });
-    const refused = expect(late).rejects.toThrow("Plugin cleanup scope is closed");
     delayed.resolve();
-    await refused;
-    expect(called).toHaveBeenCalledOnce();
+    if (mode === "idle") {
+      // Detached late work takes ordinary admission, which the retiring instance refuses.
+      await expect(late).rejects.toThrow(PluginInstanceUnavailableError);
+      expect(called).toHaveBeenCalledOnce();
+    } else {
+      // A teardown call admitted inside host cleanup completes as one counted in-flight call.
+      await expect(late).resolves.toBeUndefined();
+      expect(called).toHaveBeenCalledTimes(2);
+    }
     for (const instance of [first, second, unrelated]) {
       await instance.dispose();
     }

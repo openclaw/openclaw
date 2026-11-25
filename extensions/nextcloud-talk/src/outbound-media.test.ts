@@ -535,15 +535,7 @@ it.each([
       const files = new Map<string, Buffer>();
       fixture.respond = (request, response) => {
         const pathname = request.url.pathname;
-        if (
-          preexisting &&
-          failure === "lost-ack" &&
-          request.method === "MKCOL" &&
-          !pathname.endsWith("/OpenClaw")
-        ) {
-          files.set(pathname + "/existing.pdf", existing);
-          response.writeHead(405);
-        } else if (request.method === "PUT") {
+        if (request.method === "PUT") {
           expect(request.ifNoneMatch).toBe("*");
           files.set(pathname, preexisting ? existing : request.body);
           if (failure === "cancelled") {

@@ -60,7 +60,7 @@ export function registerMuseLifecycleTests({
         "toolResult",
         "assistant",
       ]);
-      expect(result.toolMetas).toEqual([{ toolName: "read_file" }]);
+      expect(result.toolMetas).toEqual([{ toolName: "read_file", isError: false }]);
       expect(writes.append).toHaveBeenCalledWith(
         expect.objectContaining({
           messages: expect.arrayContaining([

@@ -227,7 +227,7 @@ describe("Gateway GitHub publication", () => {
       draft: false,
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
-      expect(options?.env).toMatchObject(
+      expect(options?.preparedEnv ?? options?.env).toMatchObject(
         appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
       );
     }
@@ -400,7 +400,7 @@ describe("Gateway GitHub publication", () => {
     const token = `ghp_${"x".repeat(36)}`;
     const diagnostic = [
       "\u001b[31mfatal: Authentication failed\u001b[0m",
-      "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
+      "https://example.test/repo?unknown=fixture-query#fixture-fragment",
       "https://user:fi'xture@example.test/repo",
       `https://example.test/${"x".repeat(4_096)}?unknown=fixture-long-query#fixture-long-fragment`,
       "Authorization: Bearer fixture-bearer",
@@ -551,7 +551,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "The GitHub publication worktree changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });
@@ -713,20 +713,30 @@ describe("Gateway GitHub publication", () => {
     expect(commandMatches("write-tree")).toHaveLength(snapshotCommandCount);
     mocks.runCommand.mockImplementation(runCommand);
     await placements.acceptWorkspaceResult(claim);
-    const processClaim = vi
-      .spyOn(runtime.coordinator, "processClaim")
-      .mockRejectedValueOnce(new Error("transient publication failure"));
-    await expect(runtime.publishAcceptedWorkspace(claim)).rejects.toThrow(
-      "transient publication failure",
+    const publicationCallsBeforeHandoff = commandCalls.length;
+    await runtime.publishAcceptedWorkspace(claim);
+    expect(commandCalls).toHaveLength(publicationCallsBeforeHandoff);
+    expect(await runtime.coordinator.readAsync(requested.requestId)).toMatchObject({
+      status: "requested",
+    });
+    // A sweep cannot publish while result settlement still owns the workspace.
+    await runtime.reconcilePublications();
+    expect(commandCalls).toHaveLength(publicationCallsBeforeHandoff);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    vi.spyOn(runtime.coordinator, "resumeSessionRequests").mockRejectedValueOnce(
+      new Error("transient publication failure"),
     );
-    expect(warnings).toEqual([expect.stringContaining("GitHub publication deferred")]);
-    processClaim.mockRestore();
+    await runtime.reconcilePublications();
+    expect(await runtime.coordinator.readAsync(requested.requestId)).toMatchObject({
+      status: "requested",
+    });
+    expect(warnings).toEqual([expect.stringContaining("GitHub publication recovery deferred")]);
     warnings.length = 0;
     vi.spyOn(runtime.coordinator, "markReportedAsync").mockImplementationOnce(() => {
       throw new Error("Gateway stopped after transcript append");
     });
 
-    await expect(runtime.publishAcceptedWorkspace(claim)).resolves.toBeUndefined();
+    await runtime.reconcilePublications();
     expect(warnings).toEqual([
       expect.stringContaining("GitHub publication result reporting deferred"),
     ]);

@@ -8,12 +8,12 @@ const scanStatusJsonFast = vi.hoisted(() => vi.fn());
 // mock-isolation: The rejected option must not start config collection or live Gateway probes.
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast }));
 
-it("rejects --agent when usage is not requested", async () => {
-  await expect(
-    runStatusJsonCommand({
-      opts: { ...createStatusGatewayProbeBudget(), agent: "beta" },
-      runtime: createTestRuntime(),
-    }),
-  ).rejects.toThrow("--agent is only valid with --usage");
+it.each([
+  [{ agent: "beta" }, "--agent is only valid with --usage"],
+  [{ usage: true, agent: "" }, "--agent must not be blank"],
+] as const)("rejects invalid agent selection %j before scanning", async (selection, error) => {
+  const opts = { ...createStatusGatewayProbeBudget(), ...selection };
+  const run = runStatusJsonCommand({ opts, runtime: createTestRuntime() });
+  await expect(run).rejects.toMatchObject({ name: "ExpectedCliError", message: error });
   expect(scanStatusJsonFast).not.toHaveBeenCalled();
 });

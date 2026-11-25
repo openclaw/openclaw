@@ -45,6 +45,7 @@ export function readInstalledPluginOverview(
         | "contracts"
         | "uiCapabilities"
         | "controlUi"
+        | "recommendedPrompts"
       >
     | undefined,
 ): PluginsInspectResult["overview"] {
@@ -73,6 +74,9 @@ export function readInstalledPluginOverview(
       buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared,
       manifest.uiCapabilities,
     ),
+    ...(manifest.recommendedPrompts !== undefined
+      ? { recommendedPrompts: manifest.recommendedPrompts }
+      : {}),
     ...(readme.ok ? { readme: readme.contents.toString("utf8") } : {}),
     ...(repositoryUrl ? { repositoryUrl } : {}),
     ...(documentationUrl ? { documentationUrl } : {}),

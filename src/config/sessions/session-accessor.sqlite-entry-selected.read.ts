@@ -37,7 +37,7 @@ export function readSelectedSessionEntriesInDatabase(
     const keys = new Set(sessionKeys);
     const fullEntryKeys = new Set(options.fullEntryKeys);
     const query = selectSessionEntryRows(database, "list", options.fullEntryKeys)
-      .select("updated_at")
+      .select(["current_session_id", "updated_at"])
       .orderBy("session_key");
     const db = getNodeSqliteKysely<DB>(database.db);
     const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");

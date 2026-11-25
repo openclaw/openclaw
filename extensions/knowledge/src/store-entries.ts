@@ -1,10 +1,10 @@
 /** Shared store presentation helpers for the Stores & sharing views. */
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { StoreEntry } from "./stores-contract.js";
 import type { IconName } from "./ui-icons.js";
 
-export type Snapshot = FeatureOutput<typeof contract, "stores_snapshot">;
+export type Snapshot = FeatureOutput<FullOutputContract, "stores_snapshot">;
 /** Display name for an agent ID (host roster first). */
 export type Names = (agentId: string) => string;
 

@@ -93,6 +93,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createPackageReleasePrefixFixture } from "./package-release-slot.test-support.js";
 import {
   readRestartSentinelRowSync,
   writeRestartSentinelRowSync,
@@ -618,6 +619,30 @@ describe("restart sentinel", () => {
       await finalizeGit(commit);
       await expectPayload({ status: "error", stats: { reason } });
       await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "verifies a package restart from the release its link selects, and only that release",
+    async () => {
+      const releases = createPackageReleasePrefixFixture(tempDirs.make("openclaw-release-root-"));
+      const previous = releases.addRelease("r1", "2026.11.3");
+      const selected = releases.addRelease("r2", "2026.12.1");
+      releases.linkTo("r2");
+      const write = () =>
+        writeRestartSentinel(
+          updatePayload({
+            stats: { mode: "npm", root: releases.slot, after: { version: "expected-version" } },
+          }),
+        );
+      // A restarted Gateway discovers its root by real path: the selected release.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.12.1", process.env, "", selected);
+      await expectPayload({ status: "ok", stats: { root: releases.slot } });
+      // A Gateway still running the release the link no longer names is another installation.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.11.3", process.env, "", previous);
+      await expectPayload({ status: "error", stats: { reason: "restart-root-mismatch" } });
     },
   );
 

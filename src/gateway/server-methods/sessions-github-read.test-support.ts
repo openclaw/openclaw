@@ -23,6 +23,7 @@ export const sessionId = "publication-read-session";
 export const publisher = { source: "agent-override" as const, accountId: 7, login: "shared-bot" };
 export const publisherIdentity = () => ({
   source: publisher.source,
+  host: "github.com",
   account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
 });
 export function mockPublicationIdentity() {
@@ -42,13 +43,23 @@ export const receipt = {
 };
 
 export type ReadFixture = ReturnType<typeof createFixture>;
-export const optionsResult = (overrides: Record<string, unknown> = {}) => ({
-  personal: null,
-  shared: publisher,
-  pendingPersonal: null,
-  latestShared: receipt,
-  ...overrides,
-});
+const avatarUrl = (accountId: number) => `https://avatars.githubusercontent.com/u/${accountId}?v=4`;
+export const optionsResult = (overrides: Record<string, unknown> = {}) => {
+  const personalAccount = (overrides.personal as { account?: { accountId: number } } | undefined)
+    ?.account;
+  const avatarUrls = {
+    ...(overrides.shared === null ? {} : { shared: avatarUrl(publisher.accountId) }),
+    ...(personalAccount ? { personal: avatarUrl(personalAccount.accountId) } : {}),
+  };
+  return {
+    personal: null,
+    shared: publisher,
+    ...(Object.keys(avatarUrls).length ? { avatarUrls } : {}),
+    pendingPersonal: null,
+    latestShared: receipt,
+    ...overrides,
+  };
+};
 export const expectReply = (respond: unknown, result: unknown) =>
   expect(respond).toHaveBeenCalledWith(true, result);
 export const expectFailure = (

@@ -31,6 +31,33 @@ function pickerElements(container: HTMLElement) {
 }
 
 describe("chat model controls", () => {
+  it("does not borrow the previous pin's name after an optimistic reset", async () => {
+    const container = await renderModelControls(headerState([]), {
+      modelCatalogState: { hasSnapshot: false, status: "loading" },
+      modelOverrides: { main: null },
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: openai.id,
+        modelProvider: openai.provider,
+        modelDisplayName: "Previous pin",
+      },
+    });
+    expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label")).toBe(
+      "Chat model: gpt-5 · openai",
+    );
+  });
+
+  it("preserves a catalog failure even with pending provider metadata", async () => {
+    const container = await renderModelControls(headerState([]), {
+      modelCatalogState: { hasSnapshot: true, status: "error", pendingProviders: ["example"] },
+    });
+    expect(container.querySelector("[data-chat-model-select]")?.textContent).toBe(
+      "Models unavailable",
+    );
+  });
+
   it("groups catalog models and selects a search result", async () => {
     const state = headerState([
       openai,
@@ -67,14 +94,14 @@ describe("chat model controls", () => {
     searchFor(search, "anth");
 
     const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
     ).filter((option) => !option.hidden);
     expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
       "anthropic/claude-sonnet-4-6",
       "google/gemini-2.5-pro",
       "google/unavailable",
     ]);
-    expect(visibleOptions[2]?.disabled).toBe(true);
+    expect(visibleOptions[2]?.getAttribute("aria-disabled")).toBe("true");
     expect(
       visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
     ).not.toBeNull();

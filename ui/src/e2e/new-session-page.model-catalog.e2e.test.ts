@@ -1,29 +1,133 @@
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollText,
   pollAttribute,
   pollCount,
 } from "./new-session-page.test-support.ts";
-import {
-  unavailableError,
-  pollVisible,
-  pollFocused,
-  pollOpacity,
-} from "./new-session-shard.test-support.ts";
+import { unavailableError, pollVisible, pollFocused } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
-  it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
+  it.each([400, 820, 1280])(
+    "keeps the loading placeholders through staggered agent and catalog replies at %s px",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: 900 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            heldMethods: ["agents.list", "models.list"],
+          });
+          await page.goto(suite.server.baseUrl + "new");
+          await gateway.waitForRequest("agents.list");
+          const composer = page.locator(".new-session-page__composer");
+          const trigger = composer.locator("[data-chat-model-select]");
+          const label = trigger.locator(".chat-controls__inline-select-label");
+          const effort = composer.locator(".chat-controls__effort-trigger");
+          const chevrons = composer.locator(
+            ".chat-controls__model-settings .chat-controls__inline-select-chevron:visible",
+          );
+          const actions = composer.locator(".agent-chat__composer-actions");
+          await trigger.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await captureUiProof(suite, page, `model-defaults-${width}-pending.png`);
+          const pendingLabel = await label.textContent();
+          const pendingEffort = await effort.boundingBox();
+          const pendingChevrons = await chevrons.count();
+          const actionsBefore = await actions.boundingBox();
+          await gateway.resolveDeferred("agents.list");
+          await page
+            .locator(".agent-chat__welcome h2")
+            .getByText("OpenClaw", { exact: true })
+            .waitFor();
+          await gateway.waitForRequest("models.list");
+          await captureUiProof(suite, page, `model-defaults-${width}-catalog-pending.png`);
+          const catalogPendingLabel = await label.textContent();
+          const catalogPendingChevrons = await chevrons.count();
+          await gateway.resolveDeferred("models.list");
+          await pollText(trigger).toContain("gpt-5.5");
+          await effort.waitFor();
+          await captureUiProof(suite, page, `model-defaults-${width}-ready.png`);
+          expect(await actions.boundingBox()).toEqual(actionsBefore);
+          expect(pendingLabel).not.toContain("Default model");
+          expect(catalogPendingLabel).toBe("");
+          expect(pendingEffort).not.toBeNull();
+          expect(pendingChevrons).toBe(0);
+          expect(catalogPendingChevrons).toBe(0);
+          await pollCount(chevrons).toBe(2);
+        },
+      );
+    },
+  );
+
+  it.each([320, 400, 560])(
+    "keeps background model reads steady at %s px under CPU throttling",
+    async (width) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+        async ({ context, page }) => {
+          const cpu = await context.newCDPSession(page);
+          await cpu.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+          const gateway = await installMockGateway(page, { heldMethods: ["models.list"] });
+          await page.goto(`${suite.server.baseUrl}new`);
+          await gateway.waitForRequest("models.list");
+          const trigger = page.locator('[data-chat-model-select="true"]');
+          await pollAttribute(trigger, "aria-busy").not.toBe("true");
+          expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
+          await page.evaluate(() => document.fonts.ready);
+          const controls = page.locator(
+            ".new-session-page__composer .agent-chat__composer-controls",
+          );
+          const before = await controls.boundingBox();
+          const chevron = trigger.locator(".chat-controls__inline-select-chevron");
+          const chevronBefore = await chevron.boundingBox();
+          const triggerPath = await trigger.evaluate((node) => `summary#${CSS.escape(node.id)}`);
+          const shifts = await observeLayoutShifts(page);
+          await gateway.resolveDeferred("models.list");
+          await pollText(trigger).toContain("gpt-5.5");
+          await pollAttribute(trigger, "aria-busy").toBe("false");
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          expect(await controls.boundingBox()).toEqual(before);
+          expect(await chevron.boundingBox()).toEqual(chevronBefore);
+          const result = await shifts.evaluate((probe) => probe.read());
+          // The chip now hugs its name instead of reserving an empty label track.
+          // Only its leading edge may resize; the chevron, row and other UI stay put.
+          for (const entry of result.entries.filter((shift) => !shift.hadRecentInput)) {
+            expect(entry.sources.length).toBeGreaterThan(0);
+            for (const source of entry.sources) {
+              expect(source.node).toBe(triggerPath);
+              expect(source.currentRect.y).toBe(source.previousRect.y);
+              expect(source.currentRect.height).toBe(source.previousRect.height);
+              expect(source.currentRect.x + source.currentRect.width).toBeCloseTo(
+                source.previousRect.x + source.previousRect.width,
+                3,
+              );
+            }
+          }
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          await cpu.detach();
+        },
+      );
+    },
+  );
+  it("keeps picker geometry stable without numeric keycaps while focus moves", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -33,17 +137,19 @@ suite.define(() => {
         const modelSelect = page.locator('[data-chat-model-select="true"]');
         const picker = page.locator(".chat-controls__model-picker");
         const search = page.locator('[data-chat-model-search="true"]');
-        const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+        const providerModel = page.locator(
+          '[data-chat-model-option="anthropic/claude-sonnet-4-6"]',
+        );
 
         await modelSelect.click();
         await pollAttribute(picker, "open").toBe("");
         // Opening the picker moves focus to its filter so typing filters models.
         await pollFocused(search).toBe(true);
-        await revealChatModelOption(page, "openai/gpt-5.5");
-        await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
+        await picker.locator('[data-chat-model-provider-toggle="anthropic"]').click();
         await modelSelect.focus();
-        const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
-        await pollCount(secondShortcut).toBe(1);
+        // Numeric shortcuts index the visible provider, not the whole catalog.
+        await pollAttribute(providerModel, "aria-keyshortcuts").toBe("1");
+        await pollCount(picker.locator("kbd")).toBe(0);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
         await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
@@ -52,7 +158,7 @@ suite.define(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
             const menu = document.querySelector(".chat-controls__model-menu");
             const action = document.querySelector(
-              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
+              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-favorite-slot',
             );
             if (!anchor || !menu || !action) {
               return null;
@@ -76,19 +182,18 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(8);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
-        await pollOpacity(secondShortcut).toBe("1");
 
         await search.focus();
         await pollFocused(search).toBe(true);
-        await pollOpacity(secondShortcut).toBe("0");
+        await pollCount(picker.locator("kbd")).toBe(0);
         await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       },
     );
   });
-  it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
+  it("accepts a draft without a model loader while metadata arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.6-luna",
@@ -100,10 +205,12 @@ suite.define(() => {
       const modelTrigger = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await pollAttribute(modelTrigger, "aria-busy").toBe("true");
-      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
+      await gateway.waitForRequest("models.list");
+      await captureUiProof(suite, page, "model-catalog-pending.png");
+      await pollAttribute(modelTrigger, "aria-busy").not.toBe("true");
+      expect(await modelTrigger.getAttribute("aria-label")).not.toContain("Loading models…");
       expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
-      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
+      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
       await page
         .locator(".new-session-page__message")
         .fill("Start without waiting for the catalog");
@@ -113,17 +220,21 @@ suite.define(() => {
         )
         .toBe("false");
       const actions = page.locator(".new-session-page__composer .agent-chat__composer-actions");
-      const loadingModelBox = await modelTrigger.boundingBox();
+      const loadingModelControls = await page
+        .locator(".new-session-page__composer .chat-controls__model-settings")
+        .boundingBox();
       const loadingActionsBox = await actions.boundingBox();
-      expect(loadingModelBox).not.toBeNull();
+      expect(loadingModelControls).not.toBeNull();
       expect(loadingActionsBox).not.toBeNull();
       expect(
-        (loadingActionsBox?.x ?? 0) - ((loadingModelBox?.x ?? 0) + (loadingModelBox?.width ?? 0)),
+        (loadingActionsBox?.x ?? 0) -
+          ((loadingModelControls?.x ?? 0) + (loadingModelControls?.width ?? 0)),
       ).toBeLessThan(16);
 
       await gateway.waitForRequest("models.list");
       await gateway.resolveDeferred("models.list");
       await pollText(modelTrigger).toContain("GPT-5.6 Luna");
+      await captureUiProof(suite, page, "model-catalog-ready.png");
       expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",

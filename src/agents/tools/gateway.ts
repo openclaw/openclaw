@@ -61,11 +61,7 @@ export type GatewayCallOptions = {
 /** Presentation hint from the admitted operator source; RPC admission remains authoritative. */
 export function readGatewayToolOperatorScopes(): readonly string[] | undefined {
   const authority = getGatewayToolCallerIdentity()?.operatorAuthority;
-  if (!authority) {
-    return undefined;
-  }
-  authority.assertCurrent();
-  return [...authority.scopes];
+  return authority ? [...authority.scopes] : undefined;
 }
 
 type GatewayOverrideTarget = "local" | "remote";
@@ -251,6 +247,8 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "wake",
   "cron.list",
   "cron.get",
+  "cron.scratch.get",
+  "cron.scratch.set",
   "cron.add",
   "cron.update",
   "cron.remove",

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -8,29 +12,45 @@ import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-m
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { createDefaultDeps } from "../cli/deps.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/sessions-patch-model-selection.js";
+import { createHotReloadHandlerTestParams } from "../gateway/server-reload-handlers.config.test-support.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import * as globalHooks from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  requireActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { closeSessionControllerAdmission } from "../sessions/session-controller.lifecycle.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
 import type { CronStoredJob } from "./types.js";
 
 const admission = vi.hoisted(() => ({
   beforeOperation: undefined as (() => () => void) | undefined,
-  beforeTargetPreparation: undefined as (() => void) | undefined,
+  beforeTargetPreparation: undefined as
+    | ((assertCurrent: (() => void) | undefined) => void | Promise<void>)
+    | undefined,
   onEnqueued: undefined as ((sessionKey: string) => void) | undefined,
   whileQueuedAdmissionWaits: undefined as ((sessionKey: string) => Promise<void>) | undefined,
 }));
@@ -97,10 +117,12 @@ vi.mock(
       >();
     return {
       ...actual,
-      prepareEmbeddedAttemptTranscriptLifecycle: (
+      prepareEmbeddedAttemptTranscriptLifecycle: async (
         ...args: Parameters<typeof actual.prepareEmbeddedAttemptTranscriptLifecycle>
       ) => {
-        admission.beforeTargetPreparation?.();
+        await admission.beforeTargetPreparation?.(
+          args[0].attempt.preparedSessionTarget?.assertCurrent,
+        );
         return actual.prepareEmbeddedAttemptTranscriptLifecycle(...args);
       },
     };
@@ -164,23 +186,39 @@ describe("stored session model selections in scheduled session turns", () => {
   const userSelection = { modelOverrideSource: "user" } as const;
   const pinned = { provider: "pinned", model: "model-x" };
   const primary = { provider: "primary", model: "model-a" };
+  const a = ["primary/model-a"];
+  // Columns: reload, status, provider requests, target preparations, hook effects.
+  // Config edits after the occurrence starts (a hook ran or a model request began) apply
+  // to the next turn; only unstarted occurrences are refused or re-admitted.
   const policyCases = [
-    ["unrelated", "ok", 1, 1, 0],
-    ["policy", "ok", 1, 2, 0],
-    ["in-place-policy", "ok", 1, 2, 0],
-    ["other-agent", "ok", 1, 1, 0],
-    ["agent-policy", "ok", 1, 2, 0],
-    ["channel-defaults", "ok", 1, 2, 0],
-    ["bootstrap-effect", "error", 0, 1, 1],
-    ["hook-effect", "error", 0, 1, 1],
-    ["model-hook-effect", "error", 0, 1, 1],
-    ["revoked", "error", 0, 1, 0],
-    ["cancelled", "error", 0, 1, 0],
-    ["unknown-effect", "error", 1, 1, 0],
-    ["text-only", "error", 0, 1, 0],
+    ["unrelated", "ok", a, 1, 0],
+    ["logging-only", "ok", a, 1, 0],
+    ["unrelated-mcp", "ok", a, 1, 0],
+    ["unrelated-mcp-hook", "ok", a, 1, 1],
+    ["unrelated-model-provider", "ok", a, 1, 0],
+    ["provider-setup-sequence", "ok", a, 1, 0],
+    ["selected-model-denied", "error", [], 1, 0],
+    ["policy", "ok", a, 2, 0],
+    ["in-place-policy", "ok", a, 2, 0],
+    ["other-agent", "ok", a, 1, 0],
+    ["unrelated-auth", "ok", a, 1, 0],
+    ["provider-auth", "ok", a, 2, 0],
+    ["unrelated-auth-hook", "ok", a, 1, 1],
+    ["provider-auth-hook", "ok", a, 1, 1],
+    ["fallback-auth", "ok", ["primary/model-a", "fallback/model-b"], 2, 0],
+    ["agent-policy", "ok", a, 2, 0],
+    ["channel-defaults", "ok", a, 2, 0],
+    ["bootstrap-effect", "ok", a, 1, 1],
+    ["hook-effect", "ok", a, 1, 1],
+    ["model-hook-effect", "ok", a, 1, 1],
+    ["revoked", "error", [], 1, 0],
+    ["cancelled", "error", [], 1, 0],
+    ["unknown-effect", "ok", a, 1, 0],
+    ["text-only", "error", [], 1, 0],
   ] as const;
   async function runWithFailingPinnedModel(params: {
     reload?: (typeof policyCases)[number][0];
+    preflightCompactionWatchdog?: true;
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
@@ -195,8 +233,23 @@ describe("stored session model selections in scheduled session turns", () => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
       const controller = new AbortController();
+      const timeouts: string[] = [];
+      let summaryRequests = 0;
+      const watchdog = params.preflightCompactionWatchdog
+        ? createCronAgentWatchdog({
+            deferUntilRunner: true,
+            jobTimeoutMs: 180_000,
+            triggerTimeout: (reason) => {
+              timeouts.push(reason);
+              controller.abort(new Error(reason));
+            },
+          })
+        : undefined;
       let revoked = false;
       let preparations = 0;
+      let publications = 0;
+      let authorityRefusal: string | undefined;
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
       const effectPath = `${state.workspaceDir}/hook-effects.txt`;
       const effect = () => fs.appendFile(effectPath, "effect\n").then(() => undefined);
       using _ = {
@@ -215,16 +268,57 @@ describe("stored session model selections in scheduled session turns", () => {
           vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
         }
       }
-      if (params.reload === "bootstrap-effect") {
+      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("-hook")) {
         registerInternalHook("agent:bootstrap", effect);
       }
-      admission.beforeTargetPreparation = () => {
+      admission.beforeTargetPreparation = async (assertCurrent) => {
         preparations++;
         if (preparations !== 1 || !params.reload || params.reload === "unknown-effect") {
           return;
         }
         if (params.reload === "text-only") {
           throw new Error("Session event configuration changed; retry under the current policy");
+        }
+        if (hotReloadConfigs.length) {
+          const handlers = createGatewayReloadHandlers(
+            createHotReloadHandlerTestParams({
+              scheduler: createTestGatewayScheduler(),
+              deps: createDefaultDeps(),
+              getPluginRegistry: requireActivePluginChannelRegistry,
+              requestRecoveryRestart,
+            }),
+          );
+          try {
+            let previous = cfg;
+            for (const config of hotReloadConfigs) {
+              expect(
+                await handlers.applyHotReload(
+                  buildGatewayReloadPlan(diffConfigPaths(previous, config)),
+                  config,
+                  {
+                    sourceConfig: config,
+                    isCurrent: () => true,
+                    publish: async (commit) => {
+                      setRuntimeConfigSnapshot(config);
+                      await commit();
+                    },
+                  },
+                ),
+              ).toBe("applied");
+              publications++;
+              // Assert the real admitted target after every publication, before another edit.
+              try {
+                expectDefined(assertCurrent, "prepared scheduled target authority")();
+              } catch (error) {
+                authorityRefusal = formatErrorMessage(error);
+                throw error;
+              }
+              previous = config;
+            }
+          } finally {
+            handlers.stopRestartRetries();
+          }
+          return;
         }
         if (params.reload === "in-place-policy") {
           cfg.tools = next.tools;
@@ -247,7 +341,12 @@ describe("stored session model selections in scheduled session turns", () => {
         if (request.method !== "POST" || !request.url.endsWith("/responses")) {
           throw new Error(`Unexpected external I/O in scheduled session fixture: ${request.url}`);
         }
-        const body = (await request.json()) as { model?: string };
+        const raw = await request.text();
+        const body = JSON.parse(raw) as { model?: string };
+        if (params.preflightCompactionWatchdog && isCompactionSummaryRequest(raw)) {
+          summaryRequests++;
+          await vi.advanceTimersByTimeAsync(60_001);
+        }
         const route = Object.entries(providerUrls).find(([, url]) =>
           request.url.startsWith(url),
         )?.[0];
@@ -260,7 +359,7 @@ describe("stored session model selections in scheduled session turns", () => {
           activeTurn.started.resolve();
           await activeTurn.release.promise;
         }
-        if (route === "pinned") {
+        if (route === "pinned" || (params.reload === "fallback-auth" && route === "primary")) {
           return Response.json(
             {
               error: {
@@ -277,6 +376,11 @@ describe("stored session model selections in scheduled session turns", () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
       vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(providerFetch);
       const routeParams = { agentRuntime: { id: "openclaw" }, params: { transport: "sse" } };
+      const modelAllow =
+        params.modelAllow ??
+        (params.reload === "provider-setup-sequence" || params.reload === "selected-model-denied"
+          ? ["primary/model-a"]
+          : undefined);
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
@@ -285,7 +389,10 @@ describe("stored session model selections in scheduled session turns", () => {
               primary: params.defaultPrimary ?? "primary/model-a",
               fallbacks: ["fallback/model-b"],
             },
-            ...(params.modelAllow ? { modelPolicy: { allow: params.modelAllow } } : {}),
+            ...(modelAllow ? { modelPolicy: { allow: modelAllow } } : {}),
+            ...(params.preflightCompactionWatchdog
+              ? { compaction: { keepRecentTokens: 2_000, memoryFlush: { enabled: false } } }
+              : {}),
             models: Object.fromEntries(
               ["pinned/model-x", "primary/model-a", "fallback/model-b", "jobfallback/model-c"].map(
                 (ref) => [ref, routeParams],
@@ -301,6 +408,9 @@ describe("stored session model selections in scheduled session turns", () => {
             primary: stubProvider(providerUrls.primary, "model-a"),
             fallback: stubProvider(providerUrls.fallback, "model-b"),
             jobfallback: stubProvider(providerUrls.jobfallback, "model-c"),
+            ...(params.reload === "unrelated-model-provider"
+              ? { other: stubProvider("http://127.0.0.1:11438/v1", "model-other") }
+              : {}),
           },
         },
         plugins: { allow: ["openai"], slots: { memory: "none" } },
@@ -309,6 +419,51 @@ describe("stored session model selections in scheduled session turns", () => {
         channels: { discord: { enabled: true, guilds: {} }, slack: { enabled: true } },
       };
       const next: OpenClawConfig = { ...cfg };
+      const hotReloadConfigs: OpenClawConfig[] = [];
+      if (params.reload === "logging-only") {
+        hotReloadConfigs.push({ ...cfg, logging: { level: "debug" } });
+      } else if (params.reload?.startsWith("unrelated-mcp")) {
+        hotReloadConfigs.push({
+          ...cfg,
+          mcp: { servers: { sentry: { command: "unused-synthetic-server", enabled: false } } },
+        });
+      } else if (params.reload === "unrelated-model-provider") {
+        hotReloadConfigs.push({
+          ...cfg,
+          models: {
+            ...cfg.models,
+            providers: {
+              ...cfg.models?.providers,
+              other: stubProvider("http://127.0.0.1:11439/v1", "model-other"),
+            },
+          },
+        });
+      } else if (
+        params.reload === "provider-setup-sequence" ||
+        params.reload === "selected-model-denied"
+      ) {
+        for (const email of [undefined, "first@example.test", "second@example.test"]) {
+          hotReloadConfigs.push({
+            ...cfg,
+            auth: { profiles: { "other:manual": { provider: "other", mode: "api_key", email } } },
+          });
+        }
+        hotReloadConfigs.push({
+          ...hotReloadConfigs[2],
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              modelPolicy: {
+                allow:
+                  params.reload === "selected-model-denied"
+                    ? ["other/model"]
+                    : ["primary/model-a", "other/model"],
+              },
+            },
+          },
+        });
+      }
       if (params.reload === "unrelated") {
         next.channels = {
           discord: {
@@ -317,6 +472,13 @@ describe("stored session model selections in scheduled session turns", () => {
           },
           slack: { enabled: true },
         };
+      } else if (params.reload?.includes("auth")) {
+        const provider = params.reload.startsWith("unrelated")
+          ? "unrelated-provider"
+          : params.reload === "fallback-auth"
+            ? "fallback"
+            : "primary";
+        next.auth = { profiles: { [`${provider}:manual`]: { provider, mode: "api_key" } } };
       } else if (params.reload === "other-agent") {
         next.agents = {
           ...cfg.agents,
@@ -354,7 +516,19 @@ describe("stored session model selections in scheduled session turns", () => {
         sessionId: "pinned-conversation",
         updatedAt: Date.now(),
         sessionStartedAt: Date.now(),
+        ...(params.preflightCompactionWatchdog
+          ? {
+              totalTokens: 125_000,
+              totalTokensFresh: true,
+              totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+            }
+          : {}),
       };
+      // All turns in this fixture share the baseline; the next store starts fresh.
+      using sessionResources = {
+        [Symbol.dispose]: () => cleanupSessionResources(conversation.sessionId),
+      };
+      void sessionResources;
       const entryFor = (
         pin: { provider: string; model: string } | null,
         selection: Pick<SessionEntry, "modelOverrideSource"> = userSelection,
@@ -369,6 +543,42 @@ describe("stored session model selections in scheduled session turns", () => {
           params.storedSelection,
         ),
       );
+      if (params.preflightCompactionWatchdog) {
+        const seed = await SessionManager.openAsync(
+          {
+            agentId: "main",
+            sessionKey,
+            sessionId: conversation.sessionId,
+            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+          },
+          state.workspaceDir,
+        );
+        // The seeded history alone crosses the shared 85% compaction trigger of the 128k
+        // window, so the first scheduled request compacts; the summary request stays below it.
+        const triggerTokens = resolveCompactionThreshold({
+          contextWindowTokens: 128_000,
+          reserveTokensFloor: 0,
+        });
+        const detail = "Background detail. ";
+        const detailRepeat = Math.ceil(((triggerTokens + 4_000) * 4) / 12 / detail.length);
+        for (let turn = 0; turn < 12; turn++) {
+          await seed.appendMessageAsync({
+            role: "user",
+            content: `Earlier question ${turn}. ${detail.repeat(detailRepeat)}`,
+            timestamp: turn + 1,
+          });
+          await seed.appendMessageAsync(
+            makeAssistantMessageFixture({
+              provider: "primary",
+              api: "openai-responses",
+              model: "model-a",
+              content: [{ type: "text", text: `Earlier answer ${turn}.` }],
+            }),
+          );
+        }
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+        expectDefined(watchdog, "scheduled setup watchdog").start();
+      }
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
       const runTurn = (scheduled: CronStoredJob) =>
         runCronSessionTurn({
@@ -381,6 +591,10 @@ describe("stored session model selections in scheduled session turns", () => {
           admissionSource: "operator-schedule",
           deliveryAttemptFence: null,
           abortSignal: controller.signal,
+          onExecutionStarted: watchdog?.noteRunnerStarted,
+          onExecutionPhase: watchdog?.notePhase,
+          onLaneWait: (info) =>
+            info?.waiting === false ? watchdog?.noteLaneAdmitted() : watchdog?.noteLaneWait(),
           assertCurrent() {
             if (revoked) {
               throw new Error("Scheduled source revoked");
@@ -389,9 +603,19 @@ describe("stored session model selections in scheduled session turns", () => {
         });
       if (!activeTurn) {
         return {
-          result: await runTurn(stored),
+          result: await runTurn(stored).finally(() => {
+            watchdog?.dispose();
+            if (params.preflightCompactionWatchdog) {
+              vi.useRealTimers();
+            }
+          }),
+          timeouts,
+          summaryRequests,
           requests,
           preparations,
+          publications,
+          authorityRefusal,
+          recoveryRequests: requestRecoveryRestart.mock.calls.length,
           hookEffects: await fs.readFile(effectPath, "utf8").catch(() => undefined),
         };
       }
@@ -437,9 +661,20 @@ describe("stored session model selections in scheduled session turns", () => {
       }
       expect((await activeResult).status).toBe("ok");
       const result = await pending;
-      return { result, requests };
+      return { result, requests, summaryRequests, timeouts };
     });
   }
+
+  it("lets scheduled preflight compaction finish beyond the setup watchdog", async () => {
+    const { result, summaryRequests, timeouts, requests } = await runWithFailingPinnedModel({
+      storedPin: null,
+      preflightCompactionWatchdog: true,
+    });
+    expect(summaryRequests).toBe(1);
+    expect(requests).toEqual(["primary/model-a", "primary/model-a"]);
+    expect(timeouts).toEqual([]);
+    expect(result).toMatchObject({ status: "ok", executionStarted: true });
+  });
 
   it.each([
     ["user", "session", undefined, userSelection],
@@ -499,14 +734,35 @@ describe("stored session model selections in scheduled session turns", () => {
   it.each(policyCases)(
     "settles a scheduled occurrence across %s target preparation once",
     async (reload, status, calls, attempts, effects) => {
-      const { result, requests, preparations, hookEffects } = await runWithFailingPinnedModel({
+      const {
+        result,
+        requests,
+        preparations,
+        publications,
+        authorityRefusal,
+        recoveryRequests,
+        hookEffects,
+      } = await runWithFailingPinnedModel({
         storedPin: null,
-        payload: { fallbacks: [] },
+        payload: { fallbacks: reload === "fallback-auth" ? ["fallback/model-b"] : [] },
         reload,
       });
       expect(hookEffects).toBe(effects ? "effect\n" : undefined);
+      if (reload === "provider-setup-sequence" || reload === "selected-model-denied") {
+        expect(publications).toBe(4);
+      } else if (
+        reload === "logging-only" ||
+        reload === "unrelated-model-provider" ||
+        reload.startsWith("unrelated-mcp")
+      ) {
+        expect(publications).toBe(1);
+      }
+      expect(recoveryRequests).toBe(0);
+      if (reload === "selected-model-denied") {
+        expect(authorityRefusal).toContain("Session event configuration changed");
+      }
       expect(result?.status, result?.error).toBe(status);
-      expect(requests).toEqual(calls ? ["primary/model-a"] : []);
+      expect(requests).toEqual(calls);
       expect(preparations).toBe(attempts);
     },
   );

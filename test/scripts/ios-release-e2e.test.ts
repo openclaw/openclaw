@@ -296,6 +296,7 @@ function fixture(
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
+    firstMeasurement?: { ms: number; error?: "ETIMEDOUT" | "ABORT_ERR" };
   } = {},
 ) {
   let time = 0;
@@ -339,7 +340,15 @@ function fixture(
           return result(test);
         },
         measure: async () => {
-          trace.push(`measure:${index}`);
+          if (options.firstMeasurement && !trace.includes(`measure:${index}`)) {
+            time += options.firstMeasurement.ms;
+            trace.push(`measure:${index}`);
+            if (options.firstMeasurement.error) {
+              throw commandFailure(options.firstMeasurement.error);
+            }
+          } else {
+            trace.push(`measure:${index}`);
+          }
           return options.invalidMeasurement ? {} : { processes: 80, bytes: 1024, cpu: 1 };
         },
         cleanup: async () => {
@@ -427,6 +436,101 @@ describe("fresh trial ownership", () => {
     expect(trace.indexOf("prepare:1")).toBeLessThan(trace.indexOf("measure:1"));
     expect(trace.indexOf("measure:1")).toBeLessThan(trace.indexOf("cleanup:1"));
   });
+  it.each([
+    { ms: 4250, error: undefined },
+    { ms: 5000, error: "ETIMEDOUT" as const },
+    { ms: 5000, error: "ABORT_ERR" as const },
+  ])(
+    "records delayed and failed measurement calls without changing the gap gate: %j",
+    async (firstMeasurement) => {
+      const { deps } = fixture({ measure: true, firstMeasurement });
+      const { trials } = await runTrials("stock", deps);
+      const trial = trials[0];
+      if (!trial) {
+        throw new Error("Expected the measured stock trial");
+      }
+      expect(trial.timing?.measurements[0]).toEqual({
+        scheduledAtMs: 0,
+        startedAtMs: 0,
+        endedAtMs: firstMeasurement.ms,
+        outcome: firstMeasurement.error ? "failed" : "passed",
+        ...(firstMeasurement.error
+          ? { code: firstMeasurement.error === "ETIMEDOUT" ? "timeout" : "cancelled" }
+          : {}),
+      });
+      expect(trial.timing?.measurements[1]).toMatchObject({
+        scheduledAtMs: 1000,
+        startedAtMs: firstMeasurement.ms + 1000,
+      });
+      expect(trial.timing?.tests).toEqual([
+        {
+          test: IOS_RELEASE_TESTS[0],
+          startedAtMs: firstMeasurement.ms,
+          endedAtMs: firstMeasurement.ms + 1010,
+        },
+        {
+          test: IOS_RELEASE_TESTS[1],
+          startedAtMs: firstMeasurement.ms + 1010,
+          endedAtMs: firstMeasurement.ms + 2020,
+        },
+      ]);
+      expect(trial.measurement).toMatchObject({
+        errors: firstMeasurement.error ? 1 : 0,
+        gapCount: 1,
+        complete: false,
+      });
+      expect(trial.errors).toEqual(["incomplete-measurement"]);
+      expect(JSON.stringify(trial.timing)).not.toContain("private");
+    },
+  );
+  it("bounds call diagnostics while keeping serial sampling and joining cancellation", async () => {
+    let now = 0;
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    let cleaned = false;
+    const abort = new AbortController();
+    const report = await runTrials("stock", {
+      measure: true,
+      signal: abort.signal,
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+      create: async () => ({
+        prepare: async () => {},
+        test: async (test) => {
+          await new Promise<void>((resolve) => {
+            abort.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return result(test);
+        },
+        measure: async () => {
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await Promise.resolve();
+          if (++calls === 4100) {
+            abort.abort();
+          }
+          active--;
+          return { processes: 1, bytes: 1024, cpu: 0 };
+        },
+        cleanup: async () => {
+          cleaned = active === 0;
+        },
+      }),
+    });
+    const trial = report.trials[0];
+    if (!trial) {
+      throw new Error("Expected the cancelled stock trial");
+    }
+    expect(trial.timing?.measurements).toHaveLength(4096);
+    expect(trial.timing?.droppedMeasurements).toBe(4);
+    expect(trial.measurement?.samples).toHaveLength(4100);
+    expect(maxActive).toBe(1);
+    expect(cleaned).toBe(true);
+    expect(report.complete).toBe(false);
+  });
   it("stops after unconfirmed cleanup or cancellation, retaining the failed run", async () => {
     for (const options of [{ fail: "cleanup" as const }, { cancel: true }]) {
       const { deps, trace } = fixture(options);
@@ -447,83 +551,167 @@ describe("fresh trial ownership", () => {
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
-  const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  const selectionArtifact = {
-    id: 456,
-    name: "ios-release-gateway-selection-123",
-    expired: false,
-    workflow_run: { id: 123, head_sha: "a".repeat(40) },
-  };
-  const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
-    ...selectionArtifact,
-    workflow_run: { ...selectionArtifact.workflow_run, ...run },
-  });
-  const reuseSelection = { create: "false", "artifact-id": "456" };
-  const invalidPin = "expired or belongs to another source/run";
-  async function findGatewaySelection(
-    attempt: number,
-    artifacts: (typeof selectionArtifact)[],
-    outputs: Map<string, string>,
-    apiFailure?: Error,
-  ) {
-    const { runInNewContext } = await import("node:vm");
-    const step = workflow.jobs.qualify.steps.find(
-      (candidate: { id?: string }) => candidate.id === "gateway-selection",
-    );
-    const listWorkflowRunArtifacts = vi.fn();
-    const paginate = apiFailure
-      ? vi.fn().mockRejectedValue(apiFailure)
-      : vi.fn().mockResolvedValue(artifacts);
-    const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
-      github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
-      context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
-      core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
-      process: {
-        env: {
-          GITHUB_RUN_ATTEMPT: String(attempt),
-          TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+  const gatewayPreparation = parse(
+    readFileSync(".github/actions/prepare-mobile-release-gateway/action.yml", "utf8"),
+  );
+  describe.each(["ios", "android"])("%s stable Gateway selection", (platform) => {
+    const selectionArtifact = {
+      id: 456,
+      name: `${platform}-release-gateway-selection-123`,
+      expired: false,
+      workflow_run: { id: 123, head_sha: "a".repeat(40) },
+    };
+    const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
+      ...selectionArtifact,
+      workflow_run: { ...selectionArtifact.workflow_run, ...run },
+    });
+    const reuseSelection = { create: "false", "artifact-id": "456" };
+    const invalidPin = "expired or belongs to another source/run";
+    async function findGatewaySelection(
+      attempt: number,
+      artifacts: (typeof selectionArtifact)[],
+      outputs: Map<string, string>,
+      apiFailure?: Error,
+    ) {
+      const { runInNewContext } = await import("node:vm");
+      const step = gatewayPreparation.runs.steps.find(
+        (candidate: { id?: string }) => candidate.id === "gateway-selection",
+      );
+      const listWorkflowRunArtifacts = vi.fn();
+      const paginate = apiFailure
+        ? vi.fn().mockRejectedValue(apiFailure)
+        : vi.fn().mockResolvedValue(artifacts);
+      const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
+        github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
+        context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
+        core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
+        process: {
+          env: {
+            GITHUB_RUN_ATTEMPT: String(attempt),
+            TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+            SELECTION_ARTIFACT_NAME: selectionArtifact.name,
+          },
         },
-      },
+      });
+      await execution;
+      expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
+        owner: "openclaw",
+        repo: "openclaw",
+        run_id: 123,
+        name: selectionArtifact.name,
+        per_page: 100,
+      });
+    }
+    it.each([
+      ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
+      ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
+      ["workflow rerun", 2, [selectionArtifact], reuseSelection],
+    ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
+      const outputs = new Map<string, string>();
+      await findGatewaySelection(attempt, artifacts, outputs);
+      expect(Object.fromEntries(outputs)).toEqual(expected);
     });
-    await execution;
-    expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
-      owner: "openclaw",
-      repo: "openclaw",
-      run_id: 123,
-      name: selectionArtifact.name,
-      per_page: 100,
+    it.each([
+      ["missing rerun pin", [], "no saved stable Gateway selection"],
+      ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
+      [
+        "duplicate pins",
+        [selectionArtifact, selectionArtifact],
+        "Multiple stable Gateway selections",
+      ],
+      ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
+      ["different run", [pin({ id: 124 })], invalidPin],
+    ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
+      const outputs = new Map<string, string>();
+      await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
+      expect(outputs.size).toBe(0);
     });
-  }
-  it.each([
-    ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
-    ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
-    ["workflow rerun", 2, [selectionArtifact], reuseSelection],
-  ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
-    const outputs = new Map<string, string>();
-    await findGatewaySelection(attempt, artifacts, outputs);
-    expect(Object.fromEntries(outputs)).toEqual(expected);
+    it("fails artifact lookup errors without treating the pin as missing", async () => {
+      const outputs = new Map<string, string>();
+      await expect(
+        findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
+      ).rejects.toThrow("artifact API unavailable");
+      expect(outputs.size).toBe(0);
+    });
   });
-  it.each([
-    ["missing rerun pin", [], "no saved stable Gateway selection"],
-    ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
-    [
-      "duplicate pins",
-      [selectionArtifact, selectionArtifact],
-      "Multiple stable Gateway selections",
-    ],
-    ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
-    ["different run", [pin({ id: 124 })], invalidPin],
-  ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
-    const outputs = new Map<string, string>();
-    await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
-    expect(outputs.size).toBe(0);
-  });
-  it("fails artifact lookup errors without treating the pin as missing", async () => {
-    const outputs = new Map<string, string>();
-    await expect(
-      findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
-    ).rejects.toThrow("artifact API unavailable");
-    expect(outputs.size).toBe(0);
+  it("preserves platform selection identity and the installation-clock boundary", () => {
+    const steps = gatewayPreparation.runs.steps;
+    expect(gatewayPreparation.runs.using).toBe("composite");
+    expect(gatewayPreparation.inputs["artifact-name"].required).toBe(true);
+    expect(gatewayPreparation.inputs["record-install-clock"].default).toBe("false");
+    expect(gatewayPreparation.outputs["install-start-epoch"].value).toBe(
+      "${{ steps.install-start.outputs.epoch }}",
+    );
+    const [find, restore, clock, setup, prepare, save] = steps;
+    expect(find.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
+    expect(find.env.SELECTION_ARTIFACT_NAME).toBe("${{ inputs.artifact-name }}");
+    expect(restore.uses).toBe("actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+    expect(restore.if).toBe("steps.gateway-selection.outputs.artifact-id != ''");
+    expect(restore.with).toEqual({
+      "artifact-ids": "${{ steps.gateway-selection.outputs.artifact-id }}",
+      "github-token": "${{ github.token }}",
+      "run-id": "${{ github.run_id }}",
+      path: "${{ env.GATEWAY_SELECTION_DIR }}",
+      "digest-mismatch": "error",
+    });
+    expect(clock).toMatchObject({
+      id: "install-start",
+      if: "inputs.record-install-clock == 'true'",
+      shell: "bash",
+    });
+    expect(setup).toMatchObject({
+      uses: "./.github/actions/setup-node-env",
+      with: { "node-version": "24.22.1", "install-bun": "false", "cache-mode": "off" },
+    });
+    expect(prepare.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      RESTORED_SELECTION: "${{ steps.gateway-selection.outputs.artifact-id != '' }}",
+    });
+    expect(prepare.shell).toBe("bash");
+    for (const filename of ["selection.json", "package.json", "package-lock.json"]) {
+      expect(prepare.run).toContain(`test -f "$GATEWAY_SELECTION_DIR/${filename}"`);
+    }
+    expect(prepare.run).toContain(
+      '--target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"',
+    );
+    expect(save.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
+    expect(save.if).toBe("steps.gateway-selection.outputs.create == 'true'");
+    expect(save.with).toEqual({
+      name: "${{ inputs.artifact-name }}",
+      path:
+        ["selection.json", "package.json", "package-lock.json"]
+          .map((filename) => `\${{ env.GATEWAY_SELECTION_DIR }}/${filename}`)
+          .join("\n") + "\n",
+      "if-no-files-found": "error",
+      "retention-days": 30,
+    });
+    for (const platform of ["ios", "android"]) {
+      const selected = parse(readFileSync(`.github/workflows/${platform}-release-e2e.yml`, "utf8"));
+      const call = requiredWorkflowStep(
+        selected.jobs.qualify.steps,
+        "Prepare stable Gateway selection",
+      );
+      expect(call.id).toBe("gateway-preparation");
+      expect(call.uses).toBe("./.github/actions/prepare-mobile-release-gateway");
+      expect(call.with).toEqual({
+        "artifact-name": `${platform}-release-gateway-selection-\${{ github.run_id }}`,
+        ...(platform === "ios" ? { "record-install-clock": "true" } : {}),
+      });
+    }
+    const finish = requiredWorkflowStep(
+      workflow.jobs.qualify.steps,
+      "Complete sanitized timing proof",
+    );
+    expect(finish.env.INSTALL_START).toBe(
+      "${{ steps.gateway-preparation.outputs.install-start-epoch }}",
+    );
+    expect(finish.env.INSTALL_END).toBe("${{ steps.install-end.outputs.epoch }}");
+    expect(
+      requiredWorkflowStep(
+        workflow.jobs.qualify.steps,
+        "Finish shared toolchain installation clock",
+      ).if,
+    ).toBeUndefined();
   });
   it.each([
     ["manual current revision", {}, true],
@@ -600,7 +788,6 @@ describe("release qualification workflow authority", () => {
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
     expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
@@ -754,35 +941,6 @@ process.exitCode = 23;
       }
     },
   );
-  it.each([
-    ["full", "a".repeat(40), true],
-    ["full", "b".repeat(40), false],
-    ["main", "a".repeat(40), false],
-  ])(
-    "selects %s-tier target %s for required native qualification: %s",
-    (tier, target, selected) => {
-      const job = ci.jobs["ios-release-e2e"];
-      expect(
-        evaluateWorkflow(job.if, {
-          eventName: "workflow_dispatch",
-          sha: "a".repeat(40),
-          preflightOutputs: {
-            validation_tier: tier,
-            checkout_revision: target,
-            release_scope: "full",
-            compatibility_target: "false",
-            run_ios_build: "true",
-          },
-        }),
-      ).toBe(selected);
-      expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
-      expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
-      const gate = requiredWorkflowStep(ci.jobs["ci-gate"].steps, "Verify selected CI lanes");
-      expect(gate.env.JOB_RESULTS).toContain(
-        `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
-      );
-    },
-  );
 });
 
 it.each([
@@ -805,6 +963,8 @@ it.each([
   "build-unjoined",
   "build-exit",
   "boot-timeout",
+  "simulator-timing",
+  "simulator-timing-failure",
   "headroom-timeout",
   "cancel-during-headroom",
   "gateway-start-failure",
@@ -856,7 +1016,8 @@ it.each([
       arch: { value: "arm64" },
     }),
   );
-  vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
+  const simulatorTiming = scenario.startsWith("simulator-timing");
+  vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", simulatorTiming ? "/fixture/simslim" : "");
   const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
   const lifecycle: string[] = [];
   const setupPlan = setupPlans[scenario];
@@ -1145,6 +1306,21 @@ it.each([
       stdout.write(
         (scenario === "source-late-head-change" && sourceChanged ? "2" : "1").repeat(40),
       );
+    } else if (args.includes("--version")) {
+      stdout.write("simslim 0.11.0");
+    } else if (args.includes("scripts/ios-simulator-prepare.sh")) {
+      stderr.write("private simulator output\nOPENCLAW_SIMULATOR_TIM");
+      stderr.write("ING phase=cold-boot seconds=1.250 exit=0\n");
+      stderr.write(
+        `OPENCLAW_SIMULATOR_TIMING phase=configure seconds=2.500 exit=${scenario === "simulator-timing-failure" ? 23 : 0}\n`,
+      );
+      if (scenario === "simulator-timing-failure") {
+        return 23;
+      }
+      stderr.write("OPENCLAW_SIMULATOR_TIMING phase=ready seconds=3.000 exit=0\n");
+      stderr.write("OPENCLAW_SIMULATOR_TIMING phase=verify seconds=0.125 exit=0\n");
+      stderr.write("private simulator output".repeat(1000));
+      simulatorReady = true;
     } else if (args.includes("-version")) {
       stdout.write(
         scenario === "different-xcode"
@@ -1237,7 +1413,7 @@ it.each([
       selectedTest = testArgument.slice("-only-testing:".length);
       const reader = selectedTest === IOS_RELEASE_TESTS[1];
       lifecycle.push(reader ? "reader-test" : "live-test");
-      if (!reader) {
+      if (!reader && scenario !== "test-exit") {
         stdout.write("IOS_RELEASE_CHECKPOINT paired\nIOS_RELEASE_CHECKPOINT private-credential\n");
       }
       if (reader) {
@@ -1324,7 +1500,7 @@ it.each([
             : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
         stdout.write(
           "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
-            `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+            `/private/checkout/OpenClawSnapshotUITests+Chat.swift:1913: error: private ${failureMessage}\n` +
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (99 seconds).\n",
         );
         await Promise.resolve();
@@ -1345,11 +1521,20 @@ it.each([
         throw commandFailure("ETIMEDOUT", "unknown");
       }
       if (scenario === "test-exit") {
+        stdout.write("IOS_RELEASE_CHECKPOINT paired\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT first\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT second\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT private-credential\n");
+        nativeCommandActive = true;
         stdout.write(
-          "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+          "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: private assertion details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: repeated private details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Private.swift:42: error: private details\n" +
             "private teardown details\n".repeat(256),
         );
         stderr.write("TEST FAILED: private setup code and private path\n");
+        await Promise.resolve();
+        nativeCommandActive = false;
         return 65;
       }
       if (!reader) {
@@ -1499,6 +1684,44 @@ it.each([
         : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
   });
   try {
+    if (simulatorTiming) {
+      const resources = await native.dependencies.create("simslim", 1);
+      try {
+        if (scenario === "simulator-timing-failure") {
+          await expect(resources.prepare()).rejects.toMatchObject({
+            diagnostic: { operation: "simulator-slim", code: "exit", exitCode: 23 },
+          });
+        } else {
+          await resources.prepare();
+        }
+        expect(proof.phases).toEqual(
+          containing([
+            matching({
+              operation: "simulator-slim",
+              status: scenario === "simulator-timing-failure" ? "failed" : "passed",
+              preparationTimings: [
+                { phase: "cold-boot", seconds: 1.25, exitCode: 0 },
+                {
+                  phase: "configure",
+                  seconds: 2.5,
+                  exitCode: scenario === "simulator-timing-failure" ? 23 : 0,
+                },
+                ...(scenario === "simulator-timing-failure"
+                  ? []
+                  : [
+                      { phase: "ready", seconds: 3, exitCode: 0 },
+                      { phase: "verify", seconds: 0.125, exitCode: 0 },
+                    ]),
+              ],
+            }),
+          ]),
+        );
+        expect(JSON.stringify(proof.phases)).not.toContain("private simulator output");
+      } finally {
+        await resources.cleanup();
+      }
+      return;
+    }
     if (scenario === "native-build-only") {
       expect(nativeMocks.build).toHaveBeenCalledOnce();
       expect(nativeMocks.install).not.toHaveBeenCalled();
@@ -1748,7 +1971,11 @@ it.each([
         [
           diagnostic("native-test", "timeout", {
             errorCode: "ETIMEDOUT",
-            context: containing(["xctest-started", "xctest-failed", "xctest-line:1904"]),
+            context: containing([
+              "xctest-started",
+              "xctest-failed",
+              "xctest-location:OpenClawSnapshotUITests.swift:1904",
+            ]),
           }),
         ],
         ["failed"],
@@ -1898,9 +2125,25 @@ it.each([
           operation: "native-test",
           code: "exit",
           exitCode: 65,
-          context: containing(["test-failed", "xctest-line:1904"]),
+          context: containing([
+            "test-failed",
+            "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+          ]),
         },
       ]);
+      const context = report.trials[0]?.diagnostics[0]?.context ?? [];
+      expect(context.filter((fact) => fact.startsWith("xctest-location:"))).toEqual([
+        "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+      ]);
+      expect(proof.phases).toEqual(
+        containing([matching({ operation: "native-test", checkpoint: "second" })]),
+      );
+      expect(progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"first"'))).toBe(
+        true,
+      );
+      expect(historyReadBeforeCommandExit).toBe(true);
+      expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
       return;
     }
     if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {

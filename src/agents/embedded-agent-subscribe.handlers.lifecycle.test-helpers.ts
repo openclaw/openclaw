@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 
 export function createContext(
   lastAssistant: unknown,
@@ -31,6 +32,8 @@ export function createContext(
     state: {
       assistantTexts: [],
       toolMetas: [],
+      toolMetaById: new Map(),
+      toolActivityPresentation: new ToolActivityPresentation(),
       itemActiveIds: new Set(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
@@ -47,7 +50,12 @@ export function createContext(
     } satisfies Partial<EmbeddedAgentSubscribeContext["state"]> &
       Pick<
         EmbeddedAgentSubscribeContext["state"],
-        "toolMetas" | "itemActiveIds" | "itemStartedCount" | "itemCompletedCount"
+        | "toolMetas"
+        | "toolMetaById"
+        | "toolActivityPresentation"
+        | "itemActiveIds"
+        | "itemStartedCount"
+        | "itemCompletedCount"
       >,
     log: {
       debug: vi.fn(),

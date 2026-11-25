@@ -11,6 +11,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { settlesWithin } from "../shared/settle-within.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -69,9 +70,16 @@ async function closeWithRuntimeCleanup(
 }
 
 /** Starts the gateway server after lazily loading the full server implementation. */
-export async function startGatewayServer(
+export function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
+): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  return withLiveStateReads(() => startGatewayServerLive(port, opts));
+}
+
+async function startGatewayServerLive(
+  port: number,
+  opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   installDatabaseProcessRole("gateway");
   const { installGatewayDatabaseEngine } = await import("./server-database-engine.js");
@@ -199,10 +207,23 @@ async function startGatewayServerWithRuntime(
   if (process.platform !== "linux" || !supportsSpawnBrokerCommandTransport()) {
     return await start();
   }
-  const { startGatewaySpawnBroker, runWithSpawnBroker } =
-    await import("../process/spawn-broker/context.js");
+  // Broker close runs after an in-place update may have replaced chunks on disk; it
+  // must not first-import its cleanup owners then.
+  const [
+    { startGatewaySpawnBroker, runWithSpawnBroker },
+    { shutdownProcessSupervisor },
+    { closeSqliteReadOnlyWorkersForBroker },
+    { predictGatewayStartupResourceProfile },
+  ] = await Promise.all([
+    import("../process/spawn-broker/context.js"),
+    import("../process/supervisor/index.js"),
+    import("../infra/sqlite-readonly-worker.js"),
+    import("./server-startup-resource-profile.js"),
+  ]);
   let logger: { info: (message: string) => void } | undefined;
   const broker = await startGatewaySpawnBroker({
+    // Bootstrap resolves the profile later; the broker must be placed before it.
+    profile: await predictGatewayStartupResourceProfile(opts.startupConfigSnapshotRead),
     onReady(pid, restarted) {
       if (restarted) {
         logger?.info(`spawn broker restarted pid=${pid}`);
@@ -221,23 +242,10 @@ async function startGatewayServerWithRuntime(
     // broker alive until command results, output, and service-child cleanup settle.
     const errors: unknown[] = [];
     const steps = [
-      [
-        "process-supervisor",
-        async () => {
-          const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
-          await shutdownProcessSupervisor();
-        },
-      ],
+      ["process-supervisor", () => shutdownProcessSupervisor()],
       // A failed required core join can stop before the admission sidecar runs.
       ["database-admission", () => stopDatabaseAdmission?.()],
-      [
-        "broker-read-only-workers",
-        async () => {
-          const { closeSqliteReadOnlyWorkersForBroker } =
-            await import("../infra/sqlite-readonly-worker.js");
-          await closeSqliteReadOnlyWorkersForBroker(broker);
-        },
-      ],
+      ["broker-read-only-workers", () => closeSqliteReadOnlyWorkersForBroker(broker)],
       // Readers that did not close remain attached children for broker termination.
       ["spawn-broker", () => broker.close()],
     ] as const;

@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
 import { registerAgentsCommands } from "./register.agent.js";
@@ -210,18 +211,8 @@ describe("backup registration", () => {
       handlers.gitVerify,
       { ...gitOptions, store: "workboard" },
     ],
-    [
-      "sqlite verify /snapshot --scratch /scratch --json",
-      handlers.sqliteVerify,
-      { scratch: "/scratch" },
-      "/snapshot",
-    ],
-    [
-      "sqlite restore /snapshot --target /restored.sqlite --json",
-      handlers.sqliteRestore,
-      { target: "/restored.sqlite" },
-      "/snapshot",
-    ],
+    ["sqlite verify s --scratch t --json", handlers.sqliteVerify, { scratch: "t" }, "s"],
+    ["sqlite restore s --target t --json", handlers.sqliteRestore, { target: "t" }, "s"],
   ] as const)("dispatches backup %s", async (args, command, options, snapshot?: string) => {
     await parse(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(
@@ -231,12 +222,20 @@ describe("backup registration", () => {
     );
   });
 
-  it("rejects partial Git log limits before dispatch", async () => {
-    await expect(parse("git log --repository /repo --limit 1oops")).rejects.toThrow(
+  it.each([
+    [
+      "git log --repository /repo --limit 1oops",
+      handlers.gitLog,
       "--limit must be a positive integer.",
-    );
-    expect(handlers.gitLog).not.toHaveBeenCalled();
-  });
+    ],
+    ["verify x --namespace n --json", handlers.verify, ExpectedCliError],
+  ] as const)(
+    "rejects invalid backup options before dispatch: %s",
+    async (args, command, error) => {
+      await expect(parse(args)).rejects.toThrow(error);
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
 });
 
 const commands = vi.hoisted(() => ({

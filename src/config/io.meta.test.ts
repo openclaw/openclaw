@@ -57,6 +57,28 @@ describe("config write metadata stamping", () => {
     expect({ previous, next }).toEqual(original);
   });
 
+  it("keeps the implicit-model era version until a primary is configured", () => {
+    const previous: OpenClawConfig = { meta: { lastTouchedVersion: "2026.11.6" } };
+    const unrelated = { ...previous, gateway: { port: 18_880 } };
+    expect(
+      stampConfigWriteMetadata(unrelated, "2026.11.7", previous).meta?.lastTouchedVersion,
+    ).toBe("2026.11.6");
+    const chosen = { ...previous, agents: { defaults: { model: "openai/gpt-6-astra" } } };
+    expect(stampConfigWriteMetadata(chosen, "2026.11.7", previous).meta?.lastTouchedVersion).toBe(
+      "2026.11.7",
+    );
+  });
+
+  it("keeps an unversioned existing config eligible for the implicit-model migration", () => {
+    const unrelated: OpenClawConfig = { gateway: { port: 18_880 } };
+    expect(stampConfigWriteMetadata(unrelated, "2026.11.7", {}).meta?.lastTouchedVersion).toBe(
+      "2026.11.6",
+    );
+    expect(stampConfigWriteMetadata(unrelated, "2026.11.7", null).meta?.lastTouchedVersion).toBe(
+      "2026.11.7",
+    );
+  });
+
   it("preserves a restriction containing wildcard, alias and selector refs", () => {
     const modelMap = {
       "openai/*": {},
@@ -87,4 +109,26 @@ describe("config write metadata stamping", () => {
       ).toEqual(["bare"]);
     },
   );
+
+  it("extends only pre-split skill_workshop policy once, then records the split", () => {
+    const previous: OpenClawConfig = {
+      tools: { allow: ["skill_workshop"], deny: ["exec"] },
+      agents: { entries: { main: { tools: { allow: ["read"] } } } },
+    };
+    const next: OpenClawConfig = {
+      tools: previous.tools,
+      // Authored in this write, after the split: not pre-split policy.
+      agents: { entries: { main: { tools: { deny: ["skill_workshop"] } } } },
+    };
+    const stamped = stampConfigWriteMetadata(next, undefined, previous);
+    expect(stamped.tools?.allow).toEqual(["skill_workshop", "skill_library"]);
+    expect(stamped.agents?.entries?.main?.tools?.deny).toEqual(["skill_workshop"]);
+    expect(stamped.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+    const fresh = stampConfigWriteMetadata(previous, undefined, null);
+    expect(fresh.tools?.allow).toEqual(["skill_workshop"]);
+    expect(fresh.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+    const restamped = stampConfigWriteMetadata({ tools: previous.tools }, undefined, stamped);
+    expect(restamped.tools?.allow).toEqual(["skill_workshop"]);
+    expect(restamped.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+  });
 });

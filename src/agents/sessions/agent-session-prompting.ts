@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   enqueueMessageInjection,
   MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionClosedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
@@ -10,15 +11,13 @@ import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   mergePreparedUserTurnMessageForRuntime,
   readModelPromptProjection,
 } from "../../sessions/user-turn-transcript.message.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
@@ -536,7 +535,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       try {
         await withMessageInjectionAdmission(prepareInjection, () => {
           if (canInject && !canInject()) {
-            throw new Error("active session is finalizing");
+            throw new MessageInjectionClosedError();
           }
           notify = this.queueSteer(message, expandedText);
           onAccepted?.();

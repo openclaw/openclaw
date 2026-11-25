@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
+import { createPluginRecoveryStorage } from "./control-ui-recovery-storage.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 export function createControlUiPluginHost(
@@ -117,6 +118,16 @@ export function createControlUiPluginHost(
         canAdmin: access.canAdmin,
         assistantAgentId: snapshot.assistantAgentId,
       };
+    },
+    get recoveryStorage() {
+      return createPluginRecoveryStorage(
+        current().gateway,
+        owner.client,
+        owner.descriptor.pluginId,
+        () => {
+          current();
+        },
+      );
     },
     request: (method, params = {}) => call(() => owner.client.request(method, params)),
     onEvent(event, listener) {

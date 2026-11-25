@@ -15,6 +15,7 @@ export function withWorkerWriteAdmission<T>(
   databaseOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   assertSourceCurrent?: () => void,
+  releaseAfterOperation = false,
 ): Promise<T> {
   let finalAdmission = false;
   const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
@@ -82,7 +83,7 @@ export function withWorkerWriteAdmission<T>(
     return value;
   };
   return withOpenClawAgentDatabaseAdmission(databaseOptions, withAdmission, (database) => {
-    finalAdmission = true;
+    finalAdmission = !releaseAfterOperation;
     return operation(database);
   });
 }

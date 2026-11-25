@@ -13,6 +13,8 @@ import {
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE = "worker-gateway-tools-v1";
+export const WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE =
+  "worker-gateway-mcp-guest-result-v1";
 export const WORKER_GATEWAY_TOOL_METHODS = {
   invoke: "worker.gatewayTool.invoke",
   cancel: "worker.gatewayTool.cancel",
@@ -113,6 +115,18 @@ export const WorkerToolSurfaceSchema = closedObject({
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
         async: Type.Optional(Type.Literal(false)),
+        // Tool-owned repeat-guard exemption: always, or only for the listed `action` values.
+        repeatable: Type.Optional(
+          Type.Union([
+            Type.Literal(true),
+            closedObject({
+              actions: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+                minItems: 1,
+                maxItems: 16,
+              }),
+            }),
+          ]),
+        ),
       }),
     }),
     { maxItems: 256 },
@@ -125,6 +139,8 @@ export const WorkerToolSurfaceSchema = closedObject({
     applyPatchContainmentSource: Type.Optional(Type.Enum(["config", "session", "required-root"])),
     modelContextWindowTokens: Type.Optional(Type.Integer({ minimum: 1 })),
     modelHasVision: Type.Optional(Type.Boolean()),
+    // Resolved `tools.loopDetection.enabled`; only `false` turns the repeat guard off.
+    toolRepeatGuard: Type.Optional(Type.Boolean()),
     memoryFlushWritePath: Type.Optional(Type.String({ minLength: 1, maxLength: 4_096 })),
     imageSanitization: closedObject({
       maxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -164,8 +180,13 @@ export const WorkerGatewayToolResultSchema = closedObject({
 });
 export const WorkerGatewayToolCancelResultSchema = closedObject({ cancelled: Type.Boolean() });
 
+const WorkerGatewayToolInvokeResultSchema = closedObject({
+  ...WorkerGatewayToolResultSchema.properties,
+  mcpGuestResult: Type.Optional(Type.Unknown()),
+  mcpBlockedReason: Type.Optional(LiveTextSchema),
+});
 export const WorkerGatewayToolResponseFrameSchema = workerResponseSchema(
-  WorkerGatewayToolResultSchema,
+  WorkerGatewayToolInvokeResultSchema,
 );
 export const WorkerGatewayToolCancelResponseFrameSchema = workerResponseSchema(
   WorkerGatewayToolCancelResultSchema,
@@ -198,6 +219,7 @@ export type WorkerToolSurface = Static<typeof WorkerToolSurfaceSchema>;
 export type WorkerGatewayToolInvokeParams = Static<typeof WorkerGatewayToolInvokeParamsSchema>;
 export type WorkerGatewayToolCancelParams = Static<typeof WorkerGatewayToolCancelParamsSchema>;
 export type WorkerGatewayToolResult = Static<typeof WorkerGatewayToolResultSchema>;
+export type WorkerGatewayToolInvokeResult = Static<typeof WorkerGatewayToolInvokeResultSchema>;
 export type WorkerGatewayToolResponseFrame = Static<typeof WorkerGatewayToolResponseFrameSchema>;
 export type WorkerGatewayToolCancelResponseFrame = Static<
   typeof WorkerGatewayToolCancelResponseFrameSchema

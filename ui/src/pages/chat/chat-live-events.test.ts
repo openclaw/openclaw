@@ -23,8 +23,7 @@ async function harness() {
     connectionEpoch: 1,
     requestHandlers: { "chat.history": { messages: [], sessionId: "selected-session" } },
   });
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
     pendingSessionMessageReloadSessionKey: null,
@@ -34,7 +33,7 @@ async function harness() {
     waitingApprovalResolvedIds: new Set(),
     guardianNotices: [],
     compactionStatus: null,
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   const send = (event: string, payload: unknown, row?: GatewaySessionRow) =>
     handlePageGatewayEvent(
       state,

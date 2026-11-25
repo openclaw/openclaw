@@ -33,6 +33,10 @@
   color: var(--muted);
   font-size: 13px;
 }
+.cloud-environments__sheet,
+.cloud-environments__snapshot {
+  overflow-wrap: anywhere;
+}
 .cloud-environments__sheet {
   min-width: 0;
   display: grid;
@@ -40,7 +44,7 @@
 }
 .cloud-environments__header {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
@@ -62,13 +66,6 @@
   gap: 8px 16px;
   font-size: 13px;
   color: var(--muted);
-}
-.cloud-environments__advanced {
-  margin-top: 24px;
-}
-.cloud-environments__advanced > summary {
-  padding: 16px 0;
-  font-weight: 600;
 }
 @media (max-width: 900px) {
   .cloud-environments {

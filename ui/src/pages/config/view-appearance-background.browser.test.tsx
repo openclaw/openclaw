@@ -96,14 +96,20 @@ describe("Appearance backgrounds", () => {
       fixture({
         preference: {
           ...DEFAULT_BACKGROUND_PREFERENCE,
+          source: { kind: "theme" },
           showOnNewSession: false,
           showInSessions: false,
         },
       }),
     );
+    expect(mode("faded").getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("Both pages are off");
     expect(range().disabled).toBe(false);
-    renderBackground(fixture({ preference: { ...DEFAULT_BACKGROUND_PREFERENCE, visibility: 0 } }));
+    renderBackground(
+      fixture({
+        preference: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" }, visibility: 0 },
+      }),
+    );
     expect(host.textContent).toContain("At 0%, the artwork is hidden");
   });
 

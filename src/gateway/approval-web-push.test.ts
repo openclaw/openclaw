@@ -71,7 +71,8 @@ vi.mock("./operator-role-policy.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Control approval visibility without opening session and approval stores.
-vi.mock("./server-methods/approval-record-lookup.js", () => ({
+vi.mock("./server-methods/approval-record-lookup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/approval-record-lookup.js")>()),
   canAccessApprovalSession: () => true,
   isApprovalRecordVisibleToClient: mocks.visible,
 }));
@@ -112,6 +113,14 @@ const readOnlyPolicy = () => ({
   sessions: { others: "none" },
   agents: [],
   scopes: ["operator.read"],
+});
+const roleConfig = (): OpenClawConfig => ({
+  gateway: {
+    roles: {
+      default: "denied",
+      definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+    },
+  },
 });
 
 function success(subscription: BoundWebPushSubscription) {
@@ -212,7 +221,7 @@ beforeEach(() => {
   );
   mocks.approval.mockReturnValue({
     outcome: "found",
-    record: { reviewerDeviceIds: [], source: { agentId: null, sessionKey: null } },
+    record: { requester: {}, reviewerDeviceIds: [], source: { agentId: null, sessionKey: null } },
   });
 });
 
@@ -360,7 +369,7 @@ it("requires a current role policy for each binding", async () => {
       : undefined,
   );
   mocks.send.mockResolvedValue([success(current)]);
-  const delivery = await createDelivery(() => ({ gateway: { roles: { definitions: {} } } }));
+  const delivery = await createDelivery(roleConfig);
   await expect(delivery.handleRequested(createRecord("exec:role-check"))).resolves.toBe(true);
   expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ subscriptions: [current] }),
@@ -401,7 +410,7 @@ it.each([
   await preparationStarted.promise;
   if (change === "policy") {
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    cfg = { gateway: { roles: { definitions: {} } } };
+    cfg = roleConfig();
   } else if (change === "resolved") {
     record.resolvedAtMs = Date.now();
     record.status = "denied";
@@ -528,7 +537,7 @@ it.each([
         ],
       });
     } else if (authority === "tightened-policy") {
-      cfg = { gateway: { roles: { definitions: {} } } };
+      cfg = roleConfig();
       mocks.rolePolicy.mockReturnValue(readOnlyPolicy());
     }
     if (restart) {

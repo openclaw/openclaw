@@ -14,12 +14,21 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.localWorkspaceHandoff
+      ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
+      : {}),
     ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
+    ...(existingEntry.scheduledMemoryParent
+      ? { scheduledMemoryParent: existingEntry.scheduledMemoryParent }
+      : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),
     ...(existingEntry.activeWriterRunId !== undefined
       ? { activeWriterRunId: existingEntry.activeWriterRunId }
+      : {}),
+    ...(existingEntry.lifecycleRestartScope !== undefined
+      ? { lifecycleRestartScope: existingEntry.lifecycleRestartScope }
       : {}),
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }

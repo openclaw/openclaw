@@ -66,12 +66,37 @@ function installSlackNativeReconnectFailureObserver(
   receiver: InstanceType<SlackSocketModeReceiverConstructor>,
 ) {
   const client = receiver.client;
+  const start: typeof client.start = Reflect.get(client, "start");
+  const receiverStart: typeof receiver.start = Reflect.get(receiver, "start");
+  let receiverStarting = false;
+  // Bolt's start still rejects to its caller. The SDK's own reconnect and refresh
+  // starts would rethrow into its event listeners, so report those to the waiter.
+  Reflect.set(receiver, "start", function startReceiver(this: typeof receiver) {
+    receiverStarting = true;
+    try {
+      return receiverStart.call(this);
+    } finally {
+      receiverStarting = false;
+    }
+  });
+  Reflect.set(client, "start", function startSocket(this: typeof client) {
+    const attempt = start.call(this);
+    if (receiverStarting) {
+      return attempt;
+    }
+    return attempt.catch((error: unknown) => {
+      if (!Reflect.get(this, "shuttingDown")) {
+        this.emit(OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
+      }
+    });
+  });
   Reflect.set(
     client,
     "delayReconnectAttempt",
     function patchedDelayReconnectAttempt(
       this: typeof client,
       callback: (this: typeof client) => Promise<unknown>,
+      signal?: AbortSignal,
     ) {
       const failureCount = Number(Reflect.get(this, "numOfConsecutiveReconnectionFailures") ?? 0);
       const nextFailureCount = failureCount + 1;
@@ -83,7 +108,10 @@ function installSlackNativeReconnectFailureObserver(
           : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
       return new Promise((resolve, reject) => {
         const cancel = () => {
-          if (callback === Reflect.get(this, "start")) {
+          // SDK 3.1's disconnect() clears this timer; 3.2's does not, and its start()
+          // would open a fresh lifecycle. 3.2 passes its signal and aborts its own start.
+          clearTimeout(Reflect.get(this, "reconnectionTimer"));
+          if (signal || callback === Reflect.get(this, "start")) {
             resolve(undefined);
           } else {
             reject(new Error("Slack Socket Mode stopped during reconnect"));
@@ -93,19 +121,13 @@ function installSlackNativeReconnectFailureObserver(
           cancel();
           return;
         }
-        // disconnect() clears the SDK timer before emitting disconnecting.
-        // Settle its waiter too, or startup retains the channel's plugin custody.
+        // Settle on disconnect() too, or startup retains the channel's plugin custody.
         this.once("disconnecting", cancel);
         const reconnectTimer = setTimeout(() => {
           this.off("disconnecting", cancel);
           Reflect.set(this, "reconnectionTimer", undefined);
           this.emit("reconnecting");
           callback.call(this).then(resolve, (error: unknown) => {
-            if (callback === Reflect.get(this, "start")) {
-              this.emit(OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
-              resolve(undefined);
-              return;
-            }
             reject(toErrorObject(error, "Non-Error rejection"));
           });
         }, delayMs);

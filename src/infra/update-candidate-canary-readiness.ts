@@ -92,6 +92,7 @@ export async function waitForUpdateCandidateReadiness(
       recordProgress(milestone, completedAt);
     }
     if (!warned && Date.now() >= params.workDeadline && Date.now() < workDeadline) {
+      params.assertCurrent?.();
       warned = true;
       warningPending = Promise.resolve(
         params.onWarning(
@@ -125,12 +126,17 @@ export async function waitForUpdateCandidateReadiness(
     params.processExitSignal,
     ...(params.signal ? [params.signal] : []),
   ]);
-  const assertRunning = () => {
+  let nextAuthorityCheckAt = 0;
+  const assertRunning = (acceptReady = false) => {
     if (deadlineFailure !== undefined) {
       throw deadlineFailure;
     }
     params.signal?.throwIfAborted();
-    params.assertCurrent?.();
+    // Polls only read loopback state; revocation may wait 1s, but acceptance never does.
+    if (acceptReady || Date.now() >= nextAuthorityCheckAt) {
+      params.assertCurrent?.();
+      nextAuthorityCheckAt = Date.now() + 1_000;
+    }
     if (params.hasExited()) {
       throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
     }
@@ -205,6 +211,7 @@ export async function waitForUpdateCandidateReadiness(
             assertRunning();
           }
           if (ready && Date.now() < workDeadline) {
+            assertRunning(true);
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,
             );

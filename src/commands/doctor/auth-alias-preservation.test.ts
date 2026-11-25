@@ -60,9 +60,9 @@ function bindFixture(fixture: OpenClawTestState) {
       }),
     config: (auth?: OpenClawConfig["auth"]) =>
       authConfig(auth, { entries: { main: {}, worker: { agentDir: fixture.agentDir("worker") } } }),
-    migrateShared: () =>
+    migrateShared: async () =>
       migrateSharedAuthStore({
-        detected: detectSharedAuthStoreMigration({
+        detected: await detectSharedAuthStoreMigration({
           stateDir: fixture.stateDir,
           doctorOnlyStateMigrations: true,
         }),

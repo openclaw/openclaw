@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreSelectionOptions,

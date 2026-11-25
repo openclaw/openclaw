@@ -107,6 +107,8 @@ bindings retain their own route activation rules.
 These rules govern new message admissions. An already admitted turn keeps its
 captured policy; changing mention rules or sender allowlists does not suppress
 its reply.
+If a queued request is refused because the requester no longer has channel access,
+the refusal is silent on the channel but recorded in the session for the owner.
 
 The transport must deliver unmentioned messages before OpenClaw can apply the
 policy:

@@ -16,6 +16,7 @@ type ExtensionMatrixRow = {
   extensions_csv: string;
   includePatterns: string[];
   requires_bun?: boolean;
+  pretest_build_mode?: "runtime" | "private-qa";
   task: string;
   test_runtime_policy?: string;
   vitest_config: string;
@@ -44,6 +45,9 @@ export function createPrereleaseFixtures() {
           "Build plugin prerelease manifest",
         ).run,
         "plugin prerelease manifest script",
+      ).replace(
+        "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+        new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
       );
       const result = runWorkflowShellScript(run, {
         cwd,

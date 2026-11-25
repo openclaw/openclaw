@@ -35,9 +35,14 @@ function pendingWelcomeGrant() {
   });
 }
 
-function guestClient(grantId: string, profile: { profileId: string; displayName?: string } = SAM) {
+function guestClient(
+  grantId: string,
+  profile: { profileId: string; displayName?: string } = SAM,
+  githubLogin?: string,
+) {
   return {
     authenticatedUserProfile: profile,
+    preparedSessionProfile: { profileId: profile.profileId, githubLogin, aliases: new Set() },
     internal: {
       operatorAccessAuthority: { gatewayAccessGrant: { pluginId: "visitor-access", grantId } },
     },
@@ -123,7 +128,20 @@ describe("visitor-access.welcome.ensure", () => {
       onboarding: { state: "pending", updatedAt: NOW },
       expiresAt: Date.parse("2026-11-06T12:00:00.000Z"),
     });
-    const h = await welcomeHarness([grant]);
+    const h = await welcomeHarness([grant], {
+      agents: {
+        entries: {
+          main: { name: "Fallback", identity: { name: "Mantis" } },
+          ops: { name: "Tide" },
+        },
+      },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: { guest: { ...guestRole, agents: ["main", "ops"] } },
+        },
+      },
+    });
     const result = await h.ensure();
 
     expect(result).toEqual(
@@ -131,24 +149,32 @@ describe("visitor-access.welcome.ensure", () => {
     );
     const sessionKey = result.status === "ready" ? result.sessionKey : "";
     expect(h.creates()).toEqual([
-      ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome, Sam Rivera" }],
+      ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome Sam Rivera" }],
     ]);
     const message = h.gateway.appendAgentMessage.mock.calls[0]![0];
     expect(message).toMatchObject({
       sessionKey,
       agentId: "main",
-      mentions: [{ profileId: JOSH.profileId, start: 34, end: 39 }],
+      mentions: [{ profileId: JOSH.profileId, start: 50, end: 55 }],
       idempotencyKey: `visitor-welcome:${grant.grantId}`,
     });
-    expect(message.text.slice(34, 39)).toBe("@Josh");
-    expect(message.text).toMatch(
-      /Welcome to OpenClaw, Sam Rivera\.[\s\S]*@Josh invited you.*2026-11-06 12:00 UTC/,
-    );
-    expect(message.text).toContain(
-      "Note from Josh:\nWould love your eyes on the guest onboarding flow.",
-    );
-    expect(message.text).toMatch(
-      /own session with Roboclaw[\s\S]*start your own sessions with Roboclaw[\s\S]*private sandbox[\s\S]*read other people's sessions/,
+    expect(message.text.slice(50, 55)).toBe("@Josh");
+    expect(message.text).toBe(
+      [
+        "Hi, I'm Mantis. Welcome to OpenClaw, Sam Rivera.",
+        "",
+        "@Josh invited you. Your guest access runs through 2026-11-06 12:00 UTC.",
+        "",
+        "Note from Josh:",
+        "Would love your eyes on the guest onboarding flow.",
+        "",
+        "This is your own session with me. We can talk through an idea or dig into something together. You can:",
+        "- start your own sessions with me or Tide",
+        "- ask me to work in a private sandbox (an isolated workspace)",
+        "- read other people's sessions",
+        "",
+        "What brought you here?",
+      ].join("\n"),
     );
     expect(h.fixture.grants.get(EMAIL)?.onboarding).toEqual({
       state: "ready",
@@ -170,6 +196,20 @@ describe("visitor-access.welcome.ensure", () => {
     expect(await h.ensure()).toEqual({ ...result, created: false });
     expect(h.creates()).toHaveLength(1);
     expect(h.gateway.appendAgentMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { displayName: "  Sam\n Rivera  ", githubLogin: "sam", title: "Welcome Sam Rivera" },
+    { displayName: " ", githubLogin: "sam", title: "Welcome sam" },
+    { displayName: undefined, githubLogin: undefined, title: "Welcome" },
+  ])("titles a new welcome session $title", async ({ displayName, githubLogin, title }) => {
+    const grant = pendingWelcomeGrant();
+    const h = await welcomeHarness([grant]);
+    const result = await h.welcome.ensure(
+      guestClient(grant.grantId!, { profileId: "profile-sam", displayName }, githubLogin),
+    );
+    expect(result).toMatchObject({ status: "ready", created: true });
+    expect([...h.sessions.values()]).toMatchObject([{ displayName: title }]);
   });
 
   it("returns not_applicable without an active visitor grant for this connection", async () => {
@@ -254,10 +294,10 @@ describe("visitor-access.welcome.ensure", () => {
     });
     expect(message).not.toHaveProperty("mentions");
     expect(message.text).toMatch(
-      /^Welcome to OpenClaw\.[\s\S]*You were invited as a guest.*does not expire/,
+      /^Hi, I'm main\. Welcome to OpenClaw\.[\s\S]*You were invited as a guest\. Your guest access does not expire\./,
     );
     expect(message.text).toMatch(
-      /own session with main[\s\S]*own sessions with any agent on this Gateway/,
+      /own session with me[\s\S]*own sessions with any agent on this Gateway/,
     );
   });
 

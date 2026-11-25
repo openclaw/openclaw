@@ -193,11 +193,12 @@ parameters, timeouts, or payload compatibility switches. It preserves those
 settings instead of silently dropping them. Once a harness starts executing,
 its failures are not replayed through another runtime.
 
-Affirmative `compat.supportsReasoningEffort: true` and a nonempty
-`compat.supportedReasoningEfforts` list containing only `minimal`, `low`,
-`medium`, `high`, `xhigh`, `max`, or `ultra` describe native reasoning
-capabilities; they do not opt an otherwise compatible route out of Codex.
-Disabling reasoning, custom effort labels, and other compatibility switches
+Affirmative `compat.supportsReasoningEffort: true` and a
+`compat.supportedReasoningEfforts` list containing only `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`, with at least one effort
+other than `none`, describe native reasoning capabilities; they do not opt an
+otherwise compatible route out of Codex. Disabling reasoning (including a list
+of only `none`), custom effort labels, and other compatibility switches
 remain request behavior. Model-level runtime controls such as `fastMode` and
 `thinking` also preserve native selection when their values are valid.
 
@@ -222,7 +223,11 @@ Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
 input, but new config should keep the provider/model in its standard form and put the
 execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
 to rewrite persisted legacy model selections, model-map keys, and explicit
-`modelPolicy.allow` entries to that standard shape.
+`modelPolicy.allow` entries to that standard shape. Doctor keeps the legacy
+refs, with a warning, when config already routes models of the standard provider
+to a different runtime (for example `anthropic/claude-opus-5` pinned to
+`openclaw` next to `claude-cli/claude-opus-5`). Both routes are then in use, and
+a rewrite could silently move one onto the other.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex

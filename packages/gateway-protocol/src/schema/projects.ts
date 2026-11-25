@@ -4,6 +4,8 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
+export * from "./projects-session-move.js";
+
 const StoredProjectIdSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
 });
@@ -15,6 +17,13 @@ export const PROJECTS_LIST_MAX_IDENTITY_PROBES = 32;
 export const ProjectRecordSchema = closedObject({
   id: NonEmptyString,
   displayName: NonEmptyString,
+  repositoryIdentity: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Read-safe org/repo identity for an already discoverable project; excludes origin URLs and checkout paths.",
+    }),
+  ),
   repoRoot: Type.Optional(
     Type.String({
       minLength: 1,
@@ -93,6 +102,7 @@ export const ProjectsCheckoutOptionsParamsSchema = closedObject({
 export const ProjectsCheckoutOptionsResultSchema = closedObject({
   current: Type.Boolean(),
   worktree: Type.Boolean(),
+  refreshing: Type.Optional(Type.Boolean()),
 });
 export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
 
@@ -158,6 +168,12 @@ export const ProjectsRemoveParamsSchema = closedObject({
 });
 export const ProjectsRemoveResultSchema = closedObject({ removed: Type.Boolean() });
 
+export const ProjectsRenameParamsSchema = closedObject({
+  projectId: StoredProjectIdSchema,
+  name: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+});
+export const ProjectsRenameResultSchema = ProjectRecordSchema;
+
 export type ProjectRecord = Static<typeof ProjectRecordSchema>;
 export type ProjectRecent = Static<typeof ProjectRecentSchema>;
 export type ProjectCheckout = Static<typeof ProjectCheckoutSchema>;
@@ -174,3 +190,5 @@ export type ProjectsSearchRemoteParams = Static<typeof ProjectsSearchRemoteParam
 export type ProjectsSearchRemoteResult = Static<typeof ProjectsSearchRemoteResultSchema>;
 export type ProjectsRemoveParams = Static<typeof ProjectsRemoveParamsSchema>;
 export type ProjectsRemoveResult = Static<typeof ProjectsRemoveResultSchema>;
+export type ProjectsRenameParams = Static<typeof ProjectsRenameParamsSchema>;
+export type ProjectsRenameResult = Static<typeof ProjectsRenameResultSchema>;

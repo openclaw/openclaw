@@ -4,7 +4,8 @@ import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/n
 import type {
   ModelCatalogProviderOutcome,
   ModelChoice,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+  ModelsListResult,
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { isLocalBaseUrl } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -13,6 +14,21 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsOpenAIResponsesFastMode } from "../../llm/providers/openai-fast-mode.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+
+// Private account provenance follows each projected row, not a shared provider/model key.
+// Weak ownership keeps its catalog lifetime without exposing account selection on the wire.
+const pinnedAccountChoices = new WeakSet<ModelChoice>();
+
+export function retainModelChoiceAccountPin(choice: ModelChoice, pinned: boolean): ModelChoice {
+  if (pinned) {
+    pinnedAccountChoices.add(choice);
+  }
+  return choice;
+}
+
+export function hasModelChoiceAccountPin(choice: ModelChoice): boolean {
+  return pinnedAccountChoices.has(choice);
+}
 
 /** Account observations are never model metadata donors or native-login readiness. */
 function resolveModelCatalogServiceTiers(params: {
@@ -36,7 +52,39 @@ function resolveModelCatalogServiceTiers(params: {
   ) {
     return undefined;
   }
-  // API-key Responses tiers are a route contract; the ChatGPT catalog cannot describe them.
+  const readAccountTiers = () => {
+    if (
+      route.requestTransportOverrides === "present" ||
+      snapshot.refreshFailed ||
+      snapshot.pendingProviders?.some(
+        (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
+      )
+    ) {
+      return undefined;
+    }
+    const outcome = snapshot.providerOutcomes?.find(
+      (candidate) =>
+        normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
+        candidate.profileId ===
+          (credential.source === "profile" ? credential.profileId : undefined),
+    );
+    if (outcome?.status !== "ready") {
+      return undefined;
+    }
+    const observation = outcome.modelServiceTiers?.find(
+      (candidate) =>
+        candidate.modelId === entry.id &&
+        candidate.runtimeId === runtimeId &&
+        modelMatchesProviderModelRoute({
+          provider: entry.provider,
+          api: candidate.api,
+          baseUrl: candidate.baseUrl,
+          route,
+        }),
+    );
+    return observation ? [...observation.serviceTiers] : undefined;
+  };
+  // API-key Responses accept every tier unless the key's account catalog says otherwise.
   if (
     runtimeId === "openclaw" &&
     normalizeProviderId(entry.provider) === "openai" &&
@@ -45,38 +93,9 @@ function resolveModelCatalogServiceTiers(params: {
     route.api === "openai-responses" &&
     supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
   ) {
-    return [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
+    return readAccountTiers() ?? [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
   }
-  if (
-    credential.source !== "profile" ||
-    route.requestTransportOverrides === "present" ||
-    snapshot.refreshFailed ||
-    snapshot.pendingProviders?.some(
-      (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
-    )
-  ) {
-    return undefined;
-  }
-  const outcome = snapshot.providerOutcomes?.find(
-    (candidate) =>
-      normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
-      candidate.profileId === credential.profileId,
-  );
-  if (outcome?.status !== "ready") {
-    return undefined;
-  }
-  const observation = outcome.modelServiceTiers?.find(
-    (candidate) =>
-      candidate.modelId === entry.id &&
-      candidate.runtimeId === runtimeId &&
-      modelMatchesProviderModelRoute({
-        provider: entry.provider,
-        api: candidate.api,
-        baseUrl: candidate.baseUrl,
-        route,
-      }),
-  );
-  return observation ? [...observation.serviceTiers] : undefined;
+  return credential.source === "profile" ? readAccountTiers() : undefined;
 }
 
 /** Harness policy can remove tiers from account/route evidence, never grant new ones. */
@@ -133,6 +152,26 @@ export function buildPublicModelProjection(
     ...(typeof entry.compat?.supportsTools === "boolean"
       ? { supportsTools: entry.compat.supportsTools }
       : {}),
+  };
+}
+
+export function projectModelCatalogRefreshStatus(params: {
+  snapshot: ModelCatalogSnapshot;
+  pendingProviders: readonly string[] | undefined;
+  isVisibleProvider: (provider: string) => boolean;
+}): Pick<ModelsListResult, "pendingProviders" | "refreshFailed" | "refreshFailures"> {
+  const { snapshot, isVisibleProvider } = params;
+  const pendingProviders = params.pendingProviders?.filter(isVisibleProvider);
+  // Diagnostic labels must not disclose hidden providers or endpoint/profile-shaped values.
+  const refreshFailures = snapshot.refreshFailures?.map(({ acquisition, provider }) =>
+    provider && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(provider) && isVisibleProvider(provider)
+      ? { acquisition, provider }
+      : { acquisition },
+  );
+  return {
+    ...(pendingProviders?.length ? { pendingProviders } : {}),
+    ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+    ...(refreshFailures?.length ? { refreshFailures } : {}),
   };
 }
 

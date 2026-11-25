@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
+import { createClackPrompter } from "../wizard/clack-prompter.js";
+import { setEntrypoint } from "./onboard-entrypoint.test-support.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
 
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("runGuidedOnboarding quick start", () => {
   const {
+    canOfferGatewayService,
     ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
@@ -14,6 +23,41 @@ describe("runGuidedOnboarding quick start", () => {
     setupApplyResult,
     setupDeps,
   } = setupGuidedCustodianTestSuite();
+
+  it.each(["skip", "candidate:claude-cli"])(
+    "prints one completion message after quick start with %s",
+    async (choice) => {
+      using capture = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const rendered = createClackPrompter();
+      const prompter = createWizardPrompter(
+        { note: rendered.note, progress: rendered.progress, outro: rendered.outro },
+        { selectValues: ["quick", "one"] },
+      );
+      promptAuthChoiceGrouped.mockResolvedValueOnce(choice);
+      const deps = setupDeps({
+        prompter,
+        applySetup: vi.fn(async () => ({
+          ...setupApplyResult(),
+          lines: ["Workspace: /tmp/work"],
+          gateway: { status: "skipped" as const, reason: "explicit" as const },
+        })),
+      });
+
+      await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+      const transcript = capture.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(transcript).toContain("Local setup");
+      const completion =
+        choice === "skip"
+          ? "OpenClaw setup is saved. Connect AI before opening chat."
+          : "Everything's in place.";
+      expect(transcript.split(completion)).toHaveLength(2);
+      if (choice === "skip") {
+        expect(transcript).toContain("Next steps");
+        expect(transcript).not.toContain("Everything's in place.");
+      }
+    },
+  );
 
   it("quick start restores stdin before foreground launch", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
@@ -33,7 +77,10 @@ describe("runGuidedOnboarding quick start", () => {
     });
     const runtime = makeRuntime();
     await runGuidedOnboardingImpl({}, runtime, deps);
-    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+      message: "Keep OpenClaw running in the background?",
+      initialValue: true,
+    });
     expect(prompter.text).not.toHaveBeenCalled();
     expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
     expect(localOnboarding.persisted.config?.wizard?.securityAcknowledgedAt).toEqual(
@@ -63,6 +110,63 @@ describe("runGuidedOnboarding quick start", () => {
       expect.stringContaining("Recommended safer setup"),
       expect.anything(),
     );
+  });
+
+  it("installs the background service and skips foreground hosting when accepted", async () => {
+    const prompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true) },
+      { selectValues: ["quick", "one"] },
+    );
+    const runBrowserHandoff = vi.fn(async () => true);
+    const deps = setupDeps({ prompter, runBrowserHandoff });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(deps.applySetup).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.applySetup).mock.calls[0]?.[0]).not.toHaveProperty("installDaemon");
+    expect(runBrowserHandoff).toHaveBeenCalledOnce();
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+  });
+
+  it("continues in setup chat without a foreground Gateway when the service fails", async () => {
+    const prompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true) },
+      { selectValues: ["quick", "one"] },
+    );
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "failed" as const, error: "launchctl bootstrap failed" },
+      })),
+    });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
+  });
+
+  it("stays in the foreground without asking on hosts that cannot run the service", async () => {
+    canOfferGatewayService.mockResolvedValue(false);
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "skipped" as const, reason: "explicit" as const },
+      })),
+    });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ installDaemon: false }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(deps.runForegroundGateway).toHaveBeenCalledOnce();
   });
 
   it("preserves guarded discovery consent in an incomplete config", async () => {
@@ -267,4 +371,56 @@ describe("runGuidedOnboarding quick start", () => {
       expect.objectContaining({ agentId: "coordinator" }),
     );
   });
+
+  it.each([
+    ["npx", "hatch", "en"],
+    ["npx", "chat", "en"],
+    ["npx", "hatch", "zh-CN"],
+    ["npx", "hatch", "zh-TW"],
+    ["durable", "hatch", "en"],
+  ] as const)(
+    "%s skipped-AI next steps use entrypoint commands in %s/%s",
+    async (kind, handoffMode, locale) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_CONTAINER_HINT: undefined,
+          OPENCLAW_LOCALE: locale,
+        },
+        async () => {
+          const entrypoint = await setEntrypoint(
+            testTempDirs.make("openclaw-guided-entrypoint-"),
+            kind,
+          );
+          if (kind === "npx") {
+            expect(await isDisposableEntrypoint(entrypoint)).toBe(true);
+          }
+          const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+          promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+          const deps = setupDeps({ prompter, handoffMode });
+
+          await runGuidedOnboardingImpl(
+            { agentName: "main", acceptRisk: true },
+            makeRuntime(),
+            deps,
+          );
+
+          const notes = vi
+            .mocked(prompter.note)
+            .mock.calls.map(([message]) => message)
+            .join("\n");
+          if (kind === "npx") {
+            expect(notes).toContain(`npx openclaw@${VERSION} onboard`);
+            expect(notes).toContain(`npx openclaw@${VERSION} channels add`);
+            expect(notes).toContain(`npx openclaw@${VERSION} dashboard`);
+            expect(notes).not.toContain("`openclaw onboard`");
+          } else {
+            expect(notes).toContain(
+              "Add AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
+            );
+          }
+        },
+      );
+    },
+  );
 });

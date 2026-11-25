@@ -10,13 +10,15 @@ title: "Steering queue"
 
 When a prompt arrives in the same conversation and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. Collaborative steering is enabled by default; operators can disable it explicitly. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
+Discord guild channels and threads keep ordinary messages from different authenticated requesters as separate followup turns. Same-requester corrections can still steer, and explicit `/steer` or `/tell` retain their existing authorization and collaboration rules. This scheduling exception does not classify message topics: use `/followup` for an independent request from the same person.
+
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
 An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. When collaborative steering is disabled, another requester’s input queues quietly as their own turn. An explicit `collaborativeSteeringFallback: "reject"` instead refuses it.
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
+Ordinary steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
@@ -27,11 +29,63 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+Input accepted during continuation preparation or background-result placement is
+checked before model dispatch, including after a failed Code Mode cell. It does not wait for an
+extra model response. One-at-a-time steering still delivers one queued input per
+request.
+
+In the Control UI, a waiting steer has a small **Send now** link below its normal
+user bubble. A session writer can use it to interrupt supported running tools
+without aborting the run. Each interrupted tool records that the user interrupted
+it; the steer then reaches the next model decision after those results. Repeated
+clicks do not reinject the message or interrupt later work. When a running tool
+cannot safely stop, or the runtime does not support tool-only interruption, the
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
+
+Foreground local `exec` waits for process cleanup before delivery. Interrupting a
+`process` poll only stops that wait; its independently owned background command
+keeps running, and the tool result tells the model how to poll or stop it. Node,
+durable, and explicitly backgrounded execution do not offer this shortcut.
+Code Mode aggregate tools and native or remote backends do not support tool-only
+interruption. A required Code Mode cell waiting solely on shell commands or
+`process` polls can yield its wait to a pending steer without stopping the commands.
+The correction reaches the next model decision, and `wait` collects the original
+cell's result.
+Other unsupported calls keep waiting for their normal runtime boundary.
+
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
+
+The built-in runtime keeps accepted steering queued until the next runtime boundary, even when a tool runs longer than two minutes. There is no implicit transcript-delivery deadline. Cancellation, turn closure, and handoff still settle the waiting input through the receiving run's lifecycle.
+
+If a caller explicitly requests a delivery deadline and the runtime proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+Rejection logs preserve the owner’s `reason` and, when known, a closed
+`runtimeReason`. `tool_boundary_timeout` means a tool was still active at an explicit
+transcript deadline; `transcript_commit_timeout` means the receipt was missing
+without an active tool. Other codes distinguish turn end, handoff, closed
+steering, source cancellation, unavailable compaction state, unsupported
+compaction steering, a non-steerable turn, and a missing injection capability.
+A non-interruptible tool still has a steering boundary after completion, so it
+does not trigger immediate followup fallback. Provider token-stream state alone
+does not determine whether the local steering queue can accept input.
+
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
+
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
@@ -40,9 +94,9 @@ also retain the literal input.
 
 The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and drains pending input at model boundaries; OpenClaw does not add per-tool preemption to that runtime. A transcript commit confirms persistence, not that a later model request has read the input.
 
-A plugin-owned CLI runtime accepts steering when it offers an input sink through `registerMessageInjection` (see [CLI backend plugins](/plugins/cli-backend-plugins)). The local Claude backend supports text-only input through its persistent stream-JSON process. This applies to `messages.queue.mode: "steer"`, channel queue overrides, per-session `/queue steer`, and explicit `/steer` (`/tell`) regardless of the stored queue mode. Session settings take precedence over channel settings, which take precedence over the global mode; the default is `steer`.
+A plugin-owned CLI runtime accepts steering when it offers an input sink through `registerMessageInjection` (see [CLI backend plugins](/plugins/cli-backend-plugins)). The local Claude backend accepts text and image input through its persistent stream-JSON process; images reach the model as native image blocks in the running turn. This applies to `messages.queue.mode: "steer"`, channel queue overrides, per-session `/queue steer`, and explicit `/steer` (`/tell`) regardless of the stored queue mode. Session settings take precedence over channel settings, which take precedence over the global mode; the default is `steer`.
 
-OpenClaw waits for Claude's input lifecycle acknowledgement before recording acceptance and the user transcript. Native scheduling determines whether text joins the current answer or starts another native answer inside the same attached OpenClaw run; steering does not promise a single answer or interrupt a running tool. Before initial prompt submission, after finalization, on runtimes without input lifecycle support, or when native refuses unconsumed input, normal queue fallback remains available. Already-consumed input is not replayed. Images and incompatible permissions remain followup input; node/process alternatives do not gain text steering from this plugin capability.
+OpenClaw waits for Claude's input lifecycle acknowledgement before recording acceptance and the user transcript. Native scheduling determines whether steered input joins the current answer or starts another native answer inside the same attached OpenClaw run; steering does not promise a single answer or interrupt a running tool. Before initial prompt submission, after finalization, on runtimes without input lifecycle support, or when native refuses unconsumed input, normal queue fallback remains available. Already-consumed input is not replayed. Input with incompatible permissions waits for a followup turn. Images also wait when the runtime does not support image steering or a `before_agent_run` hook needs to inspect the new input. Node/process alternatives do not gain steering from this plugin capability.
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
 
@@ -78,14 +132,14 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With an explicit `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
+- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions, except ordinary Discord guild messages, which keep separate turns. With an explicit `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
 - For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-`messages.queue.allowCollaborativeSteering` defaults to `true`. Operators can set it to `false` to keep participants’ executions separate. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
+`messages.queue.allowCollaborativeSteering` defaults to `true`. Operators can set it to `false` to keep participants’ executions separate. Ordinary Discord guild messages from Bob instead wait for their own turn; this exception also applies when collaboration is enabled. When eligible admitted human input from Bob joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
 With the option set to `false` and quiet fallback selected, another person’s input queues for a separate execution under their identity and current policy. The active turn is unchanged. No warning or queue status message is sent for this expected fallback. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions, regardless of this option. Reconnecting with different client capabilities or caller tool bindings does not replace that execution or its permissions. Unidentified input cannot borrow the active execution's authority. Current conversation access, the original execution’s live authority, backend compatibility, cancellation, and current-owner checks always apply.
 
@@ -170,6 +224,12 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. Gateway chat sends acknowledge saved input custody without waiting
 for steering admission behind older queued messages or for the active turn to end.
+The built-in runtime keeps an accepted steer pending until its transcript boundary
+or receiving-run cleanup. Only an explicitly requested delivery deadline can expire
+while the run remains open. If the runtime can withdraw the still-pending input,
+it returns to the followup queue. Rejection logs include the runtime's reason, capped
+at 512 characters; an explicit delivery timeout is distinct from an initial refusal
+to accept input.
 Steering and followup delivery retain their original order, and later events report
 the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
@@ -183,6 +243,8 @@ interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+This also covers messages waiting for a turn during reply initialization, including
+command-bearing messages. Slow-send diagnostics attribute these admission waits to `queued`.
 
 The `runId` returned by `chat.send` remains that input's public identity when
 steering falls back to a followup. Queue admission does not complete it. Its
@@ -202,6 +264,8 @@ An authorized Gateway client can withdraw a message still waiting in the OpenCla
 runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
+After withdrawing a steer from the runtime's queue, sending the same message ID
+returns a cancellation error. To send the message again, use a new message ID.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
 work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains

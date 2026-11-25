@@ -1,22 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
-import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import * as commandsRuntime from "../gateway/server-methods/commands-list-result.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import * as auth from "./auth-profiles.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -27,31 +16,28 @@ import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-cata
 import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 import * as catalogRuntime from "./prepared-model-catalog.js";
 import {
-  getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthLabels,
   getPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import {
-  refreshNativeCatalogDuringBoundedRead,
   seedFixturePluginModelCatalog,
   writeCatalogFailureControl,
   writeSyntheticAuthDiscoveryFixture,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
-export const CATALOG_ALIAS_ID = `${PROVIDER_ID}-alias`;
+const CATALOG_ALIAS_ID = `${PROVIDER_ID}-alias`;
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
 export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
-export const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
+const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
 export const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -183,8 +169,6 @@ export function writeFixturePlugin(params: {
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
   catalogControl?: boolean;
-  /** Publishes the Codex client version handed to this worker request as a model id. */
-  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -277,12 +261,6 @@ module.exports = {
       catalog: {
         run(context) {
           ${catalogControlSource}
-          ${
-            params.reportCodexClientVersion
-              ? `const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
-          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
-              : ""
-          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -292,7 +270,6 @@ module.exports = {
             ...route,
             models: [
               ${params.catalogControl ? "...legacyModels," : ""}
-              ${params.reportCodexClientVersion ? 'model("codex-client-" + codexClientVersion, "Codex client version proof"),' : ""}
               model("sqlite-model", "SQLite model"),
               model(${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)}, "Plugin generation proof"),
               model(\`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`, "Ref-only worker proof"),
@@ -493,93 +470,6 @@ export async function createCatalogFixture(
       })
     : undefined;
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
-}
-
-export async function expectNativeHarnessModelsPublishedFromWorker(params: {
-  makeTempDir: (prefix: string) => string;
-  retireAfterTest: (retire: () => void) => void;
-}): Promise<void> {
-  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
-    provenance: "standalone",
-  };
-  const fixture = await createCatalogFixture(
-    params.makeTempDir,
-    0,
-    { [EXTERNAL_AUTH_PATH_ENV]: "" },
-    { nativeCatalog: true },
-  );
-  const { config } = fixture;
-  const retirement = new AbortController();
-  params.retireAfterTest(() => retirement.abort());
-  const build = (
-    await startCatalogBuild(catalogInput(fixture), retirement, inventoryOwner).pending
-  )[0]!;
-  // Direct builds need the same retained generation that publication gives real callers.
-  await using _ = {
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(build.pluginGeneration),
-  };
-  const { snapshot } = build;
-  const previousRegistry = captureActivePluginRegistrySnapshot();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  const readAuthStore = vi.spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot");
-  const ownerSpy = vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot");
-  const commandsSpy = vi.spyOn(commandsRuntime, "buildCommandsListResult");
-  try {
-    expect(snapshot.modelCatalog.entries).toContainEqual(catalogEntry("configured-dynamic-model"));
-    const catalog = await refreshNativeCatalogDuringBoundedRead({
-      snapshot,
-      inventoryOwner,
-      harnessId: HARNESS_ID,
-    });
-    expect(catalog.staticEntries).toContainEqual(
-      catalogEntry("configured-dynamic-model", { name: "Configured dynamic model" }),
-    );
-    expect(catalog.entries).toContainEqual(
-      catalogEntry("account-scoped-model", { nativeRuntime: HARNESS_ID }),
-    );
-    const fullAuth = expectDefined(
-      getPreparedModelFullCatalogAuth(catalog),
-      "expected prepared full-catalog auth",
-    );
-    const context = {
-      getRuntimeConfig: () => config,
-      logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    } as unknown as GatewayRequestContext;
-    expect(catalog.staticEntries).not.toContainEqual(catalogEntry("unresolved-configured-model"));
-
-    readAuthStore.mockReturnValue(fullAuth.authStore);
-    ownerSpy.mockReturnValue(snapshot);
-    commandsSpy.mockResolvedValue({ commands: [] });
-    const chatMetadata = createGatewayChatMetadataRuntime({
-      getConfig: () => config,
-      getContext: () => context,
-      log: context.logGateway,
-    });
-    await chatMetadata.refresh();
-    const metadata = await chatMetadata.read({ agentId: "main" });
-    expect(metadata.models).toEqual(
-      expect.arrayContaining([
-        catalogEntry("account-scoped-model", { available: true }),
-        catalogEntry("configured-dynamic-model", {
-          name: "Configured dynamic model",
-          available: false,
-        }),
-      ]),
-    );
-  } finally {
-    ownerSpy.mockRestore();
-    commandsSpy.mockRestore();
-    readAuthStore.mockRestore();
-    restoreActivePluginRegistrySnapshot(previousRegistry);
-  }
-  for (const key of ["entries", "routeVariants", "staticEntries"] as const) {
-    expect(
-      inventoryOwner.catalogInventory?.catalog[key]?.some(
-        (entry) => entry.id === "configured-dynamic-model",
-      ),
-      key,
-    ).toBe(false);
-  }
 }
 
 export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provider: string) {

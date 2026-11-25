@@ -93,14 +93,15 @@ it("rejects queued placement mutations after session participation is revoked", 
         : scenario.method === "move"
           ? invokeSessionMove(context, { expected, target: scenario.target }, authorization)
           : invokeSessionReclaim(context, authorization);
-    await operationStarted.promise;
+    const name = JSON.stringify(scenario);
+    const rejected = expect(operation, name).rejects.toBe(authorizationError);
+    await Promise.race([operationStarted.promise, rejected]);
     vi.mocked(authorization.assertCurrent).mockImplementation(() => {
       throw authorizationError;
     });
     releaseOperation.resolve();
 
-    const name = JSON.stringify(scenario);
-    await expect(operation, name).rejects.toBe(authorizationError);
+    await rejected;
     expect(durableTransition, name).not.toHaveBeenCalled();
   }
 });

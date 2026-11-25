@@ -7,14 +7,17 @@ import {
 } from "./service/execution-errors.js";
 
 describe("resolveCronExecutionRetryHint", () => {
-  it("does not let transient error text override a permanent provider classification", () => {
-    expect(
-      resolveCronExecutionRetryHint({
-        error: "HTTP 429: all available credits have been exhausted",
-        classifiedReason: "billing",
-      }),
-    ).toEqual({ retryable: false });
-  });
+  it.each(["billing", "route_unavailable"] as const)(
+    "does not retry classified %s failures",
+    (classifiedReason) => {
+      expect(
+        resolveCronExecutionRetryHint({
+          error: "HTTP 429: all available credits have been exhausted",
+          classifiedReason,
+        }),
+      ).toEqual({ retryable: false });
+    },
+  );
 
   it("classifies cron pre-execution watchdog failures as timeout retries", () => {
     for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {

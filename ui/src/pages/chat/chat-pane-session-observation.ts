@@ -1,4 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -24,10 +23,14 @@ import {
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  createSessionObservationRefresh,
+} from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -36,64 +39,7 @@ import {
   reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-import {
-  cacheChatSessionSnapshot,
-  clearChatMessagesFromCache,
-  readChatSessionSnapshot,
-} from "./session-message-cache.ts";
-
-function createSessionObservationRefresh(
-  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
-  target: { key: string; agentId: string },
-  client: GatewayBrowserClient,
-  current: () => boolean,
-  observation: () => SessionRowObservation | null,
-  retryAfterList = false,
-) {
-  let reading: Promise<void> | null = null;
-  let pending = false;
-  let failedListRevision: number | undefined;
-  const refresh = () => {
-    if (!current()) {
-      return;
-    }
-    pending = true;
-    const selected = observation();
-    if (reading || !selected?.isCurrent()) {
-      return;
-    }
-    pending = false;
-    failedListRevision = undefined;
-    const reconcile = selected.captureReconcile();
-    reading = sessions
-      .describe(target, { client })
-      .then(({ session }) => {
-        if (current()) {
-          reconcile(session ?? undefined);
-        }
-      })
-      .catch(() => {
-        failedListRevision = sessions.canonicalListRevision;
-      })
-      .finally(() => {
-        reading = null;
-        if (pending) {
-          refresh();
-        }
-      });
-  };
-  return {
-    refresh,
-    retryFailedRead: () => {
-      if (
-        failedListRevision !== undefined &&
-        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
-      ) {
-        refresh();
-      }
-    },
-  };
-}
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function applyObservedChatSessionRow(
   state: ChatPageHost,
@@ -217,7 +163,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       : null;
   }
 
-  private cacheParentSession() {
+  protected cacheSessionState(patch: Partial<ChatSessionStateSnapshot> = {}) {
     const state = this.state;
     if (!state || !this.ownsChatSnapshot({ sessionKey: state.sessionKey })) {
       return;
@@ -228,10 +174,11 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       return;
     }
     const parentSession = this.displayedParentSession(selectedChatSessionRow(state));
-    if (JSON.stringify(snapshot.sessionState.parentSession) !== JSON.stringify(parentSession)) {
+    const sessionState = { ...snapshot.sessionState, ...patch, parentSession };
+    if (JSON.stringify(snapshot.sessionState) !== JSON.stringify(sessionState)) {
       cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
         ...snapshot,
-        sessionState: { ...snapshot.sessionState, parentSession },
+        sessionState,
       });
     }
   }
@@ -280,9 +227,6 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       state.sessionKey,
       resolveChatAgentId(state),
     );
-    for (const { key, agentId } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
-    }
     // Live rows retire on disconnect; the session owner retains same-identity
     // presentation (including deferred metadata) until the next canonical list.
     const presentation = this.context.sessions.presentation;
@@ -309,7 +253,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.ownsChatSnapshot({ sessionKey: state.sessionKey })
     ) {
       commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
-      this.cacheParentSession();
+      this.cacheSessionState();
     }
     const outboxState = selectedSession
       ? JSON.stringify([
@@ -475,7 +419,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.cacheParentSession();
+        this.cacheSessionState();
         this.publishParentRow?.();
         if (
           !notification?.eventPending &&
@@ -497,7 +441,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
-      this.cacheParentSession();
+      this.cacheSessionState();
       this.publishParentRow?.();
       refresh.refresh();
     }
@@ -688,6 +632,23 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       ) {
         // A parked pane skips resource discovery, but its queued Stop needs current ownership.
         refreshRunner.refresh();
+      } else if (
+        this.presented &&
+        !observation.hasObserved &&
+        parseAgentSessionKey(key) &&
+        !isUiSelectedGlobalSessionKey(state, key)
+      ) {
+        // Mobile may have no roster yet. Discover only concrete targets, and never let this
+        // optional read clear a row or replace facts accepted by history or another reader.
+        const reconcile = observation.captureReconcile();
+        void sessions.describe({ key }, { client: scope.client }).then(
+          ({ session }) => {
+            if (session && ownsPane() && !observation.hasObserved) {
+              reconcile(session);
+            }
+          },
+          () => {},
+        );
       }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
       if (
