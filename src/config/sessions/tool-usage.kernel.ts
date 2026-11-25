@@ -130,21 +130,25 @@ function readAgentToolFirstSeenInDatabase(
 }
 
 /**
- * Records when this agent first offered each tool. Tools present when tracking
- * starts get 0, so only later arrivals count as new. Reset keeps these times.
+ * Records when this agent first offered each tool, keeping earlier records.
+ * Tools present when tracking starts get 0, so only later arrivals count as new.
+ * Reset keeps these times.
  */
 export function recordAgentToolFirstSeenInDatabase(
   db: EngineConnection,
-  input: { toolIds: readonly string[]; now: number },
+  input: { sightings: Readonly<Record<string, number>>; now: number },
 ): Record<string, number> {
   return withSqliteDatabaseWriteScope(db, [], () => {
     const stored = readAgentToolFirstSeenInDatabase(db);
     const firstSeen = { ...stored };
-    const missing = input.toolIds.filter((id) => firstSeen[id] === undefined);
-    for (const id of missing) {
-      firstSeen[id] = stored ? input.now : 0;
+    let changed = false;
+    for (const [id, at] of Object.entries(input.sightings)) {
+      if (firstSeen[id] === undefined) {
+        firstSeen[id] = stored ? at : 0;
+        changed = true;
+      }
     }
-    if (missing.length > 0) {
+    if (changed) {
       writeEntry(db, firstSeenKey, firstSeen, input.now);
     }
     return firstSeen;

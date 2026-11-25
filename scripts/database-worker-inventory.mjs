@@ -471,7 +471,8 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "readAgentToolUsageStateInDatabase",
-          "writeState",
+          "writeEntry",
+          "readAgentToolFirstSeenInDatabase",
           "readAgentToolUsageLiveRunsInDatabase",
           "retainLiveRun",
           "pruneAgentToolUsageInDatabase",

@@ -145,8 +145,11 @@ export async function prepareSessionToolUsageRanking(params: {
   catalogIds: readonly string[];
   inherited?: ToolUsageRankingSnapshot;
   now: number;
-  /** Agent-wide learned order and the first time the agent offered each catalog tool. */
-  readUsage: () => Promise<{
+  /**
+   * Agent-wide learned order and the first time the agent offered each catalog tool.
+   * `sightings` carries this session's own first-seen time for every catalog tool.
+   */
+  readUsage: (sightings: Readonly<Record<string, number>>) => Promise<{
     rankedIds: readonly string[];
     firstSeen: Readonly<Record<string, number>>;
   }>;
@@ -177,9 +180,13 @@ export async function prepareSessionToolUsageRanking(params: {
   if (!sameBoundary && params.enabled) {
     const inherited = !data && !historyId ? params.inherited : undefined;
     const allowed = new Set(params.catalogIds);
+    // Tools admitted by a catalog refresh keep their in-session sighting time.
+    const seen = previous?.snapshot?.newcomers ?? params.state.persistedUsageRanking?.newcomers;
     const usage = inherited
       ? { rankedIds: inherited.orderedToolIds, firstSeen: inherited.newcomers }
-      : await params.readUsage();
+      : await params.readUsage(
+          Object.fromEntries(params.catalogIds.map((id) => [id, seen?.[id] ?? params.now])),
+        );
     snapshot = {
       version: 1,
       at: inherited?.at ?? params.now,

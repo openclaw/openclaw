@@ -203,24 +203,23 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       return undefined;
     }
     const now = Date.now();
-    const catalogIds = toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [];
     usageRanking = await prepareSessionToolUsageRanking({
       state: sessionPromptState,
       routeKey: promptRouteKey,
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds,
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
-      readUsage: async () => {
+      readUsage: async (sightings) => {
         try {
           const { readAgentToolUsageForRanking } =
             await import("../../../config/sessions/tool-usage.js");
           const usage = await readAgentToolUsageForRanking({
             agentId: sessionAgentId,
             config: attempt.config,
-            toolIds: catalogIds,
+            sightings,
             now,
           });
           sessionPreparation.assertCurrent();
