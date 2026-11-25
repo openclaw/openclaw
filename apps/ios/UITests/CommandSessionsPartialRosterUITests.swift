@@ -51,7 +51,7 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         XCTAssertTrue(
             notice.waitForExistence(timeout: 20),
             "Retained rows need an incomplete-result notice")
-        XCTAssertEqual(notice.label, "Showing 200 of 205 sessions. Try again to load the rest.")
+        XCTAssertEqual(notice.label, "Couldn’t load some sessions. Try again.")
         // The first page (sessions 0–199) stays listed; the failing later page (200–204) is missing.
         let retained = app.buttons["SessionDashboard.Session.agent:main:navigation-1"]
         let laterPage = app.buttons["SessionDashboard.Session.agent:main:navigation-204"]
@@ -81,7 +81,7 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
             launch arguments: \(app.launchArguments.joined(separator: " "))
             fixture: \(fixture.absoluteString)
             retained rows visible while final page failing: Synthetic session 1; Synthetic session 204 absent
-            notice: Showing 200 of 205 sessions. Try again to load the rest.
+            notice: Couldn’t load some sessions. Try again.
             in-screen Try again: \(retryIdentity)
             after recovery: Synthetic session 204 listed, notice gone
             """)

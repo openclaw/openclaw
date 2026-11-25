@@ -27,17 +27,11 @@ struct ChatSessionRosterSnapshot: Sendable {
 
     /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
     /// letting consumers keep the retained rows visible while offering a refresh path.
-    /// `nil` when the snapshot is complete or served from cache.
+    /// `nil` when the snapshot is complete or served from cache. Completeness compares the rows the
+    /// Gateway returned with its total, before lists hide subagent runs. The sentence carries no count:
+    /// that total includes hidden runs, so no number in it would be about sessions a person can see.
     var incompleteLoadMessage: String? {
         guard !self.isComplete, !self.isCached else { return nil }
-        if let totalCount = self.totalCount {
-            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
-            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            return String(
-                format: String(localized: "Showing %lld of %lld sessions. Try again to load the rest."),
-                self.sessions.count,
-                totalCount)
-        }
         return String(localized: "Couldn’t load some sessions. Try again.")
     }
 

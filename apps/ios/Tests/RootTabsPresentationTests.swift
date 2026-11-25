@@ -178,7 +178,7 @@ struct RootTabsPresentationTests {
         #expect(snapshot.sessions.count == 200)
         #expect(snapshot.totalCount == 350)
         #expect(!snapshot.isComplete)
-        #expect(snapshot.incompleteLoadMessage == "Showing 200 of 350 sessions. Try again to load the rest.")
+        #expect(snapshot.incompleteLoadMessage == "Couldn’t load some sessions. Try again.")
     }
 
     @Test func `incomplete-load notice stays silent for complete and cached rosters`() {

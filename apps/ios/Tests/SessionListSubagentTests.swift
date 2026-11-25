@@ -90,4 +90,49 @@ struct SessionListSubagentTests {
         #expect(sections.map(\.id) == [.group(.working), .group(.recent)])
         #expect(sections.flatMap(\.sessions).count == 2)
     }
+
+    private static func page(
+        _ rows: [OpenClawChatSessionEntry],
+        total: Int,
+        offset: Int) -> OpenClawChatSessionsListResponse
+    {
+        OpenClawChatSessionsListResponse(
+            ts: nil,
+            path: nil,
+            count: rows.count,
+            totalCount: total,
+            offset: offset,
+            nextOffset: offset + rows.count,
+            hasMore: offset + rows.count < total,
+            defaults: nil,
+            sessions: rows)
+    }
+
+    @Test func `a complete roster with hidden subagents shows no load notice`() async throws {
+        // 40 sessions a person can see plus 20 hidden runs: the Gateway's total counts all 60.
+        let visible = (0..<40).map { Self.row("agent:main:ios-\($0)") }
+        let hidden = (0..<20).map { Self.row("agent:main:subagent:\($0)", parent: "agent:main:ios-0") }
+        let all = visible + hidden
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            Self.page(Array(all[offset..<min(all.count, offset + 30)]), total: all.count, offset: offset)
+        }
+        #expect(snapshot.isComplete)
+        let model = RootSidebarModel()
+        model.applyRoster(snapshot)
+        #expect(model.sessions.count == 40)
+        #expect(model.sessionErrorText == nil)
+    }
+
+    @Test func `a missing page says so without a count of hidden runs`() async throws {
+        let all = (0..<40).map { Self.row("agent:main:ios-\($0)") } +
+            (0..<20).map { Self.row("agent:main:subagent:\($0)", parent: "agent:main:ios-0") }
+        let snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+            guard offset == 0 else { throw URLError(.networkConnectionLost) }
+            return Self.page(Array(all[0..<30]), total: all.count, offset: 0)
+        }
+        #expect(!snapshot.isComplete)
+        let model = RootSidebarModel()
+        model.applyRoster(snapshot)
+        #expect(model.sessionErrorText == "Couldn’t load some sessions. Try again.")
+    }
 }

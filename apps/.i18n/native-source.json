@@ -2612,7 +2612,6 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageReactions.kt","kind":"ui-call","surface":"android","id":"native.android.4c17cd13be8a9008","source":"Type or paste an emoji."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageReactions.kt","kind":"ui-call","surface":"android","id":"native.android.f3486faa8e0fcae0","source":"You"},
     {"path":"apps/ios/Sources/RootSidebarModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2ed765fc3442164e","source":"Couldn’t load some sessions. Try again."},
-    {"path":"apps/ios/Sources/RootSidebarModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4721165ba2ce1041","source":"Showing %lld of %lld sessions. Try again to load the rest."},
     {"path":"apps/ios/WatchApp/Sources/WatchSpeechPlayback.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d45ae0bafb4079af","source":"Couldn't speak the reply. Read it in Chat."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt","kind":"ui-call","surface":"android","id":"native.android.e993cd00c7a9580d","source":"Follow Android · $systemLanguageTag"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt","kind":"ui-call","surface":"android","id":"native.android.0331b7089ed9735e","source":"OpenClaw translations · $languageTag"},
