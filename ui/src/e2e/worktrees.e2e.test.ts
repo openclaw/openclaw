@@ -81,6 +81,7 @@ suite.define(() => {
         { viewport: { width, height }, hasTouch: true, reducedMotion: "reduce" },
         async ({ page }) => {
           const name = "regionalaccessibilityandinterpretationserviceintegrationreview01";
+          // oxlint-disable-next-line oxc/no-map-spread -- each record must be an independent copy of the shared fixture.
           const records = ["/synthetic/team/project", "/synthetic/archive/project"].map(
             (repoRoot, index) => ({
               ...restorableWorktree,
@@ -112,7 +113,9 @@ suite.define(() => {
             );
             expect(await row.locator(".worktree-row__name").getAttribute("title")).toBe(name);
             await summary.press("Enter");
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
             expect(await details.innerText()).toContain(record.repoRoot);
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
             expect(await details.innerText()).toContain(record.branch);
             await summary.press("Enter");
             expect
@@ -127,6 +130,7 @@ suite.define(() => {
             await button.press("Enter");
             const dialog = page.getByRole("dialog", { name: /Snapshot and delete/ });
             await dialog.waitFor();
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
             expect.soft(await dialog.innerText()).toContain(record.path);
             for (const item of await dialog.locator("h2,.exec-approval-command").all()) {
               expect
