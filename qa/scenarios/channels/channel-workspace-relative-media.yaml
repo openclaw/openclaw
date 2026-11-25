@@ -85,9 +85,16 @@ flow:
                       message: { expr: "`${marker}-ACTION`" }
                       media: { expr: "`./${filename}`" }
                   - timeoutMs: 60000
-              - assert:
-                  expr: "actionSent?.ok === true && Boolean(actionSent.messageId ?? actionSent.result?.messageId)"
-                  message: channel plugin action did not return a successful delivery receipt
+              - if:
+                  expr: "transport.id === 'matrix'"
+                  then:
+                    - assert:
+                        expr: "actionSent?.deliveryStatus === 'sent' && actionSent.channel === delivery.channel && actionSent.result?.target?.kind === 'room' && actionSent.result.target.id === delivery.to && typeof actionSent.result.messageId === 'string' && actionSent.result.messageId.startsWith('$') && actionSent.result.messageId.length > 1"
+                        message: Matrix plugin action did not return a sent receipt for the requested room
+                  else:
+                    - assert:
+                        expr: "actionSent?.ok === true && Boolean(actionSent.messageId ?? actionSent.result?.messageId)"
+                        message: channel plugin action did not return a successful delivery receipt
               - waitForOutbound:
                   textIncludes: { expr: "`${marker}-ACTION`" }
                   sinceIndex: { ref: outboundStartIndex }
