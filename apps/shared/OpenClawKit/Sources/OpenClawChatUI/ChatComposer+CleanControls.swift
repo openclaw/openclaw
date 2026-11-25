@@ -455,7 +455,7 @@ extension OpenClawChatComposer {
     private var cleanInlineModelDisabledHint: String? {
         #if os(iOS)
         if self.viewModel.hasActiveRunForComposerSettings {
-            return String(localized: "Model changes are available after the current response finishes.")
+            return String(localized: "Wait until this reply finishes.")
         }
         #endif
         if !self.viewModel.composerModelMutationAvailable {
@@ -473,17 +473,15 @@ extension OpenClawChatComposer {
 
     private var cleanInlineEffortDisabledHint: String? {
         #if os(iOS)
-        if self.viewModel.hasActiveRunForComposerSettings {
-            return String(localized: "Available after the current response finishes.")
+        // The same words the effort bar shows under its locked controls.
+        if let reason = self.viewModel.composerPhoneEffortLockReason {
+            return reason
+        }
+        #else
+        if !self.viewModel.composerEffortMutationAvailable {
+            return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
         }
         #endif
-        if !self.viewModel.composerEffortMutationAvailable {
-            #if os(iOS)
-            return String(localized: "You don’t have permission to change effort or speed.")
-            #else
-            return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
-            #endif
-        }
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings…")
         }

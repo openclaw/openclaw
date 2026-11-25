@@ -963,7 +963,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-effort-tap-active-response")
         // A reply in progress locks the levels; the chip still opens the bar, which says why.
         XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Available after the current response finishes."].exists)
+        XCTAssertTrue(app.staticTexts["Wait until this reply finishes."].exists)
         XCTAssertFalse(app.descendants(matching: .any)["chat-effort-bar-slider"].isEnabled)
         self.attachScreenshot(named: "chat-effort-bar-active-response")
         app.buttons["Stop response"].tap()

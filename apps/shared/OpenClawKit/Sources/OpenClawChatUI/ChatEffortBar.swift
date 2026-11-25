@@ -199,18 +199,6 @@ enum ChatEffortBarMetrics {
 }
 
 extension OpenClawChatViewModel {
-    /// Why the effort bar's controls are locked, shown under them. Nil while they can change, including
-    /// the moment a change saves, so the bar does not grow and shrink on every pick.
-    var composerPhoneEffortLockReason: String? {
-        if self.hasActiveRunForComposerSettings {
-            return String(localized: "Available after the current response finishes.")
-        }
-        if !self.composerEffortMutationAvailable {
-            return String(localized: "You don’t have permission to change effort or speed.")
-        }
-        return nil
-    }
-
     /// The effort chip's VoiceOver value: the level, and the speed when it is not Standard.
     var composerPhoneEffortLabel: String {
         guard self.showsThinkingPicker else { return ChatEffortBar.speedLabel(self.composerSpeedSelection) }
