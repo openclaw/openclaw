@@ -8,7 +8,8 @@ import OpenClawProtocol
 /// automations, skills and plugins open their page.
 enum RootSearchTarget: Equatable {
     case destination(RootTabs.SidebarDestination)
-    case settings(SettingsRoute)
+    /// `query` presets the Skills or Plugins search so a named item opens filtered to itself.
+    case settings(SettingsRoute, query: String = "")
     case newChat
     case session(OpenClawChatSessionEntry)
 }
@@ -50,7 +51,7 @@ struct RootSearchMessage: Identifiable, Equatable {
 }
 
 enum RootSearchTab: CaseIterable, Hashable {
-    case all, sessions, messages, pages
+    case all, pages, sessions, messages
 
     var title: String {
         switch self {
@@ -265,7 +266,7 @@ final class RootSearchModel {
                     title: $0.name,
                     systemImage: "book",
                     kind: .skill,
-                    target: .settings(.skills))
+                    target: .settings(.skills, query: $0.name))
             }
         }
         guard !Task.isCancelled else { return }
@@ -279,7 +280,7 @@ final class RootSearchModel {
                     title: $0.name,
                     systemImage: "shippingbox",
                     kind: .plugin,
-                    target: .settings(.plugins))
+                    target: .settings(.plugins, query: $0.name))
             }
         }
     }

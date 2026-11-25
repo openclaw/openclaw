@@ -137,7 +137,7 @@ struct RootSearchScreen: View {
                 target: .destination(.settings)),
             RootSearchPage(
                 id: "command:new-chat",
-                title: String(localized: "New chat"),
+                title: String(localized: "New Chat"),
                 systemImage: "plus",
                 kind: .page,
                 target: .newChat),
@@ -195,7 +195,7 @@ struct RootSearchScreen: View {
             }
         } else {
             if !self.appModel.isOperatorGatewayConnected {
-                self.notice(String(localized: "Offline. Showing what’s on this iPhone."))
+                self.notice(String(localized: "Offline. Searching what’s on this device."))
             }
             if !results.hasAny, results.isSettled, self.model.messagePhase != .failed {
                 self.noResults(query)
@@ -242,7 +242,7 @@ struct RootSearchScreen: View {
             }
         }
         if let limit, pages.count > limit {
-            self.showAll(pages.count, tab: .pages)
+            self.showMore(tab: .pages)
         }
     }
 
@@ -255,7 +255,7 @@ struct RootSearchScreen: View {
             self.sessionRow(session, query: query, quiet: false)
         }
         if let limit, results.sessions.count > limit {
-            self.showAll(results.sessionCount, tab: .sessions)
+            self.showMore(tab: .sessions)
         } else if !results.archived.isEmpty {
             if limit == nil {
                 self.sectionHeader(String(localized: "Archived"))
@@ -299,7 +299,7 @@ struct RootSearchScreen: View {
                 }
             }
             if let limit, results.messages.count > limit {
-                self.showAll(results.messages.count, tab: .messages)
+                self.showMore(tab: .messages)
             }
         }
     }
@@ -399,11 +399,11 @@ struct RootSearchScreen: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func showAll(_ count: Int, tab: RootSearchTab) -> some View {
+    private func showMore(tab: RootSearchTab) -> some View {
         Button {
             self.tab = tab
         } label: {
-            Text(String(format: String(localized: "Show all %lld"), count))
+            Text(String(localized: "Show more"))
                 .font(OpenClawType.subheadMedium)
                 .foregroundStyle(OpenClawSidebarPalette.text)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)

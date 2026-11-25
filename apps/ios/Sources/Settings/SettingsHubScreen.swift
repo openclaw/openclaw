@@ -17,6 +17,8 @@ struct SettingsHubScreen: View {
     var onClose: (() -> Void)?
     var onSelectPage: ((RootTabs.SidebarDestination) -> Void)?
     var onTrySkill: ((String) -> Void)?
+    /// Preset search text for the Skills or Plugins screen when search opens one for a named item.
+    var toolQuery = ""
     var gatewaySetupRequest: GatewaySetupRequest?
     var onGatewaySetupRequestHandled: ((Int) -> Void)?
 
@@ -214,6 +216,7 @@ struct SettingsHubScreen: View {
                 agentID: self.agentID,
                 agentName: self.appModel.chatAgentName,
                 gatewayName: self.appModel.gatewayServerName,
+                initialQuery: self.toolQuery,
                 onTrySkill: self.onTrySkill)
         case .advanced:
             self.advanced

@@ -34,11 +34,11 @@ struct ChatSessionRosterSnapshot: Sendable {
             // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
             // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
             return String(
-                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
+                format: String(localized: "Showing %lld of %lld sessions. Try again to load the rest."),
                 self.sessions.count,
                 totalCount)
         }
-        return String(localized: "Some sessions could not be loaded. Refresh to try again.")
+        return String(localized: "Couldn’t load some sessions. Try again.")
     }
 
     @MainActor

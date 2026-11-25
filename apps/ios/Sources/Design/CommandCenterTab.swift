@@ -232,7 +232,7 @@ struct CommandSessionsScreen: View {
     /// Archived rows are not in the live roster; this screen reads them when that filter is on.
     @State private var archived: [OpenClawChatSessionEntry] = []
     @State private var isLoadingArchived = false
-    @State private var loadErrorText: String?
+    @State private var archiveLoadFailed = false
     @State private var actionErrorText: String?
     /// Notice for a partially loaded archive; rendered alongside the retained rows, never instead of them.
     @State private var partialLoadText: String?
@@ -255,11 +255,8 @@ struct CommandSessionsScreen: View {
             // drew group headers over the wrong rows when groups came and went.
             VStack(alignment: .leading, spacing: 0) {
                 self.notices
-                if let loadErrorText = self.errorText {
-                    CommandEmptyStateRow(
-                        icon: "exclamationmark.triangle.fill",
-                        title: "Sessions unavailable",
-                        detail: .verbatim(loadErrorText))
+                if self.loadFailed {
+                    self.loadFailure
                 } else if self.isLoading, self.visibleSessions.isEmpty {
                     ProgressView()
                         .frame(maxWidth: .infinity, minHeight: 88)
@@ -271,7 +268,7 @@ struct CommandSessionsScreen: View {
                         detail: .verbatim(self.appModel
                             .isCommandSessionListAvailable
                             ? self.emptyDetail
-                            : String(localized: "Connect to the gateway.")))
+                            : String(localized: "Connect to OpenClaw.")))
                 } else {
                     ForEach(sections) { section in
                         self.sectionView(section)
@@ -358,7 +355,7 @@ struct CommandSessionsScreen: View {
                         .tag(scope)
                 }
             } label: {
-                Text("Session status")
+                Text("Filter sessions")
                     .font(OpenClawType.captionMedium)
             }
             .pickerStyle(.inline)
@@ -373,7 +370,7 @@ struct CommandSessionsScreen: View {
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
-        .accessibilityLabel(String(localized: "Session status"))
+        .accessibilityLabel(String(localized: "Filter sessions"))
         .accessibilityValue(Text(verbatim: self.statusScope.title))
         .accessibilityIdentifier("Sessions.StatusScope")
     }
@@ -403,7 +400,7 @@ struct CommandSessionsScreen: View {
                         Image(systemName: "plus")
                             .font(.system(size: 16, weight: .medium))
                             .accessibilityHidden(true)
-                        Text(String(localized: "New chat"))
+                        Text(String(localized: "New Chat"))
                             .font(OpenClawType.subheadSemiBold)
                             .lineLimit(1)
                     }
@@ -444,13 +441,8 @@ struct CommandSessionsScreen: View {
                     .foregroundStyle(OpenClawBrand.warn)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("Sessions.PartialLoad.Notice")
-                Button {
-                    self.refreshNonce += 1
-                    if self.statusScope != .archived {
-                        Task { await self.sidebarModel.refreshSessions(appModel: self.appModel) }
-                    }
-                } label: {
-                    Text(String(localized: "Refresh"))
+                Button(action: self.retry) {
+                    Text(String(localized: "Try again"))
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.borderless)
@@ -502,7 +494,6 @@ struct CommandSessionsScreen: View {
                     refresh: self.refreshSessions,
                     openSession: self.openSessionKey,
                     accessory: { EmptyView() })
-                    .foregroundStyle(.secondary)
                     .padding(.top, 8)
             }
         }
@@ -650,10 +641,40 @@ struct CommandSessionsScreen: View {
     }
 
     /// A roster that failed with nothing to show is an error; with rows kept, the same text is a notice.
-    private var errorText: String? {
-        if self.statusScope == .archived { return self.loadErrorText }
-        guard self.sidebarModel.sessions.isEmpty, !self.sidebarModel.isRefreshing else { return nil }
-        return self.sidebarModel.sessionErrorText
+    /// The list failed with nothing to show. A failure that keeps rows is the partial-load notice instead.
+    private var loadFailed: Bool {
+        if self.statusScope == .archived { return self.archiveLoadFailed }
+        return self.sidebarModel.sessions.isEmpty && !self.sidebarModel.isRefreshing &&
+            self.sidebarModel.sessionErrorText != nil
+    }
+
+    private var loadFailure: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CommandEmptyStateRow(
+                icon: "exclamationmark.triangle.fill",
+                title: "Couldn’t load sessions",
+                detail: .verbatim(String(localized: "Check your connection and try again.")))
+            Button(action: self.retry) {
+                Text(String(localized: "Try again"))
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(OpenClawBrand.textStrong)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .accessibilityIdentifier("Sessions.LoadFailure.Retry")
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// Reloads whichever list is on screen: the archive here, the live roster through its owner.
+    private func retry() {
+        self.refreshNonce += 1
+        if self.statusScope != .archived {
+            Task { await self.sidebarModel.refreshSessions(appModel: self.appModel) }
+        }
     }
 
     private var partialNoticeText: String? {
@@ -702,22 +723,22 @@ struct CommandSessionsScreen: View {
 
     private var emptyTitle: String {
         guard self.appModel.isCommandSessionListAvailable else {
-            return String(localized: "Gateway offline")
+            return String(localized: "Offline")
         }
         switch self.statusScope {
-        case .active: return String(localized: "No recent sessions")
+        case .active: return String(localized: "No sessions")
         case .snoozed: return String(localized: "No snoozed sessions")
-        case .automations: return String(localized: "No automations")
+        case .automations: return String(localized: "No automation sessions")
         case .archived: return String(localized: "No archived sessions")
         }
     }
 
     private var emptyDetail: String {
         switch self.statusScope {
-        case .active: String(localized: "Start a chat and it will appear here.")
-        case .snoozed: String(localized: "Snoozed sessions will appear here until they wake.")
-        case .automations: String(localized: "Automation sessions will appear here.")
-        case .archived: String(localized: "Archived sessions will appear here.")
+        case .active: String(localized: "Start a chat to see it here.")
+        case .snoozed: String(localized: "Snoozed sessions appear here until they wake.")
+        case .automations: String(localized: "Automation sessions appear here.")
+        case .archived: String(localized: "Archived sessions appear here.")
         }
     }
 
@@ -776,7 +797,7 @@ struct CommandSessionsScreen: View {
     private func loadArchived() async {
         let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
         self.isLoadingArchived = true
-        self.loadErrorText = nil
+        self.archiveLoadFailed = false
         defer { self.isLoadingArchived = false }
         do {
             let roster = try await self.appModel.loadChatSessionRoster(
@@ -792,7 +813,7 @@ struct CommandSessionsScreen: View {
             guard !Task.isCancelled, self.statusScope == .archived else { return }
             self.partialLoadText = nil
             self.archived = []
-            self.loadErrorText = "Try again after the gateway reconnects."
+            self.archiveLoadFailed = true
         }
     }
 }

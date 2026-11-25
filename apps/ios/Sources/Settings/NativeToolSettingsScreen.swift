@@ -36,8 +36,25 @@ struct NativeToolSettingsScreen: View {
     let gatewayName: String?
     var onTrySkill: ((String) -> Void)?
 
+    init(
+        kind: Kind,
+        agentID: String,
+        agentName: String,
+        gatewayName: String?,
+        initialQuery: String = "",
+        onTrySkill: ((String) -> Void)? = nil)
+    {
+        self.kind = kind
+        self.agentID = agentID
+        self.agentName = agentName
+        self.gatewayName = gatewayName
+        self.onTrySkill = onTrySkill
+        // Search opens this screen filtered to the skill or plugin it found.
+        _query = State(initialValue: initialQuery)
+    }
+
     @Environment(NodeAppModel.self) private var appModel
-    @State private var query = ""
+    @State private var query: String
     @State private var inventory = NativeToolSettingsInventory()
 
     private var connectionID: String {

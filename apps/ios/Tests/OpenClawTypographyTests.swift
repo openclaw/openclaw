@@ -7,7 +7,10 @@ import UIKit
 struct OpenClawTypographyTests {
     @Test func `group header controls use branded typography`() throws {
         let source = try String(contentsOf: Self.sourceURL("Design/CommandSessionGroupHeader.swift"), encoding: .utf8)
-        #expect(source.contains(".font(OpenClawType.caption2Bold)"))
+        // The fold control is the shared section header, the same one as Needs you, Working, Pinned and Recent.
+        let header = try String(contentsOf: Self.sourceURL("Design/SessionSectionHeader.swift"), encoding: .utf8)
+        #expect(source.contains("SessionSectionHeader("))
+        #expect(header.contains(".font(OpenClawType.captionMedium)"))
         #expect(source.contains(".font(OpenClawType.subhead)"))
         #expect(source.contains(".font(OpenClawType.body)"))
         #expect(!source.contains(".font(."))

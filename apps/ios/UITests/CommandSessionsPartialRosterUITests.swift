@@ -49,7 +49,7 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         // assertion is scoped to the Sessions screen's own scroll view.
         let screen = app.scrollViews.containing(.staticText, identifier: "Recent sessions").firstMatch
         XCTAssertTrue(screen.waitForExistence(timeout: 10))
-        let notice = screen.staticTexts["Showing 200 sessions; 205 total. Refresh to load the rest."]
+        let notice = screen.staticTexts["Showing 200 of 205 sessions. Try again to load the rest."]
         let partialCount = screen.staticTexts["199 sessions"]
         XCTAssertTrue(
             partialCount.waitForExistence(timeout: 20),
@@ -62,7 +62,7 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
             screen.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Synthetic session 1"))
                 .firstMatch
                 .exists)
-        let refresh = screen.buttons["Refresh"]
+        let refresh = screen.buttons["Try again"]
         XCTAssertTrue(refresh.waitForExistence(timeout: 5))
         XCTAssertTrue(refresh.isHittable)
         // Capture the control's identity while it still exists; resolving it after
@@ -78,13 +78,13 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
 
         let trace = XCTAttachment(
             string: """
-                launch arguments: \(app.launchArguments.joined(separator: " "))
-                fixture: \(fixture.absoluteString)
-                retained rows visible while final page failing: Synthetic session 1 … header "199 sessions"
-                notice: Showing 200 sessions; 205 total. Refresh to load the rest.
-                in-screen Refresh: \(refreshIdentity)
-                header count after recovery: 204 sessions
-                """)
+            launch arguments: \(app.launchArguments.joined(separator: " "))
+            fixture: \(fixture.absoluteString)
+            retained rows visible while final page failing: Synthetic session 1 … header "199 sessions"
+            notice: Showing 200 of 205 sessions. Try again to load the rest.
+            in-screen Refresh: \(refreshIdentity)
+            header count after recovery: 204 sessions
+            """)
         trace.name = "sessions-partial-roster-trace"
         trace.lifetime = .keepAlways
         self.add(trace)

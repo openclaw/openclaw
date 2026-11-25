@@ -85,6 +85,7 @@ struct RootTabs: View {
     @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var settingsSheetPath: [SettingsRoute] = []
+    @State private var settingsToolQuery = ""
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
     @State private var gatewayRetryFailure: String?
@@ -762,6 +763,7 @@ struct RootTabs: View {
                             self.selectSidebarDestination(destination)
                         },
                         onTrySkill: self.trySkillAction,
+                        toolQuery: self.settingsToolQuery,
                         gatewaySetupRequest: self.gatewaySetupRequest,
                         onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                         .presentationDragIndicator(.visible)
@@ -847,8 +849,8 @@ extension RootTabs {
         switch target {
         case let .destination(destination):
             self.selectSidebarDestination(destination)
-        case let .settings(route):
-            self.selectSettingsRoute(route)
+        case let .settings(route, query):
+            self.showSettings(path: [route], toolQuery: query)
         case .newChat:
             self.appModel.requestNewChat()
             self.selectSidebarDestination(.chat)
@@ -908,8 +910,9 @@ extension RootTabs {
         }
     }
 
-    private func showSettings(path: [SettingsRoute] = []) {
+    private func showSettings(path: [SettingsRoute] = [], toolQuery: String = "") {
         self.settingsSheetPath = path
+        self.settingsToolQuery = toolQuery
         self.presentedSheet = .settings
     }
 

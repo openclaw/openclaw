@@ -34,8 +34,8 @@ final class CommandSessionsMutationUITests: XCTestCase {
         app.buttons["Go to Chat"].tap()
         self.openSessions(in: app)
 
-        XCTAssertTrue(app.staticTexts["Sessions unavailable"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Try again after the gateway reconnects."].exists)
+        XCTAssertTrue(app.staticTexts["Couldn’t load sessions"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Check your connection and try again."].exists)
         self.capture("initial-roster-unavailable", app: app)
         try await self.setListRejected(false, fixture: fixture)
         self.openDestination("overview", in: app)
@@ -55,7 +55,7 @@ final class CommandSessionsMutationUITests: XCTestCase {
         XCTAssertTrue(second.exists, "Rejected Pin must retain unrelated loaded conversations")
         XCTAssertTrue(first.isHittable)
         XCTAssertTrue(second.isHittable)
-        XCTAssertFalse(app.staticTexts["Sessions unavailable"].exists)
+        XCTAssertFalse(app.staticTexts["Couldn’t load sessions"].exists)
         XCTAssertFalse(app.staticTexts["Pinned"].exists)
 
         second.tap()
