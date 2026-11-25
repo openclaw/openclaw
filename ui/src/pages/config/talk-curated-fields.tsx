@@ -1,5 +1,5 @@
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
-import { Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { ALL_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -7,6 +7,7 @@ import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/disp
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { SettingsPickerRow, SettingsSelectRow } from "./settings-select-row.tsx";
 import { talkProviderStatus, talkProviderStatusLabel } from "./talk-status.ts";
 import type { TalkCatalogState } from "./talk.tsx";
@@ -40,6 +41,7 @@ function TalkInput(
   props: FieldProps & { number?: { min: number; max?: number; step: number | "any" } },
 ) {
   const field = useField(props);
+  const displayValue = createMemo(() => text(field.value()));
   return (
     <SettingsRow
       title={props.title}
@@ -51,7 +53,7 @@ function TalkInput(
           min={props.number?.min}
           max={props.number?.max}
           step={props.number?.step}
-          value={text(field.value())}
+          ref={liveValue(displayValue)}
           placeholder={t("talkPage.revamp.defaultValue")}
           onChange={(event) => {
             const input = event.currentTarget;
@@ -224,10 +226,10 @@ function CommandFields(props: FieldsProps) {
   const { runtimeConfig } = useApplication();
   const entry = () =>
     record(record(record(props.config?.talk)?.providers)?.[CUSTOM_COMMAND_PROVIDER]);
-  const args = () => {
+  const args = createMemo(() => {
     const value = entry()?.args;
     return Array.isArray(value) ? value.join("\n") : "";
-  };
+  });
   return (
     <>
       <TalkInput
@@ -243,7 +245,7 @@ function CommandFields(props: FieldsProps) {
             aria-label={t("talkPage.revamp.arguments")}
             disabled={props.disabled}
             rows={3}
-            value={args()}
+            ref={liveValue(args)}
             onChange={(event) => {
               const lines = event.currentTarget.value.split("\n").filter((line) => line !== "");
               const path = ["talk", "providers", CUSTOM_COMMAND_PROVIDER, "args"];

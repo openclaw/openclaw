@@ -24,6 +24,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { SettingsPickerRow, SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
@@ -224,6 +225,7 @@ function TalkTextRow(props: {
   disabled: boolean;
   onChange: (value: string | null) => void;
 }) {
+  const value = createMemo(() => props.value ?? "");
   return (
     <SettingsRow
       title={t(`talkPage.${props.field}.title`)}
@@ -233,7 +235,7 @@ function TalkTextRow(props: {
           aria-label={t(`talkPage.${props.field}.title`)}
           class="settings-input"
           disabled={props.disabled}
-          value={props.value ?? ""}
+          ref={liveValue(value)}
           placeholder={props.placeholder}
           onChange={(event) => props.onChange(event.currentTarget.value.trim() || null)}
         />
@@ -483,10 +485,10 @@ export function Talk(props: TalkViewProps) {
   const theme = application?.theme ? projectTheme(application.theme) : undefined;
   const [standalone, setChimes] = createSignal(loadSettings());
   const chimes = () => (theme ? theme.preferences.read() : standalone());
-  const splitMode = () => props.selection.mode === "stt-tts";
+  const splitMode = createMemo(() => props.selection.mode === "stt-tts");
   // Transcription-only has no assistant voice: it shows the speech-to-text cards alone.
-  const transcriptionOnly = () => props.selection.mode === "transcription";
-  const sttLayout = () => splitMode() || transcriptionOnly();
+  const transcriptionOnly = createMemo(() => props.selection.mode === "transcription");
+  const sttLayout = createMemo(() => splitMode() || transcriptionOnly());
   const updateChime = (
     key: "talkChimeStart" | "talkChimeEnd" | "talkChimeReply",
     enabled: boolean,

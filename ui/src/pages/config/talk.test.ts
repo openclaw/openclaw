@@ -947,6 +947,9 @@ describe("Talk settings page revamp", () => {
     // Two entries: unsetting the provider is invalid, and so is a provider outside the map.
     expect(byValue("")?.disabled).toBe(true);
     expect(byValue("tts-local-cli")?.disabled).not.toBe(true);
+    page.configObject = { talk: { realtime: { mode: "stt-tts" }, providers: { a: {} } } };
+    await waitForSolid(() => expect(byValue("")?.disabled).toBe(false));
+    expect(byValue("")?.description).toBeUndefined();
   });
 
   it("keeps Model and Speaker voice editable when the catalog cannot list them", async () => {
@@ -1022,27 +1025,6 @@ describe("Talk settings page revamp", () => {
     await waitForSolid(() => expect(interrupt()?.value).toBe("false"));
   });
 
-  it("keeps Default neutral when a sole Talk provider can still be selected", async () => {
-    const { page } = await readyTalk({
-      catalogRequest: (_index, catalog) => ({
-        ...catalog,
-        speech: {
-          ready: true,
-          activeProvider: "elevenlabs",
-          providers: [{ id: "elevenlabs", label: "ElevenLabs", configured: true }],
-        },
-      }),
-    });
-    page.configObject = { talk: { realtime: { mode: "stt-tts" }, providers: { elevenlabs: {} } } };
-    const voice = () =>
-      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
-        candidate.params.options.some((option) => option.value === "tts-local-cli"),
-      );
-    await waitForSolid(() => expect(voice()).toBeDefined());
-    const fallback = voice()!.params.options.find((option) => option.value === "");
-    expect(fallback?.disabled).toBe(false);
-    expect(fallback?.description).toBeUndefined();
-  });
   it("can edit and clear the speech provider when the catalog fails", async () => {
     const { page, runtimeConfig } = createTalkMutationHarness({
       catalogRequest: () => Promise.reject(new Error("catalog unavailable")),
@@ -1054,7 +1036,16 @@ describe("Talk settings page revamp", () => {
       );
     await waitForSolid(() => expect(page.textContent).toContain("catalog unavailable"));
     expect(input()).toMatchObject({ disabled: false, value: "elevenlabs" });
-    input()!.value = "openai";
+    const before = input()!;
+    before.value = "openai";
+    page.configObject = {
+      talk: { realtime: { mode: "stt-tts" }, provider: "elevenlabs", silenceTimeoutMs: 1500 },
+    };
+    await waitForSolid(() =>
+      expect(page.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe("1500"),
+    );
+    expect(input() === before).toBe(true);
+    expect(input()?.value).toBe("openai");
     input()!.dispatchEvent(new Event("change", { bubbles: true }));
     expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "openai");
     input()!.value = "";

@@ -1,2 +1,2 @@
-# Exact net test lines for #205068: the Talk settings page redesign is covered by page-level tests (readiness rows, pickers, schema gating, editable fallbacks, transcription mode, booleans, Voice notes in Live); the check also counts the stacked #204355 chimes tests.
-89
+# Exact net test lines for #205068: the Talk settings page redesign is covered by page-level tests (readiness rows, pickers, schema gating, editable fallbacks and draft preservation, transcription mode, booleans, Voice notes in Live); the check also counts the stacked #204355 chimes tests.
+98
