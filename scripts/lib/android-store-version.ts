@@ -284,8 +284,6 @@ export function resolveAndroidPublicBaselines(snapshotValue: unknown, refs: Andr
 
 export function resolveAndroidStorePlan(input: {
   gatewayVersion: string;
-  pinnedVersion: string;
-  pinnedVersionCode: number;
   sourceSha: string;
   snapshot: unknown;
   refs: AndroidReleaseRef[];
@@ -300,7 +298,7 @@ export function resolveAndroidStorePlan(input: {
   const history = storeHistory(snapshot, input.refs);
   const releaseNotesBaselines = publicBaselines(snapshot, history.records);
   const records = [...new Set(history.records.values())];
-  for (const version of [input.pinnedVersion, ...records.map((record) => record.gatewayVersion)]) {
+  for (const version of records.map((record) => record.gatewayVersion)) {
     const comparison = compareReleaseVersions(gatewayVersion, version);
     if (comparison === null || comparison < 0) {
       throw new Error(
@@ -329,7 +327,6 @@ export function resolveAndroidStorePlan(input: {
     ) + 1;
   const highWater = Math.max(
     history.legacyMaxVersionCode,
-    Code.parse(input.pinnedVersionCode) + 50,
     ...history.liveCodes,
     ...history.records.keys(),
   );

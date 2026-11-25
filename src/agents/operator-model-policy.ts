@@ -11,6 +11,7 @@ import {
   isDeeplyFrozenPlainData,
 } from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeProviderId } from "./model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
@@ -80,11 +81,12 @@ export function resolveOperatorModelDefault(
     cfg: OpenClawConfig;
     agentId?: string;
     policy: PreparedOperatorModelPolicy | undefined;
-    model: ModelRef;
+    /** The configured or selected model; undefined when none is configured. */
+    model: ModelRef | undefined;
     allows: (ref: ModelRef) => boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef | undefined {
-  if (!params.policy || params.policy.allows(params.model)) {
+  if (!params.policy || (params.model && params.policy.allows(params.model))) {
     return params.model;
   }
   const automatic = new Set(
@@ -162,11 +164,11 @@ function prepareAgentModels(
     allowPluginNormalization: false,
   };
   const primary = resolveDefaultModelForAgent(normalization);
-  const selection = { ...normalization, defaultProvider: primary.provider };
+  const selection = { ...normalization, defaultProvider: primary?.provider ?? DEFAULT_PROVIDER };
   const aliasIndex = buildModelAliasIndex(selection);
   const resolve = (raw: string) =>
     resolveModelRefFromString({ ...selection, raw, aliasIndex })?.ref;
-  const models = [primary];
+  const models = primary ? [primary] : [];
   for (const raw of resolveConfiguredModelFallbacks(params)) {
     const ref = resolve(raw);
     if (ref) {

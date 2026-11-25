@@ -167,6 +167,7 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    onMembershipChange: membership.onMembershipChange,
     readMembership(query: records.Lookup) {
       if (!params.isActive()) {
         return undefined;

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   accountStorageRoot,
@@ -23,7 +24,6 @@ import {
   writeMatrixIdbSnapshotJson,
 } from "./src/matrix/crypto-state-store.js";
 import { getMatrixRuntime } from "./src/runtime.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const failImport = vi.hoisted(() => (name: string): never => {
   throw new Error(`${name} loaded by a Doctor migration`);

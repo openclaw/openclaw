@@ -226,6 +226,11 @@ export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext
       return () => snapshots.delete(notify);
     }),
   } as unknown as ApplicationContext["gateway"];
+  // Real Gateway connection publication binds the hello before any consumer reads.
+  createGatewayMetadataObserver((next) => next === result.snapshot).synchronize(
+    createApplicationGatewaySnapshot(),
+    current,
+  );
   eventListeners.set(result, listeners);
   gatewayListeners.set(result, snapshots);
   return result;

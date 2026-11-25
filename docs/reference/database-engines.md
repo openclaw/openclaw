@@ -92,6 +92,9 @@ selecting PostgreSQL alone is not a warning.
 | `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.   |
 
+OpenClaw rejects the prefix `pg` and any prefix starting with `pg_` because
+both produce names reserved for PostgreSQL system schemas.
+
 Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family
 map and, if needed, the shared PostgreSQL connection once on the host. Reader,
@@ -191,11 +194,15 @@ Do not remove existing data to switch engines.
 Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
 those stores still use SQLite. The port preflight refuses pending declared
 legacy migrations and names the repairs required before retrying the port.
-A scoped `--family` port checks only migrations declared for that family.
+A scoped `--family` port checks for pending migrations only in that family.
 This includes native Codex task assignments, Matrix inbound dedupe, and legacy
 memory index sidecars.
 Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
 migration completion receipt before porting.
+
+If a selected plugin's Doctor migration contract fails to load, preflight stops
+before copying any stores and reports the plugin and the load error. Fix or
+remove the named plugin, then retry the port.
 
 These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
 not applicable instead of opening the local engine anchor as an application
@@ -354,7 +361,7 @@ qualification limits, including signed macOS app and native Windows flows.
 | Retained `agent exec --state-dir` | Uses the effective configured engines; temporary and `--isolated` runs use SQLite. See [agent exec](/cli/agent#agent-exec).                                                                         | [#188420](https://github.com/openclaw/openclaw/pull/188420) |
 | iMessage with PostgreSQL state    | Recovery cursors use the selected shared-state engine without NUL-containing keys.                                                                                                                  | [#184919](https://github.com/openclaw/openclaw/pull/184919) |
 | Store-backed Gateway credentials  | Local CLI RPC commands resolve `gateway.auth.*` refs from the configured state engine. See the [store provider](/gateway/secrets/secretref-contract#store-provider).                                | [#185238](https://github.com/openclaw/openclaw/pull/185238) |
-| Archive backup creation           | `backup create` works while the Gateway runs; generic PostgreSQL snapshots, Git backups, and restore still require offline custody.                                                                 | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
+| Archive backup creation           | `backup create` and Git capture work while the Gateway runs; generic PostgreSQL snapshots and restore still require offline custody.                                                                | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
 | Retained agent creation           | Missing, uninitialized, or mismatched namespaces refuse reuse; new anchors publish after initialization commits. See [retained-store recovery](/gateway/postgresql#recover-a-retained-agent-store). | [#188350](https://github.com/openclaw/openclaw/pull/188350) |
 
 ## Search on PostgreSQL
@@ -374,6 +381,12 @@ including its vector dimension, is refused with `SearchExtensionDefinitionChange
 restore the previous definition until the owning component provides a derived-index
 rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
 the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
+
+Memory provides that owner-controlled rebuild through `openclaw memory index --force`.
+On PostgreSQL, new vector dimensions are installed in the same transaction that
+publishes the rebuilt chunks and index metadata. Failed publication preserves the
+previous projection. Tokenizer changes update the memory trigram indexes at
+admission without replacing source text or the full-text columns.
 
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
@@ -850,16 +863,21 @@ and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/d
 
 Use `openclaw backup create` to capture PostgreSQL stores together with the
 SQLite stores that still hold the rest of the installation. It runs while the
-Gateway serves requests. Generic local snapshots and Git backups whose selected
+Gateway serves requests. Git capture, including scheduled Git backups, uses the
+same online per-store snapshots. Generic local snapshots and restore whose selected
 source is PostgreSQL require the Gateway stopped; if it is running, they refuse:
 “stop through the service owner, then rerun.” They never stop the Gateway
 automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs
 you to `openclaw backup create`.
 
-A PostgreSQL backup contains a portable SQLite export image, the original anchor,
-and a format-2 manifest. Update and Doctor recovery captures use the same format
-unless [server recovery captures](#server-recovery-captures) are enabled. The export reads one `REPEATABLE READ READ ONLY` snapshot,
-including the store's sequence allocation facts, then applies the existing user-backup sanitizer before compaction and hashing.
+A PostgreSQL user backup contains a portable SQLite export image, the original
+anchor, and a format-2 manifest. Legacy update and standalone Doctor recovery
+captures use the same format unless
+[server recovery captures](#server-recovery-captures) are enabled. Protected
+release trials instead use the server-side copy described below. The portable
+export reads one `REPEATABLE READ READ ONLY` snapshot, including the store's
+sequence allocation facts, then applies the existing user-backup sanitizer
+before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
 the connection DSN. Active optional fragments come from the source catalog,
@@ -896,20 +914,52 @@ captures. See [Backups](/install/backups) and [Backup CLI](/cli/backup).
 
 ## Updates and target compatibility
 
-Updates preserve each store's physical engine. Before database mutation, the
-installed updater captures PostgreSQL rows and their matching anchor without
-sanitization, alongside the existing exact SQLite captures. Recovery restores
-PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
-migrated namespace remains available until recovery is confirmed. Changed state
-or uncertain custody prevents automatic restore and retains the captures for
-recovery. An update never silently ports a store or falls back to SQLite.
+Updates preserve each store's physical engine; they never silently port a store
+or fall back to SQLite.
+
+**Protected release trials:** when schemas need an upgrade and preparation selects
+copy protection, candidate startup makes a private server-side PostgreSQL copy under stopped-writer
+custody. It migrates and validates all private inputs, including SQLite stores in
+mixed-engine installations, before writing the durable swap plan and publishing
+new anchors. The original PostgreSQL application schema and rows stay unchanged.
+Failed trials restore the old release and anchors, not the server data. The old
+anchors select the original namespaces, and trial-only writes are discarded.
+The launcher needs no PostgreSQL restore or SQL.
+
+This path uses only the server carrier, independent of
+`database.postgres.recoveryCaptures`; no portable-export or in-place migration
+fallback is allowed. A protection failure, including a revoked database `CREATE`
+grant, uses the existing configuration-refusal exit (78) and names the cause.
+`--no-restart` defers copying until actual startup; same-schema releases do not
+make a protected PostgreSQL copy.
+
+The affected namespace name changes on each protected schema-changing update. Allow a
+longer restart and temporary double server storage plus indexes, WAL, temporary
+work, and retained generations. Keep active, immediate-prior, and pinned or
+recovery anchor/namespace pairs. Pruning drops only update-created or
+verified-owned namespaces. A failed drop retains the pair and reports a warning,
+without failing a serving release. Same-server copies do not replace portable
+backups. Stores whose copy-time estimate exceeds the update window instead keep
+in-place migration, without automatic data rollback; update output and the saved
+report name that limitation. See the
+[PostgreSQL update procedure](/gateway/postgresql#updates-and-schema-migrations).
+
+**Legacy in-place updates:** before database mutation, the installed updater
+captures exact PostgreSQL rows and their matching anchor without sanitization,
+alongside exact SQLite captures. Recovery restores PostgreSQL into a fresh owned
+namespace and publishes its matched anchor; the migrated namespace remains
+available until recovery is confirmed. Changed state or uncertain custody
+prevents automatic restore and retains the captures for recovery. This is
+separate from a protected release trial's anchor-only rollback.
 
 ### Server recovery captures
 
-By default, update rollback captures and Doctor pre-migration captures of a
-PostgreSQL store are portable: each `.postgres.bak` or `.postgres` directory holds
-`anchor.sqlite`, a `database.sqlite` export image, and `manifest.json`. You can
-copy that set to another host and restore it without the original server.
+By default, legacy in-place update rollback captures and standalone Doctor
+pre-migration captures of a PostgreSQL store are portable: each `.postgres.bak`
+or `.postgres` directory holds `anchor.sqlite`, a `database.sqlite` export image,
+and `manifest.json`. You can copy that set to another host and restore it without
+the original server. This setting does not select the protected release-trial
+carrier; protected release trials always use the server-side copy.
 
 Set `database.postgres.recoveryCaptures: "server"` to keep those rows on the
 server instead:
@@ -930,9 +980,9 @@ server instead:
   pre-migration capture of a store, Doctor drops that store's capture schemas
   whose directory was removed. This also runs after you switch back to
   `portable`.
-- The update rollback capture of the shared `state` family and the candidate
-  state copy stay portable, because client credential rollback and the update
-  rehearsal read their SQLite images.
+- On the legacy in-place path, the update rollback capture of the shared `state`
+  family and the candidate state copy stay portable, because client credential
+  rollback and the update rehearsal read their SQLite images.
 - [Original state captures](/cli/update/repair-and-recovery#original-state-captures),
   taken before an update or a standalone `doctor --fix` writes state, also stay
   portable: they still write local SQLite images of PostgreSQL stores.
@@ -942,8 +992,8 @@ existing `CREATE` privilege. Existing portable captures stay readable and
 restorable either way. Older releases reject the setting, so remove it before
 downgrading below the release that added it.
 
-Recovery generations include the live PostgreSQL catalog, exact rows, and sequence
-allocation state (`last_value` and `is_called`). The installed driver can fingerprint
+Legacy capture/restore recovery generations include the live PostgreSQL catalog,
+exact rows, and sequence allocation state (`last_value` and `is_called`). The installed driver can fingerprint
 a candidate's newer schema without loading that schema's descriptor. Restore uses
 the captured version's descriptor and retains exact allocation state, including a
 sequence deliberately reset below retained row IDs. Maintenance checks the stable
@@ -953,8 +1003,8 @@ Update-run admission reads PostgreSQL through its existing schema connection and
 initializes only the update-history fragment; it does not copy the anchor as SQLite
 state or run candidate schema migrations before managed shutdown.
 
-Candidate Doctor state and agent schema migrations publish their before/after generations through
-the existing maintenance write receipt. PostgreSQL table and sequence locks retain
+On the legacy in-place path, candidate Doctor state and agent schema migrations
+publish their before/after generations through the existing maintenance write receipt. PostgreSQL table and sequence locks retain
 native exclusion until the migration transaction commits; only that confirmed
 publication advances the expected generation. Independent writes before migration
 or after publication still prevent automatic rollback. Uncertain commit or custody
@@ -971,10 +1021,10 @@ the updater checks every selected family and retained physical store, including
 disabled plugins. Missing engine or family support refuses before stopping the
 previous Gateway or mutating data.
 Reverse-port to SQLite with the current compatible binary, or stay on the
-current version. Homogeneous PostgreSQL installations include agent stores in
-preflight, exact capture, and custody-backed rollback, including retained registry
-paths. Family overrides also require successful candidate admission of the
-complete selection; global PostgreSQL support alone does not prove this.
+current version. Legacy in-place updates of homogeneous PostgreSQL installations
+include agent stores in preflight, exact capture, and custody-backed rollback,
+including retained registry paths. Family overrides also require successful
+candidate admission of the complete selection; global PostgreSQL support alone does not prove this.
 If PostgreSQL family lookup fails, preflight reports the database error and its
 remedy, such as the administrator SQL for missing `unaccent`. Connection details
 remain redacted; lookup failure does not imply a missing backup provider.
@@ -983,10 +1033,11 @@ Shared-state preflight reads registry, plugin installation, schema-version and
 retained-agent facts using the effective state engine. PostgreSQL inspection uses
 an admitted read-only transaction in a worker; agent inspection follows each
 agent store's physical engine. It never treats the SQLite anchor as application rows or migrates the
-source during inspection. Disposable candidate rehearsals use provider-exported
-SQLite images and a private SQLite config, so they never reconnect to the source
-PostgreSQL namespaces. Exact rollback restores the captured rows while
-preserving the current update-run history, as SQLite rollback does.
+source during inspection. Legacy disposable candidate rehearsals use
+provider-exported SQLite images and a private SQLite config, so they never
+reconnect to the source PostgreSQL namespaces. Legacy exact rollback restores
+the captured rows while preserving current update-run history, as SQLite
+rollback does. Protected release trials instead restore the preserved anchors.
 SQLite-only installations keep their existing admission and inspection behavior.
 The installed driver owns these checks; a candidate cannot repair an older
 driver. Published 2026.10.5 SQLite → current → PostgreSQL 17 port is qualified,
@@ -1017,6 +1068,13 @@ before recording the DDL hash and live catalog fingerprint. A missing migration
 refuses admission. Newer stores require a compatible binary, or a reverse port
 with a compatible binary before downgrade. Never edit schema metadata to bypass
 admission.
+
+Protected release trials cannot recover an installation already stranded by an
+earlier unprotected migration: there is no preserved original namespace to select.
+Use a compatible known-good build or a verified matched pre-migration backup
+with its matching release under stopped-writer custody. Verify the managed
+service's selected installation; a package replacement alone is not that proof.
+Do not drop namespaces or lower schema markers to force an older build to start.
 
 The generated shared-state `state.postgres.sql` and `fragment-*.postgres.sql`
 files contain runtime DDL only. Their caller supplies the transaction and

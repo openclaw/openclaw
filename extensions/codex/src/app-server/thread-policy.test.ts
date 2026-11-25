@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { createClientHarness } from "./test-support.js";
 import {
   createThreadRequestAppServerOptions,
   createThreadRequestAttemptParams,
 } from "./thread-lifecycle.test-fixtures.js";
-import { refreshCodexThreadPolicy } from "./thread-policy.js";
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  refreshCodexThreadPolicy,
+} from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 
 describe("native thread policy refresh", () => {
@@ -86,4 +90,59 @@ describe("native thread policy refresh", () => {
       }
     },
   );
+});
+
+describe("adopted thread restart wait", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refuses a restart input when the earlier turn is still active after the wait", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const h = createClientHarness();
+    const params = createThreadRequestAttemptParams({ provider: "openai" });
+    params.inputProvenance = { kind: "internal_system", sourceTool: "restart" };
+    const spans: string[] = [];
+    const activeThread = {
+      thread: { ...threadStartResult("root", "/repo").thread, status: { type: "active" } },
+    };
+    try {
+      const waiting = assertAdoptedCodexThreadResumeAllowed(
+        { client: h.client, params },
+        "root",
+        {
+          lifecycleTiming: {
+            measure: async (label, run) => {
+              spans.push(label);
+              return await run();
+            },
+          },
+          throwIfAborted: () => {},
+        },
+        () => {},
+      );
+      void waiting.catch(() => {});
+      const first = JSON.parse(await h.waitForWrite(0));
+      expect(first.method).toBe("thread/read");
+      h.send({ id: first.id, result: activeThread });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const second = JSON.parse(await h.waitForWrite(1));
+      expect(second.method).toBe("thread/read");
+      vi.setSystemTime(Date.now() + 120_000);
+      h.send({ id: second.id, result: activeThread });
+      await expect(waiting).rejects.toMatchObject({
+        name: "CodexAdoptedThreadActiveError",
+        message: expect.stringContaining("still active after the restart wait"),
+        userMessage: expect.stringContaining("That work is still running"),
+      });
+      expect(h.writes).toHaveLength(2);
+      // The whole wait is one lifecycle stage, not one per read.
+      expect(spans).toEqual(["thread-read-adoption-status"]);
+    } finally {
+      await h.client.closeAndWait();
+    }
+  });
 });

@@ -249,6 +249,47 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
+  it("rolls back a dimension rebuild with its owner transaction, including retained admission", () => {
+    withEngineStoreAdmission(() => {
+      const changed = structuredClone(vector);
+      changed.vector!.chunks!.postgres!.dimensions = 4;
+      const bytes = Buffer.alloc(24);
+      bytes.writeDoubleLE(1, 0);
+      db.prepare(`INSERT INTO memory_index_chunks
+        (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES ('kept', 'kept.md', 1, 1, 'hash', 'fixture', 'kept memory', ?, 1)`).run(bytes);
+      expect(() =>
+        db.runTransaction(
+          () => {
+            db.exec("DELETE FROM memory_index_chunks");
+            admitAgentEngineSearchExtensions(db, { "memory.vector": changed }, () => {}, true);
+          },
+          {
+            withCommit() {
+              throw new Error("Rebuild owner retired");
+            },
+          },
+        ),
+      ).toThrow("Rebuild owner retired");
+      expect(get("SELECT embedding FROM memory_index_chunks WHERE id = 'kept'")?.embedding).toEqual(
+        new Uint8Array(bytes),
+      );
+      expect(
+        get("SELECT embedding::text AS vector FROM memory_index_chunks_vec WHERE id = 'kept'"),
+      ).toEqual({ vector: "[1,0,0]" });
+      expect(JSON.parse(extensions())["memory.vector"]).toEqual(vector);
+      expect(
+        get(
+          "SELECT atttypmod AS dimensions FROM pg_attribute WHERE attrelid = 'memory_index_chunks_vec'::regclass AND attname = 'embedding'",
+        ),
+      ).toEqual({ dimensions: 3 });
+      admitAgentEngineSearchExtensions(db, { "memory.vector": vector }, () => {
+        throw new Error("Rollback must retain the old admission");
+      });
+      db.exec("DELETE FROM memory_index_chunks WHERE id = 'kept'");
+    });
+  });
+
   it("locks first-use installation and shares its admission with another handle", () => {
     withEngineStoreAdmission(() => {
       using nextAnchor = openNodeSqliteDatabase(databasePath);
@@ -505,7 +546,9 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
               (session_key, current_session_id, entry_json, updated_at)
               VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
               INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-              VALUES ('retained', 'agent:main:retained', 1, 1);`);
+              VALUES ('retained', 'agent:main:retained', 1, 1);
+              INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+              VALUES ('agent:main:retained', 'reader', 'owner', 1);`);
             const rows = [
               [
                 "nested-stop",
@@ -527,7 +570,17 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             db.close();
             publishSqliteDatabaseSchemaChange(anchor);
             db = open(agentEngineSchema);
-            expect(getPostgresPhysicalFacts(db)?.version).toBe(43);
+            expect(getPostgresPhysicalFacts(db)?.version).toBe(agentEngineSchema.version);
+            expect(db.prepare("SELECT identity_id, access FROM session_members").all()).toEqual([
+              { identity_id: "reader", access: null },
+            ]);
+            db.exec("UPDATE session_members SET access='suggest'");
+            expect(db.prepare("SELECT access FROM session_members").get()).toEqual({
+              access: "suggest",
+            });
+            expect(() => db.exec("UPDATE session_members SET access='admin'")).toThrow(
+              /check constraint/i,
+            );
             expect(
               db
                 .prepare(`SELECT column_name, data_type, is_nullable
@@ -555,7 +608,7 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             );
           }
           expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-            schema_version: 43,
+            schema_version: absentPendingTable ? 43 : agentEngineSchema.version,
           });
         } finally {
           if (db.isOpen) {

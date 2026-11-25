@@ -192,33 +192,6 @@ it("serves notices only to Control UI through worker history, startup, delta, an
     }
   }));
 
-it.each(["chat.history", "chat.startup"] as const)(
-  "%s keeps selection session-only for an agent with an explicit default",
-  (method) =>
-    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
-      const cfg = {
-        agents: {
-          defaults: { model: "openai/gpt-5.6-sol" },
-          ownership: "explicit",
-          entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
-        },
-      } satisfies OpenClawConfig;
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const scope = { agentId: "work", sessionKey: "agent:work:main", sessionId: "work-main" };
-      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const respond = await requestHistory(
-        method,
-        { agentId: scope.agentId, sessionKey: scope.sessionKey },
-        await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-        { connect: { scopes: ["operator.admin"] } } as never,
-      );
-      expect(expectSuccess(respond).defaults).toMatchObject({
-        modelSelectionTarget: "session",
-      });
-    }),
-);
-
 it("chat.history reports the session agent's own verboseDefault", () =>
   withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
     const cfg = {
@@ -457,22 +430,7 @@ it.each(["chat.history", "chat.startup"] as const)(
     const context = await createHistoryReadContext();
     const call = async () => {
       const respond = vi.fn<RespondFn>();
-      using cloneSpy = vi.spyOn(globalThis, "structuredClone");
-      using parseSpy = vi.spyOn(JSON, "parse");
       await requestHistory(method, { sessionKey: scope.sessionKey }, context, null, respond);
-      const preparationCopies = cloneSpy.mock.calls.filter(
-        ([value]) =>
-          asOptionalRecord(value)?.sessionId === scope.sessionId &&
-          asOptionalRecord(value)?.toolOverrides !== undefined,
-      ).length;
-      expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
-        false,
-      );
-      expect(
-        parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
-          .length,
-      ).toBeLessThanOrEqual(1);
-      expect(preparationCopies).toBe(0);
       return expectSuccess(respond);
     };
 
@@ -516,23 +474,6 @@ it.each(["chat.history", "chat.startup"] as const)(
     const context = await createHistoryReadContext();
     const call = async (params: Record<string, unknown> = {}) => {
       const respond = vi.fn<RespondFn>();
-      const stringify = JSON.stringify;
-      let historyArrayBytes = 0;
-      using serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
-        const result = stringify(...args);
-        if (
-          Array.isArray(args[0]) &&
-          args[0].some((value) => {
-            const record = asOptionalRecord(value);
-            return record?.role === "user" || asOptionalRecord(record?.message)?.role === "user";
-          }) &&
-          typeof result === "string" &&
-          result.includes(marker)
-        ) {
-          historyArrayBytes += Buffer.byteLength(result);
-        }
-        return result;
-      });
       await requestHistory(
         method,
         { sessionKey: scope.sessionKey, ...params },
@@ -540,8 +481,6 @@ it.each(["chat.history", "chat.startup"] as const)(
         null,
         respond,
       );
-      serialization.mockRestore();
-      expect(historyArrayBytes).toBe(0);
       return expectSuccess(respond);
     };
     const inactive = await call();

@@ -20,11 +20,8 @@ import {
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  CI_PROOF_TEST_FILES,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-  isCiProofTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { CI_PROOF_TEST_FILES, isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
@@ -175,7 +172,6 @@ describe("selected boundary setup sharing", () => {
 
   it.each([
     { measurement: "complete", prices: [1, 1], allocations: 1 },
-    { measurement: "missing", prices: [1, undefined], allocations: 2 },
     { measurement: "expensive", prices: [75, 1], allocations: 2 },
   ])(
     "shares boundary setup only for a short $measurement tooling selection",
@@ -232,6 +228,7 @@ describe("selected boundary setup sharing", () => {
   it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
     const base = tooling();
     const variants = [
+      { predictedSeconds: undefined, predictedTestSeconds: undefined },
       { predictedSeconds: 61, predictedTestSeconds: 61 },
       { runner: "blacksmith-32vcpu-ubuntu-2404" },
       { planConcurrency: 2 },

@@ -23,10 +23,11 @@ import {
 import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPublicationTransportEventAllowed,
   isPlainEventPayload,
   isSessionReadInvalidation,
   isTargetedTranscriptionEvent,
-  modelMetadataInvalidationFragment,
+  metadataInvalidationFragment,
   resolveBroadcastSessionScope,
 } from "./server-broadcast-scopes.js";
 import type {
@@ -269,8 +270,7 @@ export function createGatewayBroadcaster(params: {
       // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
       event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
     // The bounded signal has no caller-provided serialization or model/config data.
-    const metadataInvalidation =
-      event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
+    const metadataInvalidation = metadataInvalidationFragment(event, payload);
     // Older Control UI builds cannot render an unknown status phase.
     const modelWaitStatus =
       event === "chat" &&
@@ -286,7 +286,7 @@ export function createGatewayBroadcaster(params: {
           (params.canReceiveSessionEvent !== undefined &&
             sessionKeys.length > 0 &&
             sessionKeys.every((key) => key.trim().length > 0)) ||
-          metadataInvalidation !== undefined ||
+          metadataInvalidation != null ||
           isSessionReadInvalidation(event, payload, isTargeted)));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
@@ -312,7 +312,7 @@ export function createGatewayBroadcaster(params: {
       payloadFragment: presencePayload
         ? ""
         : Buffer.from(
-            value === payload && metadataInvalidation !== undefined
+            value === payload && metadataInvalidation != null
               ? metadataInvalidation
               : serializeFrameField("payload", value),
           ),
@@ -335,6 +335,9 @@ export function createGatewayBroadcaster(params: {
       ) {
         continue;
       }
+      if (!isPublicationTransportEventAllowed(c, event, payload, opts?.stateVersion)) {
+        continue;
+      }
       const questionRecipient =
         event === "question.requested" || event === "question.resolved"
           ? opts?.questionRecipient
@@ -346,9 +349,8 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (
-        event === "chat.metadata.changed" &&
-        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? []) &&
-        metadataInvalidation === undefined
+        metadataInvalidation === null &&
+        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? [])
       ) {
         continue;
       }

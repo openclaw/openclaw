@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -76,13 +77,13 @@ describe.skipIf(!connection)("PostgreSQL worker provisioning source migration", 
         }),
       );
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 40,
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
       expect(
         upgraded.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),
       ).toEqual(expected);
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*40/iu);
+      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
       const reopened = fixture.open(stateEngineSchema);
       expect(
         reopened.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),

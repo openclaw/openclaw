@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import "./update-command-service-maintenance.test-support.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as doctorAdmission from "../../commands/doctor-maintenance-admission.js";
@@ -343,6 +344,35 @@ it.each(maintenanceOperations)(
       }
     }),
 );
+
+it("names a Git release launcher service as unconfirmed, not as another installation", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const prefix = path.join(home, ".openclaw", "git-install");
+    const launcher = path.join(prefix, "openclaw-launcher.mjs");
+    // The release the launcher starts through its link: a package outside this checkout.
+    const release = path.join(prefix, "releases", "r1", "openclaw");
+    await fs.mkdir(path.join(release, "dist"), { recursive: true });
+    await fs.writeFile(path.join(release, "package.json"), '{"name":"openclaw"}');
+    await fs.writeFile(path.join(release, "dist", "index.js"), "gateway");
+    await fs.symlink(path.join("releases", "r1", "openclaw"), path.join(prefix, "openclaw"));
+    await fs.writeFile(launcher, "launcher");
+    const service = mockMaintenanceService(home, {
+      readCommand: async () => ({
+        programArguments: [process.execPath, launcher, "gateway"],
+        environment: { HOME: home },
+      }),
+    });
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      phase: "inspect",
+    });
+    expect(result.serviceUpdateVerdict?.kind).toBe("foreign");
+    expect(result.serviceMutationSkipMessage).toBe(
+      `Gateway service management skipped: the service starts the Git release launcher ${launcher}, and this checkout cannot yet confirm that the release it runs is its own, so the service was left untouched. Run \`openclaw triage\` for an agent to inspect it.`,
+    );
+    expect(service.stop).not.toHaveBeenCalled();
+  }));
 
 it("explains a blocked systemd inspection for a failed unit with residual tasks", () =>
   withServiceHome(async (home) => {

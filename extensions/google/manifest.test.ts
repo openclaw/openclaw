@@ -157,14 +157,15 @@ describe("google manifest model catalog", () => {
     expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
 
-  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+  it("offers Gemini API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
     expect(choices).toEqual([
       expect.objectContaining({
         provider: "google",
         method: "api-key",
-        choiceLabel: "Google AI Studio API key",
+        choiceLabel: "Gemini API key",
+        groupLabel: "Gemini API key",
         choiceHint: "Supported API-key access from aistudio.google.com/apikey",
         groupHint: "Supported API-key setup",
       }),

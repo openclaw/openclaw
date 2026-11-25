@@ -108,11 +108,7 @@ async function withModelTurn(
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const capability = expectDefined(
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "local" },
-      source === "channel-owner" ? { source, isCurrent: () => true } : { source },
-    ),
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source }),
     "model authority",
   );
   const identity: AgentRuntimeIdentity = {
@@ -157,7 +153,6 @@ function createPolicyFixture(storePath: string) {
     method: string,
     params: Record<string, unknown>,
     identity?: AgentRuntimeIdentity,
-    commitGuard?: () => void,
     scopes = identity ? ["operator.write"] : ["operator.admin"],
     directClient?: GatewayClient,
   ) => {
@@ -174,17 +169,7 @@ function createPolicyFixture(storePath: string) {
       respond,
       isWebchatConnect: () => false,
       extraHandlers: {
-        [method]: commitGuard
-          ? (options) =>
-              handler({
-                ...options,
-                // Inject commit-time changes after the router's admission checks.
-                sessionMutationCommitGuard: () => {
-                  options.sessionMutationCommitGuard?.();
-                  commitGuard();
-                },
-              })
-          : handler,
+        [method]: handler,
       },
     });
     return expectDefined(respond.mock.calls[0], "cron response");
@@ -288,24 +273,16 @@ describe("Gateway automation policy", () => {
           owner: { sessionKey: "agent:main:other", agentId: "main", accountId: "default" },
         });
         await withModelTurn("channel-owner", async (identity) => {
-          const list = await invoke("cron.list", { includeDisabled: true }, identity, undefined, [
-            scope,
-          ]);
+          const list = await invoke("cron.list", { includeDisabled: true }, identity, [scope]);
           expect(list[0]).toBe(true);
           expect(list[1]).toMatchObject({ jobs: [expect.objectContaining({ id: owned.id })] });
           for (const method of ["cron.get", "cron.update", "cron.run", "cron.remove"]) {
             const params = method === "cron.update" ? { patch: { description: "allowed" } } : {};
             expectDenied(
-              await invoke(method, { id: foreign.id, ...params }, identity, undefined, [scope]),
+              await invoke(method, { id: foreign.id, ...params }, identity, [scope]),
               method === "cron.get" ? "cron job not found" : "Automation not found",
             );
-            const response = await invoke(
-              method,
-              { id: owned.id, ...params },
-              identity,
-              undefined,
-              [scope],
-            );
+            const response = await invoke(method, { id: owned.id, ...params }, identity, [scope]);
             expect(response[0], response[2]?.message).toBe(true);
           }
         });
@@ -319,14 +296,12 @@ describe("Gateway automation policy", () => {
     "ordinary caller",
     "session-only runtime",
     "read-only runtime",
-    "revoked before commit",
   ] as const)("keeps mutation authority restricted for %s", async (scenario) => {
     await withCron(async ({ cron, invoke, readJobs }) => {
       const job = await addOwnedJob(cron);
       const before = await readJobs();
       setRuntimeConfigSnapshot({});
       for (const method of ["cron.update", "cron.remove", "cron.run"]) {
-        // Each method needs a fresh admitted run so revocation happens at its own commit.
         await withModelTurn("channel-owner", async (identity) => {
           const response = await invoke(
             method,
@@ -337,9 +312,6 @@ describe("Gateway automation policy", () => {
             scenario === "ordinary caller" || scenario === "cron-only direct caller"
               ? undefined
               : identity,
-            scenario === "revoked before commit"
-              ? () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority)
-              : undefined,
             [
               scenario === "read-only runtime"
                 ? "operator.read"
@@ -350,12 +322,8 @@ describe("Gateway automation policy", () => {
                     : "operator.write",
             ],
           );
-          if (scenario === "revoked before commit") {
-            expectDenied(response, "authority is no longer active");
-          } else {
-            expect(response[0]).toBe(false);
-            expect(response[2]?.message).toBe("missing scope: operator.admin");
-          }
+          expect(response[0]).toBe(false);
+          expect(response[2]?.message).toBe("missing scope: operator.admin");
         });
         expect(await readJobs()).toEqual(before);
       }
@@ -421,9 +389,7 @@ describe("Gateway automation policy", () => {
       const job = await cron.add(commandJob);
       setRuntimeConfigSnapshot(commandRestricted);
       await withModelTurn("control-ui-admin", async (identity) => {
-        const create = await invoke("cron.add", commandJob, identity, undefined, [
-          "operator.admin",
-        ]);
+        const create = await invoke("cron.add", commandJob, identity, ["operator.admin"]);
         expectDenied(create, "command automations");
         await expect(
           tool(identity).execute("run", { action: "run", jobId: job.id }),
@@ -491,7 +457,7 @@ it("allows only the current human owner or admin to edit and transfer an automat
         });
         expect(job.ownerProfileId).toBe(aliceId);
         const update = (client: GatewayClient, patch: Record<string, unknown>) =>
-          invoke("cron.update", { id: job.id, patch }, undefined, undefined, undefined, client);
+          invoke("cron.update", { id: job.id, patch }, undefined, undefined, client);
         expect((await update(alice, { description: "owned edit" }))[0]).toBe(true);
         expect(
           (await invoke("cron.update", { id: job.id, patch: { description: "admin edit" } }))[0],
@@ -519,12 +485,12 @@ it("allows only the current human owner or admin to edit and transfer an automat
         expectDenied(await update(alice, { description: "former owner" }), "Automation not found");
         expect((await update(bob, { description: "new owner" }))[0]).toBe(true);
         expectDenied(
-          await invoke("cron.remove", { id: job.id }, undefined, undefined, undefined, alice),
+          await invoke("cron.remove", { id: job.id }, undefined, undefined, alice),
           "Automation not found",
         );
-        expect(
-          (await invoke("cron.remove", { id: job.id }, undefined, undefined, undefined, bob))[0],
-        ).toBe(true);
+        expect((await invoke("cron.remove", { id: job.id }, undefined, undefined, bob))[0]).toBe(
+          true,
+        );
       } finally {
         cron.stop();
         await fixture.scheduler.stop();

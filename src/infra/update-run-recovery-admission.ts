@@ -80,6 +80,11 @@ export async function inspectPluginCohortRecoveryAdmission(
   return pair;
 }
 
+/** A restore directory beside the state database: evidence, unlike a failed listing. */
+export class InterruptedStateRestoreError extends Error {
+  override name = "InterruptedStateRestoreError";
+}
+
 /** Check publication before an admitted row reader; false means the parent is absent. */
 export async function assertUpdateRecoveryDirectoryAdmission(
   databasePath: string,
@@ -93,7 +98,7 @@ export async function assertUpdateRecoveryDirectoryAdmission(
   // Do not swallow discovery races or recreate an absent canonical database.
   const family = (await fs.readdir(parent)).find((name) => name.startsWith(".openclaw-restore-"));
   if (family) {
-    throw new Error(
+    throw new InterruptedStateRestoreError(
       `Interrupted shared-database publication left ${path.join(parent, family)}, which may hold the only copy of the original state database; update commands stay read-only. Keep that directory and see https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore.`,
     );
   }

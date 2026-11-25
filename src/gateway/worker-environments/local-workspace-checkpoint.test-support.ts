@@ -15,6 +15,7 @@ import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { provePublicationPauseAttribution } from "./local-workspace-publication.test-support.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -323,7 +324,7 @@ async function proveLocalWorkspaceCaptures(
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(
       async (destination, options) => {
         expect(paused).toBe(false);
-        if (deferredCleanup) {
+        if (deferredCleanup && path.basename(destination).startsWith("checkpoint-retired-")) {
           removalStarted = true;
           removing.resolve();
           await releaseRemoval.promise;
@@ -602,6 +603,8 @@ export function registerSandboxCheckpointTests(
   logObserver: typeof checkpointLog,
 ) {
   checkpointLog = logObserver;
+  it("resumes after publication capture and preserves guest writes during canonical Git staging", () =>
+    provePublicationPauseAttribution(owner(), checkpointLog));
   it("finishes checkpoint-owned projection work after caller stop without replaying its journal", () =>
     proveCheckpointProjectionCallerStop(owner()));
   it("records closed reconcile abort reasons without replacing the original failure", async () => {

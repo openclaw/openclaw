@@ -45,8 +45,8 @@ export function resolvePendingInputEndCause(
   if (isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)) {
     return "user-stop";
   }
-  if (defaultEndCause === "delete") {
-    return "delete";
+  if (defaultEndCause === "delete" || defaultEndCause === "user-stop") {
+    return defaultEndCause;
   }
   if (
     reason === "auth-revoked" ||
@@ -67,7 +67,11 @@ export function resolvePendingInputEndCause(
   return reason === "restart" ? "restart-unrecoverable" : defaultEndCause;
 }
 
-/** Accepted outages relinquish custody; pre-acceptance failures settle terminally. */
+/**
+ * Accepted outages and restarts relinquish custody; pre-acceptance failures settle terminally.
+ * Only the transcript commit consumes an accepted input, so an unconsumed one has not started:
+ * its queued row replays after restart. A consumed one resumes from the transcript instead.
+ */
 export async function settleUserTurnPendingInput(
   recorder: UserTurnTranscriptRecorder | undefined,
   signal?: AbortSignal,
@@ -75,13 +79,14 @@ export async function settleUserTurnPendingInput(
   deleted = false,
   disposition: "cancelled" | "interrupted" = "cancelled",
   accepted = false,
+  explicitStop?: "user-stop",
 ): Promise<void> {
   const consumed = recorder?.isPendingInputConsumed?.();
   const endCause = consumed
     ? undefined
-    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : "failed");
+    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : explicitStop);
   try {
-    if (!consumed && endCause === undefined && accepted) {
+    if (!consumed && accepted && (endCause === undefined || endCause === "restart-unrecoverable")) {
       recorder?.relinquishPendingInput?.();
     } else if (consumed) {
       recorder?.releasePendingInput?.();

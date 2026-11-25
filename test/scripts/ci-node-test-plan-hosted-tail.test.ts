@@ -21,33 +21,42 @@ const options = {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainValidation) => {
+it.each(["push", "main", "full"] as const)("bounds hosted groups (%s)", (mode) => {
+  const mainValidation = mode === "main";
+  const full = mode === "full";
   vi.stubEnv("CI", "true");
   vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
-  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
-  const selectedOptions = mainValidation
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", full ? "dual-all" : "bun-all");
+  const selectedOptions = full
     ? {
         ...options,
         compactMode: "pull-request" as const,
-        includeProofTests: true,
         includeReleaseOnlyToolingShards: true,
-        includePrExemptRuntimeTests: true,
-        mainValidation: true,
+        includeReleaseOnlyRuntimeTests: true,
       }
-    : options;
+    : mainValidation
+      ? {
+          ...options,
+          compactMode: "pull-request" as const,
+          includeProofTests: true,
+          includeReleaseOnlyToolingShards: true,
+          includePrExemptRuntimeTests: true,
+          mainValidation: true,
+        }
+      : options;
   const workerRows = createNodeWorkerE2eTestShards();
   expect(workerRows).toHaveLength(2);
   expect(workerRows.every((row) => !row.requiresDist && row.planConcurrency === 1)).toBe(true);
-  const totalJobCap = mainValidation ? 77 : 70;
-  const jobCap = totalJobCap - workerRows.length;
+  const totalJobCap = full ? 98 : mainValidation ? 77 : 70;
+  const jobCap = full ? undefined : totalJobCap - workerRows.length;
   const owners = createNodeTestShards(selectedOptions);
   const jobs = createNodeTestShardBundles({ ...selectedOptions, compactNodeJobCap: jobCap });
   expect(jobs.filter((job) => !job.requiresDist).length + workerRows.length).toBeLessThanOrEqual(
     totalJobCap,
   );
-  expect(jobs.length).toBeLessThanOrEqual(mainValidation ? 90 : 69);
+  expect(jobs.length).toBeLessThanOrEqual(full ? 96 : mainValidation ? 90 : 69);
 
-  if (!mainValidation) {
+  if (!mainValidation && !full) {
     const reducedOwners = owners.filter(
       (owner) =>
         /^core-tooling-\d+$/u.test(owner.shardName) || owner.shardName === "agentic-cli-process",
@@ -121,6 +130,7 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
         }
         if (
           !mainValidation &&
+          !full &&
           (ownerName === "agentic-control-plane-agent-chat" ||
             (ownerName === "agentic-gateway-methods" && files.length > 32))
         ) {
@@ -144,8 +154,14 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
     group.includePatterns?.includes("src/cli/update-cli.test.ts"),
   );
   expect(updateGroups).toHaveLength(1);
-  expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
-  if (!mainValidation) {
+  if (full) {
+    // Ordinary updater tests do not inherit packaged-runtime consumers' build.
+    expect(updateGroups[0]!.pretestBuildMode).toBeUndefined();
+    expect(updateGroups[0]!.includePatterns!.length).toBeGreaterThan(1);
+  } else {
+    expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
+  }
+  if (!mainValidation && !full) {
     expect(updateJobs[0]!.groups).toHaveLength(1);
   }
 });

@@ -29,13 +29,15 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   values?: string[];
   fields?: Array<{ id: string; name: string; values: string[] }>;
   messageId?: string;
+  /** The tap already updated the source message; handler edits replace that update. */
+  sourceAnswered?: boolean;
 }): Promise<"handled" | "unmatched"> {
   const normalizedConversationId =
     params.interactionCtx.rawGuildId || params.channelCtx.channelType === ChannelType.GroupDM
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
-  let responded = false;
-  let acknowledged = false;
+  let responded = params.sourceAnswered === true;
+  let acknowledged = params.sourceAnswered === true;
   const updateOriginalMessage = async (input: {
     text?: string;
     components?: TopLevelComponents[];
@@ -44,6 +46,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       ...(input.text !== undefined ? { content: input.text } : {}),
       ...(input.components !== undefined ? { components: input.components } : {}),
     };
+    if (params.sourceAnswered) {
+      // The tap's update answered the interaction; @original is the source message.
+      await params.interaction.editReply(payload);
+      return;
+    }
     if (acknowledged) {
       await params.interaction.reply(payload);
       return;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import type { DatabaseEngineId } from "../infra/database-engine/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
@@ -41,8 +42,11 @@ function resolveKey({ kind, env }: PinScope) {
   return `daemon-runtime-pin:${sha256Hex(JSON.stringify([kind, process.platform, name, resolveConfigPathCandidate(env)]))}`;
 }
 const migrationPending = new Map<string, boolean>();
-export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): boolean {
-  if (completeUnshippedDaemonRuntimePinMigration(env)) {
+export function readDaemonRuntimePinMigrationPending(
+  env: NodeJS.ProcessEnv,
+  stateEngine?: DatabaseEngineId,
+): boolean {
+  if (completeUnshippedDaemonRuntimePinMigration(env, stateEngine)) {
     return false;
   }
   const source = resolveOpenClawStateSqlitePath(env);
@@ -58,13 +62,14 @@ export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): bo
   return migrationPending.get(source) ?? false;
 }
 
-/** Admit migration under native service custody before planning any runtime change. */
+/** Admit migration under native service custody. Local startup can supply the pin source engine before resolving connection secrets. */
 export function withDaemonRuntimePinMigration<T>(
   env: NodeJS.ProcessEnv,
   read: () => T,
+  stateEngine?: DatabaseEngineId,
 ): Promise<T> {
   return withGatewayServiceOperationLock(env, async () => {
-    if (readDaemonRuntimePinMigrationPending(env)) {
+    if (readDaemonRuntimePinMigrationPending(env, stateEngine)) {
       const { migrateDaemonRuntimePins } =
         await import("../infra/state-migrations.daemon-runtime-pins.js");
       const result = await migrateDaemonRuntimePins(env);

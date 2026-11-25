@@ -31,6 +31,24 @@ function pickerElements(container: HTMLElement) {
 }
 
 describe("chat model controls", () => {
+  it("does not borrow the previous pin's name after an optimistic reset", async () => {
+    const container = await renderModelControls(headerState([]), {
+      modelCatalogState: { hasSnapshot: false, status: "loading" },
+      modelOverrides: { main: null },
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: openai.id,
+        modelProvider: openai.provider,
+        modelDisplayName: "Previous pin",
+      },
+    });
+    expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label")).toBe(
+      "Chat model: gpt-5 · openai",
+    );
+  });
+
   it("preserves a catalog failure even with pending provider metadata", async () => {
     const container = await renderModelControls(headerState([]), {
       modelCatalogState: { hasSnapshot: true, status: "error", pendingProviders: ["example"] },

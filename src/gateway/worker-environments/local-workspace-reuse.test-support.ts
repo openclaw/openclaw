@@ -11,6 +11,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
@@ -256,7 +257,7 @@ export async function provePreparationObservationBoundary(owner: LocalWorkspaceO
 
 export async function provePreparationWaiterAuthority(
   owner: LocalWorkspaceOwner,
-  mode: "cancel waiter" | "revoke waiter" | "cancel producer" | "failed producer" | "other session",
+  mode: "cancel waiter" | "cancel producer" | "failed producer" | "other session",
 ) {
   using _ = await prepareSandboxCheckpointFixture(owner);
   const stores = await import("./local-workspace-store.js");
@@ -290,18 +291,13 @@ export async function provePreparationWaiterAuthority(
   );
   const producerStop = new AbortController();
   const waiterStop = new AbortController();
-  let revoked = false;
   const producer = prepareSandboxCheckpointFixture(owner, undefined, producerStop.signal);
   let waiter: typeof producer | undefined;
   try {
     await awaitGateBeforeSettlement(entered.promise, producer, "Producer did not acquire custody");
     waiter = prepareSandboxCheckpointFixture(
       mode === "other session" ? { ...owner, sessionId: "another-incarnation" } : owner,
-      () => {
-        if (revoked) {
-          throw new Error("waiter revoked");
-        }
-      },
+      undefined,
       waiterStop.signal,
     );
     await awaitGateBeforeSettlement(admitted.promise, waiter, "Waiter did not enter preparation");
@@ -309,7 +305,6 @@ export async function provePreparationWaiterAuthority(
       waiterStop.abort(new Error("waiter stopped"));
       await expect(waiter).rejects.toBe(waiterStop.signal.reason);
     }
-    revoked = mode === "revoke waiter";
     if (mode === "cancel producer") {
       producerStop.abort(new Error("producer stopped"));
     }
@@ -325,12 +320,10 @@ export async function provePreparationWaiterAuthority(
       mode === "cancel producer" || mode === "failed producer" ? "rejected" : "fulfilled",
     );
     expect(results[1]?.status).toBe(mode === "cancel producer" ? "fulfilled" : "rejected");
-    if (mode === "revoke waiter" || mode === "other session") {
+    if (mode === "other session") {
       expect(results[1]).toMatchObject({
         reason: {
-          message: expect.stringContaining(
-            mode === "revoke waiter" ? "waiter revoked" : "different session incarnation",
-          ),
+          message: expect.stringContaining("different session incarnation"),
         },
       });
     }
@@ -377,7 +370,17 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   // The first reuse must detect a same-size edit despite the retained initialization identities.
   const source = path.join(first.workspaceDir, "source.txt");
   const before = await fs.stat(source);
-  await writeText(first.workspaceDir, "source.txt", "modified\n");
+  // An independent writer bypasses command finalization and host-write hooks.
+  const background = await runCommandWithTimeout(
+    [
+      process.execPath,
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], 'modified\\n')",
+      source,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  expect(background.code).toBe(0);
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
   await expectText(canonical, "source.txt", "modified\n");
@@ -422,8 +425,7 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
 
 export async function proveWarmWorkspaceReuseFailure(
   owner: LocalWorkspaceOwner,
-  failure: "read" | "authority" | "observation" | "cancel",
-  revoke: () => void,
+  failure: "read" | "observation" | "cancel",
 ) {
   using first = await prepareSandboxCheckpointFixture(owner);
   if (failure === "observation") {
@@ -445,9 +447,6 @@ export async function proveWarmWorkspaceReuseFailure(
         manifest: async (row, action) => {
           if (action.kind === "probe" && !failed && failure !== "observation") {
             failed = true;
-            if (failure === "authority") {
-              revoke();
-            }
             if (failure === "cancel") {
               cancellation.abort(new Error("reuse cancelled"));
             }
@@ -476,7 +475,7 @@ export async function proveWarmWorkspaceReuseFailure(
     expect(quiesce).not.toHaveBeenCalled();
   } else {
     await expect(prepareSandboxCheckpointFixture(owner)).rejects.toThrow(
-      failure === "authority" ? "revoked" : "observation acceptance failed",
+      "observation acceptance failed",
     );
     expect(quiesce).not.toHaveBeenCalled();
   }

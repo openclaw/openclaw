@@ -16,7 +16,7 @@ import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { modelsListCommand } from "./list.list-command.js";
-import { runAuthProbes } from "./list.probe.js";
+import { buildProbeTargets, runAuthProbes } from "./list.probe.js";
 
 const provider = "offline-secret-fixture";
 const credential = "synthetic-offline-catalog-key";
@@ -25,6 +25,7 @@ let server: Awaited<ReturnType<typeof reserveTestPortListener<Server>>>;
 let requests: boolean[];
 let release: ReturnType<typeof createDeferredCore<void>>;
 let baseUrl: string;
+let listingStatus: number;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -38,6 +39,7 @@ beforeEach(async () => {
     },
   });
   requests = [];
+  listingStatus = 200;
   release = createDeferredCore();
   server = await reserveTestPortListener({
     offsets: [0],
@@ -47,6 +49,7 @@ beforeEach(async () => {
         request.resume();
         if (request.url === "/v1/models") {
           void release.promise.then(() => {
+            response.statusCode = listingStatus;
             response.setHeader("content-type", "application/json");
             response.end('{"data":[{"id":"discovered-model","name":"Discovered model"}]}');
           });
@@ -95,14 +98,10 @@ function config(
   };
 }
 
-it.each(["provider", "profile"] as const)(
-  "waits for and persists offline catalog refresh with a %s file SecretRef",
-  async (owner) => {
-    const secretPath = await state.writeText("catalog-key", credential);
-    await fs.chmod(secretPath, 0o600);
-    const pluginFile = await state.writeText(
-      "catalog-plugin/index.cjs",
-      `module.exports = {
+async function installCatalogPlugin(): Promise<OpenClawConfig["plugins"]> {
+  const pluginFile = await state.writeText(
+    "catalog-plugin/index.cjs",
+    `module.exports = {
   id: ${JSON.stringify(provider)},
   register(api) {
     api.registerProvider({
@@ -113,6 +112,7 @@ it.each(["provider", "profile"] as const)(
         const response = await fetch(${JSON.stringify(baseUrl)} + "/models", {
           headers: { authorization: "Bearer " + auth.discoveryApiKey },
         });
+        if (!response.ok) throw new Error("Model listing unavailable");
         const body = await response.json();
         return { provider: {
           baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
@@ -123,24 +123,67 @@ it.each(["provider", "profile"] as const)(
   },
 };
 `,
-    );
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: provider,
-      activation: { onStartup: false },
-      providers: [provider],
-      providerCatalogEntry: "./index.cjs",
-      modelCatalog: { discovery: { [provider]: "runtime" } },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    });
+  );
+  await state.writeJson("catalog-plugin/openclaw.plugin.json", {
+    id: provider,
+    activation: { onStartup: false },
+    providers: [provider],
+    providerCatalogEntry: "./index.cjs",
+    modelCatalog: {
+      discovery: { [provider]: "runtime" },
+      providers: {
+        [provider]: {
+          baseUrl,
+          api: "openai-completions",
+          models: [{ id: "manifest-model", name: "Manifest model" }],
+        },
+      },
+    },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
+  return {
+    allow: [provider],
+    load: { paths: [pluginFile] },
+    slots: { memory: "none" },
+    entries: { [provider]: { enabled: true } },
+  };
+}
+
+it.each([200, 503])("plans unconfigured model probes after listing returns %i", async (status) => {
+  listingStatus = status;
+  release.resolve();
+  const cfg = { ...config([], credential), plugins: await installCatalogPlugin() };
+  await state.writeConfig(cfg);
+  const plan = await buildProbeTargets({
+    cfg,
+    agentId: "main",
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    providers: [provider],
+    modelCandidates: [],
+    options: { includeDirectKeys: true, timeoutMs: 10_000, concurrency: 1 },
+  });
+  if (status === 200) {
+    expect(plan.targets.map((target) => target.model)).toEqual([
+      { provider, model: "discovered-model" },
+    ]);
+    expect(plan.results).toEqual([]);
+  } else {
+    expect(plan.targets).toEqual([]);
+    expect(plan.results).toMatchObject([{ provider, status: "no_model", reasonCode: "no_model" }]);
+  }
+  expect(requests).toEqual([true]);
+});
+
+it.each(["provider", "profile"] as const)(
+  "waits for and persists offline catalog refresh with a %s file SecretRef",
+  async (owner) => {
+    const secretPath = await state.writeText("catalog-key", credential);
+    await fs.chmod(secretPath, 0o600);
     const ref = { source: "file", provider: "catalog", id: "value" } as const;
     await state.writeConfig({
       ...config([], owner === "provider" ? ref : undefined),
-      plugins: {
-        allow: [provider],
-        load: { paths: [pluginFile] },
-        slots: { memory: "none" },
-        entries: { [provider]: { enabled: true } },
-      },
+      plugins: await installCatalogPlugin(),
       secrets: {
         providers: { catalog: { source: "file", path: secretPath, mode: "singleValue" } },
       },

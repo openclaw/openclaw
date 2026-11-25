@@ -230,7 +230,7 @@ it.each(["partial", "speech-start"] as const)(
       config.serve.path,
       lifecycle,
     );
-    const { ws } = await connectCarrierStream(handler);
+    const { ws } = await connectCarrierStream(handler, "request-uuid");
     sendCarrierStart(ws, "dialogue-stream", "request-uuid");
     const callbacks = await ready.promise;
     let now = Date.now();

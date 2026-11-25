@@ -3,7 +3,11 @@ import {
   type ProbeFrame,
   type ProbeLog,
   motion,
+  offsetWriters,
+  offsetWrites,
+  prependShift,
   remounts,
+  restingMotion,
   transcriptText,
   window,
 } from "../../scripts/lib/ios-behavior-grade.mts";
@@ -98,6 +102,79 @@ describe("window", () => {
       events: [],
     };
     expect(motion(window(log, 50, 100).frames)).toMatchObject({ teleports: 1, maxDriftPt: 470 });
+  });
+
+  it("keeps the reader's own scrolling when a gesture must not scroll at all", () => {
+    const log: ProbeLog = {
+      frames: [frame(10, { "user/a": 100 }), frame(20, { "user/a": 60 })],
+      events: [
+        { t: 15, e: "phase", v: "interacting" },
+        { t: 30, e: "phase", v: "idle" },
+      ],
+    };
+    expect(motion(window(log, 12, 40, { keepUserScroll: true }).frames).maxDriftPt).toBe(40);
+  });
+});
+
+describe("offset writers", () => {
+  it("totals each writer's writes and distance, back and forth included", () => {
+    const events = [
+      { t: 1, e: "offset", k: "ReadingPosition.follow", v: "100->140" },
+      { t: 2, e: "offset", k: "ReadingPosition.follow", v: "140->100" },
+      { t: 3, e: "offset", k: "system:ChatView.body", v: "100->90.5" },
+      { t: 9, e: "offset", k: "user", v: "90->10" },
+    ];
+    expect(offsetWriters(offsetWrites(events, 0, 5))).toEqual({
+      "ReadingPosition.follow": { writes: 2, movedPt: 80 },
+      "system:ChatView.body": { writes: 1, movedPt: 9.5 },
+    });
+  });
+});
+
+describe("prependShift", () => {
+  it("reads a prepend kept in place mid-deceleration as no shift", () => {
+    // The reader's deceleration moves the offset 30 pt; rows move up exactly that far.
+    const log: ProbeLog = {
+      frames: [
+        frame(100, { "user/a": 200, composer: 800 }),
+        frame(150, { "user/a": 170, composer: 800 }),
+      ],
+      events: [
+        { t: 100, e: "mark", k: "older-prepend" },
+        { t: 120, e: "offset", k: "ReadingPosition.prepend", v: "500->2500" },
+        { t: 140, e: "offset", k: "user", v: "2500->2530" },
+      ],
+    };
+    expect(prependShift(log, 100)).toBe(0);
+  });
+
+  it("reports rows the prepend pushed down beyond the reader's scroll", () => {
+    const log: ProbeLog = {
+      frames: [
+        frame(100, { "user/a": 200, composer: 800 }),
+        frame(150, { "user/a": 260, composer: 800 }),
+      ],
+      events: [{ t: 100, e: "mark", k: "older-prepend" }],
+    };
+    expect(prependShift(log, 100)).toBe(60);
+  });
+});
+
+describe("restingMotion", () => {
+  it("measures each stretch between drags on its own", () => {
+    const log: ProbeLog = {
+      frames: [
+        frame(10, { "user/a": 300 }),
+        frame(20, { "user/a": 250 }),
+        frame(40, { "user/a": 100 }),
+        frame(50, { "user/a": 108 }),
+      ],
+      events: [
+        { t: 15, e: "phase", v: "interacting" },
+        { t: 30, e: "phase", v: "idle" },
+      ],
+    };
+    expect(restingMotion(log, 0, 100)).toEqual({ largestStepPt: 8, teleports: 0 });
   });
 });
 

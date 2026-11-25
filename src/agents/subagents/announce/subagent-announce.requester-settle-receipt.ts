@@ -49,7 +49,7 @@ export function createRequesterSettleReceiptAdmission(params: {
                 currentEntry = entries[0];
               }
               if (!isCurrent()) {
-                throw new Error("Requester settle authority changed during watch admission");
+                throw new Error("Requester session ended during watch admission");
               }
             },
           },

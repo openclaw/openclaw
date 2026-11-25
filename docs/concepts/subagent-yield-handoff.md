@@ -24,6 +24,40 @@ response settle before the execution ends, preserving each call's own result.
 Stop, timeouts, and permission revocation can still cancel those calls while
 they settle. The handoff does not start another model request.
 
+Without a registered wake source, `sessions_yield` returns `nothing_pending`
+and keeps the model turn open. The model should reply to the user or start the
+work it intended to await. Keeping a spawned session does not keep its completed
+task alive: a new human message in that session needs its own continuation source.
+The tool stays available because the turn can start children or background work
+later; its availability does not imply that a wait has been registered.
+
+An empty model stop after tool results is not intentional silence. A direct human
+turn in a kept child follows the ordinary human reply policy: an explicit
+`NO_REPLY` stays silent, while a missing answer receives the existing recovery or
+missing-reply notice. Historical asynchronous tool activity alone cannot suppress
+that notice once the work has settled. A retained tool handoff still owns its
+continuation even after its tool call completes: the current turn releases
+ownership, then the handoff result resumes the conversation.
+
+Completion inputs already committed to the requester transcript remain consumed
+when its announcing turn produces no reply; they are not recorded as failed child
+deliveries or replayed. Results not yet consumed remain owed to the requester.
+A descendant whose delivery has settled cannot hold a later completion behind
+unfinished cleanup. Session deletion still waits for that cleanup.
+Committed child-row removal also retires its accepted completion receipt, so a
+later requester yield transfers the remaining cohort without requiring deleted
+rows. An unknown missing child still fails the complete-cohort check. Tracking
+the spawning turn for receipt cleanup does not claim a session-bound message wait;
+only an explicit watched continuation binds that wait to requester completion.
+This does not claim that a channel received an answer: ambiguous outbound delivery
+keeps its separate outcome, and private child input stays private.
+
+Gateway maintenance settles older unreachable yielded session lifecycles with a
+recorded failure, including runs absent from the subagent registry. It preserves active
+execution, queued input, retained continuations and wake-armed process completion.
+Restart recovery reports the missing continuation without attributing its loss to
+the restart.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |
@@ -41,6 +75,10 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
+Each ready member wakes the requester without waiting for siblings that are still
+working; those siblings keep the same generation and wake it again later. A
+followup caller that awaits one reply, and a Goal return, continue on the
+partition that leaves no member pending; earlier partitions are ordinary settle turns.
 
 Background commands belong to the session that started them, not to a run. A
 yield awaits every wake-armed command that is still running in the session,
@@ -329,6 +367,17 @@ otherwise be silent, the shared reply pipeline can send a waiting acknowledgment
 The native subagent registry retains the completion obligation and wakes the
 requester through its accepted completion path; progress text is not proof that
 a child finished or that its result was delivered.
+
+A later turn can supply an explicit waiting acknowledgment while an earlier
+turn's active child completion is already armed. The acknowledgment ends only
+the current turn; it does not claim the child again or rearm its completion.
+Without an acknowledgment, or when the earlier children are paused or have no
+armed wake, `sessions_yield` reports the pending work and leaves the turn active.
+If that turn already delivered its reply through the message tool and at least
+one earlier child is active with an armed wake, the runtime ends the turn at the
+`already_pending` result instead, because that wake resumes the session. Paused
+or unarmed children resume nothing, so their result always leaves the turn
+active for the model to act on.
 
 When settlement resumes a top-level parent with automatic channel delivery,
 OpenClaw keeps the channel's typing indicator active while that continuation

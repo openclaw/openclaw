@@ -33,6 +33,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import {
@@ -42,7 +43,6 @@ import {
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { SubagentCompletion } from "../../shared/subagent-completion.js";
@@ -77,7 +77,6 @@ export type PreparedAgentRunUserTurn = {
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   requesterOrigin?: RequesterOrigin;
-  assertRequesterCurrent?: () => void;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
   releaseProcessingAbortObserver?: () => void;
@@ -186,7 +185,6 @@ export async function prepareAgentRunUserTurn(params: {
 }): Promise<PreparedAgentRunUserTurn> {
   const caller = params.client?.internal?.agentToolCaller;
   const operatorAuthority = params.client?.internal?.operatorRunAuthority;
-  operatorAuthority?.assertCurrent();
   let requesterOrigin = caller
     ? captureRequesterOrigin(caller)
     : operatorAuthority ||
@@ -273,7 +271,10 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
-    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
+    const trackRequesterCompletion =
+      params.privateCompletion ||
+      settleWakeReplay !== undefined ||
+      Boolean(params.subagentCompletions?.length);
     const suppressPromptPersistence =
       !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
@@ -462,15 +463,6 @@ export async function prepareAgentRunUserTurn(params: {
       senderIsOwner =
         requesterOwner?.isCurrent(params.cfg) === true || resolveRuntimeSenderIsOwner();
     }
-    const assertRequesterCurrent =
-      requesterOwner && senderIsOwner
-        ? () => {
-            if (!requesterOwner.isCurrent(params.context.getRuntimeConfig())) {
-              throw new Error("Requester owner authority changed; send a new request.");
-            }
-          }
-        : undefined;
-    assertRequesterCurrent?.();
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
@@ -517,7 +509,6 @@ export async function prepareAgentRunUserTurn(params: {
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
       requesterOrigin,
-      assertRequesterCurrent,
       suppressPromptPersistence,
     };
   } catch (error) {

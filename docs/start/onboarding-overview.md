@@ -105,8 +105,12 @@ and stops rather than selecting a local model. Fix the reported problem and
 retry, or choose another available provider manually. A missing Codex executable
 or login still allows the remaining connections to be tried.
 If none works, OpenClaw installs or enables the official Codex plugin and uses
-its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
-is a utility option and is never chosen as the primary model.
+its existing login, or offers ChatGPT sign-in. If a connection failed for a reason
+other than credentials, setup shows **Couldn’t connect your AI** and the failed
+attempts instead of presenting sign-in as the diagnosis. You can still choose
+ChatGPT sign-in as another connection. Missing or expired credentials without
+other failures keep the sign-in prompt. Apple Foundation Models is a utility
+option and is never chosen as the primary model.
 
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
@@ -130,8 +134,8 @@ without automatic setup use the existing native AI setup flow.
 
 Gemini CLI remains available as an explicitly configured runtime after setup,
 but Gemini CLI and Antigravity are not offered as detected inference routes.
-Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for guided setup. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 

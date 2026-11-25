@@ -60,9 +60,6 @@ export async function prepareOpenClawTools(
           config: captured.config,
           agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
           authStore: captured.authProfileStore,
-          ...(captured.authProfileStoreSource !== undefined
-            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
-            : {}),
           runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
         });
   shared.assertCurrent();

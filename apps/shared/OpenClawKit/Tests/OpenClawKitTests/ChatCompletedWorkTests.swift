@@ -16,7 +16,7 @@ struct ChatCompletedWorkTests {
         #expect(Self.work(in: rows).isEmpty)
     }
 
-    @Test func `completed work folds around visible answers and leaves unresolved tails exposed`() throws {
+    @Test func `completed work folds narration above the answer and leaves unresolved tails exposed`() throws {
         let user = Self.message("user", "Check the layout", at: 1000)
         let progress = Self.message("assistant", "Checking", at: 2000, phase: "commentary")
         let tool = Self.message("toolResult", "checked", at: 3000)
@@ -27,24 +27,23 @@ struct ChatCompletedWorkTests {
         let independent = Self.message("toolResult", "heartbeat", at: 10000, run: "another-run")
         let source = [user, progress, tool, answer, trailing, failed, unresolved, independent]
         let rows = Self.collapse(source)
-        let work = try #require(Self.work(in: rows).first)
+        let groups = Self.work(in: rows)
+        try #require(groups.count == 2)
 
-        #expect(work.messages.map(\.id) == [tool.id])
-        #expect(work.durationMilliseconds == nil)
-        #expect(Self.visibleIDs(rows) == [
-            user.id,
-            progress.id,
-            answer.id,
-            trailing.id,
-            failed.id,
-            unresolved.id,
-            independent.id,
-        ])
-        #expect(Self.collapse([user, progress, failed, unresolved]) == ChatTranscriptRow.build(
-            from: [user, progress, failed, unresolved]))
+        // Narration before the answer and resolved narration after it join one disclosure above it.
+        #expect(groups[0].messages.map(\.id) == [progress.id, tool.id, trailing.id])
+        #expect(groups[0].durationMilliseconds == nil)
+        #expect(!groups[0].isActivityRun)
+        // The unresolved tail stays below the answer, gathered into one activity log.
+        #expect(Self.visibleIDs(rows) == [user.id, answer.id])
+        #expect(groups[1].isActivityRun)
+        #expect(groups[1].messages.map(\.id) == [failed.id, unresolved.id, independent.id])
+        let unanswered = Self.collapse([user, progress, failed, unresolved])
+        #expect(Self.visibleIDs(unanswered) == [user.id, progress.id])
+        #expect(Self.work(in: unanswered).map(\.isActivityRun) == [true])
     }
 
-    @Test func `unphased last reply and mixed final phase media remain visible`() throws {
+    @Test func `plain earlier replies final phase answers and media remain visible`() throws {
         let progress = Self.message("assistant", "Checking", at: 2000)
         let firstAnswer = Self.message("assistant", "First answer", at: 4000, phase: "final_answer")
         let mixed = try Self.decode(#"""
@@ -58,9 +57,13 @@ struct ChatCompletedWorkTests {
             content: [.init(type: "image", text: nil, mimeType: "image/png", fileName: "layout.png", content: nil)],
             timestamp: 6000)
         let rows = Self.collapse([progress, firstAnswer, mixed, media])
+        // An unphased reply that did not stop for tools is a reply, not narration; no tools, no fold.
         #expect(Self.work(in: rows).isEmpty)
         #expect(Self.visibleIDs(rows) == [progress.id, firstAnswer.id, mixed.id, media.id])
-        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), mixed])) == [progress.id, mixed.id])
+        let tool = Self.toolCall(at: 3000)
+        let withTool = Self.collapse([progress, tool, mixed])
+        #expect(Self.visibleIDs(withTool) == [progress.id, mixed.id])
+        #expect(Self.work(in: withTool).map { $0.messages.map(\.id) } == [[tool.id]])
         let legacyFinal = Self.message("assistant", "Legacy final", at: 7000)
         #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), legacyFinal])) == [
             progress.id,
@@ -68,7 +71,33 @@ struct ChatCompletedWorkTests {
         ])
     }
 
-    @Test func `later run commentary cannot turn its unanswered tools into completed work`() {
+    @Test func `an opening greeting before a reply never folds into empty work`() {
+        // The screenshot-mode demo chat: two plain assistant replies and no user message yet.
+        let greeting = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(
+                type: "text",
+                text: "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.")],
+            timestamp: 1000,
+            transcriptMessageID: "greeting",
+            stopReason: "stop")
+        let workflow = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(
+                type: "text",
+                text: "A small release workflow:\n\n```mermaid\nflowchart TD\n  Draft --> Review\n```")],
+            timestamp: 2000,
+            transcriptMessageID: "workflow",
+            stopReason: "stop")
+        let rows = Self.collapse([greeting, workflow])
+        #expect(Self.work(in: rows).isEmpty)
+        #expect(Self.visibleIDs(rows) == [greeting.id, workflow.id])
+        // Commentary alone is still not work worth a fold.
+        let narration = Self.message("assistant", "Looking now", at: 500, phase: "commentary")
+        #expect(Self.work(in: Self.collapse([narration, workflow])).isEmpty)
+    }
+
+    @Test func `later reply run commentary after the answer folds into its work`() {
         let tool = Self.toolCall(at: 1000)
         let final = Self.message("assistant", "Done", at: 2000, run: "answered", phase: "final_answer")
         let progress = Self.message(
@@ -79,12 +108,13 @@ struct ChatCompletedWorkTests {
             phase: "commentary")
         let result = Self.message("toolResult", "Checked", at: 4000, run: "unanswered")
         let rows = Self.collapse([tool, final, progress, result])
-        #expect(Self.work(in: rows).first?.messages.map(\.id) == [tool.id])
-        #expect(Self.visibleIDs(rows) == [final.id, progress.id, result.id])
+        // Its run has visible text, so its resolved output belongs above the answer (web :366-394).
+        #expect(Self.work(in: rows).map { $0.messages.map(\.id) } == [[tool.id, progress.id, result.id]])
+        #expect(Self.visibleIDs(rows) == [final.id])
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `assistant text with unfinished tools cannot complete work or hide a failure tail`(
+    func `unfinished last text closes the turn but keeps its own tools visible`(
         hasFailedResult: Bool,
         hasType: Bool)
     {
@@ -111,10 +141,36 @@ struct ChatCompletedWorkTests {
                     name: "read",
                     arguments: AnyCodable(["path": "layout.md"]))] + results,
             timestamp: 4000)
-        #expect(Self.work(in: Self.collapse([progress, unfinished])).isEmpty)
+        // Visible text is where the reply ends even with tools still open (web isFinalReplyGroup);
+        // work above it folds, its own unresolved parts stay exposed.
+        #expect(Self.work(in: Self.collapse([progress, unfinished])).map { $0.messages.map(\.id) } == [[progress.id]])
         let rows = Self.collapse([progress, final, failed, unfinished])
-        #expect(Self.work(in: rows).isEmpty)
-        #expect(Self.visibleIDs(rows) == [progress.id, final.id, failed.id, unfinished.id, unfinished.id])
+        #expect(Self.work(in: rows).map { $0.messages.map(\.id) } == [[progress.id, failed.id]])
+        #expect(Self.visibleIDs(rows) == [final.id, unfinished.id, unfinished.id])
+    }
+
+    @Test func `stopped reply still closes its turn and failed output after an answer stays put`() {
+        let user = Self.message("user", "Check the layout", at: 1000)
+        let tool = Self.toolCall(at: 2000)
+        let stopped = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Partial answer")],
+            timestamp: 3000,
+            stopReason: "aborted")
+        let rows = Self.collapse([user, tool, stopped])
+        #expect(Self.work(in: rows).map { $0.messages.map(\.id) } == [[tool.id]])
+        #expect(Self.visibleIDs(rows) == [user.id, stopped.id])
+
+        let answer = Self.message("assistant", "Layout checked", at: 3000, phase: "final_answer")
+        let timedOut = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Still saving")],
+            timestamp: 4000,
+            stopReason: "Timeout",
+            phase: "commentary")
+        let answered = Self.collapse([user, tool, answer, timedOut])
+        #expect(Self.work(in: answered).map { $0.messages.map(\.id) } == [[tool.id]])
+        #expect(Self.visibleIDs(answered) == [user.id, answer.id, timedOut.id])
     }
 
     @Test func `overlapping steers extend the same chronological chain until its last input is answered`() {
@@ -249,11 +305,17 @@ struct ChatCompletedWorkTests {
         let raw = try original.map { try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode($0)) }
         let decoded = await OpenClawChatViewModel.decodeMessages(raw)
         #expect(decoded.count == 4)
-        let refreshed = OpenClawChatViewModel.reconcileMessageIDs(
-            previous: decoded, incoming: await OpenClawChatViewModel.decodeMessages(raw))
+        let refreshed = await OpenClawChatViewModel.reconcileMessageIDs(
+            previous: decoded, incoming: OpenClawChatViewModel.decodeMessages(raw))
         #expect(refreshed.map(\.id) == decoded.map(\.id))
         #expect(Set(refreshed.map(\.id)).count == 4)
-        #expect(Self.work(in: Self.collapse(refreshed)).first?.messages.count == 2)
+        // The parent's narration, tool call and result fold; the settle run's answer stays visible.
+        let collapsed = Self.collapse(refreshed)
+        let parentIDs = refreshed.filter { $0.workRunID == "parent" }.map(\.id)
+        #expect(parentIDs.count == 3)
+        #expect(Self.work(in: collapsed).map { $0.messages.map(\.id) } == [parentIDs])
+        #expect(Self.visibleIDs(collapsed) == refreshed.filter { $0.workRunID == "announce:requester-settle" }
+            .map(\.id))
         let cached = OpenClawChatSQLiteTranscriptCache.cacheableMessages(decoded)
         #expect(OpenClawChatViewModel.dedupeMessages(cached).count == 4)
     }
@@ -296,7 +358,9 @@ struct ChatCompletedWorkTests {
         let source = [Self.toolCall(at: 1000), failed, first, second]
         let decoded = OpenClawChatViewModel.dedupeMessages(source)
         #expect(decoded.count == 4)
-        #expect(Self.work(in: Self.collapse(decoded)).isEmpty)
+        // Without an answer nothing folds; only the adjacent tool rows share an activity log.
+        #expect(Self.work(in: Self.collapse(decoded)).map(\.isActivityRun) == [true])
+        #expect(Self.visibleIDs(Self.collapse(decoded)) == [first.id, second.id])
         let user = Self.message("user", "Check the files", at: 0)
         #expect(OpenClawChatViewModel.hasUnansweredLatestUser(in: [user] + decoded))
 
@@ -311,13 +375,184 @@ struct ChatCompletedWorkTests {
             #expect(Self.work(in: Self.collapse([failed, roundTrip])).isEmpty)
         }
         let final = Self.message("assistant", "The first read failed; the next file is ready.", at: 5000)
-        #expect(Self.visibleIDs(Self.collapse(decoded + [final])) == [first.id, second.id, final.id])
+        let answered = Self.collapse(decoded + [final])
+        #expect(Self.visibleIDs(answered) == [final.id])
+        #expect(Self.work(in: answered).map { $0.messages.map(\.id) } == [decoded.map(\.id)])
 
         let unkeyed = try Self.decode(#"""
         {"role":"assistant","timestamp":5000,"openclawStreamFallback":{"source":"current","itemId":"  "},
          "content":[{"type":"text","text":"A complete unkeyed reply"}]}
         """#)
         #expect(Self.visibleIDs(Self.collapse([failed, unkeyed])) == [unkeyed.id])
+    }
+
+    @Test func `completed run folds into one summary timed from input to its last recorded row`() throws {
+        // Display timestamps differ from the recorded times: the end must come from recordTimestampMs.
+        let messages = try [
+            #"{"role":"user","timestamp":1000,"content":"Audit it","__openclaw":{"runId":"run-1"}}"#,
+            #"""
+            {"role":"assistant","timestamp":2000,"stopReason":"toolUse","__openclaw":{"runId":"run-1","recordTimestampMs":61000},
+             "content":[{"type":"toolCall","id":"c1","name":"exec","arguments":{"command":"ls"}}]}
+            """#,
+            #"""
+            {"role":"toolResult","toolCallId":"c1","toolName":"exec","timestamp":3000,"content":"ok",
+             "__openclaw":{"runId":"run-1","recordTimestampMs":120000}}
+            """#,
+            #"""
+            {"role":"assistant","timestamp":900000,"stopReason":"stop","content":"Audit done",
+             "__openclaw":{"runId":"run-1","recordTimestampMs":1656000}}
+            """#,
+        ].map(Self.decode)
+        let rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages))
+
+        let works = Self.work(in: ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false))
+        #expect(works.count == 1)
+        let work = try #require(works.first)
+        #expect(work.durationMilliseconds == 1_655_000)
+        #expect(ChatCompletedWorkSummary.label(work: work) == "Worked for 27m 35s")
+
+        // A live run never folds and has no completed duration.
+        #expect(ChatTranscriptRow.collapseCompletedWork(rows, runWorking: true) == rows)
+        #expect(ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false, activeRunIDs: ["run-1"]) == rows)
+        #expect(ChatTranscriptRow.runDurations(in: rows, activeRunIDs: ["run-1"]).isEmpty)
+    }
+
+    @Test func `continued runs keep one turn and each earlier run's reply stays visible`() throws {
+        func call(_ id: String, run: String, at time: Int, boundary: Bool = false, text: String? = nil) -> [String] {
+            let continuation = boundary ? #","turnBoundary":true,"continuation":{"source":"exec"}"# : ""
+            let prose = text.map { #"{"type":"text","text":"\#($0)"},"# } ?? ""
+            return [
+                #"""
+                {"role":"assistant","timestamp":\#(time),"stopReason":"toolUse",
+                 "__openclaw":{"runId":"\#(run)"\#(continuation)},
+                 "content":[\#(prose){"type":"toolCall","id":"\#(id)","name":"exec","arguments":{"command":"git log"}}]}
+                """#,
+                #"""
+                {"role":"toolResult","toolCallId":"\#(id)","toolName":"exec","timestamp":\#(time + 1),"content":"ok",
+                 "__openclaw":{"runId":"\#(run)"}}
+                """#,
+            ]
+        }
+        func reply(_ text: String, run: String, at time: Int) -> String {
+            #"{"role":"assistant","timestamp":\#(time),"stopReason":"stop","content":"\#(text)","__openclaw":{"runId":"\#(run)"}}"#
+        }
+        let json = [#"{"role":"user","timestamp":1000,"content":"Fix it here","__openclaw":{"runId":"a"}}"#] +
+            call("a1", run: "a", at: 2000) + [reply("Both problems will be fixed here.", run: "a", at: 3000)] +
+            call("b1", run: "b", at: 4000, boundary: true) + [reply("I hit a snag.", run: "b", at: 5000)] +
+            call("c1", run: "c", at: 6000, boundary: true) +
+            call("c2", run: "c", at: 7000, text: "This failure comes from the test.") +
+            [reply("The PR is not merged yet.", run: "c", at: 8000)]
+        let rows = try ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: json.map(Self.decode)))
+        // Automatic continuations resume the same request (web chat-turn-boundary.ts:88-102).
+        #expect(rows.filter(\.startsTurn).count == 1)
+        let collapsed = ChatTranscriptRow.collapseCompletedWork(rows, runWorking: false)
+        let projected = collapsed.dropFirst().map { row -> String? in
+            switch row {
+            case let .message(message): ChatMessageVisibleText.visibleText(in: message)
+            case let .completedWork(work): work.messages.flatMap {
+                    ChatToolActivity.items(message: $0).map(\.id)
+                }.joined(separator: ",")
+            case .systemNotice, .historyDivider: nil
+            }
+        }
+        #expect(projected == [
+            "a1", "Both problems will be fixed here.",
+            "b1", "I hit a snag.",
+            "c1,c2", "The PR is not merged yet.",
+        ])
+    }
+
+    @Test func `adjacent tool rows of an unanswered turn share one activity log`() {
+        func step(
+            _ id: String,
+            tool: String = "exec",
+            text: String? = nil,
+            failed: Bool = false) -> [OpenClawChatMessage]
+        {
+            let prose = text.map { [OpenClawChatMessageContent(type: "text", text: $0)] } ?? []
+            let arguments = tool == "read" ? ["path": "notes.md"] : ["command": "ls \(id)"]
+            let call = OpenClawChatMessage(
+                role: "assistant",
+                content: prose + [OpenClawChatMessageContent(
+                    type: "toolCall", id: id, name: tool, arguments: AnyCodable(arguments))],
+                timestamp: 1,
+                transcriptRunID: "p",
+                stopReason: "toolUse")
+            // A failed command that reports its exit status still ran.
+            let result = OpenClawChatMessage(
+                role: "toolResult",
+                content: [OpenClawChatMessageContent(type: "text", text: failed ? "boom" : "ok")],
+                timestamp: 2,
+                transcriptRunID: "p",
+                toolCallId: id,
+                toolName: tool,
+                details: failed ? AnyCodable(["exitCode": 1]) : nil,
+                isError: failed)
+            return [call, result]
+        }
+        let user = Self.message("user", "Deploy it", at: 0, run: "p")
+        let source = [user] + step("e1") + step("e2") + step("e3", text: "Production is stuck.") +
+            step("e4", failed: true) + step("r1", tool: "read") + step("e5", text: "Rebuilding the image.") +
+            step("e6")
+        let merged = ChatTranscriptRow.mergeToolResults(in: source)
+        let rows = ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: merged), runWorking: false)
+        let logs = Self.work(in: rows)
+        #expect(logs.map(\.isActivityRun) == [true, true])
+        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Ran commands, read files"])
+        // Narration and a lone command between it stay in place; a failure stays inside its log.
+        #expect(Self.visibleIDs(rows) == [user.id, merged[3].id, merged[6].id, merged[7].id])
+        #expect(logs.last.map { ChatToolActivity.items(message: $0.messages[0]).map(\.isError) } == [true])
+    }
+
+    @Test func `a subagent launch stays a visible row while the tools around it collapse`() throws {
+        func step(_ id: String, tool: String, arguments: [String: String], result: String) -> [OpenClawChatMessage] {
+            [
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [OpenClawChatMessageContent(
+                        type: "toolCall", id: id, name: tool, arguments: AnyCodable(arguments))],
+                    timestamp: 1,
+                    transcriptRunID: "p",
+                    stopReason: "toolUse"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [OpenClawChatMessageContent(type: "text", text: result)],
+                    timestamp: 2,
+                    transcriptRunID: "p",
+                    toolCallId: id,
+                    toolName: tool),
+            ]
+        }
+        let user = Self.message("user", "Ask Auditor", at: 0, run: "p")
+        let spawn = step(
+            "s1",
+            tool: "sessions_spawn",
+            arguments: ["label": "Auditor audit", "task": "Review the design"],
+            result: #"{"status":"accepted","childSessionKey":"agent:main:subagent:audit"}"#)
+        let source = [user] + step("e1", tool: "exec", arguments: ["command": "ls"], result: "ok") +
+            step("e2", tool: "exec", arguments: ["command": "pwd"], result: "ok") + spawn +
+            step("e3", tool: "exec", arguments: ["command": "git status"], result: "ok") +
+            step("r1", tool: "read", arguments: ["path": "notes.md"], result: "notes")
+        let merged = ChatTranscriptRow.mergeToolResults(in: source)
+        let launchRow = try #require(merged.first { $0.content.contains { $0.id == "s1" } })
+
+        // Unanswered: the launch splits the activity into two logs and keeps its own row.
+        let open = ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: merged), runWorking: false)
+        #expect(Self.visibleIDs(open) == [user.id, launchRow.id])
+        #expect(Self.work(in: open).map(\.isActivityRun) == [true, true])
+        #expect(Self.work(in: open).map(\.messages.count) == [2, 2])
+        let launch = try #require(ChatToolActivity.items(message: launchRow).first?.sessionLaunch)
+        #expect(launch.childKey == "agent:main:subagent:audit")
+        #expect(ChatSessionLaunch.title([launch], linksChildren: true).runs.compactMap { $0.link?.absoluteString } ==
+            ["\(ChatSessionLaunch.linkScheme):0"])
+
+        // Answered: the other tools fold into "Worked"; the launch stays beside the answer.
+        let answer = Self.message("assistant", "Auditor is on it.", at: 3, run: "p", phase: "final_answer")
+        let done = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: merged + [answer]), runWorking: false)
+        #expect(Self.visibleIDs(done) == [user.id, launchRow.id, answer.id])
+        #expect(Self.work(in: done).map(\.messages.count) == [4])
+        #expect(Self.work(in: done).map(\.isActivityRun) == [false])
     }
 
     private static func decode(_ json: String) throws -> OpenClawChatMessage {

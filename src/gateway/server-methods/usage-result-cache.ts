@@ -100,9 +100,9 @@ export async function loadSessionsUsageSnapshotCached(
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
     revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
-    revisionOnly: params.overview,
+    revisionOnly: true,
     load: params.load,
-    // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
+    // Incomplete snapshots must be retried even when no revision changes.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
   });
 }

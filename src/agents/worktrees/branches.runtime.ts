@@ -7,12 +7,14 @@ import { findGitCheckoutRoot, runGit } from "./git.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./types.js";
 
-const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024;
 const BRANCH_SUGGESTIONS_PER_KIND = 100;
+// Names keep their 256 KiB budget; each row's NUL and Unix commit time add at most 12 bytes.
+const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024 + BRANCH_SUGGESTIONS_PER_KIND * 12;
 
 type RepositoryBranchRef = {
   ref: string;
   branchName: string;
+  committedAt: number;
   branch: ManagedWorktreeBranch;
 };
 
@@ -29,8 +31,9 @@ async function listRepositoryBranchRefs(
       "core.warnAmbiguousRefs=true",
       "for-each-ref",
       `--count=${count}`,
-      "--sort=refname",
-      "--format=%(refname)%00%(refname:short)",
+      // Recent work is what people branch from; the bound keeps those refs, not the alphabet's head.
+      "--sort=-committerdate",
+      "--format=%(refname)%00%(refname:short)%00%(committerdate:unix)",
       ...patterns,
     ],
     {
@@ -41,21 +44,23 @@ async function listRepositoryBranchRefs(
   const output = requireGitCommandOutput("git for-each-ref", result);
   const branches: RepositoryBranchRef[] = [];
   for (const line of output.trim().split("\n")) {
-    const [ref, name] = line.split("\0");
+    const [ref, name, date] = line.split("\0");
     if (!ref || !name) {
       continue;
     }
+    const committedAt = Number(date) || 0;
     if (ref.startsWith("refs/heads/")) {
       branches.push({
         ref,
         branchName: ref.slice("refs/heads/".length),
+        committedAt,
         branch: { name, kind: "local" },
       });
     } else if (ref.startsWith("refs/remotes/")) {
       const remoteRef = ref.slice("refs/remotes/".length);
       const slash = remoteRef.indexOf("/");
       const branchName = slash > 0 ? remoteRef.slice(slash + 1) : "";
-      branches.push({ ref, branchName, branch: { name, kind: "remote" } });
+      branches.push({ ref, branchName, committedAt, branch: { name, kind: "remote" } });
     }
   }
   return branches;
@@ -156,7 +161,12 @@ export async function readRepositoryBranches(
     entry.ref === defaultEntry?.ref ? 0 : entry.ref === headEntry?.ref ? 1 : 2;
   const result: ManagedWorktreeBranchesResult = {
     branches: [...branches.values()]
-      .toSorted((a, b) => rank(a) - rank(b) || a.branch.name.localeCompare(b.branch.name))
+      .toSorted(
+        (a, b) =>
+          rank(a) - rank(b) ||
+          b.committedAt - a.committedAt ||
+          a.branch.name.localeCompare(b.branch.name),
+      )
       .map((entry) => entry.branch),
     ...(defaultEntry ? { defaultBranch: defaultEntry.branch.name } : {}),
     ...(headEntry ? { headBranch: headEntry.branch.name } : {}),

@@ -72,7 +72,7 @@ async function failFiveImages(page: Page, imageOnly = false) {
       });
     });
   });
-  await page.goto(suite.server.baseUrl + "/chat");
+  await page.goto(new URL("chat", suite.server.baseUrl).href);
   const composer = page.locator(".agent-chat__composer-combobox textarea").first();
   const input = page.locator(".agent-chat__file-input").first();
   await expectBrowser(composer).toBeVisible();

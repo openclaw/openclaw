@@ -132,3 +132,62 @@ it("applies current profile access to literal, short, and named session paths", 
     { scenario: "minimal", prepareProfileCatalog: true },
   );
 });
+
+it("opens the main route before its first message without telling absent from hidden", async () => {
+  await withSessionRowProjectionState(
+    async (create) => {
+      const cfg: OpenClawConfig = { ...config(), ...rolePolicyConfig() };
+      setRuntimeConfigSnapshot(cfg);
+      const owner = roleClient("none", "main-owner");
+      const viewer = roleClient("view", "main-viewer");
+      const denied = roleClient("none", "main-denied");
+      const projection = await create({ cfg, modelCatalog: [] });
+      const resolve = (
+        client: GatewayClient | null,
+        path = "/chat/main",
+        publicOnly = false,
+        isCurrent?: () => boolean,
+      ) => {
+        const target = parseControlUiSessionPath(path);
+        if (!target) {
+          throw new Error("Invalid fixture URL");
+        }
+        return resolveControlUiSessionPath({ target, projection, client, publicOnly, isCurrent });
+      };
+      const main = { key: "agent:main:main", agentId: "main" };
+      let authorityCurrent = true;
+      const absent = await resolve(viewer, "/chat/main/", false, () => authorityCurrent);
+      expect(absent).toMatchObject(main);
+      for (const client of [owner, denied]) {
+        expect(await resolve(client)).toMatchObject(main);
+      }
+      expect(await resolve(null, "/chat/main", true)).toBeNull();
+      expect(await resolve(null, "/chat/main", false)).toBeNull();
+      expect(await resolve(viewer, "/chat/main/main")).toBeNull();
+      expect(await resolve(viewer, "/chat/unknown")).toBeNull();
+
+      await put(main.key, "main-session", {
+        visibility: "draft",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: owner.authenticatedUserProfile!.profileId,
+        },
+      });
+      // The draft is visible to its creator and hidden from the others.
+      expect(await resolve(owner, "/chat/main/main")).toMatchObject(main);
+      expect(await resolve(viewer, "/chat/main/main")).toBeNull();
+      expect(await resolve(denied, "/chat/main/main")).toBeNull();
+      // The row appearing keeps a selection that was made without one.
+      expect(absent?.isCurrent()).toBe(true);
+      for (const client of [owner, viewer, denied]) {
+        expect(await resolve(client)).toMatchObject(main);
+      }
+      expect(await resolve(null, "/chat/main", true)).toBeNull();
+      authorityCurrent = false;
+      expect(absent?.isCurrent()).toBe(false);
+    },
+    false,
+    { scenario: "minimal", prepareProfileCatalog: true },
+  );
+});

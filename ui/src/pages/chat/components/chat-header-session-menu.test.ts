@@ -107,6 +107,7 @@ async function mountMenu(
 
 async function openMenu(menu: HeaderMenuElement) {
   expect(menu.openMenu()).toBe(true);
+  await import("./chat-header-session-menu-content.tsx");
   await waitForSolid(() => expect(menu.querySelector('[data-value="rename"]')).not.toBeNull());
 }
 

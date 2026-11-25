@@ -45,8 +45,6 @@ export async function createChatSendDashboardAuthority(params: {
   session: Pick<PreparedChatSendSession, "agentId" | "storePath">;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
-  hasCurrentClientAuthority: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
-  sessionMutationCommitGuard: GatewayRequestHandlerOptions["sessionMutationCommitGuard"];
   sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   externalAdmissionParams: Parameters<
@@ -88,7 +86,6 @@ export async function createChatSendDashboardAuthority(params: {
   const assertSourceCurrent =
     eligible && externalAuthorityAdmission
       ? () => {
-          params.sessionMutationCommitGuard?.();
           if (admission.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
             throw new Error("Dashboard prompt source lifecycle is no longer active.");
           }
@@ -100,14 +97,6 @@ export async function createChatSendDashboardAuthority(params: {
             )
           ) {
             admission.activeRunAbort.controller.signal.throwIfAborted();
-          }
-          // Transport loss is not revocation; the original caller and target still govern use.
-          if (
-            client?.invalidated ||
-            params.hasCurrentClientAuthority?.() === false ||
-            !externalAuthorityAdmission.allowsDashboardReads(externalAdmissionParams)
-          ) {
-            throw new Error("Dashboard message read admission is no longer active.");
           }
           (
             sessionAuthorization?.assertAdmittedInputCurrent ?? sessionAuthorization?.assertCurrent

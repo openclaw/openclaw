@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   formatCronSentence,
-  formatDays,
   formSentenceFrequency,
   parseCronSentence,
   sentenceForFrequency,
@@ -64,9 +63,13 @@ describe("schedule sentence", () => {
     expect(formatCronSentence(sentenceForFrequency("daily", null))).toBe("0 9 * * *");
   });
 
-  it("writes days as cron lists", () => {
-    expect(formatDays([])).toBe("*");
-    expect(formatDays([1, 3])).toBe("1,3");
-    expect(formatDays([0, 1, 2, 5])).toBe("0-2,5");
+  it.each<[number[], string]>([
+    [[], "*"],
+    [[1, 3], "1,3"],
+    [[0, 1, 2, 5], "0-2,5"],
+  ])("writes days %j as a cron list", (days, expected) => {
+    expect(formatCronSentence({ frequency: "daily", days, hour: 9, minute: 0 })).toBe(
+      `0 9 * * ${expected}`,
+    );
   });
 });

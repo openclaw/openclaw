@@ -8,6 +8,7 @@ import {
 import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
+import { flushLogger } from "../../logging/logger.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellation-policy.js";
 import { shutdownProcessSupervisor } from "../../process/supervisor/index.js";
@@ -178,6 +179,7 @@ export function createGatewayRunCleanup(
         requestSettledExitWatchdog(
           SETTLED_EXIT_WATCHDOG_MS,
           cleanupFailed && exitCode === 1 ? "SIGUSR2" : undefined,
+          flushLogger,
         );
       }
       // Final diagnostics follow the actual producer joins, including failed cleanup.

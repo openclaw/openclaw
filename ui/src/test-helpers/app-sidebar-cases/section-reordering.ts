@@ -173,9 +173,7 @@ describe("AppSidebar section reordering", () => {
       const bounds = target.getBoundingClientRect();
       dispatchDragEvent(target, "dragover", transfer, after ? bounds.bottom + 1 : bounds.top - 1);
       await sidebar.updateComplete;
-      expect(
-        target.classList.contains(`sidebar-zone-entry--drop-${after ? "after" : "before"}`),
-      ).toBe(true);
+      expect(target.classList.contains(`reorder-drop-${after ? "after" : "before"}`)).toBe(true);
       dispatchDragEvent(target, "drop", transfer);
       await sidebar.updateComplete;
     };

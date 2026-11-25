@@ -25,8 +25,9 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
+    state: {},
     ...overrides,
-  } as CronJob;
+  };
 }
 
 export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
@@ -58,6 +59,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
+    cloning: false,
     createOpen: false,
     activityOpen: false,
     detailTab: "settings",
@@ -71,9 +73,8 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     runsDeliveryStatuses: [],
     runsQuery: "",
     runsSortDir: "desc",
-    agentSuggestions: [],
-    modelSuggestions: [],
-    thinkingSuggestions: [],
+    agentsList: null,
+    models: { catalog: undefined, agent: undefined },
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
     failureAlertToSuggestions: [],
@@ -137,10 +138,6 @@ export function getElement<T extends Element>(
   return element;
 }
 
-export function selectSegmented(control: HTMLElement) {
-  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
-}
-
 const SENTENCE_FREQUENCY: Record<string, string> = {
   at: "once",
   every: "every",
@@ -148,13 +145,8 @@ const SENTENCE_FREQUENCY: Record<string, string> = {
   event: "event",
 };
 
-/** Chooses a schedule kind as a person does: Repeat for kinds with their own controls, else the sentence's frequency. */
+/** Chooses a schedule kind from the frequency menu. */
 export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: string) {
-  const segmented = root.querySelector<HTMLElement>(`[data-test-id="cron-schedule-kind-${kind}"]`);
-  if (segmented) {
-    selectSegmented(segmented);
-    return;
-  }
   getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
   getElement(
     root,

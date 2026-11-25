@@ -1,7 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
-import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -15,18 +13,6 @@ import type { FollowupRun } from "./types.js";
 
 const queue = queueFixture("steer");
 const source = (prompt: string, messageId = prompt) => queue.source(prompt, messageId);
-function authority(isCurrent: () => boolean, message: string) {
-  return createAdmittedRunOperatorAuthority({
-    profileId: "fixture",
-    scopes: ["operator.write"],
-    source: {},
-    assertCurrent() {
-      if (!isCurrent()) {
-        throw new Error(message);
-      }
-    },
-  });
-}
 function recordDelivery(count: number, active?: FollowupRun) {
   const delivered: string[] = [];
   const done = createDeferred();
@@ -128,50 +114,6 @@ it("joins asynchronous source cleanup after native settlement and cancellation",
   expect(input.mailbox.entries).not.toContain(input);
 });
 
-it("rechecks channel execution authority after waiting for native settlement", async () => {
-  const [first, second] = [queue.source("first"), queue.source("second")];
-  let current = true;
-  second.operatorAuthority = authority(() => current, "source authority revoked");
-  const firstReservation = await queue.admit(first);
-  const secondReservation = queue.reserve(second);
-  const secondAdmission = secondReservation.admit();
-  const rejected = expect(secondAdmission).resolves.toBe("cancelled");
-  current = false;
-  firstReservation.consume("consumed");
-  await rejected;
-  await settleSource(second.controllerInput!);
-  expect(second.controllerInput?.phase).toBe("consumed");
-});
-
-it.each([new GatewayOperatorAccessUnavailableError(), new Error("internal SDK assertion failure")])(
-  "queues an unaccepted steer after an unrecorded authority refusal (%s)",
-  async (error) => {
-    const [first, second] = [source("first"), source("second")];
-    let refusing = false;
-    second.operatorAuthority = {
-      profileId: "fixture",
-      scopes: ["operator.write"],
-      signal: new AbortController().signal,
-      assertCurrent() {
-        if (refusing) {
-          refusing = false;
-          throw error;
-        }
-      },
-    };
-    const { delivered, drained } = recordDelivery(1);
-    const firstReservation = await queue.admit(first);
-    const secondAdmission = queue.reserve(second).admit();
-    const rejected = expect(secondAdmission).rejects.toBe(error);
-    refusing = true;
-    firstReservation.consume("consumed");
-    await rejected;
-    expect(second.controllerInput?.abortSignal.aborted).toBe(false);
-    await drained;
-    expect(delivered).toEqual(["second"]);
-  },
-);
-
 it.each(["accepted", "rejected"] as const)(
   "tries newer input after an earlier steer rejects and drains %s fallback in order",
   async (outcome) => {
@@ -230,10 +172,6 @@ it.each(["summarize", "new", "old"] as const)(
   async (dropPolicy) => {
     queue.settings = { ...queue.settings, cap: 1, dropPolicy };
     const [active, first, newer] = [source("active"), source("steer-a"), source("steer-b")];
-    let firstCurrent = true;
-    if (dropPolicy === "old") {
-      first.operatorAuthority = authority(() => firstCurrent, "queued source authority expired");
-    }
     const disposition = vi.fn();
     newer.onQueueDisposition = disposition;
     const onAbandoned = vi.fn();
@@ -250,7 +188,6 @@ it.each(["summarize", "new", "old"] as const)(
       const newerSettlement = settleSource(newerInput);
       expect(getExistingFollowupQueue(queue.key)?.items).toEqual([active, first, newer]);
       expect(disposition).not.toHaveBeenCalled();
-      firstCurrent = false;
       newerReservation.fallback();
       expect(getExistingFollowupQueue(queue.key)?.items).toEqual([
         active,
