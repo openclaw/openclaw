@@ -2,9 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runInNewContext } from "node:vm";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
@@ -23,6 +28,7 @@ const dirs: string[] = [];
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -42,6 +48,7 @@ describe("startup retained deletion", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       };
+      openClientCredentialCustody(env, { createIfMissing: true })?.close();
       fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
       const statePath = path.join(stateDir, "state", "openclaw.sqlite");
       const retainedDir = path.join(stateDir, "agents", "retired", "agent");
@@ -72,6 +79,9 @@ describe("startup retained deletion", () => {
             JSON.stringify([retainedPath]),
             Number(cleanupCompleted),
           );
+        runSqliteImmediateTransactionSync(state, () =>
+          bindFreshClientCredentialStore(state, { env, path: statePath }),
+        );
       }
       {
         using active = new DatabaseSync(activePath);
@@ -127,7 +137,11 @@ describe("canonical in-place migration", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       };
-      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+      for (const [key, value] of Object.entries(env)) {
+        vi.stubEnv(key, value);
+      }
+      const authoredConfig = trial ? '{"agents":{"list":[{"id":"main"}]}}\n' : "{}";
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, authoredConfig);
       const statePath = path.join(stateDir, "state", "openclaw.sqlite");
       const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
       for (const file of [statePath, agentPath]) {
@@ -141,7 +155,7 @@ describe("canonical in-place migration", () => {
           INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
             VALUES ('primary', 'global', 41, 1, 1);
           INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '41', 1);
-          INSERT INTO config_machine_state VALUES ('upgrade-witness', '"before"', 1);`);
+          INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1);`);
         using agent = new DatabaseSync(agentPath);
         agent.exec(getOpenClawAgentMigrationSchema(43));
         agent.exec(`PRAGMA user_version = 43;
@@ -169,6 +183,17 @@ describe("canonical in-place migration", () => {
           expect(live.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
           using agent = new DatabaseSync(agentPath, { readOnly: true });
           expect(agent.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+          expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authoredConfig);
+          if (trial) {
+            const configOriginal = `${env.OPENCLAW_CONFIG_PATH}.pre-${resolveRuntimeServiceBuildId() ?? VERSION}`;
+            expect(fs.existsSync(configOriginal), "config original must precede manifest").toBe(
+              true,
+            );
+            expect(
+              fs.readFileSync(configOriginal, "utf8"),
+              "config original must precede manifest",
+            ).toBe(authoredConfig);
+          }
         }
         rename(source, destination);
       });
@@ -188,6 +213,11 @@ describe("canonical in-place migration", () => {
       };
       await expect(upgrade()).resolves.toEqual({ status: "upgraded" });
       publication.mockRestore();
+      if (trial) {
+        const repairedConfig = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+        expect(repairedConfig).toHaveProperty("agents.entries.main", {});
+        expect(repairedConfig).not.toHaveProperty("agents.list");
+      }
       for (const [file, identity] of [
         [statePath, stateIdentity],
         [agentPath, agentIdentity],
@@ -211,7 +241,7 @@ describe("canonical in-place migration", () => {
           OPENCLAW_STATE_SCHEMA_VERSION,
         );
         state.exec(
-          `UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'upgrade-witness'`,
+          `UPDATE config_machine_state SET value_json = '"allowlist"' WHERE state_key = 'plugins.bundledDiscovery'`,
         );
         using agent = new DatabaseSync(agentPath);
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
@@ -224,17 +254,21 @@ describe("canonical in-place migration", () => {
       await expect(
         executeExistingOpenClawStateRead(
           { env },
-          { type: "plugins.metadata.read", input: { stateKeys: ["upgrade-witness"] } },
+          { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
         ),
       ).resolves.toMatchObject({
         type: "plugins.metadata.read",
-        rows: [{ state_key: "upgrade-witness", value_json: '"after"' }],
+        rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
       });
-      const preimage = `${statePath}.pre-${resolveRuntimeServiceBuildId() ?? VERSION}`;
+      const generation = resolveRuntimeServiceBuildId() ?? VERSION;
+      const preimage = `${statePath}.pre-${generation}`;
+      const configPreimage = `${env.OPENCLAW_CONFIG_PATH}.pre-${generation}`;
       expect(fs.existsSync(manifestPath)).toBe(trial);
       expect(fs.existsSync(preimage)).toBe(trial);
+      expect(fs.existsSync(configPreimage)).toBe(trial);
       if (trial) {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        const encoded = fs.readFileSync(manifestPath, "utf8");
+        const manifest = JSON.parse(encoded) as {
           v: number;
           runId: string;
           files: Array<{ live: string; preimage: string | null }>;
@@ -242,16 +276,46 @@ describe("canonical in-place migration", () => {
         expect(manifest).toMatchObject({ v: 1, runId: "in-place-floor" });
         expect(manifest.files.filter((file) => file.preimage !== null)).toEqual([
           { live: statePath, preimage },
+          { live: env.OPENCLAW_CONFIG_PATH, preimage: configPreimage },
         ]);
+        expect(fs.readFileSync(configPreimage, "utf8")).toBe(authoredConfig);
         expect(manifest.files.some((file) => file.live.startsWith(agentPath))).toBe(false);
         expect(fs.statSync(preimage).ino).not.toBe(stateIdentity.ino);
-        using image = new DatabaseSync(preimage, { readOnly: true });
-        expect(image.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+        {
+          using image = new DatabaseSync(preimage, { readOnly: true });
+          expect(image.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
+          expect(
+            image
+              .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+              .get("plugins.bundledDiscovery"),
+          ).toEqual({ value_json: '"all"' });
+        }
+        const imageIdentity = fs.statSync(preimage);
+        const configImageIdentity = fs.statSync(configPreimage);
+        await expect(upgrade()).resolves.toEqual({ status: "current" });
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(encoded);
+        expect(fs.statSync(preimage)).toMatchObject({
+          dev: imageIdentity.dev,
+          ino: imageIdentity.ino,
+        });
+        expect(fs.statSync(configPreimage)).toMatchObject({
+          dev: configImageIdentity.dev,
+          ino: configImageIdentity.ino,
+        });
+        expect(fs.readFileSync(configPreimage, "utf8")).toBe(authoredConfig);
+        await closeOpenClawStateDatabaseAsync();
+        runInNewContext(
+          `${ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); retirePlans(stateDir,generation); restoreState(files,suffix);`,
+          { fs, path, stateDir, generation, suffix: `.pre-${generation}` },
+        );
+        expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authoredConfig);
+        using restored = new DatabaseSync(statePath, { readOnly: true });
+        expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 41 });
         expect(
-          image
+          restored
             .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-            .get("upgrade-witness"),
-        ).toEqual({ value_json: '"before"' });
+            .get("plugins.bundledDiscovery"),
+        ).toEqual({ value_json: '"all"' });
       }
     },
   );
@@ -263,14 +327,12 @@ describe("upgradeStateDirectory version zero", () => {
     dirs.push(stateDir);
     fs.mkdirSync(path.join(stateDir, "state"));
     const anchor = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    anchor.exec("CREATE TABLE anchor (v TEXT)");
     anchor.close();
     // Fresh agent catalogs also belong to bootstrap.
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
     const agent = new DatabaseSync(
       path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
     );
-    agent.exec("CREATE TABLE t (v TEXT)");
     agent.close();
     const env = {
       OPENCLAW_STATE_DIR: stateDir,

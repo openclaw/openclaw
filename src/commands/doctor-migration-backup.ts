@@ -96,26 +96,8 @@ export function captureFreshDoctorMigrationTables(
     }
   };
   assertCurrent();
-  const backupId = randomUUID();
-  let backup: { path: string; generation: string };
-  try {
-    backup = createScopedMigrationSnapshotSync(db, {
-      sourcePath: options.path,
-      targetPath: doctorMigrationBackupPath(options.path, backupId, "scoped"),
-      tables: options.tables,
-      assertCurrent,
-    });
-  } catch (error) {
-    const full = getDoctorMigrationFullBackup(options.path);
-    if (!(error instanceof ScopedMigrationSnapshotUnsupportedError) || !full) {
-      throw error;
-    }
-    if (!scopedMigrationTablesMatchFullBackup(db, options.path, full.path, options.tables)) {
-      throw new DoctorMaintenanceRefusalError(
-        `Pre-migration backup no longer contains current credentials: ${full.path}. Preserve the database and its backup before retrying.`,
-        { kind: "data-at-risk", reason: "incomplete-migration" },
-      );
-    }
+  const full = getDoctorMigrationFullBackup(options.path);
+  if (full && scopedMigrationTablesMatchFullBackup(db, options.path, full.path, options.tables)) {
     assertCurrent();
     return {
       capture: {
@@ -127,6 +109,24 @@ export function captureFreshDoctorMigrationTables(
       },
       backupPath: full.path,
     };
+  }
+  const backupId = randomUUID();
+  let backup: { path: string; generation: string };
+  try {
+    backup = createScopedMigrationSnapshotSync(db, {
+      sourcePath: options.path,
+      targetPath: doctorMigrationBackupPath(options.path, backupId, "scoped"),
+      tables: options.tables,
+      assertCurrent,
+    });
+  } catch (error) {
+    if (error instanceof ScopedMigrationSnapshotUnsupportedError && full) {
+      throw new DoctorMaintenanceRefusalError(
+        `Pre-migration backup no longer contains current credentials: ${full.path}. Preserve the database and its backup before retrying.`,
+        { kind: "data-at-risk", reason: "incomplete-migration" },
+      );
+    }
+    throw error;
   }
   recordDoctorMigrationBackups(
     options.env,

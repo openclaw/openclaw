@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sha256File } from "../infra/crypto-digest.js";
+import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -64,6 +66,7 @@ describe("startup canonical ownership", () => {
     };
     const registrations = readRegistry();
     const agentIdentity = fs.statSync(agentPath);
+    const agentBytes = await sha256File(agentPath);
     const stateIdentity = fs.statSync(statePath);
     const log = { info: vi.fn(), warn: vi.fn() };
     const result = await upgradeStateDirectory({
@@ -82,12 +85,19 @@ describe("startup canonical ownership", () => {
       ino: agentIdentity.ino,
       size: 64 * 1024 * 1024 + 1,
     });
+    expect(await sha256File(agentPath)).toBe(agentBytes);
     expect(fs.statSync(statePath)).toMatchObject({
       dev: stateIdentity.dev,
       ino: stateIdentity.ino,
     });
     expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
-    expect(fs.readdirSync(path.dirname(agentPath))).toEqual(["openclaw-agent.sqlite"]);
+    expect(
+      fs.readdirSync(path.dirname(agentPath)).filter((name) => name.includes(".pre-")),
+    ).toEqual([]);
+    // The existing clean-close owner may publish its validated seal, not an upgrade copy.
+    expect(
+      readSqliteCleanCloseSeal(agentPath, fs.statSync(agentPath, { bigint: true })),
+    ).toBeDefined();
     using state = new DatabaseSync(statePath, { readOnly: true });
     expect(state.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,

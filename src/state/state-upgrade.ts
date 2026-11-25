@@ -1,6 +1,14 @@
 // Gateway startup owns admission; each store's existing migration owner writes in place.
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeHeartbeatRepairSource } from "../commands/doctor-automatic-heartbeat-repair.js";
+import { tryProjectRetiredHeartbeatConfig } from "../commands/doctor-heartbeat-legacy.js";
+import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
+import {
+  backupDoctorMigrationDatabases,
+  captureFreshDoctorMigrationTables,
+} from "../commands/doctor-migration-backup.js";
 import {
   commitAutomaticConfigRepair,
   planAutomaticConfigRepair,
@@ -21,6 +29,10 @@ import {
   logStateMigrationResult,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import {
+  recordDoctorMigrationFullBackup,
+  runWithDoctorMigrationBackup,
+} from "../infra/update-doctor-migration-attribution.js";
 import { prepareLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.js";
 import { preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -29,12 +41,11 @@ import { openAgentEngineStore } from "./openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
-import {
-  openOpenClawStateDatabaseForDoctor,
-  prepareOpenClawStateDatabaseSchema,
-} from "./openclaw-state-db.js";
+import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { openOpenClawStateDatabaseForDoctor } from "./openclaw-state-db.js";
 import {
   discoverDatabases,
+  expectedVersion,
   floorRaisingDatabases,
   outdatedDatabases,
   stateUpgradeRefusal,
@@ -61,8 +72,18 @@ export async function upgradeStateDirectory(params: {
     return { status: "current" };
   }
   const snapshot = await readConfigSnapshotBeforeEngineSelection(env);
+  const heartbeatSource = normalizeHeartbeatRepairSource(snapshot);
+  const projectedHeartbeat = tryProjectRetiredHeartbeatConfig(heartbeatSource.sourceConfig);
+  const heartbeatMigration =
+    projectedHeartbeat && !isDeepStrictEqual(projectedHeartbeat, heartbeatSource.sourceConfig)
+      ? {
+          config: projectedHeartbeat,
+          changes: heartbeatSource.changes,
+          pendingStateMigration: true as const,
+        }
+      : undefined;
   const configRepair = await withArtifactPreservingStateReads(() =>
-    planAutomaticConfigRepair(snapshot),
+    planAutomaticConfigRepair(snapshot, heartbeatMigration),
   );
   if (snapshot.exists && !snapshot.valid && !configRepair) {
     return {
@@ -98,100 +119,169 @@ export async function upgradeStateDirectory(params: {
           );
         }
       }
-      await publishStateUpgradeRestore(restore, { targets: protectedTargets, config });
+      await publishStateUpgradeRestore(restore, {
+        targets: [
+          ...protectedTargets,
+          ...(configRepair ? [{ path: snapshot.path, engine: "file" as const }] : []),
+        ],
+        config,
+      });
     } catch (error) {
       return { status: "refused", reason: formatErrorMessage(error) };
     }
-    const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
-      prepareLegacySessionSurfaces({ config, env }),
-    );
-    const legacyState = await detectLegacyStateMigrations({
-      cfg: config,
-      env,
-      doctorOnlyStateMigrations: true,
-      artifactPreservingReadOnly: true,
-      legacySessionSurfaces,
-    });
-    if (outdated.length === 0 && !configRepair && legacyState.preview.length === 0) {
-      return { status: "current" };
-    }
-    try {
-      // Released file formats still belong to Doctor's existing import owner.
-      // It runs on live paths, after database images and before schema admission.
-      if (legacyState.preview.length > 0) {
-        const legacy = await autoMigrateLegacyState({
-          cfg: config,
-          env,
-          doctorOnlyStateMigrations: true,
-          configIncludedPaths: snapshot.includedPaths,
-          legacySessionSurfaces,
-        });
-        logStateMigrationResult(legacy, log);
-        throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
-      }
-      if (configRepair) {
-        await commitAutomaticConfigRepair(configRepair, snapshot);
-      }
-      for (const target of outdated.filter((entry) => entry.kind === "state")) {
-        if (target.engine === "postgres") {
-          await withEngineStoreAdmission(() =>
-            openOpenClawStateDatabaseForDoctor({ path: target.path, env }),
-          );
-        } else {
-          // This is the ordinary schema migration owner, not Doctor's repair chain.
-          const migrated = await prepareOpenClawStateDatabaseSchema({ path: target.path, env });
-          if (migrated.warnings.length > 0) {
-            throw new Error(migrated.warnings.join("\n"), { cause: migrated.failure });
+    return runWithDoctorMigrationBackup(
+      captureFreshDoctorMigrationTables,
+      async (): Promise<StateUpgradeResult> => {
+        for (const file of restore?.existing?.files ?? []) {
+          if (file.preimage !== null) {
+            recordDoctorMigrationFullBackup(file.live, { path: file.preimage });
           }
         }
-        log.info(`Migrated ${target.path} in place from schema ${target.version}.`);
-      }
-      const agents = outdated.filter((target) => target.kind === "agent");
-      if (agents.length > 0) {
-        await withAgentDatabaseMaintenanceLease(
-          { env, processBound: true, schemaPolicy: "existing" },
-          async (lease) => {
-            for (const target of agents) {
-              lease.assertOwned();
-              using database = openNodeSqliteDatabase(target.path);
-              if (target.engine === "postgres") {
-                withEngineStoreAdmission(() => {
-                  const engine = openAgentEngineStore(database, target.agentId!, target.path, true);
-                  if (engine !== database) {
-                    engine.close();
-                  }
-                });
-              } else {
-                runSqliteIntegrityOperationSync(
-                  ensureOpenClawAgentDatabaseSchemaSteps(database, {
-                    agentId: target.agentId!,
-                    path: target.path,
-                    env,
-                    versionMigrationOnly: true,
-                    onMigrationWarning: (warning) => log.warn(warning),
-                  }),
-                );
-              }
-              log.info(`Migrated ${target.path} in place from schema ${target.version}.`);
-            }
-          },
+        // Outside a launcher trial, the same Doctor owner backs up this one
+        // credential-bearing database before the cutover can retire its rows.
+        const credentialMigrations = outdated.filter(
+          (target) =>
+            target.kind === "state" &&
+            target.engine === "sqlite" &&
+            target.version < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
         );
-      }
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-    if (restore) {
-      await pruneGenerations(
-        stateDir,
-        restore.generation,
-        readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
-        new Set(
-          restore.existing?.files.filter((file) => file.preimage !== null).map((file) => file.live),
-        ),
-        { config, activeAnchors: inventory.targets.map((target) => target.path), warn: log.warn },
-      );
-    }
-    return { status: "upgraded" };
+        if (!restore && credentialMigrations.length > 0) {
+          const paths = credentialMigrations.map((target) => target.path);
+          const backup = await backupDoctorMigrationDatabases({
+            env,
+            databasePaths: paths,
+            pendingDatabasePaths: paths,
+            pendingMigrations: credentialMigrations.map((target) => ({
+              kind: target.kind,
+              path: target.path,
+              foundVersion: target.version,
+              supportedVersion: expectedVersion(target),
+            })),
+          });
+          logStateMigrationResult(backup, log);
+          if (backup.warnings.length > 0) {
+            throw new Error(backup.warnings.join("\n"));
+          }
+        }
+        try {
+          // Shared admission is the existing prerequisite of Doctor's agent leases.
+          for (const target of outdated.filter((entry) => entry.kind === "state")) {
+            await withEngineStoreAdmission(() =>
+              openOpenClawStateDatabaseForDoctor({
+                path: target.path,
+                env,
+                ...(target.version < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION
+                  ? { clientCredentialMigrationFromVersion: target.version }
+                  : {}),
+              }),
+            );
+            log.info(`Migrated ${target.path} in place from schema ${target.version}.`);
+          }
+          const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
+            prepareLegacySessionSurfaces({ config, env }),
+          );
+          const legacyState = await detectLegacyStateMigrations({
+            cfg: config,
+            env,
+            doctorOnlyStateMigrations: true,
+            artifactPreservingReadOnly: true,
+            legacySessionSurfaces,
+          });
+          if (outdated.length === 0 && !configRepair && legacyState.preview.length === 0) {
+            return { status: "current" };
+          }
+          // File imports retain their existing Doctor owner, not a subprocess or copy.
+          if (legacyState.preview.length > 0) {
+            const legacy = await autoMigrateLegacyState({
+              cfg: config,
+              env,
+              doctorOnlyStateMigrations: true,
+              configIncludedPaths: snapshot.includedPaths,
+              legacySessionSurfaces,
+            });
+            logStateMigrationResult(legacy, log);
+            throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
+          }
+          if (configRepair) {
+            await commitAutomaticConfigRepair(
+              configRepair,
+              snapshot,
+              heartbeatMigration
+                ? async (current) => {
+                    const source = normalizeHeartbeatRepairSource(current);
+                    const retired = await retireHeartbeatWithDoctor(
+                      source.sourceConfig,
+                      env,
+                      (warnings) => log.warn(warnings.join("\n")),
+                    );
+                    if (!isDeepStrictEqual(retired, heartbeatMigration.config)) {
+                      throw new Error(
+                        "Heartbeat migration changed after validation; config was retained.",
+                      );
+                    }
+                  }
+                : undefined,
+            );
+          }
+          const agents = outdated.filter((target) => target.kind === "agent");
+          if (agents.length > 0) {
+            await withAgentDatabaseMaintenanceLease(
+              { env, processBound: true, schemaPolicy: "existing" },
+              async (lease) => {
+                for (const target of agents) {
+                  lease.assertOwned();
+                  using database = openNodeSqliteDatabase(target.path);
+                  if (target.engine === "postgres") {
+                    withEngineStoreAdmission(() => {
+                      const engine = openAgentEngineStore(
+                        database,
+                        target.agentId!,
+                        target.path,
+                        true,
+                      );
+                      if (engine !== database) {
+                        engine.close();
+                      }
+                    });
+                  } else {
+                    runSqliteIntegrityOperationSync(
+                      ensureOpenClawAgentDatabaseSchemaSteps(database, {
+                        agentId: target.agentId!,
+                        path: target.path,
+                        env,
+                        versionMigrationOnly: true,
+                        onMigrationWarning: (warning) => log.warn(warning),
+                      }),
+                    );
+                  }
+                  log.info(`Migrated ${target.path} in place from schema ${target.version}.`);
+                }
+              },
+            );
+          }
+        } finally {
+          await closeOpenClawStateDatabaseAsync();
+        }
+        if (restore) {
+          await pruneGenerations(
+            stateDir,
+            restore.generation,
+            readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
+            new Set(
+              restore.existing?.files
+                .filter((file) => file.preimage !== null)
+                .map((file) => file.live),
+            ),
+            {
+              config,
+              activeAnchors: inventory.targets.map((target) => target.path),
+              warn: log.warn,
+            },
+          );
+        }
+        return { status: "upgraded" };
+      },
+    );
   });
 }
 

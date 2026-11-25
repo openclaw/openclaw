@@ -134,7 +134,10 @@ function checkpointOriginal(file: string): void {
 /** Publish the final raised-floor set before any live schema step. */
 export async function publishStateUpgradeRestore(
   restore: StateUpgradeRestore | undefined,
-  plan: { targets: readonly DatabaseTarget[]; config: OpenClawConfig },
+  plan: {
+    targets: readonly { path: string; engine: DatabaseTarget["engine"] | "file" }[];
+    config: OpenClawConfig;
+  },
 ): Promise<void> {
   if (!restore) {
     return;
@@ -152,9 +155,10 @@ export async function publishStateUpgradeRestore(
     }
     if (
       plan.targets.some(
-        ({ path: live }) =>
+        ({ path: live, engine }) =>
           !files.has(live) ||
-          COMPANIONS.some((suffix) => files.get(`${live}${suffix}`)?.preimage !== null),
+          (engine !== "file" &&
+            COMPANIONS.some((suffix) => files.get(`${live}${suffix}`)?.preimage !== null)),
       )
     ) {
       throw new Error(
@@ -166,11 +170,14 @@ export async function publishStateUpgradeRestore(
     return;
   }
   const files: RestoreFile[] = [];
+  const additions: Array<{ kind: "add"; live: string }> = [];
   for (const target of plan.targets) {
     const live = target.path;
     if (!fs.existsSync(live)) {
-      for (const suffix of ["", ...COMPANIONS]) {
-        files.push({ live: `${live}${suffix}`, preimage: null });
+      for (const suffix of target.engine === "file" ? [""] : ["", ...COMPANIONS]) {
+        const entry = { live: `${live}${suffix}`, preimage: null };
+        files.push(entry);
+        additions.push({ kind: "add", live: entry.live });
       }
       continue;
     }
@@ -184,11 +191,13 @@ export async function publishStateUpgradeRestore(
         await retirePostgresUpgrade(
           preimage,
           plan.config,
-          plan.targets.map((entry) => entry.path),
+          plan.targets.filter((entry) => entry.engine !== "file").map((entry) => entry.path),
         );
       }
     } else {
-      checkpointOriginal(live);
+      if (target.engine === "sqlite") {
+        checkpointOriginal(live);
+      }
       fs.rmSync(temporary, { force: true });
       try {
         // Reuse #201716's native CoW/byte-copy primitive. A hard link cannot
@@ -203,19 +212,15 @@ export async function publishStateUpgradeRestore(
     fs.renameSync(temporary, preimage);
     fsyncPath(path.dirname(preimage), true);
     files.push({ live, preimage });
-    for (const suffix of COMPANIONS) {
-      files.push({ live: `${live}${suffix}`, preimage: null });
+    if (target.engine !== "file") {
+      for (const suffix of COMPANIONS) {
+        files.push({ live: `${live}${suffix}`, preimage: null });
+      }
     }
   }
   const manifest: RestoreManifest = { v: 1, runId: restore.runId, files };
   // Frozen launchers consume this shipped receipt to remove stores the trial
   // creates. No copied paths, replacements or forward swap operations remain.
-  const targets = new Set(plan.targets.map((target) => target.path));
-  const additions = files
-    .filter((entry) => entry.preimage === null && targets.has(entry.live))
-    .flatMap(({ live }) =>
-      ["", ...COMPANIONS].map((suffix) => ({ kind: "add", live: `${live}${suffix}` })),
-    );
   if (additions.length > 0) {
     const applied = path.join(restore.stateDir, `.upgraded-${restore.generation}.json`);
     const pending = `${applied}.tmp`;
@@ -263,7 +268,8 @@ export async function pruneGenerations(
 ): Promise<string[]> {
   const removed: string[] = [];
   const keep = new Set([keepVersion, ...pinnedVersions]);
-  const generations: Array<{ absolute: string; retained: boolean }> = [];
+  const databases = new Set(postgres.activeAnchors);
+  const generations: Array<{ absolute: string; retained: boolean; database: boolean }> = [];
   for (const directory of new Set([...ownedFiles].map((file) => path.dirname(file)))) {
     for (const name of fs.readdirSync(directory)) {
       const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
@@ -278,13 +284,19 @@ export async function pruneGenerations(
       const [, original, generation] = match;
       const absolute = path.join(directory, name);
       if (ownedFiles.has(path.join(directory, original!)) && fs.lstatSync(absolute).isFile()) {
-        generations.push({ absolute, retained: keep.has(generation!) });
+        generations.push({
+          absolute,
+          retained: keep.has(generation!),
+          database: databases.has(path.join(directory, original!)),
+        });
       }
     }
   }
   const retainedAnchors = [
     ...postgres.activeAnchors,
-    ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
+    ...generations
+      .filter((entry) => entry.retained && entry.database)
+      .map((entry) => entry.absolute),
   ].filter((file) => fs.existsSync(file));
   const protectedNamespaces = new Set(
     retainedAnchors.flatMap((file) => {
@@ -292,12 +304,12 @@ export async function pruneGenerations(
       return engine.engine === "postgres" ? [engine.namespace] : [];
     }),
   );
-  for (const { absolute, retained } of generations) {
+  for (const { absolute, retained, database } of generations) {
     if (retained) {
       continue;
     }
-    const engine = readBackupEngine(absolute);
-    if (engine.engine === "postgres" && !protectedNamespaces.has(engine.namespace)) {
+    const engine = database ? readBackupEngine(absolute) : undefined;
+    if (engine?.engine === "postgres" && !protectedNamespaces.has(engine.namespace)) {
       try {
         await retirePostgresUpgrade(absolute, postgres.config, retainedAnchors);
       } catch (error) {

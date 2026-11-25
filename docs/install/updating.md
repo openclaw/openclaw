@@ -207,6 +207,12 @@ to plan pending canonical schema steps and their derived minimum reader floors
 before mutating live databases. A schema-version increase alone does not require
 a preimage: compatible steps run in place without one.
 
+Shipped copy-based releases can leave a durable `.upgrade-*/plan.json` after an
+interrupted publication. Boot first settles that existing intent under exclusive
+physical ownership, before config guards or database inspection. Only this
+historical replay can finish planned replacements; new upgrades never write plans
+or create copied trees.
+
 Before any floor-raising step, boot publishes the complete recovery manifest at
 `<prefix>/releases/<target-release-id>/.restore`, keeping the existing
 `{v:1,runId,files:[{live,preimage}]}` format. Paths are absolute; a null preimage
@@ -215,6 +221,8 @@ floor rises receive database preimages. SQLite images are independent clones or
 byte copies, never hard links to a database that will be mutated in place. Their
 `.pre-<build-generation>` names remain discoverable by existing launchers.
 A raised-floor database can roll back only through its recorded image.
+When legacy config repair changes the config file, its original receives the same
+launcher-compatible image and manifest entry before the repair is committed.
 On a filesystem without clones, this rare step takes as long as one byte copy of
 that database. There is no pre-stop clone probe or copy-time budget. If the required
 image cannot be made, boot refuses with exit 78 before the schema step and the
@@ -229,16 +237,18 @@ names the database and where to move it. Compatible steps do not require scan
 coverage and do not refuse an external database merely because it is external.
 
 The same canonical in-place migration owners run on ordinary starts and release
-trials, under existing custody. There is no private tree, Doctor subprocess chain,
-generic rebuild, or forward file swap or rename. A trial started by an older
+trials, under existing custody. New upgrades use no private tree, Doctor subprocess
+chain, generic rebuild, or forward file swap or rename. A trial started by an older
 preparer repeats admission before migration. A refused trial exits 78 and the
 launcher restores the previous release. Ordinary non-trial starts, including
 manual package upgrades, keep their existing migration-on-open behavior: a
 store's size alone never prevents that Gateway from starting.
 Older releases can still keep sessions and other state in legacy files. Boot
-runs Doctor's existing legacy-file import owner in place, with its existing
-backups, then the canonical schema steps and ordinary config rewrite. These
-imports are not a copied-state Doctor process. Direct upgrades from 2026.7.x
+runs the existing shared-schema and backed-up credential owners, Doctor's
+legacy-file import owner in place, and the remaining schema steps. The ordinary
+config writer retires legacy heartbeat state through its existing Doctor owner
+before removing that config. These imports are not a copied-state Doctor process.
+Direct upgrades from 2026.7.x
 retain their session history.
 
 The launcher's selected target owns the prepared release directory and its

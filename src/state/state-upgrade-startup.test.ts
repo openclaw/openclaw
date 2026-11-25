@@ -4,7 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
@@ -146,6 +149,7 @@ it.each([true, false])(
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_LAUNCHER_IPC: "1",
     };
+    openClientCredentialCustody(env, { createIfMissing: true })?.close();
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, '{"gateway":{"mode":"local"}}');
     fs.mkdirSync(path.join(stateDir, "state"));
     const file = path.join(stateDir, "state", "openclaw.sqlite");
@@ -156,6 +160,9 @@ it.each([true, false])(
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
           VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, 1, 1);
         INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);`);
+      runSqliteImmediateTransactionSync(db, () =>
+        bindFreshClientCredentialStore(db, { env, path: file }),
+      );
     }
     const original = fs.readFileSync(file);
     const target = path.join("releases", "empty-release", "openclaw");

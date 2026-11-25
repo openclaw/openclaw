@@ -18,7 +18,7 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
 // Startup migration normally brings these databases current before activation repair.
-// Isolate the activation repair owner here so its offline maintenance path remains reachable.
+// mock-isolation: Keep Doctor's offline activation repair reachable without startup migrations.
 vi.mock("../state/state-upgrade-startup.js", () => ({
   upgradeStateOnGatewayStart: vi.fn(async () => {}),
 }));

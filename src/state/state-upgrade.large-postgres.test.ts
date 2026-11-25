@@ -50,6 +50,7 @@ it.each([
       );
     }
     const originalAgent = fs.readFileSync(agentPath);
+    const originalAgentInode = fs.statSync(agentPath).ino;
     const originalInode = fs.statSync(statePath).ino;
     // Fixed external database facts avoid allocating multi-GiB PostgreSQL fixtures.
     vi.spyOn(backup, "inspectPostgresUpgrade").mockResolvedValue({
@@ -92,6 +93,7 @@ it.each([
     expect(result).toEqual({ status: "upgraded" });
     expect(readBackupEngine(agentPath)).toMatchObject({ namespace: "original_agent" });
     expect(fs.readFileSync(agentPath)).toEqual(originalAgent);
+    expect(fs.statSync(agentPath).ino).toBe(originalAgentInode);
     expect(fs.statSync(statePath).ino).toBe(originalInode);
     expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
     expect(

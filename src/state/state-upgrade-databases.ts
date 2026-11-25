@@ -70,7 +70,6 @@ export async function discoverDatabases(
   let metadataRows: PluginMetadataStateRow[] = [];
   let retainedAgentIds = new Set<string>();
   let registeredAgents: Array<{ agentId: string; path: string }> = [];
-  let configuredAgents: Array<{ agentId: string; path: string }> = [];
   const add = async (kind: DatabaseTarget["kind"], inputPath: string, agentId?: string) => {
     const pathname = path.resolve(inputPath);
     if (targets.some((target) => target.path === pathname)) {
@@ -187,7 +186,7 @@ export async function discoverDatabases(
       agentId,
     );
   }
-  configuredAgents = resolveConfiguredAgentDatabaseTargets(config, {
+  const configuredAgents = resolveConfiguredAgentDatabaseTargets(config, {
     env,
     registeredDatabases: registeredAgents,
   });

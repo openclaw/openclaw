@@ -90,6 +90,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     );
     const originalAnchor = fs.readFileSync(statePath);
     const originalInode = fs.statSync(statePath).ino;
+    const originalAgentInode = fs.statSync(agentPath).ino;
     const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
     const prefix = resolvePrefix(env);
     const target = path.join(prefix, "releases", "candidate", "openclaw");
@@ -114,6 +115,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     expect(readBackupEngine(statePath)).toMatchObject({ namespace });
     expect(fs.readFileSync(statePath)).toEqual(originalAnchor);
     expect(fs.statSync(statePath).ino).toBe(originalInode);
+    expect(fs.statSync(agentPath).ino).toBe(originalAgentInode);
     using upgradedAgent = openNodeSqliteDatabase(agentPath, { readOnly: true });
     expect(upgradedAgent.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -183,6 +185,8 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
       }),
     );
     const originalAnchor = fs.readFileSync(agentPath);
+    const originalAgentInode = fs.statSync(agentPath).ino;
+    const originalStateInode = fs.statSync(statePath).ino;
     const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
     const result = await upgradeStateDirectory({
       env,
@@ -191,9 +195,14 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     expect(result).toEqual({ status: "upgraded" });
     expect(readBackupEngine(agentPath)).toMatchObject({ namespace });
     expect(fs.readFileSync(agentPath)).toEqual(originalAnchor);
-    expect(
-      fs.readdirSync(path.dirname(agentPath)).filter((name) => name.includes(".pre-")),
-    ).toEqual([]);
+    expect(fs.statSync(agentPath).ino).toBe(originalAgentInode);
+    expect(fs.statSync(statePath).ino).toBe(originalStateInode);
+    expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+    for (const file of [statePath, agentPath]) {
+      expect(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".pre-"))).toEqual(
+        [],
+      );
+    }
     using state = openNodeSqliteDatabase(statePath, { readOnly: true });
     expect(state.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
