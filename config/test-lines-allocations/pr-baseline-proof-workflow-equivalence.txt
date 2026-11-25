@@ -1,3 +1,3 @@
-# Real-Git workflow admission, frozen dependencies, preflight preservation, captured-byte custody, historical signed proof replay, and native publication outcomes.
-# Net test growth is 945 lines; this covers the excess above the 400-line allowance.
-545
+# Real-Git workflow admission, frozen dependencies, preflight preservation, captured-byte custody, historical signed proof replay, native publication outcomes, and locked-fetch workflow identity.
+# Net test growth is 1023 lines; this covers the excess above the 400-line allowance.
+623

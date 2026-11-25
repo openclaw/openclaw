@@ -1522,6 +1522,84 @@ describePosix("reviewed workflow equivalence for initial proof admission", () =>
     expect(f.readLocal("correction-review.json").toString()).toContain('"NEEDS WORK"');
   });
 
+  it("keeps reviewed proof identity when locked main acquisition advances", () => {
+    const f = fixture();
+    const { workflow, main, args } = equivalentMain(f);
+    const review = f.readLocal("source-review.json");
+    const reviewOid = f.oid("source-review.json");
+    const receipt = f.before["prepare-push-result.env"]!;
+    const receiptOid = f.oid("prepare-push-result.env");
+    f.git(f.repo, "commit", "--allow-empty", "-qm", "test: advance main during qualification");
+    const advanced = f.git(f.repo, "rev-parse", "HEAD");
+    expect(new Set([workflow, main, advanced]).size).toBe(3);
+    expect(f.git(f.repo, "rev-parse", advanced + "^")).toBe(main);
+    expect(f.git(f.repo, "rev-parse", advanced + "^{tree}")).toBe(
+      f.git(f.repo, "rev-parse", main + "^{tree}"),
+    );
+    f.git(f.repo, "update-ref", "refs/heads/main", main, advanced);
+    expect(f.git(f.repo, "rev-parse", "refs/remotes/origin/main")).toBe(main);
+
+    // Move only the remote main ref after selection, at the lock-owned fetch.
+    // Exec the existing observer so Git status, signals and private FDs stay native.
+    const witness = join(f.root, "locked-main-transition");
+    const selectedGit = join(f.root, "advance-qualification-git");
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
+      selectedGit,
+      `#!/bin/sh
+fetch=false
+private_fetch=false
+qualification=''
+for argument do
+  case "$argument" in
+    fetch) fetch=true ;;
+    --no-write-fetch-head) private_fetch=true ;;
+    +refs/heads/main:refs/openclaw/pr-workflow-qualification/42/*) qualification=\${argument##*/} ;;
+  esac
+done
+if [ "$fetch" = true ] && [ "$private_fetch" = true ] && [ "\${#qualification}" -eq 40 ]; then
+  case "$qualification" in
+    *[!0-9a-f]*) ;;
+    *)
+      if [ ! -e ${quote(witness)} ]; then
+        git -C ${quote(f.repo)} update-ref refs/heads/main ${advanced} ${main} || exit
+        printf '%s\\n' ${quote(main + " " + advanced)} > ${quote(witness)} || exit
+      fi
+      ;;
+  esac
+fi
+exec ${quote(f.extra.OPENCLAW_PR_GIT)} "$@"
+`,
+      { mode: 0o755 },
+    );
+    const result = f.run(command, args, { ...f.extra, OPENCLAW_PR_GIT: selectedGit });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(witness, "utf8")).toBe(main + " " + advanced + "\n");
+    expect(f.git(f.repo, "rev-parse", "refs/heads/main")).toBe(advanced);
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(record.baselineHead).toBe(main);
+    expect(record.capturedMain).toBe(advanced);
+    expect(record.proofSource).toMatchObject({
+      workflowSource: workflow,
+      sourceReviewOid: reviewOid,
+      workflowAdmission: { workflowSource: workflow, currentMain: advanced, reviewOid },
+      continuation: { receiptOid },
+    });
+    expect(readFileSync(join(f.worktree, record.archive, "baseline-source-review.json"))).toEqual(
+      review,
+    );
+    expect(readFileSync(join(f.worktree, record.archive, "prepare-push-result.env"))).toEqual(
+      receipt,
+    );
+    expect(record.authority[".local/prepare-push-result.env"]).toBe(receiptOid);
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+    expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(f.source + " " + main);
+    f.prepGit("verify-commit", f.prepGit("rev-parse", "HEAD"));
+    f.expectAbsent("prep.env", "gates.env", "review-transition.json");
+    expect(f.readLocal("correction-review.json").toString()).toContain('"NEEDS WORK"');
+  });
+
   it.each([
     "manifest-add",
     "manifest-remove",
