@@ -322,6 +322,7 @@ const repositoryScriptEntries = [
   "scripts/test-macos-mlx-settings.mts!",
   "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-setting-ids.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",

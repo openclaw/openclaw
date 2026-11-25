@@ -82,19 +82,20 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
+/** A setting ID taken from a config path; only {@link configSettingId} makes one. */
+export type ConfigSettingPath = string & { readonly configSettingPath: true };
+
 /**
  * ID of one schema setting: its config path, such as `gateway.publicOrigin`. It is the row's
  * element ID and the anchor a settings link names. A section root is addressed by its
  * `config-section-*` ID, and list items share their list's path, so neither has one.
  */
-/** A setting ID taken from a config path; only {@link configSettingId} makes one. */
-export type ConfigSettingPath = string & { readonly configSettingPath: true };
-
 export function configSettingId(path: Array<string | number>): ConfigSettingPath | undefined {
-  return path.length > 1 && path.every((segment) => typeof segment === "string")
-    ? // SAFETY: a joined config path of string segments is what the brand names.
-      (path.join(".") as ConfigSettingPath)
-    : undefined;
+  if (path.length < 2 || path.some((segment) => typeof segment !== "string")) {
+    return undefined;
+  }
+  // SAFETY: a joined config path of string segments is what the brand names.
+  return path.join(".") as ConfigSettingPath;
 }
 
 /** ID of the element that names a setting row; a marked row is labelled by it. */
