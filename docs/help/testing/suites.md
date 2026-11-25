@@ -120,7 +120,7 @@ the existing Vitest workers can overlap independent recovery and custody cases.
 They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
 no additional job or service is started.
 
-CI's **PostgreSQL conformance** matrix runs four shards in parallel with a 30-minute
+CI's **PostgreSQL conformance** matrix runs six shards in parallel with a 30-minute
 job budget each. Every shard has a
 fresh PostgreSQL 17 service using the pinned `pgvector/pgvector:pg17` image and
 the `unaccent`, `pg_trgm`, and `vector` extensions. It runs
@@ -131,7 +131,8 @@ on scheduled main CI, manual CI validations, and PRs touching `src/infra/databas
 `extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
-omit it. All selected shards are required by `openclaw/ci-gate`.
+omit it. Pull requests also run the PostgreSQL 16 Gateway cron smoke in a
+separate parallel row. All selected rows are required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 
