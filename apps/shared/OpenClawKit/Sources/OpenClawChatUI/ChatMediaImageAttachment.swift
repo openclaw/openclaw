@@ -222,7 +222,7 @@ struct ChatMediaImageAttachment: View {
                         Button {
                             self.retryGeneration &+= 1
                         } label: {
-                            Text(String(localized: "Retry"))
+                            Text(String(localized: "Try again"))
                                 .frame(minHeight: 44)
                                 .contentShape(Rectangle())
                         }
