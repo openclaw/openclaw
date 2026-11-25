@@ -91,6 +91,42 @@ describe("resumeCodexAppServerThread", () => {
     expect(abandonClient).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { cliVersion: "0.169.0", display: { action: "answerHelpline", checkTrustedContacts: false } },
+    { cliVersion: "0.172.0", display: { mode: "show", trustedContacts: "skip", version: 1 } },
+  ])("resumes retained agent messages from Codex $cliVersion", async ({ cliVersion, display }) => {
+    const item = {
+      id: "item-1",
+      type: "agentMessage",
+      text: "Retained answer.",
+      moderation: { moderated: true, display },
+    };
+    const result = threadStartResult("thread-1", "/repo");
+    const harness = createHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line);
+        send({
+          id: request.id,
+          result: {
+            ...result,
+            thread: {
+              ...result.thread,
+              cliVersion,
+              turns: [{ id: "turn-1", status: "completed", items: [item] }],
+            },
+          },
+        });
+      },
+    });
+    const abandonClient = vi.fn(async () => harness.client.close());
+
+    const response = await resumeRequestedThread(harness.client, { abandonClient });
+
+    expect(response.thread.turns?.[0]?.items).toEqual([item]);
+    expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual(["thread/resume"]);
+    expect(abandonClient).not.toHaveBeenCalled();
+  });
+
   it.each<[string, number, string, string, boolean]>([
     ["thread/resume", -32_600, "thread-1", "", true],
     ["thread/read", -32_600, "thread-1", "", false],

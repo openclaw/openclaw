@@ -17,6 +17,7 @@ export function createCodexValidationSchemas() {
     normalizeJsonSchemaForTypeBox({ ...schema, $id: new URL(name, schemaBaseUrl).href });
 
   const codexErrorInfoSchema = sharedDefinitionsSchema.definitions.CodexErrorInfo;
+  const agentMessageDisplaySchema = sharedDefinitionsSchema.definitions.AgentMessageDisplay;
   // Preserve known variant constraints when the upstream open enum accepts future errors.
   const knownErrorVariantConstraints = codexErrorInfoSchema.anyOf.flatMap((variant) =>
     "required" in variant
@@ -31,6 +32,25 @@ export function createCodexValidationSchemas() {
         $id: sharedDefinitionsId,
         definitions: {
           ...sharedDefinitionsSchema.definitions,
+          AgentMessageDisplay: {
+            ...agentMessageDisplaySchema,
+            oneOf: [
+              ...agentMessageDisplaySchema.oneOf,
+              {
+                // Supported older app-servers (e.g. 0.169.0) send an action, not a mode.
+                type: "object",
+                required: ["action"],
+                properties: {
+                  action: { type: "string" },
+                  blockType: { type: ["string", "null"] },
+                  checkTrustedContacts: { type: ["boolean", "null"] },
+                  cyberTrustedAccess: { type: ["boolean", "null"] },
+                  mode: false,
+                  version: false,
+                },
+              },
+            ],
+          },
           CodexErrorInfo: {
             ...codexErrorInfoSchema,
             allOf: knownErrorVariantConstraints,
