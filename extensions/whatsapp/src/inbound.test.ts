@@ -56,6 +56,18 @@ describe("web inbound helpers", () => {
       name: "Ada Lovelace",
     },
     {
+      label: "colons in quoted name and phone parameters",
+      displayName: "",
+      card: [
+        "BEGIN:VCARD",
+        "VERSION:4.0",
+        'FN;LANGUAGE=en;ALTID=":":Lane:Desk',
+        'item1.TEL;ALTID="a:b";VALUE=uri:tel:+15555550123',
+        "END:VCARD",
+      ].join("\r\n"),
+      name: "Lane:Desk",
+    },
+    {
       label: "escaped vCard names and telephone prefixes",
       displayName: undefined,
       card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),
@@ -74,6 +86,14 @@ describe("web inbound helpers", () => {
       total: 1,
       contacts: [{ name, phones: ["+15555550123"] }],
     });
+  });
+
+  it.each([
+    ['N;ALTID="a:b":Family;Given;;;', "Family Given"],
+  ])("reads the shared contact name from %s", (field, name) => {
+    const card = ["BEGIN:VCARD", "VERSION:4.0", field, "END:VCARD"].join("\r\n");
+    const input = message({ contactMessage: { displayName: "", vcard: card } });
+    expect(extractContactContext(input)?.contacts).toEqual([{ name, phones: [] }]);
   });
 
   it.each([
