@@ -1,4 +1,5 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { worktreePathExists } from "../agents/worktrees/git.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -150,6 +151,13 @@ export async function prepareGitHubPublicationWorkspaceRecovery<
   };
   const commands = createGitHubPublicationCommandRunner(assertCustody);
   try {
+    // Registry ownership above can settle stale receipts without a checkout. A
+    // current receipt instead waits for restoration, retaining its idempotency key.
+    if (!(await worktreePathExists(owner.worktree.path))) {
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication checkout is unavailable; retry recovery after restoring it.",
+      );
+    }
     await commands.step(() =>
       assertSafeGitPublicationWorkspace(owner.worktree.path, runPublicationCommand),
     );

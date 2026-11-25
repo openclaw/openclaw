@@ -396,6 +396,34 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
+  it("keeps a current receipt retryable while its checkout is unavailable", async () => {
+    const database = localDatabase();
+    seedLocalPublication(database, {
+      requestId: "missing-current-checkout",
+      status: "publishing",
+      headCommit: null,
+      createdAtMs: Date.now(),
+    });
+    const checkout = path.join(root, "synthetic-worktree");
+    await fs.rmdir(checkout);
+    const transport = mocks.runCommand.getMockImplementation()!;
+    respond((argv) => (argv[0] === "git" ? commandResult("", 128) : undefined));
+    await expect(createLocalCoordinator(database).resumeSessionRequests()).rejects.toThrow(
+      "checkout is unavailable",
+    );
+    expect(receipt(database, "missing-current-checkout")).toMatchObject({
+      status: "publishing",
+      head_commit: null,
+    });
+    expectNoCommands("commit-tree", "update-ref", "push", "POST");
+    await fs.mkdir(checkout);
+    mocks.runCommand.mockImplementation(transport);
+    await createLocalCoordinator(database).resumeSessionRequests();
+    expect(receipt(database, "missing-current-checkout")).toMatchObject({
+      status: "published",
+    });
+  });
+
   it.each(
     (["requested", "publishing"] as const).flatMap((status) =>
       [true, false].map((checkoutExists) => ({ status, checkoutExists })),

@@ -276,8 +276,8 @@ export function createGitHubPublicationCoordinator(params: {
             return publicationResult(claimed);
           }
           // Accepted receipts must still settle stale session/workspace bindings when
-          // the checkout is gone. Unlike agent bootstrap, existing Git operations do
-          // not recreate a missing checkout; they report their filesystem failure.
+          // the checkout is gone. Current bindings wait for checkout restoration in
+          // workspace recovery rather than terminally failing the accepted receipt.
           const lease = await acquireWorktreeRunLease(claimed.worktree_id, {
             allowMissingCheckout: true,
           });
