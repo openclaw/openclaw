@@ -577,7 +577,7 @@ extension OpenClawChatMessage {
 
     /// A row that shows only tool operations: no narration, media, final answer, or the
     /// failure that ended its run (web isActivityGroup, chat-turn-presentation.ts:497-524).
-    fileprivate var isActivityRow: Bool {
+    var isActivityRow: Bool {
         guard !self.isForwardedTurnBoundary, !self.hasWorkMedia else { return false }
         let role = self.role.lowercased()
         if ["tool", "toolresult", "tool_result"].contains(role) { return true }

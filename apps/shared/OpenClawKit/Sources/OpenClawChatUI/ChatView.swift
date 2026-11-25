@@ -670,6 +670,7 @@ extension OpenClawChatView {
             transcript: transcript,
             groups: self.runGroups(transcript)[...],
             hasVisibleContent: hasVisibleContent)
+            .environment(\.openClawToolRowContext, transcript.tools)
     }
 
     private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
@@ -1128,10 +1129,7 @@ extension OpenClawChatView {
         }
     }
 
-    private struct TranscriptPresentation {
-        let rows: [ChatTranscriptRow]
-        let metadata: [UUID: ChatMessageMetadata]
-    }
+    private typealias TranscriptPresentation = ChatTranscriptPresentation
 
     private var readerPresentationMessages: [OpenClawChatMessage] {
         let current = self.viewModel.transcriptMessages
@@ -1153,8 +1151,9 @@ extension OpenClawChatView {
         } else {
             base = messages
         }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.retiringDispatchEnvelopes(
-            in: ChatTranscriptRow.mergeToolResults(in: base)))
+        let (merged, tools) = ChatToolRowContext.present(
+            base, sessions: self.viewModel.sessions, searchActive: self.isSearchPresented)
+        var rows = ChatTranscriptRow.build(from: merged)
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // One duration map serves the reply footers and the "Worked for" summaries.
@@ -1185,7 +1184,7 @@ extension OpenClawChatView {
                 return row
             }
         }
-        return TranscriptPresentation(rows: rows, metadata: metadata)
+        return TranscriptPresentation(rows: rows, metadata: metadata, tools: tools)
     }
 
     private var latestVisibleTurnStartID: UUID? {

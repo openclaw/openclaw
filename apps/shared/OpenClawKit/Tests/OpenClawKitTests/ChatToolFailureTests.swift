@@ -43,7 +43,9 @@ struct ChatToolFailureTests {
         let messages = try Self.decode([
             #"{"role":"user","content":[{"type":"text","text":"Hand off the fixes."}],"__openclaw":{"id":"u"}}"#,
             Self.dispatchedFailure(
-                "toolu_a", tool: "sessions_spawn", args: #"{"label":"Reply images"}"#,
+                "toolu_a",
+                tool: "sessions_spawn",
+                args: #"{"label":"Reply images"}"#,
                 error: "Requester provenance requires trusted in-process Gateway dispatch."),
         ])
         let items = Self.presented(messages).flatMap { ChatToolActivity.items(message: $0) }.filter(\.isVisible)
@@ -59,12 +61,15 @@ struct ChatToolFailureTests {
 
     @Test func `an envelope message keeps its other calls and a non-dispatcher parent keeps its row`() throws {
         var rows = [Self.dispatchedFailure(
-            "toolu_b", tool: "sessions_send", args: #"{"sessionKey":"agent:main:subagent:x"}"#,
+            "toolu_b",
+            tool: "sessions_send",
+            args: #"{"sessionKey":"agent:main:subagent:x"}"#,
             error: "Followup completion requires in-process caller custody.")]
         // The same assistant message also ran a plain command.
         rows[0] = rows[0].replacingOccurrences(
             of: #"{"type":"toolCall","id":"toolu_b""#,
-            with: #"{"type":"toolCall","id":"plain","name":"exec","arguments":{"command":"ls"}},{"type":"toolCall","id":"toolu_b""#)
+            with: #"{"type":"toolCall","id":"plain","name":"exec","arguments":{"command":"ls"}},"#
+                + #"{"type":"toolCall","id":"toolu_b""#)
         // A code-mode exec that recorded a child keeps its own row: its outcome is its own.
         rows.append("""
         {"role":"assistant","__openclaw":{"id":"exec-call","runId":"run-1"},"content":[
@@ -86,7 +91,9 @@ struct ChatToolFailureTests {
         let messages = try Self.presented(Self.decode([
             #"{"role":"user","content":[{"type":"text","text":"Go."}],"__openclaw":{"id":"u"}}"#,
             Self.dispatchedFailure(
-                "toolu_c", tool: "sessions_send", args: #"{"sessionKey":"agent:main:subagent:x"}"#,
+                "toolu_c",
+                tool: "sessions_send",
+                args: #"{"sessionKey":"agent:main:subagent:x"}"#,
                 error: "Nope."),
         ]))
         var live = OpenClawChatPendingToolCall(
@@ -94,9 +101,131 @@ struct ChatToolFailureTests {
         live.runID = "run-1"
         live.isComplete = true
         let groups = ChatAssistantRunGroup.build(
-            ChatTranscriptRow.build(from: messages), tools: [live], liveRunID: nil, hasLiveContent: false,
+            ChatTranscriptRow.build(from: messages),
+            tools: [live],
+            liveRunID: nil,
+            hasLiveContent: false,
             searchActive: false)
-        let liveParts = groups.flatMap(\.parts).filter { if case .tool = $0 { true } else { false } }
+        let liveParts = groups.flatMap(\.parts).filter {
+            if case .tool = $0 {
+                true
+            } else {
+                false
+            }
+        }
         #expect(liveParts.isEmpty)
+    }
+
+    // MARK: Grouping
+
+    static func failed(_ id: String, _ tool: String, _ args: [String: AnyCodable], reason: String = "No")
+        -> ChatToolActivityItem
+    {
+        self.item(id, tool, AnyCodable(args), result: reason, state: .failed)
+    }
+
+    static func item(
+        _ id: String,
+        _ tool: String,
+        _ args: AnyCodable?,
+        result: String,
+        state: ChatToolActivityItem.State) -> ChatToolActivityItem
+    {
+        ChatToolActivityItem(
+            id: id,
+            name: tool,
+            arguments: args,
+            details: nil,
+            resultText: result,
+            state: state,
+            liveDiffStat: nil)
+    }
+
+    static func send(_ id: String, to key: String) -> ChatToolActivityItem {
+        self.failed(id, "sessions_send", ["sessionKey": AnyCodable(key), "message": AnyCodable("Go")])
+    }
+
+    @Test func `repeats of one tool on one chat join the first row; other chats and tools stay apart`() {
+        let ok = Self.item(
+            "status",
+            "session_status",
+            AnyCodable([String: AnyCodable]()),
+            result: "ok",
+            state: .finished)
+        let span = [
+            Self.send("a1", to: "agent:main:subagent:a"),
+            Self.send("b1", to: "agent:main:subagent:b"),
+            Self.failed("s1", "sessions_spawn", ["label": AnyCodable("Reply images")]),
+            Self.failed("s2", "sessions_spawn", ["label": AnyCodable("Image viewer")]),
+            ok,
+            Self.send("a2", to: "agent:main:subagent:a"),
+            Self.send("b2", to: "agent:main:subagent:b"),
+            Self.send("b3", to: "agent:main:subagent:b"),
+        ]
+        let repeats = ChatToolRepeats.project(spans: [span])
+        #expect(repeats.attempts["a1"]?.map(\.id) == ["a1", "a2"])
+        #expect(repeats.attempts["b1"]?.map(\.id) == ["b1", "b2", "b3"])
+        // Two launches of different subagents are different targets; a success never groups.
+        #expect(repeats.attempts.keys.sorted() == ["a1", "b1"])
+        #expect(repeats.absorbed == ["a2", "b2", "b3"])
+    }
+
+    @Test func `a new span starts over, and a success between failures does not group them`() {
+        let first = Self.send("a1", to: "agent:main:subagent:a")
+        let later = Self.send("a2", to: "agent:main:subagent:a")
+        #expect(ChatToolRepeats.project(spans: [[first], [later]]).absorbed.isEmpty)
+        let sent = Self.item("a-ok", "sessions_send", first.arguments, result: "ok", state: .finished)
+        let repeats = ChatToolRepeats.project(spans: [[first, sent, later]])
+        #expect(repeats.attempts["a1"]?.map(\.id) == ["a1", "a2"])
+        #expect(!repeats.absorbed.contains("a-ok"))
+        // Positional IDs recur across rows; they are never grouped.
+        #expect(ChatToolRepeats.project(spans: [[Self.send("call-0", to: "k"), Self.send("call-1", to: "k")]])
+            .absorbed.isEmpty)
+    }
+
+    @Test func `the agent's text between calls ends a span in the transcript`() throws {
+        func failedSend(_ id: String) -> String {
+            """
+            {"role":"assistant","stopReason":"toolUse","__openclaw":{"id":"\(id)-m","runId":"r"},"content":[
+              {"type":"toolCall","id":"\(id)","name":"sessions_send",
+               "arguments":{"sessionKey":"agent:main:subagent:a"}},
+              {"type":"toolResult","id":"\(id)","toolName":"sessions_send","isError":true,
+               "content":[{"type":"text","text":"Nope."}]}]}
+            """
+        }
+        let narration = #"{"role":"assistant","__openclaw":{"id":"n","runId":"r"},"#
+            + #""content":[{"type":"text","text":"Trying the other chat."}]}"#
+        let joined = try ChatToolRepeats.project(Self.presented(Self.decode([failedSend("x1"), failedSend("x2")])))
+        #expect(joined.attempts["x1"]?.count == 2)
+        let apart = try ChatToolRepeats.project(
+            Self.presented(Self.decode([failedSend("x1"), narration, failedSend("x2")])))
+        #expect(apart.absorbed.isEmpty)
+    }
+
+    // MARK: Naming
+
+    @Test func `a chat is named by the session list, never by its key`() {
+        var named = OpenClawChatSessionEntry(key: "agent:main:subagent:fbb338be-1179-4c73-8ba2-f6d51f128067")
+        named.label = "Toasts board"
+        let unnamed = OpenClawChatSessionEntry(key: "agent:main:subagent:4f1e2c90-0000-4000-8000-3d67980d6702")
+        let names = ChatSessionNames(sessions: [named, unnamed])
+        #expect(names.name(for: "agent:main:subagent:fbb338be-1179-4c73-8ba2-f6d51f128067") == "Toasts board")
+        #expect(names.name(for: unnamed.key) == nil)
+
+        let item = Self.send("a1", to: named.key)
+        #expect(item.addressedSessionKey == named.key)
+        #if os(iOS)
+        #expect(item.rowTitle(chatName: "Toasts board") == "Send to Toasts board")
+        #expect(item.rowTitle(chatName: nil) == "Send to a chat")
+        #endif
+    }
+
+    @Test func `a failure opens to the receipt's own error, not its JSON`() {
+        let receipt = #"{"status":"error","#
+            + #""error":"Requester provenance requires trusted in-process Gateway dispatch.","#
+            + #""childSessionKey":"agent:main:subagent:x"}"#
+        let launch = Self.failed("s1", "sessions_spawn", ["label": AnyCodable("Reply images")], reason: receipt)
+        #expect(launch.failureReason == "Requester provenance requires trusted in-process Gateway dispatch.")
+        #expect(Self.send("a1", to: "k").failureReason == "No")
     }
 }

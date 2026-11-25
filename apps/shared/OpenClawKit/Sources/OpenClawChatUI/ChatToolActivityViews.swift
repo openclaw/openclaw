@@ -234,6 +234,56 @@ extension ChatToolActivityItem {
         return self.activity?.preparedTitle ?? ToolDisplayRegistry.resolve(name: call.name, args: call.args).title
     }
 
+    /// The collapsed row's title once the chat a call addresses has a name. On iPhone a message to
+    /// another chat names that chat, never its key (web chat-tool-row-presentation.ts:171-182).
+    func rowTitle(chatName: String?) -> String {
+        #if os(iOS)
+        if self.namesChatInTitle {
+            let name = chatName ?? self.callLabel
+            return switch self.displayState {
+            case .running: name.map { String(format: String(localized: "Sending to %@"), $0) } ??
+                String(localized: "Sending to a chat")
+            case .finished: name.map { String(format: String(localized: "Sent to %@"), $0) } ??
+                String(localized: "Sent to a chat")
+            default: name.map { String(format: String(localized: "Send to %@"), $0) } ??
+                String(localized: "Send to a chat")
+            }
+        }
+        #endif
+        return self.rowTitle
+    }
+
+    /// A message to another chat carries that chat in its title, so its row has no detail line.
+    var namesChatInTitle: Bool {
+        self.call.name == "sessions_send"
+    }
+
+    /// The chat a call addresses by key (web readAddressedSessionKey, chat-spawned-subagent.ts:190-210).
+    var addressedSessionKey: String? {
+        let call = self.call
+        let key: String? = switch call.name {
+        case "sessions_send", "sessions_history": call.args?["sessionKey"]?.stringValue
+        case "subagents" where ["steer", "kill"].contains(call.args?["action"]?.stringValue ?? ""):
+            call.args?["target"]?.stringValue.flatMap { $0.contains(":") ? $0 : nil }
+        default: nil
+        }
+        return ChatPayloadDecoding.trimmedNonEmptyString(key)
+    }
+
+    /// The name the agent gave the call's target, used when the session list has none.
+    var callLabel: String? {
+        ChatPayloadDecoding.trimmedNonEmptyString(self.call.args?["label"]?.stringValue)
+    }
+
+    /// Why a failed call failed, as recorded: the receipt's `error` text, else the result itself.
+    var failureReason: String? {
+        guard self.isError else { return nil }
+        let receipt = ChatToolActivity.jsonObject(self.receiptText)
+        return ChatPayloadDecoding.trimmedNonEmptyString(receipt?["error"]?.stringValue) ??
+            ChatPayloadDecoding.trimmedNonEmptyString(self.receiptDetails?.dictionaryValue?["error"]?.stringValue) ??
+            ChatPayloadDecoding.trimmedNonEmptyString(self.receiptText)
+    }
+
     /// The shell command, whitespace collapsed and capped at 200 UTF-16 units
     /// (web chat-tool-row-presentation.ts:61-63).
     var commandPreview: String? {
@@ -544,11 +594,13 @@ enum ChatToolActivity {
 
 struct ChatToolActivityRow: View, Equatable {
     let item: ChatToolActivityItem
+    /// Every failure this row stands for, itself first, when it carries repeats (`ChatToolRepeats`).
+    var attempts: [ChatToolActivityItem] = []
 
     var body: some View {
         // Compare the item before constructing the content: its initializer prepares
         // the diff, which unchanged siblings must not repeat on every tool update.
-        ChatToolActivityRowContent(item: self.item)
+        ChatToolActivityRowContent(item: self.item, attempts: self.attempts)
     }
 }
 
@@ -558,7 +610,9 @@ private struct ChatToolActivityRowContent: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openClawOpenChatSession) private var openChatSession
+    @Environment(\.openClawToolRowContext) private var toolContext
     let item: ChatToolActivityItem
+    let attempts: [ChatToolActivityItem]
     private let displayCall: (name: String?, args: AnyCodable?)
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
@@ -576,16 +630,67 @@ private struct ChatToolActivityRowContent: View {
         self.item.commandPreview == nil ? nil : self.item.commandPurpose
     }
 
+    private var isRepeated: Bool {
+        self.attempts.count > 1
+    }
+
+    private var chatName: String? {
+        #if os(iOS)
+        self.item.addressedSessionKey.flatMap(self.toolContext.names.name(for:))
+        #else
+        nil
+        #endif
+    }
+
+    private var title: String {
+        self.item.rowTitle(chatName: self.chatName)
+    }
+
+    /// A failure is information inside a turn that went on, not an alarm: on iPhone it keeps the
+    /// row's neutral ink and says how it ended in secondary text, like the web's muted outcome
+    /// (ui/src/styles/chat/tool-cards.css:239-242).
+    private var failureTint: Color {
+        #if os(iOS)
+        .secondary
+        #else
+        OpenClawChatTheme.danger
+        #endif
+    }
+
+    private var failureTitleTint: Color {
+        #if os(iOS)
+        self.textColor
+        #else
+        OpenClawChatTheme.danger
+        #endif
+    }
+
+    private var statusText: String {
+        self.isRepeated
+            ? String(format: String(localized: "%lld failed"), Int64(self.attempts.count))
+            : String(localized: self.item.statusTitle)
+    }
+
     private var detailLine: String? {
         if let command = self.item.commandPreview { return command }
         if self.item.sessionLaunch != nil { return nil }
+        #if os(iOS)
+        // The key is routing, never a name: the session list names the chat, else the call's label.
+        if self.item.addressedSessionKey != nil {
+            return self.item.namesChatInTitle ? nil : self.chatName ?? self.item.callLabel
+        }
+        #endif
         guard let detail = self.display.detailLine, !detail.isEmpty else { return nil }
         return detail
     }
 
     /// A launched child opens through the shared session navigation instead of expanding its receipt.
     private var openableChildKey: String? {
-        guard self.openChatSession != nil else { return nil }
+        guard self.openChatSession != nil, !self.isRepeated else { return nil }
+        #if os(iOS)
+        // A launch that failed never started its chat; the row opens its reason instead.
+        if self.item.sessionLaunch?.phase == .failed { return nil }
+        #endif
         return self.item.sessionLaunch?.childKey
     }
 
@@ -595,17 +700,24 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var expandable: Bool {
-        self.openableChildKey == nil &&
+        self.isRepeated || self.openableChildKey == nil &&
             (self.resolvedDiff != nil || !self.formattedResult.isEmpty || self.inspectedPurpose != nil)
     }
 
+    /// A failure opens to its reason in the receipt's own words, not the receipt's JSON.
+    private var openedResult: String {
+        #if os(iOS)
+        if self.resolvedDiff == nil, let reason = self.item.failureReason { return reason }
+        #endif
+        return self.formattedResult
+    }
+
     private var accessibilityValue: String {
-        let status = String(localized: self.item.statusTitle)
-        return self.detailLine.map { "\(status), \($0)" } ?? status
+        self.detailLine.map { "\(self.statusText), \($0)" } ?? self.statusText
     }
 
     private var expandedLineCount: Int {
-        self.resolvedDiff?.lines.count ?? self.formattedResult.components(separatedBy: .newlines).count
+        self.resolvedDiff?.lines.count ?? self.openedResult.components(separatedBy: .newlines).count
     }
 
     private var isResultTruncated: Bool {
@@ -613,8 +725,8 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var expandedResult: String {
-        guard self.isResultTruncated, !self.showsFullResult else { return self.formattedResult }
-        let lines = self.formattedResult.components(separatedBy: .newlines)
+        guard self.isResultTruncated, !self.showsFullResult else { return self.openedResult }
+        let lines = self.openedResult.components(separatedBy: .newlines)
         return lines.prefix(Self.expandedLineLimit - 1).joined(separator: "\n") + "\n…"
     }
 
@@ -630,8 +742,9 @@ private struct ChatToolActivityRowContent: View {
         self.item.isPending ? self.item.liveDiffStat ?? self.resolvedDiff?.stat : self.resolvedDiff?.stat
     }
 
-    init(item: ChatToolActivityItem) {
+    init(item: ChatToolActivityItem, attempts: [ChatToolActivityItem]) {
         self.item = item
+        self.attempts = attempts
         let displayCall = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
         self.displayCall = displayCall
         self.resolvedDiff = ChatToolDiff.resolveDiff(
@@ -653,7 +766,7 @@ private struct ChatToolActivityRowContent: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(self.item.rowTitle)
+                .accessibilityLabel(self.title)
                 .accessibilityValue(self.accessibilityValue)
                 .accessibilityHint("Opens the subagent's session")
                 .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
@@ -669,62 +782,25 @@ private struct ChatToolActivityRowContent: View {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(self.item.rowTitle)
+                .accessibilityLabel(self.title)
                 .accessibilityValue(self.accessibilityValue)
-                .accessibilityHint(self.expanded ? "Collapse tool result" : "Expand tool result")
+                .accessibilityHint(self.isRepeated
+                    ? (self.expanded ? "Hides each attempt" : "Shows each attempt")
+                    : (self.expanded ? "Collapse tool result" : "Expand tool result"))
                 .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             } else {
                 self.collapsedRow
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(self.item.rowTitle)
+                    .accessibilityLabel(self.title)
                     .accessibilityValue(self.accessibilityValue)
             }
 
             if self.expanded, self.expandable {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let purpose = self.inspectedPurpose {
-                        Text(purpose)
-                            .font(OpenClawChatTypography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if self.resolvedDiff != nil {
-                        self.diffRows
-                        // The result text carries the outcome (success summary or the
-                        // error diagnostic); hiding it would misrepresent failed edits
-                        // as applied changes. Bounded so foreign harness output cannot
-                        // dwarf the diff.
-                        if !self.formattedResult.isEmpty {
-                            Text(self.formattedResult)
-                                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .lineLimit(Self.expandedLineLimit)
-                        }
-                    } else if !self.formattedResult.isEmpty {
-                        Text(self.expandedResult)
-                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-
-                    Text(self.item.statusTitle)
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
-
-                    if self.isResultTruncated {
-                        Button {
-                            self.showsFullResult.toggle()
-                        } label: {
-                            Text(
-                                self.showsFullResult
-                                    ? String(localized: "Show less")
-                                    : String(
-                                        format: String(localized: "Show all %lld lines"),
-                                        Int64(self.expandedLineCount)))
-                                .font(OpenClawChatTypography.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
+                    if self.isRepeated {
+                        self.attemptRows
+                    } else {
+                        self.openedDetail
                     }
                 }
                 .padding(10)
@@ -741,6 +817,94 @@ private struct ChatToolActivityRowContent: View {
             }
         }
         .modifier(ChatWorkCardStyle())
+    }
+
+    /// Each failure the row stands for, in order, with its own reason.
+    private var attemptRows: some View {
+        ForEach(Array(self.attempts.enumerated()), id: \.element.id) { index, attempt in
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                self.failureMark
+                Text(attempt.failureReason ?? String(localized: attempt.statusTitle))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("chat-tool-attempt-\(index)")
+        }
+    }
+
+    /// The key a chat could not be named by, kept for inspection only.
+    @ViewBuilder
+    private var unnamedChatKey: some View {
+        #if os(iOS)
+        if let key = self.item.addressedSessionKey, self.chatName == nil {
+            Text(verbatim: key)
+                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        #endif
+    }
+
+    private var failureMark: some View {
+        Image(systemName: "exclamationmark.circle")
+            .font(OpenClawChatTypography.caption)
+            .imageScale(.small)
+            .foregroundStyle(self.failureTint)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var openedDetail: some View {
+        if let purpose = self.inspectedPurpose {
+            Text(purpose)
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+        }
+        if self.resolvedDiff != nil {
+            self.diffRows
+            // The result text carries the outcome (success summary or the
+            // error diagnostic); hiding it would misrepresent failed edits
+            // as applied changes. Bounded so foreign harness output cannot
+            // dwarf the diff.
+            if !self.formattedResult.isEmpty {
+                Text(self.formattedResult)
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(Self.expandedLineLimit)
+            }
+        } else if !self.openedResult.isEmpty {
+            Text(self.expandedResult)
+                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+
+        self.unnamedChatKey
+
+        Text(self.item.statusTitle)
+            .font(OpenClawChatTypography.caption)
+            .foregroundStyle(self.item.isError ? self.failureTint : .secondary)
+
+        if self.isResultTruncated {
+            Button {
+                self.showsFullResult.toggle()
+            } label: {
+                Text(
+                    self.showsFullResult
+                        ? String(localized: "Show less")
+                        : String(
+                            format: String(localized: "Show all %lld lines"),
+                            Int64(self.expandedLineCount)))
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private var collapsedRow: some View {
@@ -763,7 +927,7 @@ private struct ChatToolActivityRowContent: View {
 
             Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
+                .foregroundStyle(self.item.isError ? self.failureTint : Color.secondary)
 
             if self.isDesktopLayout {
                 VStack(alignment: .leading, spacing: 3) {
@@ -784,10 +948,15 @@ private struct ChatToolActivityRowContent: View {
             // Preserve the native collapsed cues when a local title replaces the Gateway warning;
             // a failure always says how it ended (web chat-tool-outcome-summary.solid.tsx:19-25).
             if self.isDesktopLayout || self.item.displayState == .unavailable || self.item.isError {
-                Text(self.item.statusTitle)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
-                    .fixedSize()
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    #if os(iOS)
+                    if self.item.isError { self.failureMark }
+                    #endif
+                    Text(verbatim: self.statusText)
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.item.isError ? self.failureTint : .secondary)
+                }
+                .fixedSize()
             }
         }
         .padding(.vertical, 3)
@@ -795,9 +964,9 @@ private struct ChatToolActivityRowContent: View {
 
     /// A single launch row's own button opens the child, so its title carries no link.
     private var toolTitle: some View {
-        Text(self.item.rowTitle)
+        Text(self.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
-            .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
+            .foregroundStyle(self.item.isError ? self.failureTitleTint : self.textColor)
             .lineLimit(1)
     }
 
@@ -948,6 +1117,7 @@ struct ChatDiffStatChips: View {
 
 struct ChatToolActivityList: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawToolRowContext) private var toolContext
     let items: [ChatToolActivityItem]
     private let isNestedToolActivity: Bool
 
@@ -958,11 +1128,15 @@ struct ChatToolActivityList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
-            ForEach(Self.visibleRuns(self.items), id: \.first) { run in
+            // A repeated failure is drawn in its first attempt's row.
+            let shown = self.items.filter { !self.toolContext.repeats.absorbed.contains($0.id) }
+            ForEach(Self.visibleRuns(shown), id: \.first) { run in
                 if run.count > 1 {
-                    ChatSessionLaunchGroupRow(launches: run.compactMap { self.items[$0].sessionLaunch })
+                    ChatSessionLaunchGroupRow(launches: run.compactMap { shown[$0].sessionLaunch })
                 } else {
-                    ChatToolActivityRow(item: self.items[run[0]])
+                    ChatToolActivityRow(
+                        item: shown[run[0]],
+                        attempts: self.toolContext.repeats.attempts[shown[run[0]].id] ?? [])
                         .equatable()
                 }
             }
