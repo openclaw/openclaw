@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -228,20 +229,8 @@ export function stateUpgradeRefusal(
   if (protectedTargets.length === 0) {
     return undefined;
   }
-  const realStateDir = fs.realpathSync(stateDir);
-  const device = fs.statSync(stateDir).dev;
   for (const target of protectedTargets) {
-    const relative = path.relative(stateDir, target.path);
-    const stat = fs.statSync(target.path, { throwIfNoEntry: false });
-    // An absent store is restored by the existing addition-removal receipt, not the scan.
-    if (!stat) {
-      continue;
-    }
-    if (
-      !isUpgradeRestorePath(stateDir, target.path) ||
-      path.relative(realStateDir, resolvePathViaExistingAncestorSync(target.path)) !== relative ||
-      (stat !== undefined && stat.dev !== device)
-    ) {
+    if (!isUpgradeRestorePath(stateDir, target.path)) {
       return `The release trial cannot restore database ${target.path} after raising its reader floor. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
     }
   }
@@ -291,14 +280,28 @@ function isSqliteFile(pathname: string): boolean {
   }
 }
 
-function isUpgradeRestorePath(stateDir: string, file: string): boolean {
+/** Paths whose build-named image the frozen launcher can discover and rename. */
+export function isUpgradeRestorePath(stateDir: string, file: string): boolean {
+  // Absent stores use the launcher's existing addition-removal receipt.
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat) {
+    return true;
+  }
   const relative = path.relative(stateDir, file);
   const parts = relative.split(path.sep);
+  const canonical = resolvePathViaExistingAncestorSync(file);
   return (
     relative !== ".." &&
     !relative.startsWith(`..${path.sep}`) &&
     !path.isAbsolute(relative) &&
     parts.length <= 5 &&
+    path.relative(fs.realpathSync(stateDir), canonical) === relative &&
+    stat.dev === fs.statSync(stateDir).dev &&
+    (process.platform !== "linux" ||
+      !fs
+        .readFileSync("/proc/self/mountinfo", "utf8")
+        .split("\n")
+        .some((line) => decodeMountInfoPath(line.split(" ")[4] ?? "") === canonical)) &&
     !parts.some(
       (part, index) =>
         /\.pre-[^/]+$|\.pre-startup-migration-|\.scoped\.bak$|\.sqlite[^/]*\.bak$|^openclaw-media-persistence-recovery-|-(wal|shm|journal)$|\.seal$/u.test(

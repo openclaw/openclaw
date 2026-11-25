@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { normalizeHeartbeatRepairSource } from "../commands/doctor-automatic-heartbeat-repair.js";
 import { tryProjectRetiredHeartbeatConfig } from "../commands/doctor-heartbeat-legacy.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
@@ -10,10 +11,15 @@ import {
   captureFreshDoctorMigrationTables,
 } from "../commands/doctor-migration-backup.js";
 import {
+  planLegacyConfigForUpdateChannel,
+  repairLegacyConfigForUpdateChannel,
+} from "../commands/doctor/legacy-config-repair.js";
+import {
   commitAutomaticConfigRepair,
   planAutomaticConfigRepair,
 } from "../commands/doctor/shared/automatic-config-repair.js";
-import { readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
+import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
+import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { resolveStateDir } from "../config/paths.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -47,6 +53,7 @@ import {
   discoverDatabases,
   expectedVersion,
   floorRaisingDatabases,
+  isUpgradeRestorePath,
   outdatedDatabases,
   stateUpgradeRefusal,
 } from "./state-upgrade-databases.js";
@@ -71,7 +78,13 @@ export async function upgradeStateDirectory(params: {
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
-  const snapshot = await readConfigSnapshotBeforeEngineSelection(env);
+  const selectedSnapshot = await readConfigSnapshotBeforeEngineSelection(env);
+  const { snapshot, writeOptions } = await createConfigIO({
+    env,
+    configPath: selectedSnapshot.path,
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshotForWrite();
   const heartbeatSource = normalizeHeartbeatRepairSource(snapshot);
   const projectedHeartbeat = tryProjectRetiredHeartbeatConfig(heartbeatSource.sourceConfig);
   const heartbeatMigration =
@@ -85,7 +98,21 @@ export async function upgradeStateDirectory(params: {
   const configRepair = await withArtifactPreservingStateReads(() =>
     planAutomaticConfigRepair(snapshot, heartbeatMigration),
   );
-  if (snapshot.exists && !snapshot.valid && !configRepair) {
+  // Stateful retirement remains with the automatic Doctor owner; include-only
+  // repairs use the existing update-channel planner and its captured identities.
+  const includePlan =
+    !configRepair && !heartbeatMigration && snapshot.includedPaths?.length
+      ? await withArtifactPreservingStateReads(() =>
+          planLegacyConfigForUpdateChannel(snapshot, writeOptions),
+        )
+      : undefined;
+  const includeRepair = includePlan?.changes.length ? includePlan : undefined;
+  const includeBoundary = includeRepair
+    ? resolveConfigIncludeWriteBoundary({ snapshot, nextConfig: includeRepair.nextConfig })
+    : null;
+  const includeTarget =
+    includeBoundary && writeOptions.includeFileTargetsForWrite?.[includeBoundary.includePath];
+  if (snapshot.exists && !snapshot.valid && !configRepair && !includeRepair) {
     return {
       status: "refused",
       reason: `The config is invalid (${snapshot.issues
@@ -94,7 +121,7 @@ export async function upgradeStateDirectory(params: {
         .join("; ")}). Run openclaw config validate before retrying the update.`,
     };
   }
-  const config = configRepair?.config ?? snapshot.config;
+  const config = configRepair?.config ?? includeRepair?.config ?? snapshot.config;
   const selection = await resolveDatabaseEngineSelection(config, env);
   return withDatabaseEngineSelection(selection, async (): Promise<StateUpgradeResult> => {
     const inventory = await discoverDatabases(stateDir, config, env);
@@ -103,7 +130,31 @@ export async function upgradeStateDirectory(params: {
     let restore: StateUpgradeRestore | undefined;
     try {
       restore = await beginStateUpgradeRestore(env);
+      if (process.platform === "linux" && (configRepair || includeRepair)) {
+        const rootTarget = fs.realpathSync(snapshot.path);
+        if (
+          fs
+            .readFileSync("/proc/self/mountinfo", "utf8")
+            .split("\n")
+            .some((line) => {
+              const mounted = decodeMountInfoPath(line.split(" ")[4] ?? "");
+              return mounted === rootTarget || mounted === includeTarget;
+            })
+        ) {
+          return {
+            status: "refused",
+            reason:
+              "Changed config is a single-file mount and cannot be safely restored. Run openclaw doctor --fix before retrying the update. Nothing live was changed.",
+          };
+        }
+      }
       if (restore) {
+        if (includeTarget && !isUpgradeRestorePath(stateDir, includeTarget)) {
+          return {
+            status: "refused",
+            reason: `The release trial cannot restore changed included config ${includeTarget}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`,
+          };
+        }
         const refusal = stateUpgradeRefusal(inventory, stateDir);
         if (refusal) {
           return { status: "refused", reason: refusal };
@@ -122,7 +173,10 @@ export async function upgradeStateDirectory(params: {
       await publishStateUpgradeRestore(restore, {
         targets: [
           ...protectedTargets,
-          ...(configRepair ? [{ path: snapshot.path, engine: "file" as const }] : []),
+          ...(configRepair || includeRepair
+            ? [{ path: snapshot.path, engine: "file" as const }]
+            : []),
+          ...(includeTarget ? [{ path: includeTarget, engine: "file" as const }] : []),
         ],
         config,
       });
@@ -164,17 +218,14 @@ export async function upgradeStateDirectory(params: {
           }
         }
         try {
-          // Shared admission is the existing prerequisite of Doctor's agent leases.
           for (const target of outdated.filter((entry) => entry.kind === "state")) {
-            await withEngineStoreAdmission(() =>
-              openOpenClawStateDatabaseForDoctor({
-                path: target.path,
-                env,
-                ...(target.version < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION
-                  ? { clientCredentialMigrationFromVersion: target.version }
-                  : {}),
-              }),
-            );
+            await openOpenClawStateDatabaseForDoctor({
+              path: target.path,
+              env,
+              ...(target.version < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION
+                ? { clientCredentialMigrationFromVersion: target.version }
+                : {}),
+            });
             log.info(`Migrated ${target.path} in place from schema ${target.version}.`);
           }
           const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
@@ -187,7 +238,12 @@ export async function upgradeStateDirectory(params: {
             artifactPreservingReadOnly: true,
             legacySessionSurfaces,
           });
-          if (outdated.length === 0 && !configRepair && legacyState.preview.length === 0) {
+          if (
+            outdated.length === 0 &&
+            !configRepair &&
+            !includeRepair &&
+            legacyState.preview.length === 0
+          ) {
             return { status: "current" };
           }
           // File imports retain their existing Doctor owner, not a subprocess or copy.
@@ -222,6 +278,16 @@ export async function upgradeStateDirectory(params: {
                   }
                 : undefined,
             );
+          }
+          if (includeRepair) {
+            const repaired = await repairLegacyConfigForUpdateChannel({
+              configSnapshot: snapshot,
+              plan: includeRepair,
+              jsonMode: true,
+            });
+            if (repaired.warnings?.length) {
+              log.warn(repaired.warnings.join("\n"));
+            }
           }
           const agents = outdated.filter((target) => target.kind === "agent");
           if (agents.length > 0) {
