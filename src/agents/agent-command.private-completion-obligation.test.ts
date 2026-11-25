@@ -41,7 +41,6 @@ import {
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { AgentCommandIngressOpts } from "./command/types.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
@@ -92,6 +91,9 @@ const OWED_OBLIGATION = {
   intentId: "owed-intent-1",
   deliveries: [{ id: "owed-delivery-1", state: "prepared" as const }],
 };
+// The Gateway binds the handoff to the model route it admitted for the run. There is no
+// compiled-in default model (#203271), so this is the fixture's configured primary.
+const ADMITTED_ROUTE = { provider: "openai", model: "gpt-5.5" };
 
 type PrivateCompletionCapture = {
   gatewayOptions?: Record<string, unknown>;
@@ -215,8 +217,7 @@ async function runTranscriptOnlyPrivateCompletion(
               targetSessionKey: params.sessionKey as string,
               targetSessionId: REQUESTER_SESSION_ID,
               idempotencyKey: runId,
-              provider: DEFAULT_PROVIDER,
-              model: DEFAULT_MODEL,
+              ...ADMITTED_ROUTE,
             });
       const result = await agentCommandFromGatewayIngress(
         {
@@ -237,8 +238,6 @@ async function runTranscriptOnlyPrivateCompletion(
           onActiveModelSelected: createAgentRunModelSelectionHandler({
             runId,
             cfg: state.cfg ?? {},
-            lifecycleStorePath: requireCompactionStorePath(),
-            activeSessionAgentId: "main",
             trustedInternalHandoff,
           }),
         },
@@ -329,6 +328,7 @@ it("retains an outstanding user-reply obligation across a transcript-only privat
     sourceSessionKey: CHILD_SESSION_KEY,
     targetSessionKey: REQUESTER_SESSION_KEY,
   });
+  expect(capture.embedded).toMatchObject(ADMITTED_ROUTE);
   expect(capture.embedded?.disableTools).toBe(false);
   expect(capture.embedded?.disableMessageTool).not.toBe(true);
   expect(capture.boundToolNames).toContain("message");
