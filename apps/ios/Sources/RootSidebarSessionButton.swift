@@ -6,6 +6,9 @@ import SwiftUI
 /// Actions must use the tapped session and reference or @State-backed state; equality excludes closures.
 struct RootSidebarSessionButton: View, Equatable {
     @Environment(NodeAppModel.self) private var appModel
+    /// Branded fonts are fixed-size fonts resolved when the body runs, and equality skips the body on a
+    /// Dynamic Type change from the parent. Reading the size here re-runs the row when the text size changes.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let node: ChatSessionSidebarModel.Node
     let isSelected: Bool
     let mainSessionKey: String
