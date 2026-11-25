@@ -20,7 +20,7 @@ import {
   ERROR_DETAILS_HINT,
   ERROR_PREFIX_RE,
 } from "./assistant-request-failure-copy.js";
-import { resolveBillingFailure } from "./billing.js";
+import type { resolveBillingFailure } from "./billing.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -577,9 +577,8 @@ export function renderRateLimitReplyCopy(
 }
 
 export function renderBillingReplyCopy(
-  params: Parameters<typeof resolveBillingFailure>[0],
+  billingFailure: ReturnType<typeof resolveBillingFailure>,
 ): string {
-  const billingFailure = resolveBillingFailure(params);
   if (billingFailure?.billingError) {
     return billingFailure.billingError.message;
   }

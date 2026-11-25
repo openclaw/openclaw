@@ -52,7 +52,16 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     const billingError = {
       message: "A subscription is required.",
     };
-    const attempts: FallbackAttempt[] = [];
+    const attempts: FallbackAttempt[] = [
+      { provider: "generic", model: "first", reason: "billing", error: "Payment required" },
+      {
+        provider: "subscription",
+        model: "second",
+        reason: "billing",
+        authMode: "oauth",
+        error: "Plan limit reached",
+      },
+    ];
     const paid = { provider: "paid-provider", model: "model-a" };
     const other = { provider: "other-provider", model: "model-b" };
     const firstError = new FailoverError("provider diagnostic", {

@@ -117,16 +117,12 @@ for (const billing of [false, true]) {
             await page.getByRole("button", { name: "Send message", exact: true }).click();
             const failure = page.locator(".chat-run-failure").first();
             const toggle = failure.locator(".chat-run-failure__toggle");
-            const checkFailure = async (capture = false) => {
+            const checkFailure = async () => {
               await failure.waitFor({ timeout: 60_000 });
               if (billing) {
                 await toggle.click();
                 await page.locator(".chat-run-failure__log").waitFor();
                 const plans = page.getByRole("link", { name: "View plans", exact: true });
-                const shot = process.env.OPENCLAW_E2E_SHOT;
-                if (capture && shot) {
-                  await page.screenshot({ path: shot });
-                }
                 expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
                   message,
                 );
@@ -142,7 +138,7 @@ for (const billing of [false, true]) {
                 );
               }
             };
-            await checkFailure(true);
+            await checkFailure();
             expect(upstreamRequests).toBeGreaterThan(0);
             await page.reload();
             await waitForControlUiGatewayReady(page);

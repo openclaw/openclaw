@@ -156,12 +156,9 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
-      const billingFailure =
-        isFailoverError(terminalValue) &&
-        (terminalValue.reason === "billing" ||
-          terminalValue.attempts?.some((attempt) => attempt.reason === "billing"))
-          ? resolveBillingFailure(terminalValue)
-          : undefined;
+      const billingFailure = isFailoverError(terminalValue)
+        ? resolveBillingFailure(terminalValue)
+        : undefined;
       data.error =
         renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??

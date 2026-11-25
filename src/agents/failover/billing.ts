@@ -5,7 +5,7 @@ import {
 import { inferSignalStatus } from "./classification-rules.js";
 import type { FallbackAttemptRecord } from "./error.js";
 import type { PreparedProviderFailoverOwner } from "./provider-patterns.js";
-import type { FailoverSignal } from "./signal.js";
+import type { FailoverReason, FailoverSignal } from "./signal.js";
 
 export function formatProviderBillingError(
   signal: FailoverSignal,
@@ -16,6 +16,7 @@ export function formatProviderBillingError(
     if (!owner?.formatBillingError) {
       return undefined;
     }
+    const status = inferSignalStatus(signal);
     for (const errorMessage of [
       signal.message ?? "",
       ...(signal.details ?? []),
@@ -26,7 +27,7 @@ export function formatProviderBillingError(
           provider: owner.id,
           modelId: context?.model,
           errorMessage,
-          status: inferSignalStatus(signal),
+          status,
           code: signal.code,
           errorType: signal.errorType,
         }),
@@ -42,20 +43,30 @@ export function formatProviderBillingError(
 }
 
 export function resolveBillingFailure(params: {
+  reason?: FailoverReason;
   provider?: string;
   model?: string;
   authMode?: string;
   billingError?: BillingError;
   attempts?: readonly (FallbackAttemptRecord & { authMode?: string })[];
 }) {
-  const attempts = params.attempts ?? [];
-  return attempts.length > 0
-    ? (attempts.find((attempt) => attempt.reason === "billing" && attempt.billingError) ??
-        attempts.find(
-          (attempt) =>
-            attempt.reason === "billing" &&
-            (attempt.authMode === "oauth" || attempt.authMode === "token"),
-        ) ??
-        attempts.find((attempt) => attempt.reason === "billing"))
-    : params;
+  const attempts = params.attempts;
+  if (!attempts?.length) {
+    return !params.reason || params.reason === "billing" ? params : undefined;
+  }
+  let first: (typeof attempts)[number] | undefined;
+  let subscription: (typeof attempts)[number] | undefined;
+  for (const attempt of attempts) {
+    if (attempt.reason !== "billing") {
+      continue;
+    }
+    if (attempt.billingError) {
+      return attempt;
+    }
+    first ??= attempt;
+    if (attempt.authMode === "oauth" || attempt.authMode === "token") {
+      subscription ??= attempt;
+    }
+  }
+  return subscription ?? first;
 }

@@ -154,13 +154,11 @@ export function ChatRunFailureNotice(props: {
         >
           <Show when={lead() || billingError()?.actionUrl}>
             <p class="chat-run-failure__summary">
-              <Show when={lead()}>
-                <bdi>{lead()}</bdi>
-              </Show>
+              <bdi>{lead()}</bdi>
               <Show when={billingError()?.actionUrl}>
                 {(url) => (
                   <>
-                    {lead() ? " " : ""}
+                    {" "}
                     <a class="session-link" href={url()} target="_blank" rel="noopener noreferrer">
                       {t("chat.recovery.viewPlans")}
                     </a>

@@ -24,6 +24,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "../../agents/failover/assistant-request-failure-copy.js";
+import { resolveBillingFailure } from "../../agents/failover/billing.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import {
   ContextPreparationTimeoutError,
@@ -88,10 +89,19 @@ export function resolveReplyFailureSummary(params: {
   config?: OpenClawConfig;
 }): { kind: "billing" | "rate_limit" | "overloaded"; text: string } | undefined {
   const attempts = params.attempts;
+  const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const billingFailure = resolveBillingFailure({
+    attempts,
+    reason: params.facts.reason,
+    provider: failoverError?.provider,
+    model: failoverError?.model,
+    authMode: failoverError?.authMode,
+    billingError: failoverError?.reason === "billing" ? failoverError.billingError : undefined,
+  });
   let kind = params.facts.reason;
   // The top-level reason describes the last attempt; aggregate copy must account for the entire chain.
   if (attempts?.length) {
-    if (attempts.some((attempt) => attempt.reason === "billing")) {
+    if (billingFailure) {
       kind = "billing";
     } else if (attempts.every((attempt) => attempt.reason === "overloaded")) {
       kind = "overloaded";
@@ -106,21 +116,13 @@ export function resolveReplyFailureSummary(params: {
   if (kind !== "billing" && kind !== "rate_limit" && kind !== "overloaded") {
     return undefined;
   }
-  const failoverError = isFailoverError(params.error) ? params.error : undefined;
   const code = failoverError?.code ?? attempts?.at(-1)?.code;
   const facts = params.facts;
   const text =
     kind === "rate_limit" && !attempts?.length && facts.requestFailureText
       ? facts.requestFailureText
       : kind === "billing"
-        ? renderBillingReplyCopy({
-            attempts,
-            provider: failoverError?.provider,
-            model: failoverError?.model,
-            authMode: failoverError?.authMode,
-            billingError:
-              failoverError?.reason === "billing" ? failoverError.billingError : undefined,
-          })
+        ? renderBillingReplyCopy(billingFailure)
         : kind === "overloaded"
           ? // A host-authored refusal names its own cause; overload copy would blame the AI service.
             (code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE && renderFailoverCodeUserCopy(code)) ||
