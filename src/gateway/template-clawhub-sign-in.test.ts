@@ -73,6 +73,7 @@ describe("Template ClawHub authorization ownership", () => {
       expect(owner.cancel({ ...target, ...overrides }, requestId)).toEqual({ status: "expired" });
     }
     expect(poll).not.toHaveBeenCalled();
+    expect(await owner.poll(target, requestId)).toEqual({ status: "connected" });
   });
 
   it("discards a token when cancellation wins during identity validation", async () => {
