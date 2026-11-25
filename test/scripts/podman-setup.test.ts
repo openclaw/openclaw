@@ -25,6 +25,7 @@ case "$1" in
   inspect) printf '%s\\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';;
   start) (cd "$HOME" && node "$PODMAN_STUB_ARGS-probe.cjs" "$(cat "$PODMAN_STUB_ARGS-probe-mode")");;
   rm) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"; if [[ " $* " == *" -v "* ]]; then rm -f "$PODMAN_STUB_ARGS-volume"; fi;;
+  run) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"; if [[ " $* " == *" --replace "* ]]; then echo "fixture-container-replace" >&2; fi;;
   *) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS";;
 esac`,
         openclaw: 'printf "lan\\n"',
@@ -101,7 +102,13 @@ esac`,
         config.gateway.publicOrigin = "https://new.example.com";
         const updated = JSON.stringify(config);
         writeFileSync(sandbox.file, updated);
-        sandbox.run("scripts/run-openclaw-podman.sh", ["launch"], "20234");
+        const changedLaunch = sandbox.run("scripts/run-openclaw-podman.sh", ["launch"], "20234");
+        if (allowedOrigins?.length) {
+          expect(changedLaunch.stderr).toContain("gateway.controlUi.allowedOrigins");
+          expect(changedLaunch.stderr.indexOf("gateway.controlUi.allowedOrigins")).toBeLessThan(
+            changedLaunch.stderr.indexOf("fixture-container-replace"),
+          );
+        }
         args = readFileSync(sandbox.log, "utf8").split("\n");
         expect(args).toContain("OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=20234");
         expect(args).toContain("127.0.0.1:20234:18789");

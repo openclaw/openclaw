@@ -106,7 +106,17 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { args: ["openclaw.mjs", "gateway"], rootOptions: [] },
     { args: ["openclaw", "gateway"], rootOptions: [], installed: true },
     { args: ["dist/index.js", "gateway", "--bind", "lan", "--port", "18789"], rootOptions: [] },
-    { args: ["dist/index.js", "gateway", "--published-port", "25432"], rootOptions: [] },
+    {
+      args: ["dist/index.js", "gateway", "--published-port", "25432"],
+      rootOptions: [],
+      publishedPort: "25432",
+    },
+    {
+      args: ["dist/index.js", "gateway", "--published-port=25432"],
+      rootOptions: [],
+      publishedPort: "25432",
+    },
+    { args: ["dist/index.js", "gateway", "--token", "--published-port"], rootOptions: [] },
     {
       args: ["openclaw.mjs", "--profile", "demo", "gateway", "run", "--no-color"],
       rootOptions: ["--profile", "demo", "--no-color"],
@@ -115,21 +125,33 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { args: ["openclaw.mjs", "--dev", "gateway"], rootOptions: ["--dev"] },
     { args: ["openclaw.mjs", "gateway", "--dev"], rootOptions: [] },
     { args: ["openclaw.mjs", "gateway", "--token", "--reset"], rootOptions: [] },
-  ])("execs after Doctor: $args", async ({ args, rootOptions, installed }, { command }) => {
+  ])(
+    "execs after Doctor: $args",
+    async ({ args, rootOptions, installed, publishedPort }, { command }) => {
+      const f = fixture(command);
+      if (installed) {
+        fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
+      }
+      const result = installed
+        ? await f.runCommand(args, { PATH: `${f.root}:${nodePath}` })
+        : await f.run(args);
+      expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
+      const rows = f.read();
+      expect(rows.map((row) => row.args)).toEqual([
+        [...rootOptions, "doctor", "--fix", "--non-interactive"],
+        args.slice(1),
+      ]);
+      expect(rows[1].pid).toBe(rows[0].parentPid);
+      expect(rows[0].publishedPort).toBe(publishedPort);
+    },
+  );
+
+  it("rejects a malformed mapped port before Doctor activation", async ({ command }) => {
     const f = fixture(command);
-    if (installed) {
-      fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
-    }
-    const result = installed
-      ? await f.runCommand(args, { PATH: `${f.root}:${nodePath}` })
-      : await f.run(args);
-    expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
-    const rows = f.read();
-    expect(rows.map((row) => row.args)).toEqual([
-      [...rootOptions, "doctor", "--fix", "--non-interactive"],
-      args.slice(1),
-    ]);
-    expect(rows[1].pid).toBe(rows[0].parentPid);
+    const result = await f.run(["dist/index.js", "gateway", "--published-port", "0"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid --published-port");
+    expect(fs.existsSync(path.join(f.root, "calls.jsonl"))).toBe(false);
   });
 
   it.for(

@@ -7,6 +7,7 @@ import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js"
 import { getHeader } from "./http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
+  resolveDirectIngressPublishedPort,
   hasCurrentRemoteControlUiIngress,
 } from "./ingress-attribution.js";
 import {
@@ -74,7 +75,10 @@ export function resolveBrowserOriginPolicy(params: {
     requestHost: getHeader(params.req, "host"),
     origin: getHeader(params.req, "origin"),
     fetchSite: getHeader(params.req, "sec-fetch-site"),
-    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg, params.publishedPort),
+    allowedOrigins: resolveControlUiAllowedOrigins(
+      params.cfg,
+      resolveDirectIngressPublishedPort(params.req, params.publishedPort),
+    ),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };

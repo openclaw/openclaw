@@ -16,6 +16,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import { getHeader } from "../http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
+  resolveDirectIngressPublishedPort,
   hasCurrentRemoteControlUiIngress,
   type GatewayIngressAttribution,
 } from "../ingress-attribution.js";
@@ -618,7 +619,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     ...params,
     ...connectionLifecycle,
     upgradeReq,
-    publishedPort: params.publishedPort,
+    publishedPort: resolveDirectIngressPublishedPort(upgradeReq, params.publishedPort),
     ingressAttribution,
     ...params.addresses,
     forwardedFor,

@@ -67,13 +67,13 @@ import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import {
+  findGatewayRunFlagError,
   GATEWAY_AUTH_MODES,
   GATEWAY_BIND_MODES,
   GATEWAY_TAILSCALE_MODES,
   INVALID_AUTH,
   INVALID_BIND,
   INVALID_TAILSCALE,
-  INVALID_WS_LOG,
 } from "./run-flag-checks.js";
 import {
   createConfiguredGatewayHealthProbe,
@@ -310,6 +310,12 @@ async function maybeWriteGatewayStartupFailureBundle(
 }
 
 async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
+  const flagError = findGatewayRunFlagError(opts);
+  if (flagError) {
+    defaultRuntime.error(flagError);
+    defaultRuntime.exit(1);
+    return;
+  }
   // Reparenting can hide the running service from the ancestor walk.
   // Preserve its inherited PID before config env rebuilding overwrites it.
   const inheritedGatewayServicePid = parseStrictPositiveInteger(
@@ -336,15 +342,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as string | undefined;
   const wsLogStyle: GatewayWsLogStyle =
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
-  if (
-    wsLogRaw !== undefined &&
-    wsLogRaw !== "auto" &&
-    wsLogRaw !== "compact" &&
-    wsLogRaw !== "full"
-  ) {
-    defaultRuntime.error(INVALID_WS_LOG);
-    defaultRuntime.exit(1);
-  }
   setGatewayWsLogStyle(wsLogStyle);
 
   if (opts.rawStream) {

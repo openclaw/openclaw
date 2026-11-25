@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDirectIngressPublishedPort } from "./ingress-attribution.js";
 
 function resolveControlUiImageCorsOrigin(
   req: IncomingMessage,
@@ -21,7 +22,10 @@ function resolveControlUiImageCorsOrigin(
   } catch {
     return undefined;
   }
-  const allowed = resolveControlUiAllowedOrigins(cfg, publishedPort);
+  const allowed = resolveControlUiAllowedOrigins(
+    cfg,
+    resolveDirectIngressPublishedPort(req, publishedPort),
+  );
   return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
     ? origin
     : undefined;

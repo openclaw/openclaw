@@ -225,11 +225,11 @@ JSON
   )
   echo "Created $CONFIG_JSON (minimal gateway.mode=local)." >&2
 fi
+PUBLISHED_ORIGIN_PORT=""
+if [[ ${#PUBLISHED_PORT_ENV[@]} -gt 0 ]]; then PUBLISHED_ORIGIN_PORT="$HOST_GATEWAY_PORT"; fi
 LEGACY_ORIGIN_PORT=""
-if [[ "${GATEWAY_COMMAND_MODE:-}" == "legacy" && ${#PUBLISHED_PORT_ENV[@]} -gt 0 ]]; then
-  LEGACY_ORIGIN_PORT="$HOST_GATEWAY_PORT"
-fi
-ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT"
+if [[ "${GATEWAY_COMMAND_MODE:-}" == "legacy" ]]; then LEGACY_ORIGIN_PORT="$PUBLISHED_ORIGIN_PORT"; fi
+ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT" "$PUBLISHED_ORIGIN_PORT"
 
 PODMAN_USERNS="${OPENCLAW_PODMAN_USERNS:-keep-id}"
 USERNS_ARGS=()

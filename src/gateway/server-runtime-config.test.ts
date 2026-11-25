@@ -182,6 +182,13 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "0.0.0.0",
       },
       {
+        name: "rejects whitespace-only lists instead of treating them as intentional deny-all",
+        cfg: {
+          gateway: { bind: "lan" as const, auth: TOKEN_AUTH, controlUi: { allowedOrigins: [" "] } },
+        },
+        expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
         name: "accepts an explicit empty origin list as deny-all",
         cfg: {
           gateway: {

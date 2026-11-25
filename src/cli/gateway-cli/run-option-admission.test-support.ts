@@ -1,16 +1,59 @@
-// Share the command suite's startup mocks and reset lifecycle for port admission cases.
+// Share the command suite's startup mocks and reset lifecycle for option admission cases.
 import { expect, it, type Mock } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 
-export function registerGatewayPortOptionTests({
+export function registerGatewayOptionAdmissionTests({
   runGatewayCli,
   startGatewayServer,
   runtimeErrors,
+  configState,
+  prepareGatewayReset,
+  ensureDevGatewayConfig,
 }: {
   runGatewayCli: (args: string[]) => Promise<unknown>;
   startGatewayServer: Mock;
   runtimeErrors: string[];
+  configState: { snapshot: Record<string, unknown> };
+  prepareGatewayReset: () => Promise<unknown>;
+  ensureDevGatewayConfig: Mock;
 }) {
+  it("allows ambient channel triggers with the deprecated alias", async () => {
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev-ambient-channels"]);
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({ ambientEnvTriggers: "allow" }),
+    );
+  });
+
+  it("prints all supported modes on invalid --auth value", async () => {
+    await expect(
+      runGatewayCli(["gateway", "--auth", "bad-mode", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Invalid --auth. Use "none", "token", "password", or "trusted-proxy".',
+    );
+  });
+
+  it("rejects a malformed published port before dev reset", async () => {
+    const config = { gateway: { mode: "local" } };
+    configState.snapshot = { config, sourceConfig: config, exists: true, valid: true };
+    await prepareGatewayReset();
+    await expect(
+      runGatewayCli([
+        "gateway",
+        "run",
+        "--allow-unconfigured",
+        "--dev",
+        "--reset",
+        "--published-port",
+        "0",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
   it.each([
     { args: ["gateway", "--published-port", "19123"] },
     { args: ["gateway", "--published-port", "19123", "run"] },

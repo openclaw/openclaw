@@ -173,7 +173,8 @@ Container launch supplies the published Gateway port automatically. When
 `gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
 and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
 Trusted-proxy authentication retains its configured origin policy and does not
-inherit those direct-container loopback grants.
+inherit those direct-container loopback grants. Managed Tailscale Serve/Funnel
+and relayed ingress likewise retain their own origin policy.
 The manual launcher supplies those loopback defaults only when the publish host
 is `127.0.0.1` or the IPv4 wildcard `0.0.0.0`. For a specific non-loopback
 `OPENCLAW_PODMAN_PUBLISH_HOST`, configure the browser origin explicitly.
@@ -186,6 +187,8 @@ port or public origin, update `gateway.controlUi.allowedOrigins` to include
 the origins you intend to allow. To use the current public origin and mapped
 localhost defaults instead, remove the `gateway.controlUi.allowedOrigins`
 field from your configuration; setting it to `[]` disables those defaults.
+Before replacing a container, setup and the manual launcher warn when a saved
+loopback list does not include the selected mapped port; the list stays unchanged.
 
 Setup checks the selected image before changing saved configuration or replacing
 the Gateway. Images with the existing `gateway --port` command remain supported;

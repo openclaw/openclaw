@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import * as tailscale from "../infra/tailscale.js";
 import {
   linkEmail,
   setAvatar,
@@ -26,6 +27,10 @@ import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
+import {
+  markGatewayIngressTransport,
+  type GatewayIngressTransport,
+} from "./ingress-attribution.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
@@ -52,9 +57,13 @@ describe("personal avatar HTTP authentication", () => {
   let cfg: OpenClawConfig;
   let rateLimiter: AuthRateLimiter | undefined;
   let publishedPort: number | undefined;
+  let ingressTransport: GatewayIngressTransport | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
+      if (ingressTransport) {
+        markGatewayIngressTransport(req, ingressTransport);
+      }
       void (async () => {
         const pathname = new URL(req.url ?? "/", origin).pathname;
         if (pathname === "/generic") {
@@ -90,6 +99,7 @@ describe("personal avatar HTTP authentication", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("personal-avatar-auth-"));
     cfg = {};
     publishedPort = undefined;
+    ingressTransport = undefined;
     auth = { mode: "token", token: "test-shared-secret", allowTailscale: false };
     vi.spyOn(configIo, "getRuntimeConfig").mockImplementation(() => cfg);
     const profile = ensureGatewayOwnerProfile("Avatar test owner");
@@ -141,6 +151,38 @@ describe("personal avatar HTTP authentication", () => {
     }
     return fetch(origin + avatarPath, { ...init, headers });
   }
+
+  it("keeps mapped origins off ambient managed Serve image reads", async () => {
+    vi.spyOn(tailscale, "readTailscaleWhoisIdentity").mockResolvedValue({
+      login: "reader@example.test",
+    });
+    auth = { mode: "token", token: "test-shared-secret", allowTailscale: true };
+    cfg = {
+      gateway: {
+        auth: { mode: "token", token: auth.token, allowTailscale: true },
+        publicOrigin: "https://serve.example.ts.net",
+      },
+    };
+    publishedPort = 25432;
+    ingressTransport = { kind: "managed-tailscale", mode: "serve" };
+    const headers = {
+      host: "serve.example.ts.net",
+      "x-forwarded-for": "100.64.0.10",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "serve.example.ts.net",
+      "tailscale-user-login": "reader@example.test",
+      origin: "https://serve.example.ts.net",
+    };
+    const accepted = await request(undefined, { headers });
+    expect(accepted.status).toBe(200);
+    expect(Buffer.from(await accepted.arrayBuffer())).toEqual(PNG);
+    const denied = await request(undefined, {
+      headers: { ...headers, origin: "http://localhost:25432" },
+    });
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await denied.text()).not.toContain(PNG.toString("base64"));
+  });
 
   it("does not extend proxy-authenticated image access to mapped origins", async () => {
     const trustedProxy = { userHeader: "x-auth-user", allowLoopback: true };

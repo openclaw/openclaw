@@ -344,9 +344,10 @@ export async function createGatewayHttpTransport(params: {
     tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
     testListener?: HttpServer,
   ): HttpServer => {
+    const publishedPort = ingressTransport.kind === "ordinary" ? params.publishedPort : undefined;
     const httpServer = createGatewayHttpServer({
       testListener,
-      publishedPort: params.publishedPort,
+      publishedPort,
       clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
@@ -382,7 +383,7 @@ export async function createGatewayHttpTransport(params: {
       reportUnattributableProxy,
     });
     const upgradeHandler = attachGatewayUpgradeHandler({
-      publishedPort: params.publishedPort,
+      publishedPort,
       httpServer,
       controlUiBasePath: params.controlUiBasePath,
       wss,

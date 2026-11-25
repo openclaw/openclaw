@@ -197,12 +197,11 @@ JSON
   )
   echo "Wrote minimal config to $CONFIG_JSON"
 fi
+PUBLISHED_ORIGIN_PORT="$HOST_GATEWAY_PORT"
+if [[ "$INSTALL_QUADLET" == true ]]; then PUBLISHED_ORIGIN_PORT=18789; fi
 LEGACY_ORIGIN_PORT=""
-if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
-  LEGACY_ORIGIN_PORT="$HOST_GATEWAY_PORT"
-  if [[ "$INSTALL_QUADLET" == true ]]; then LEGACY_ORIGIN_PORT=18789; fi
-fi
-ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT"
+if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then LEGACY_ORIGIN_PORT="$PUBLISHED_ORIGIN_PORT"; fi
+ensure_local_gateway_mode "$CONFIG_JSON" "$LEGACY_ORIGIN_PORT" "$PUBLISHED_ORIGIN_PORT"
 
 if [[ "$INSTALL_QUADLET" == true ]]; then
   QUADLET_DIR="$OPENCLAW_HOME/.config/containers/systemd"

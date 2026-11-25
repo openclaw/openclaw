@@ -22,7 +22,7 @@ export const INVALID_TAILSCALE = 'Invalid --tailscale. Use "off", "serve", or "f
 
 export type GatewayRunFlagOpts = Pick<
   GatewayRunOpts,
-  "auth" | "bind" | "compact" | "port" | "tailscale" | "wsLog"
+  "auth" | "bind" | "compact" | "port" | "publishedPort" | "tailscale" | "wsLog"
 >;
 
 /** Returns the first invalid-flag error, checking only CLI values (config is not loaded yet). */
@@ -33,6 +33,9 @@ export function findGatewayRunFlagError(opts: GatewayRunFlagOpts): string | unde
   }
   if (opts.port !== undefined && parseTcpPort(opts.port) === null) {
     return formatInvalidPortOption("--port");
+  }
+  if (opts.publishedPort !== undefined && parseTcpPort(opts.publishedPort) === null) {
+    return formatInvalidPortOption("--published-port");
   }
   const bind = normalizeOptionalString(toOptionString(opts.bind));
   if (bind !== undefined && !GATEWAY_BIND_MODES.has(bind)) {

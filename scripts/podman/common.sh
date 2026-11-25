@@ -165,6 +165,7 @@ upsert_env_var() {
 ensure_local_gateway_mode() {
   local file="$1"
   local legacy_port="${2:-}"
+  local published_port="${3:-}"
   local tmp=""
   ensure_safe_write_file_path "config file" "$file"
   if ! command -v python3 >/dev/null 2>&1; then
@@ -172,11 +173,11 @@ ensure_local_gateway_mode() {
     return 0
   fi
   tmp="$(mktemp "$(dirname "$file")/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$tmp" "$legacy_port" <<'PYTHON'
+  if ! python3 - "$file" "$tmp" "$legacy_port" "$published_port" <<'PYTHON'
 import json
 import sys
 
-path, tmp, legacy_port = sys.argv[1:]
+path, tmp, legacy_port, published_port = sys.argv[1:]
 try:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -197,6 +198,12 @@ if legacy_port and not gateway.get("publicOrigin") and isinstance(control_ui, di
     control_ui["allowedOrigins"] = [f"http://localhost:{legacy_port}", f"http://127.0.0.1:{legacy_port}"]
     gateway["controlUi"] = control_ui
     changed = True
+origins = control_ui.get("allowedOrigins") if isinstance(control_ui, dict) else None
+if published_port and isinstance(origins, list):
+    desired = [f"http://localhost:{published_port}", f"http://127.0.0.1:{published_port}"]
+    has_loopback = any(isinstance(value, str) and value.startswith(("http://localhost:", "http://127.0.0.1:")) for value in origins)
+    if has_loopback and not any(value in origins for value in desired):
+        print(f"Warning: published Gateway port {published_port} does not match the saved loopback gateway.controlUi.allowedOrigins. Dashboard access may be refused. Update that list explicitly, or remove the field to inherit current-image launch defaults. Existing policy is unchanged.", file=sys.stderr)
 if changed:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)

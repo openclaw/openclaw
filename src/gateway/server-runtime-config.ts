@@ -92,7 +92,8 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg, params.publishedPort).some(
     (value) => value.trim(),
   );
-  const hasAuthoredControlUiAllowedOrigins = cfg.gateway?.controlUi?.allowedOrigins !== undefined;
+  const hasExplicitEmptyControlUiAllowedOrigins =
+    cfg.gateway?.controlUi?.allowedOrigins?.length === 0;
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -121,7 +122,7 @@ export function assertGatewayRuntimeSecurityConfig(
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
     !hasControlUiAllowedOrigins &&
-    !hasAuthoredControlUiAllowedOrigins &&
+    !hasExplicitEmptyControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts

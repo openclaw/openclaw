@@ -13,7 +13,8 @@ Container launch supplies the published Gateway port automatically. When
 `gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
 and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
 Trusted-proxy authentication retains its configured origin policy and does not
-inherit those direct-container loopback grants.
+inherit those direct-container loopback grants. Managed Tailscale Serve/Funnel
+and relayed ingress likewise retain their own origin policy.
 Changing the public origin updates the inherited origin without saving a copy
 in the allowlist. An explicit list, including `[]`, remains authoritative and
 is not changed by setup or launch; include any desired browser origins yourself.

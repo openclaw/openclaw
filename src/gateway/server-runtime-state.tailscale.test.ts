@@ -104,6 +104,8 @@ describe("managed Tailscale gateway ingress", () => {
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
+      publishedPort: 25432,
+      cfg: { gateway: { publicOrigin: "https://gateway.tailnet.ts.net" } },
       getReadiness: createPreparedReadinessFixture(() => ({
         ready: true,
         coreReady: true,
@@ -148,6 +150,21 @@ describe("managed Tailscale gateway ingress", () => {
       expect(ordinary.body).toContain("proxy_attribution_required");
     }
     expect(managed.status).toBe(200);
+    const imagePreflight = (port: number, origin: string, forwarded = false) =>
+      requestStatus({
+        host: "127.0.0.1",
+        port,
+        path: "/api/users/profile-1/avatar",
+        method: "OPTIONS",
+        headers: { ...(forwarded ? headers : {}), origin },
+      });
+    expect((await imagePreflight(ordinaryAddress.port, "http://localhost:25432")).status).toBe(204);
+    expect(
+      (await imagePreflight(tailscaleAddress.port, "http://localhost:25432", true)).status,
+    ).toBe(403);
+    expect(
+      (await imagePreflight(tailscaleAddress.port, "https://gateway.tailnet.ts.net", true)).status,
+    ).toBe(204);
   });
 
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
