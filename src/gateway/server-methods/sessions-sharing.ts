@@ -1,6 +1,8 @@
 import {
   ErrorCodes,
   validateSessionMemberAddParams,
+  validateSessionMemberSetAccessParams,
+  type SessionMemberAddParams,
   validateSessionMemberRemoveParams,
   validateSessionMembersListParams,
   validateSessionVisibilitySetParams,
@@ -8,8 +10,6 @@ import {
   type SessionPublicShare,
   type SessionMember,
   type SessionMemberEvidence,
-  type SessionSharingEvent,
-  type SessionSharingEvidenceEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -19,7 +19,10 @@ import {
 } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-membership-facts.types.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
-import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
+import {
+  setSessionMemberAccess,
+  readSessionMembersInWorker,
+} from "../../config/sessions/session-sharing-store.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -35,7 +38,6 @@ import {
   loadPublicSessionShareTokenCodec,
   type PublicSessionShareTokenCodec,
 } from "../control-ui-public-session-token.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { prepareSessionPublicShareGrant } from "../session-publication-grant.js";
@@ -52,10 +54,16 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { prepareManagedSessionAccess, sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import { knownSessionIdentities, type SharingActorFacts } from "./sessions-sharing-identities.js";
-import { projectSessionMemberPermissions } from "./sessions-sharing-permissions.js";
+import {
+  projectSessionMemberPermissions,
+  resolveSessionMemberInvitationAccess,
+} from "./sessions-sharing-permissions.js";
+import {
+  publishSharingChange,
+  publishSessionMemberAccessReduced,
+} from "./sessions-sharing-publication.js";
 import type {
   GatewayClient,
-  GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
@@ -107,7 +115,11 @@ function sharingActorStorageRef(facts: SharingActorFacts): string {
 function projectSessionMemberEvidence(member: StoredSessionMember): SessionMemberEvidence {
   // Sentinel ids satisfy the existing non-null storage contract only. Project
   // actor evidence here so persistence markers never become protocol identities.
-  const common = { identityId: member.identityId, addedAt: member.addedAt };
+  const common = {
+    identityId: member.identityId,
+    addedAt: member.addedAt,
+    ...(member.access !== undefined ? { access: member.access } : {}),
+  };
   if (member.addedBy === UNKNOWN_SHARING_ACTOR_STORAGE_REF) {
     return { ...common, addedByState: "unknown" };
   }
@@ -130,6 +142,7 @@ function projectLegacySessionMember(member: SessionMemberEvidence): SessionMembe
     identityId: member.identityId,
     addedBy: member.addedBy,
     addedAt: member.addedAt,
+    ...(member.access !== undefined ? { access: member.access } : {}),
   };
 }
 
@@ -148,35 +161,6 @@ function projectPublicSessionShare(params: {
     }),
     createdAt: params.grant.createdAt,
   };
-}
-
-function publishSharingChange(params: {
-  context: GatewayRequestContext;
-  actor: SharingActorFacts;
-  event: Omit<SessionSharingEvidenceEvent, "actorState">;
-}): void {
-  bumpGatewayAccessRevision();
-  const eventOptions = {
-    sessionKeys: [params.event.sessionKey],
-  };
-  if (params.actor.state === "present") {
-    const event: SessionSharingEvent = { ...params.event, actor: params.actor.actor };
-    params.context.broadcast("session.sharing", event, eventOptions);
-  } else {
-    const event: SessionSharingEvidenceEvent = {
-      ...params.event,
-      ...(params.actor.state === "unknown" ? { actorState: "unknown" } : {}),
-    };
-    params.context.broadcast("session.sharing.evidence", event, eventOptions);
-  }
-  emitSessionsChanged(params.context, {
-    reason: "sharing",
-    sessionKey: params.event.sessionKey,
-    agentId: params.event.agentId,
-  });
-  // Draft recipients cannot receive the scoped row, but still need a redacted
-  // catalog invalidation so their next canonical list drops a newly hidden session.
-  emitSessionsChanged(params.context, { reason: "sharing" });
 }
 
 function defineManagedSessionHandler<T extends { sessionKey: string; agentId?: string }>(
@@ -337,22 +321,14 @@ function createSessionMembersListHandler(
 function createSessionMemberMutationHandler(
   action: "add" | "remove",
 ): GatewayRequestHandlers[string] {
-  return defineManagedSessionHandler(
+  return defineManagedSessionHandler<SessionMemberAddParams>(
     `session.members.${action}`,
     action === "add" ? validateSessionMemberAddParams : validateSessionMemberRemoveParams,
     async ({ params, respond, client, context }, access) => {
       const managed = access.target;
       let addActor: SharingActorFacts | undefined;
+      let refused = false;
       if (action === "add") {
-        if ("access" in params && params.access !== undefined) {
-          // Access levels are stored but not yet enforced; refuse rather than grant full membership.
-          respondError(
-            respond,
-            ErrorCodes.INVALID_REQUEST,
-            "member access levels are not supported",
-          );
-          return;
-        }
         const projection = requireSessionRowProjection(context);
         do {
           await projection.prepareSelection({ metadataOnly: true });
@@ -364,7 +340,8 @@ function createSessionMemberMutationHandler(
           actor: addActor,
           profiles: listResidentUserProfileDisplayFacts(),
         });
-        if (!known.some((identity) => identity.id === params.identityId)) {
+        const invitee = known.find((identity) => identity.id === params.identityId);
+        if (!invitee) {
           respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown identity");
           return;
         }
@@ -378,23 +355,46 @@ function createSessionMemberMutationHandler(
         };
         let now: number;
         let actor: SharingActorFacts;
+        let grantedAccess: SessionMemberAddParams["access"];
         if (addActor) {
           now = Date.now();
           actor = addActor;
+          const grant = resolveSessionMemberInvitationAccess(
+            params.identityId,
+            params.access,
+            context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+          );
+          if (!grant.ok) {
+            refused = true;
+            respondError(respond, ErrorCodes.INVALID_REQUEST, grant.error);
+            return;
+          }
+          const assertGrantCurrent = () => {
+            access.assertCurrent();
+            const currentGrant = resolveSessionMemberInvitationAccess(
+              params.identityId,
+              grant.value,
+              context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+            );
+            if (!currentGrant.ok || currentGrant.value !== grant.value) {
+              throw new Error("Invitee role changed before invitation commit");
+            }
+          };
           const added = await addSessionMember(
             scope,
             {
               identityId: params.identityId,
               addedBy: sharingActorStorageRef(actor),
               addedAt: now,
-              expectedSessionId: current.entry.sessionId,
+              ...(grant.value ? { access: grant.value } : {}),
               expectedEntry: sharingExpectedEntry(current),
             },
-            access.assertCurrent,
+            assertGrantCurrent,
           );
           if (!added.inserted) {
             return;
           }
+          grantedAccess = grant.value;
         } else {
           const removed = await removeSessionMember(
             scope,
@@ -410,11 +410,22 @@ function createSessionMemberMutationHandler(
           now = Date.now();
           actor = actorIdentity(client);
         }
+        if (action === "remove") {
+          publishSessionMemberAccessReduced({
+            context,
+            actor,
+            target: current,
+            identityId: params.identityId,
+            ts: now,
+          });
+          return;
+        }
         publishSharingChange({
           context,
           actor,
           event: {
-            action: action === "add" ? "member-added" : "member-removed",
+            action: "member-added",
+            ...(grantedAccess ? { access: grantedAccess } : {}),
             sessionKey: current.canonicalKey,
             agentId: current.agentId,
             identityId: params.identityId,
@@ -422,6 +433,9 @@ function createSessionMemberMutationHandler(
           },
         });
       });
+      if (refused) {
+        return;
+      }
       respond(
         true,
         { ok: true, sessionKey: managed.canonicalKey, identityId: params.identityId },
@@ -620,5 +634,83 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
   "session.members.listEvidence": createSessionMembersListHandler("session.members.listEvidence"),
 
   "session.members.add": createSessionMemberMutationHandler("add"),
+  "session.members.setAccess": defineManagedSessionHandler(
+    "session.members.setAccess",
+    validateSessionMemberSetAccessParams,
+    async ({ params, respond, client, context }, access) => {
+      let refused = false;
+      await runExclusiveSharingMutation(access.target, access.lifecycleStorePath, async () => {
+        const { target } = access.current();
+        const readGrant = () =>
+          resolveSessionMemberInvitationAccess(
+            params.identityId,
+            params.access,
+            context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+          );
+        const grant = readGrant();
+        if (!grant.ok) {
+          refused = true;
+          respondError(respond, ErrorCodes.INVALID_REQUEST, grant.error);
+          return;
+        }
+        const changed = await setSessionMemberAccess(
+          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+          {
+            identityId: params.identityId,
+            access: params.access,
+            expectedEntry: sharingExpectedEntry(target),
+          },
+          () => {
+            access.assertCurrent();
+            const current = readGrant();
+            if (!current.ok) {
+              throw new Error(current.error);
+            }
+          },
+        );
+        if (!changed) {
+          refused = true;
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "identity is not a session member");
+          return;
+        }
+        if (!changed.changed) {
+          return;
+        }
+        const actor = actorIdentity(client);
+        const levels = ["read", "suggest", "send"];
+        const ts = Date.now();
+        if (levels.indexOf(params.access) < levels.indexOf(changed.previousAccess ?? "read")) {
+          publishSessionMemberAccessReduced({
+            context,
+            actor,
+            target,
+            identityId: params.identityId,
+            access: params.access,
+            ts,
+          });
+        } else {
+          publishSharingChange({
+            context,
+            actor,
+            event: {
+              action: "member-access-changed",
+              sessionKey: target.canonicalKey,
+              agentId: target.agentId,
+              identityId: params.identityId,
+              access: params.access,
+              ts,
+            },
+          });
+        }
+      });
+      if (!refused) {
+        respond(true, {
+          ok: true,
+          sessionKey: access.target.canonicalKey,
+          identityId: params.identityId,
+        });
+      }
+    },
+  ),
   "session.members.remove": createSessionMemberMutationHandler("remove"),
 };

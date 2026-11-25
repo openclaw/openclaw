@@ -587,15 +587,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             params,
             commandRuntime,
           ) => {
-            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
-            const senderIsOwner = claimedOwner === true;
-            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
-            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
+            const { messageChannel, ...remainingParams } = params;
+            // Validate and dispatch the same channel value; never re-read plugin-owned input.
+            const ingressParams = { ...remainingParams, messageChannel };
             if (
-              // Community channels may admit guests; trusted provenance is required only for owner elevation.
-              (senderIsOwner &&
-                record.origin !== "bundled" &&
-                record.trustedOfficialInstall !== true) ||
               currentRegistry().plugins.find((entry) => entry.id === pluginId) !== record ||
               !isPluginRecordActive(registry, record) ||
               !currentRegistry().channels.some(
@@ -603,7 +598,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               )
             ) {
               throw new Error(
-                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
+                `Plugin "${pluginId}" cannot run turns for channel "${messageChannel ?? "unknown"}": it is not the active plugin registered for that channel.`,
               );
             }
             return await runWithPluginScope(() =>

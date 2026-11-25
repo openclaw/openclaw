@@ -51,6 +51,7 @@ export const DEFAULT_PARTICIPATION_TOOLS = Object.freeze([
   "process",
   "sessions_spawn",
   "sessions_yield",
+  "github_publish",
   "skills_search",
   "skills_read",
   "web_search",

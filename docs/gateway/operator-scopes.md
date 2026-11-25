@@ -253,6 +253,10 @@ RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
 
+When an agent tool call needs a scope that the turn's role lacks, the tool
+result names the refused tool and tells the model to ask a Gateway admin
+instead of retrying; the Gateway log keeps the missing scope.
+
 `question.*` also accepts `operator.sessions.write` for ordinary questions
 bound to the caller's own admitted run and owned session. The Gateway records
 that binding from trusted run authority, never from caller-supplied session or
@@ -421,6 +425,154 @@ This restriction does not apply to the creator, administrators, or teammates
 with role-wide `view`, `suggest`, or `write` access, even if they are also members.
 Existing scope checks still apply: `full` and `sandboxMode` changes require
 `operator.admin`. See [Session permission modes](/gateway/permission-modes).
+
+The opt-in Participate policy adds `sessions.maxInvitedAccess` (`"read"`,
+`"suggest"`, or `"send"`) only to roles with `sessions.others: "invited"`.
+Its per-session resolver uses the lower of the stored invitation level and this
+ceiling, treating an unspecified invitation level as `"read"`. Omitting the field
+preserves existing membership behavior. A `"send"` invitation permits bounded
+participation with a session-read scope, not general operator write authority.
+
+Set `sessions.invitedPermission` on an invited-session role to choose `read-only`,
+`guarded`, `workspace` (default), or `full`. Each input captures the lower of this
+ceiling and the session's permission mode. Read-only also denies file mutations;
+guarded uses human approval, workspace uses the command reviewer, and full removes
+the participation-specific exec ceiling. Session, model, host, and tool restrictions
+still apply. File tools remain contained to the session root in every mode. Shell
+execution is not an OS filesystem sandbox; isolate untrusted programs separately.
+Human approvals remain creator/admin-only, and the participant cannot grant them.
+Queued and recovered inputs retain the captured ceiling; policy changes may narrow
+it but never widen it. Stored inputs predating this field retain guarded authority.
+
+On a role with `maxInvitedAccess`, `sandbox: "required"` governs sessions the
+role creates or owns. Admitted send-level participation in another person's
+session uses that session's sandbox settings plus the captured participant
+ceiling. Invited members may read that session's workspace at their granted
+level. The role's own unsandboxed sessions remain blocked; roles without this
+opt-in keep the existing sandbox requirement for all sessions.
+
+Set `sessions.invitedTools` to replace the participant tool defaults, or
+`sessions.invitedAlsoAllow` to add to them. Both require `maxInvitedAccess` and
+`sessions.others: "invited"`. Configuring both fields is an error, even if either
+list is empty. With neither field set, the defaults are:
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`,
+`sessions_yield`, `github_publish`, `skills_search`, `skills_read`, `web_search`,
+`web_fetch`, `tool_search`, `tool_describe`, `dispatch_action`, `view_image`, and
+`progress_card`. `invitedTools: []` permits no tools; `invitedAlsoAllow: []` keeps
+the defaults.
+
+For example, replace a role's participant tools with file reads and discovery:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedTools: ["read", "ls", "tool_search", "tool_describe", "dispatch_action"],
+  },
+}
+```
+
+Or keep the defaults and add browser access:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedAlsoAllow: ["browser"],
+  },
+}
+```
+
+Both lists use ordinary tool-policy names, groups, and wildcards. Core, plugin,
+and MCP tools are eligible when otherwise offered and authorized; there is no
+fixed upper allowlist. Agent tool policy and each tool's authorization checks
+still apply. Listing a tool does not make an unavailable or agent-denied tool
+available. The `openclaw` tool is always denied, and participants cannot mutate
+Gateway configuration, roles, or membership, or restart the Gateway, even with
+`"*"`. This includes installing, uninstalling, enabling, or disabling plugins,
+which change Gateway configuration. Plugin reload is also denied because it can
+approve new plugin capabilities. Tool policy belongs to the role, not the individual invitation. To give one
+person a different tool policy, duplicate the role and assign that person to it.
+
+Participant skill tools read only installed skills eligible for that agent, including
+text companions bounded to each skill directory. `invitedTools` can remove these
+tools; enabling them does not expand the file tools' session root. Participant exec
+starts only in directories whose real paths are within that root, including for
+children. This constrains the starting directory, not command arguments or later
+filesystem access by the command; it is not an operating-system sandbox.
+
+Participant `sessions_spawn` calls create only hidden, same-agent, Gateway-local
+OpenClaw children. They cannot change the original root through `cwd`, projects,
+worktrees, thread binding, visible sessions, worker placement, ACP, or CLI runtimes.
+Every child and descendant retains the original invitation, creator, incarnation,
+root, tool ceiling, and permission ceiling. Each new child turn or private completion
+rechecks that original invitation and the participant's current role. An admin
+sending a new input to the child cannot replace its original participant source.
+The parent's independent turns do not acquire the child's ceiling. Child exec
+approvals require the original session creator, not an assignee, participant, or
+unrelated administrator. Process tools expose only the child's own process scope.
+
+Removing or reducing membership blocks new child work and completion admission.
+There is no invitation epoch: reinviting the same person may admit a retained child
+under the intersection of its stored ceiling and the current invitation. Missing
+child rows or source bindings never restore owner authority. The retained spawn
+record can require current completion custody; it cannot reconstruct that custody
+or serve as a second restart mechanism.
+
+Include the discovery tools when the participant needs deferred tools. Explicitly
+allowing tools delegates the agent's or Gateway's capabilities intentionally.
+Existing role and scope checks use the admitted participant, not the session
+creator. Plugin JavaScript, MCP servers, desktop access, and channel credentials
+may use agent-owned or shared resources; the participant tool list does not
+sandbox them.
+
+The Gateway captures the resolved tool list on each accepted input and preserves
+it across queueing and restart. Re-admission intersects the retained and current
+policies as independent restrictions: a tool must satisfy both, including when
+they contain groups or wildcards. A wider role policy applies to newly submitted
+inputs, not retained work. Participant turns require Gateway-local **OpenClaw**
+execution, not a native/CLI harness or remote worker. Allowing `exec` never disables
+the admitted permission ceiling, host approval requirements, sandbox policy, or
+file-tool containment.
+
+### Retained participant work
+
+Participation is part of the admitted operator run authority, not a separate
+execution option. The original input captures a bound invitation with the person's
+profile, source agent and session, session incarnation, creator, root, permission,
+and tool restrictions. Native execution, tools, approvals, and compaction consume
+that admitted authority.
+
+Queued inputs, scheduled work, and supported restart continuations retain the
+same strict operator recovery source. Participant snapshots use version 2 and
+include the bound invitation. Ordinary operator sources keep their existing
+unversioned snapshot shape, size limits, approval behavior, and recovery rules;
+no invitation is required for ordinary sessions or automations.
+
+Children store an immutable delegated operator source in their private session
+state. This is a restriction, not a grant: every new admission restores the
+original person's current authority and rechecks the original invitation.
+Recovery refuses changed source agents, session incarnations, creators, or roots.
+Missing or oversized participant sources cannot become source-less owner or
+System work. Sources are bounded; overflow is refused rather than truncating
+policy intersections.
+
+Removing membership or reducing it below `send` prevents new participant
+admissions. Re-adding `send` may admit a future scheduled occurrence under its
+retained ceiling; it does not revive cancelled queued input. Narrowing the same
+role's invitation tools or permission narrows retained work. Widening those
+fields does not widen work already accepted. Named-role reassignment and other
+operator-policy changes retain their existing source invalidation rules.
+
+Graceful restart uses the existing queued-input, scheduled-occurrence, and root
+resume owners. A root resume retains the interrupted requester's source, not the
+session owner's. Persisted child completion records alone do not authorize replay:
+unsupported child/completion recovery remains non-executing until a supported
+owner admits new work. Durable context-engine maintenance privately retains and
+re-admits the participant source before native compaction; it does not expose
+that source to context-engine plugins.
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.

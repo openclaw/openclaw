@@ -143,11 +143,13 @@
   position: relative;
 }
 
-.meetings-day .transcripts-list > li::before {
+.meetings-row__title::before {
   content: "";
   position: absolute;
   inset-inline-start: calc(-1 * var(--space-4) - 4px);
-  inset-block-start: 32px;
+  /* The list item anchors the rail; the title’s first line anchors the dot. */
+  margin-block-start: 0.5lh;
+  transform: translateY(-50%);
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
@@ -301,13 +303,22 @@
 .transcripts-utterance__byline {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
   gap: var(--space-3);
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
+.transcripts-utterance__byline time {
+  flex: none;
+}
+
 .transcripts-utterance__byline strong {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-strong);
   font-weight: 600;
 }
@@ -485,7 +496,7 @@
     padding-inline-start: 0;
   }
 
-  .meetings-day .transcripts-list > li::before {
+  .meetings-row__title::before {
     inset-inline-start: -4px;
   }
 

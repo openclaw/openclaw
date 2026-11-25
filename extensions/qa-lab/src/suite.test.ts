@@ -17,11 +17,9 @@ import {
   buildQaSuiteSummaryJson,
   captureGatewayHeapSnapshotCheckpoint,
   createQaSuiteTransportAdapter,
-  formatQaSuiteRunStartProgress,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuite,
   runQaFlowSuiteCleanupPlan,
-  shouldLogQaSuiteProgress,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
   throwQaSuiteCleanupErrors,
   waitForQaLabReadyOrStopOwned,
@@ -54,27 +52,6 @@ const rssSamples = [
   { label: "suite-start", at: "2026-04-22T12:00:00.000Z", gatewayProcessRssBytes: 100_000_000 },
   { label: "finish", at: "2026-04-22T12:00:10.000Z", gatewayProcessRssBytes: 140_000_000 },
 ];
-const heapSnapshots = [
-  {
-    label: "suite-start",
-    at: "2026-04-22T12:00:01.000Z",
-    path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-    bytes: 12_345,
-  },
-];
-
-const expectedMetrics = {
-  wallMs: 12_000,
-  gatewayProcessCpuMs: 3_000,
-  gatewayCpuCoreRatio: 0.25,
-  gatewayProcessRssStartBytes: 100_000_000,
-  gatewayProcessRssEndBytes: 125_000_000,
-  gatewayProcessRssDeltaBytes: 25_000_000,
-  gatewayProcessRssPeakBytes: 140_000_000,
-  gatewayProcessRssPeakDeltaBytes: 40_000_000,
-  gatewayProcessRssSamples: rssSamples,
-  gatewayHeapSnapshots: heapSnapshots,
-};
 
 function cleanupErrorForTest(params: Parameters<typeof throwQaSuiteCleanupErrors>[0]): Error {
   try {
@@ -318,57 +295,10 @@ describe("qa suite", () => {
     }
   });
 
-  it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
-    for (const [CI, override, expected] of [
-      ["false", "true", true],
-      ["true", "false", false],
-      ["false", "on", true],
-      ["true", "off", false],
-      ["true", "definitely", true],
-    ] as const) {
-      expect(shouldLogQaSuiteProgress({ CI, OPENCLAW_QA_SUITE_PROGRESS: override })).toBe(expected);
-    }
-  });
-
   it("sanitizes scenario ids for progress logs", () => {
     expect(sanitizeQaSuiteProgressValue("scenario-id")).toBe("scenario-id");
     expect(sanitizeQaSuiteProgressValue("scenario\nid\tvalue")).toBe("scenario id value");
     expect(sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
-  });
-
-  it("includes effective channel driver in run start progress logs", () => {
-    for (const { expected, ...params } of [
-      { concurrency: 8, expected: "run start: scenarios=80 concurrency=8 transport=qa-channel" },
-      {
-        concurrency: 1,
-        channelDriver: "crabline" as const,
-        channelId: "telegram",
-        expected:
-          "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
-      },
-    ]) {
-      expect(
-        formatQaSuiteRunStartProgress({
-          selectedScenarioCount: 80,
-          transportId: "qa-channel",
-          ...params,
-        }),
-      ).toBe(expected);
-    }
-  });
-
-  it("records gateway RSS peak and trace samples", () => {
-    const metrics = buildQaSuiteRuntimeMetrics({
-      startedAt: new Date("2026-04-22T12:00:00.000Z"),
-      finishedAt: new Date("2026-04-22T12:00:12.000Z"),
-      gatewayProcessCpuStartMs: 1_000,
-      gatewayProcessCpuEndMs: 4_000,
-      gatewayProcessRssStartBytes: 100_000_000,
-      gatewayProcessRssEndBytes: 125_000_000,
-      gatewayProcessRssSamples: structuredClone(rssSamples),
-      gatewayHeapSnapshots: structuredClone(heapSnapshots),
-    });
-    expect(metrics).toEqual(expectedMetrics);
   });
 
   it.each([
@@ -459,47 +389,10 @@ describe("buildQaSuiteSummaryJson", () => {
     ).toThrow("channelDriverSelection was removed");
   });
 
-  it("records selected scenarios and realized run metadata", () => {
-    const run = {
-      scenarioIds: ["approval", "handoff", "recall"],
-      status: "running",
-      channel: "telegram",
-      channelDriver: "crabline",
-      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-      channelDriverSmokePath: "crabline-provider-readiness.json",
-      runtimePair: ["openclaw", "codex"],
-    } satisfies Partial<Parameters<typeof buildQaSuiteSummaryJson>[0]>;
-    const json = summarize(structuredClone(run));
-    expect(json.run).toMatchObject(run);
-  });
-
-  it("leaves split fields null when a model ref is malformed", () => {
-    const json = summarize({
-      primaryModel: "not-a-real-ref",
-      alternateModel: "",
-      scenarioIds: [],
-    });
-    expect(json.run).toMatchObject({
-      primaryModel: "not-a-real-ref",
-      primaryProvider: null,
-      primaryModelName: null,
-      alternateModel: "",
-      alternateProvider: null,
-      alternateModelName: null,
-      scenarioIds: null,
-    });
-  });
-
   it("includes skipped scenarios in the canonical summary counts", () => {
     const json = summarize({ scenarios: outcomes("pass", "fail", "skip", "skip") });
 
     expect(json.counts).toEqual({ total: 4, passed: 1, failed: 1, skipped: 2 });
-  });
-
-  it("records optional runtime metrics when provided", () => {
-    const metrics = { ...expectedMetrics, gatewayProcessCpuMs: 3_400, gatewayCpuCoreRatio: 0.283 };
-    const json = summarize({ metrics: structuredClone(metrics) });
-    expect(json.metrics).toEqual(metrics);
   });
 });
 

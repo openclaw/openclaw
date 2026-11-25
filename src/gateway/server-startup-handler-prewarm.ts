@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -103,7 +103,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
 }): GatewayIdleTaskHandle {
   let stopped = false;
   // A delayed warmup can outlive its initial headroom. Leave the remaining handlers cold.
-  const shouldStop = () => stopped || isConstrainedProcessLowOnMemory();
+  const shouldStop = () => stopped || isMemoryPressureHigh();
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
   const items = gatewayPrewarmItems(params.getConfig);
@@ -172,14 +172,13 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
-  // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
-  if (isConstrainedProcessLowOnMemory()) {
+  // Leave scarce memory to requests; every warmup has a request-time loader.
+  if (isMemoryPressureHigh()) {
     return [];
   }
   const hasIoPressure = createHostIoPressureProbe();
   const shouldDeferTemplates = () =>
-    isConstrainedProcessLowOnMemory() ||
-    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+    isMemoryPressureHigh() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({

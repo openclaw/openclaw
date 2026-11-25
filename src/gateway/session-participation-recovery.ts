@@ -3,7 +3,7 @@ import {
   intersectParticipationCeilings,
   type BoundParticipationCeiling,
 } from "../agents/participation-ceiling.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** The recovery owner supplies already-authenticated custody, avoiding a recorded-source restore cycle. */
@@ -17,7 +17,7 @@ export async function prepareRecoveredParticipation(params: {
   const { prepareSessionPrincipalRunAuthority } =
     await import("./session-sharing-authorization-async.js");
   if (authority.profileId !== retained.profileId) {
-    throw new GatewayOperatorRecoveryAuthorizationError("Interrupted requester identity changed.");
+    throw new OperatorRefusalError("sign-in-ended");
   }
   const access = await prepareSessionPrincipalRunAuthority({
     context: params.context,
@@ -29,8 +29,6 @@ export async function prepareRecoveredParticipation(params: {
     restored: {
       authority,
       release: authority.retain?.() ?? (() => {}),
-      controlUiAdmin: false,
-      automationAdmin: false,
     },
     assertCurrent: () => authority.signal?.throwIfAborted(),
   });
@@ -42,9 +40,7 @@ export async function prepareRecoveredParticipation(params: {
   };
   try {
     if (!access.participationCeiling) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "The original invitation no longer permits participation.",
-      );
+      throw new OperatorRefusalError("invitation-ended");
     }
     const ceiling = intersectParticipationCeilings(retained, access.participationCeiling);
     signal?.addEventListener("abort", onRevoked, { once: true });

@@ -15,6 +15,7 @@ import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   decodePublicationDispatchEnvelope,
+  dispatchEnvelopeFromInputs,
   normalizePublicationIntent,
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
@@ -231,6 +232,9 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 --resume-request continues an admitted candidate request before its first Q workflow
 POST, reusing an exact existing Q ref after interrupted creation. After a
 qualification POST it is observation-only, never a redispatch.
+Fresh validation checks committed mock exports before dispatch. For diagnostics or
+historical candidates, --skip-local-mock-preflight logs and skips only this local check.
+Build-only and retained requests are unchanged.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
 Prints the frozen candidate/tooling, effective profile, group, and soak selection
@@ -451,6 +455,7 @@ export function parseArgs(argv: string[]) {
     specifiedInputs: [] as string[],
     pinAdmissionWorkflow: false,
     keepBranch: false,
+    skipLocalMockPreflight: false,
     dryRun: false,
     inputs,
   };
@@ -492,6 +497,10 @@ export function parseArgs(argv: string[]) {
     }
     if (arg === "--keep-branch") {
       args.keepBranch = true;
+      continue;
+    }
+    if (arg === "--skip-local-mock-preflight") {
+      args.skipLocalMockPreflight = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -1045,7 +1054,7 @@ function warnCandidateToolingLag(candidateSha: string) {
   }
 }
 
-function assertAdmissionContract(admissionWorkflowSha: string) {
+function assertAdmissionContract(admissionWorkflowSha: string, preflightFirst: boolean) {
   const workflow = parseYaml(
     run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
   );
@@ -1053,12 +1062,20 @@ function assertAdmissionContract(admissionWorkflowSha: string) {
     workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
     "Selected P lacks qualification admission; update P independently without changing C/Q",
   );
+  requireDispatch(
+    !preflightFirst || workflow?.env?.RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Admission SHA ${admissionWorkflowSha} does not support preflight_first; select a supporting P before dispatch.`,
+  );
 }
 
 // Main routinely advances between P selection and the admission POST. A newer
 // tip replaces P only when it is trusted main, descends from the selected P,
 // and still declares the admission contract.
-function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+function verifyMainAdmissionAdvance(
+  previousSha: string,
+  currentSha: string,
+  preflightFirst: boolean,
+) {
   requireDispatch(
     resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
     `Main tip ${currentSha} did not resolve to itself`,
@@ -1067,7 +1084,7 @@ function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
     runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
     `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
   );
-  assertAdmissionContract(currentSha);
+  assertAdmissionContract(currentSha, preflightFirst);
 }
 
 function requireDispatch(condition: unknown, message: string): asserts condition {
@@ -1107,13 +1124,15 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
     publication_artifact_source_json,
+    preflight_first,
     known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
     extension_test_exclude_patterns_json === undefined &&
     qualification_baselines_json === undefined &&
-    publication_artifact_source_json === undefined
+    publication_artifact_source_json === undefined &&
+    preflight_first !== "true"
       ? undefined
       : {
           ...(extension_test_exclude_patterns_json === undefined
@@ -1123,7 +1142,16 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
           ...(publication_artifact_source_json === undefined
             ? {}
             : { publication_artifact_source_json }),
+          ...(preflight_first === "true" ? { preflight_first } : {}),
         };
+  requireDispatch(
+    preflight_first === undefined || ["true", "false"].includes(preflight_first),
+    "preflight_first must be true or false",
+  );
+  requireDispatch(
+    preflight_first !== "true" || workflow.env.FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support preflight_first; no remote refs or run were created.`,
+  );
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
@@ -1182,7 +1210,11 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     inputs[key] = value;
     wireInputs[key] = String(value);
   }
-  decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  if (preflight_first === "true") {
+    dispatchEnvelopeFromInputs(inputs);
+  } else {
+    decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  }
   return {
     inputs,
     wireInputs,
@@ -1641,6 +1673,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
     retainedInputs = {
       ...retainedInputs,
       ...envelope.laneInputs,
+      preflight_first: envelope.laneInputs?.preflight_first ?? "false",
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -2305,7 +2338,20 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    assertAdmissionContract(admissionWorkflowSha);
+    assertAdmissionContract(admissionWorkflowSha, args.inputs.preflight_first === "true");
+  }
+  if (args.inputs.rerun_group !== "build-only") {
+    if (args.skipLocalMockPreflight) {
+      console.warn(
+        `Skipping local mock-export preflight for ${targetSha} (--skip-local-mock-preflight)`,
+      );
+    } else {
+      const { checkFrozenMockExports } = await import("./check-test-mock-exports.mts");
+      requireDispatch(
+        checkFrozenMockExports(process.cwd(), targetSha) === 0,
+        `Local mock-export preflight failed for ${targetSha}; no workflow was dispatched. Fix the candidate or use --skip-local-mock-preflight to defer to hosted validation.`,
+      );
+    }
   }
   if (candidateOwned) {
     warnCandidateToolingLag(workflowSha);

@@ -15,6 +15,8 @@ export type AdmittedRunOperatorRoleFacts = Readonly<{
 /** What a turn may do; only `decideTurnGrant` produces it. In memory only; replays re-admit. */
 export type TurnGrant = Readonly<{
   owner: boolean;
+  /** `manage`: every automation; `self`: the turn creates and edits its own. */
+  automations: "none" | "self" | "manage";
   skillAuthoring: boolean;
   questionReplace: boolean;
   commands: "none" | "all";

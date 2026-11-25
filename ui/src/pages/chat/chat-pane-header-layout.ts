@@ -319,6 +319,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
             sidebarLayout,
           ]),
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
+            sharing: selectedSession
+              ? this.collaboration.sharingStates.get(
+                  this.sessionSharingCacheKey(selectedSession.key),
+                )?.result
+              : undefined,
             cachedDetails: cached?.details,
             displayPullRequests: this.visibleDetailsPullRequests,
             sessionFactsReady:

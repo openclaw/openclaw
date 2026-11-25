@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ErrorShape,
+  SessionMemberPermissionLevel,
   MentionsListResult,
   UsersMentionableParams,
   UsersMentionableResult,
@@ -15,7 +16,11 @@ export type MentionInbox = {
   prepareInvitation: (
     client: GatewayClient | null,
     target: { agentId: string; sessionKey: string; entry: SessionEntry | undefined },
-    mentions: readonly { profileId: string; token: string }[],
+    mentions: readonly {
+      profileId: string;
+      token: string;
+      access?: SessionMemberPermissionLevel;
+    }[],
   ) => PreparedSessionMentionInvitation | undefined;
   mentionable: (
     client: GatewayClient | null,

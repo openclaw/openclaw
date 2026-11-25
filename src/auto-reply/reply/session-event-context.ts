@@ -37,7 +37,7 @@ import {
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
-  readSessionEventTargetRequesterOwner,
+  readSessionEventTargetScheduledRequester,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -296,29 +296,28 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.automationAdmin
+  const operatorAuthority = automation
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.
-        (!automation && (options.source === "cron" || options.source === "cron_failure_repair"))
+        options.source === "cron" ||
+        options.source === "cron_failure_repair"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
-  const requesterOwner = readSessionEventTargetRequesterOwner(target);
+  const scheduled = readSessionEventTargetScheduledRequester(target);
   const requesterPrincipal =
-    requesterOwner?.requester.kind === "channel"
+    scheduled?.requester.kind === "channel"
       ? {
-          channelId: requesterOwner.requester.requester.channel,
-          accountId: normalizeAccountId(requesterOwner.requester.requester.accountId),
-          senderId: requesterOwner.requester.requester.senderId,
+          channelId: scheduled.requester.requester.channel,
+          accountId: normalizeAccountId(scheduled.requester.requester.accountId),
+          senderId: scheduled.requester.requester.senderId,
         }
       : undefined;
   if (
-    operatorAuthority &&
-    (automation?.automationAdmin ||
-      ((options.source === "restart" || readSessionEventTargetOwnerContinuation(target)) &&
-        operatorAuthority.grant.owner))
+    operatorAuthority?.grant.owner &&
+    (automation || options.source === "restart" || readSessionEventTargetOwnerContinuation(target))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event
@@ -335,17 +334,15 @@ export function buildSessionEventContext(params: {
         isCurrent: () => true,
       },
     });
-  } else if (requesterOwner?.owner) {
+  } else if (scheduled?.grant?.owner) {
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
-      recoveryReference: requesterOwner.recoveryReference,
       isCurrent: () => {
         params.assertCurrent();
         return true;
       },
       successor: {
         channelPrincipal: requesterPrincipal,
-        recoveryReference: requesterOwner.recoveryReference,
         isCurrent: () => {
           params.assertCurrent();
           return true;

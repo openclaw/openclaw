@@ -23,6 +23,7 @@ import {
   discoverAllSessions,
   loadCostUsageSummaryFromCache,
 } from "../../infra/session-cost-usage.js";
+import { includesUsageDay } from "../../shared/usage-calendar.js";
 import { resolveDateRange } from "./usage-date-range.js";
 import { invokeUsage, usageReply, usageTotals } from "./usage.test-support.js";
 
@@ -84,6 +85,24 @@ it("falls back to the offset when Gateway ICU does not recognize the browser tim
   expect(await request(params)).toEqual([true, expect.any(Object), undefined]);
   expect(loadCost).toHaveBeenCalledWith(
     expect.objectContaining({ dayBucket: { mode: "utc-offset", utcOffsetMinutes: 60 } }),
+  );
+});
+
+it("includes later years when a split-day report starts before year 1000", () => {
+  const range = resolveDateRange({
+    startDate: "0999-01-01",
+    endDate: "2007-11-04",
+    mode: "specific",
+    timeZone: "America/St_Johns",
+  });
+  const days = range.ok && range.value.civilDays;
+  expect(days && includesUsageDay("2007-11-03", days)).toBe(true);
+});
+
+it("resolves the 23-hour day in Vienna", () => {
+  expectRange(
+    { startDate: "2026-03-29", endDate: "2026-03-29", mode: "specific", timeZone: "Europe/Vienna" },
+    [Date.parse("2026-03-28T23:00:00Z"), Date.parse("2026-03-29T22:00:00Z") - 1],
   );
 });
 

@@ -12,6 +12,7 @@ import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -50,12 +51,7 @@ async function fixture(run: (pathname: string, home: string) => Promise<void>) {
     await fs.mkdir(path.dirname(pathname), { recursive: true });
     {
       using db = new DatabaseSync(pathname);
-      db.exec(
-        await fs.readFile(
-          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v24.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      db.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
       db.exec(`PRAGMA user_version=24;
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
         VALUES ('primary', 'agent', 24, 'openclaw', 1, 1);

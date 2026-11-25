@@ -227,7 +227,6 @@ type DispatchCase = {
     | "closed"
     | "replaced"
     | "target"
-    | "policy"
     | "stopped"
     | "restart"
     | "identity"
@@ -236,12 +235,12 @@ type DispatchCase = {
 };
 
 export const dispatchCases: DispatchCase[] = [
-  ...(
-    ["closed", "replaced", "policy", "stopped", "restart", "identity", "source-closed"] as const
-  ).map((transcriptTargetInvalidation) => ({
-    agentId: "main",
-    transcriptTargetInvalidation,
-  })),
+  ...(["closed", "replaced", "stopped", "restart", "identity", "source-closed"] as const).map(
+    (transcriptTargetInvalidation) => ({
+      agentId: "main",
+      transcriptTargetInvalidation,
+    }),
+  ),
   ...(["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).map(
     (targetField) => ({
       agentId: "main",

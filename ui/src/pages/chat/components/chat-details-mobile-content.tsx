@@ -44,7 +44,7 @@ import {
   type ChatPullRequestMobileCollectionProps,
   type ChatPullRequestMobileDetailProps,
 } from "./chat-pull-request-mobile.tsx";
-import type { ChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
+import type { ChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.ts";
 import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,

@@ -2,7 +2,6 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import {
   intersectOperatorScopes,
   operatorScopeSatisfied,
@@ -14,6 +13,7 @@ import {
   prepareOperatorAdmission,
   type OperatorAdmissionContext,
 } from "./operator-admission.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import {
   captureChannelOperatorRunAuthority,
   prepareGatewayOperatorRunAuthority,
@@ -33,8 +33,6 @@ export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
   /** Only Gateway recovery reauthenticates a Control UI profile. */
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  controlUiAdmin: boolean;
-  automationAdmin: boolean;
   release: () => void;
 };
 
@@ -66,17 +64,17 @@ export async function restoreGatewayOperatorSource(params: {
  * Chat-like starts need the grant a live chat.send needs: operator.sessions.write.
  */
 export async function restoreGatewayQueuedOperatorRecovery(params: QueuedRecoveryParams) {
-  return admitStart(params, "operator.sessions.write", "sending messages");
+  return admitStart(params, "operator.sessions.write", "run your queued request");
 }
 
 /** A queued Talk consult starts on the grant that created it: operator.talk, or write. */
 export async function restoreTalkConsultOperator(params: QueuedRecoveryParams) {
-  return admitStart(params, "operator.talk", "using Talk");
+  return admitStart(params, "operator.talk", "run your queued Talk request");
 }
 
 /** Scheduled automations start on the grant that creates them: operator.cron, or write. */
 export async function restoreScheduledAutomationOperator(params: QueuedRecoveryParams) {
-  return admitStart(params, "operator.cron", "running this automation");
+  return admitStart(params, "operator.cron", "run this automation");
 }
 
 /** Admission only narrows scopes; a start also needs its grant. Channel senders need none. */
@@ -97,9 +95,7 @@ async function admitStart(
     )
   ) {
     admitted.release();
-    throw new GatewayOperatorRecoveryAuthorizationError(
-      `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
-    );
+    throw new OperatorRefusalError("role-denies", { action });
   }
   return admitted;
 }
@@ -118,9 +114,7 @@ async function admitQueuedSource(
     const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
     const principal = decideChannelOwnerPrincipal(getConfig(), captured.sender);
     if (!principal) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "This sender is no longer in commands.ownerAllowFrom, so its saved work cannot run. Send a new message.",
-      );
+      throw new OperatorRefusalError("owner-removed", { action: "run your saved work" });
     }
     live = captureChannelOperatorRunAuthority({ ...principal, getRuntimeConfig: getConfig });
   }
@@ -151,9 +145,7 @@ async function admitQueuedSource(
   try {
     const context = params.context.resolveGatewayContext?.();
     if (!context) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "Participant continuation requires its original Gateway.",
-      );
+      throw new OperatorRefusalError("sign-in-ended");
     }
     const revoked = new AbortController();
     const participation = await prepareRecoveredParticipation({

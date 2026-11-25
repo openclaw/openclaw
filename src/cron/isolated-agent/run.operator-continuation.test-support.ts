@@ -8,6 +8,7 @@ import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gatewa
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import type { GatewaySchedulerClock } from "../../infra/gateway-scheduler.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { runCronSessionTurn } from "../session-run.js";
@@ -45,6 +46,9 @@ export function createOperatorContinuationService(params: {
           "explicit continuation session target",
         ),
       }),
+    // Scheduled runs take their job scope from the occurrence admission, as on the Gateway.
+    admitScheduledOccurrence: ({ job }) =>
+      admitScheduledOccurrence({ cfg: params.config, job, agentId: "main", trigger: "cron" }),
     runIsolatedAgentJob: (request) =>
       params.runIsolated({
         ...request,

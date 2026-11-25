@@ -58,8 +58,13 @@ installation cannot continue until it is published.
 ## Configure owner identities
 
 Add your FaceTime email address or full international phone number to
-`ownerHandles`. Only listed handles can use the integration. Every listed handle
-has owner authority; there is no guest tier.
+`ownerHandles`. Only listed handles can place or receive bridged calls.
+
+Owner tools follow [`commands.ownerAllowFrom`](/gateway/config-channels/commands),
+the same list that decides owner status for channel messages. Add each handle
+that should get owner tools as `facetime:<handle>`: a lowercase email address, or
+a phone number with only `+` and digits. A caller in `ownerHandles` but not in
+`commands.ownerAllowFrom` can talk to the agent without owner tools.
 
 Merge this into your OpenClaw configuration. Preserve existing plugin entries
 and add `facetime` to your existing `plugins.allow` list if you use one.
@@ -81,6 +86,9 @@ and add `facetime` to your existing `plugins.allow` list if you use one.
         },
       },
     },
+  },
+  commands: {
+    ownerAllowFrom: ["facetime:owner@example.com", "facetime:+12065550123"],
   },
 }
 ```
@@ -144,8 +152,9 @@ Choose a `realtime.toolPolicy`:
 | `safe-read-only`  | Limit agent requests to a fixed set of file, search, web-fetch, and memory tools. Other plugin tools are not included automatically. |
 | `none`            | Disable agent consults. Voice conversation and call control remain available.                                                        |
 
-Invalid policy values are rejected. Only add your own identities to
-`ownerHandles`, even when choosing a restricted tool policy.
+Invalid policy values are rejected. Only add people you trust to
+`ownerHandles`: every caller can use the agent's tools that do not need owner
+status, even when choosing a restricted tool policy.
 
 ### Choose a voice
 
@@ -307,6 +316,13 @@ openclaw gateway call facetime.updateDriver --json
 If upgrading a prototype configuration, run `openclaw doctor --fix`. Doctor
 migrates `whitelistHandles` to `ownerHandles` and removes the retired
 `helperHost`, `helperPort`, and `realtime.brain` settings.
+
+Before this release, every handle in `ownerHandles` was also the owner. Doctor,
+including the update-time Doctor pass, adds each of those handles to
+`commands.ownerAllowFrom` as `facetime:<handle>` when that list has no
+`facetime:` entry yet, so existing callers keep their owner tools. After that,
+edit owner status in `commands.ownerAllowFrom`. If you remove every `facetime:`
+entry, the next Doctor run adds them again.
 
 ## Remove the integration
 

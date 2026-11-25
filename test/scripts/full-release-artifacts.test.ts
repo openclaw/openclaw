@@ -1104,6 +1104,105 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expect(receipt.outputs).toEqual(test.outputs);
   });
 
+  it.each([
+    ["both ready", "success", true, ""],
+    ["source pending", null, true, "Fixture reached another artifact poll"],
+    ["source failed", "failure", false, "ended with failure"],
+    ["source skipped", "skipped", true, "ended with skipped"],
+    ["source only", "success", false, "Fixture reached another artifact poll"],
+  ] as const)(
+    "joins the original source and raw package for scheduling: %s",
+    (_case, conclusion, raw, error) => {
+      const test = fixture();
+      const source = {
+        ...test.jobs[0],
+        name: "Prepare npm artifacts / Check npm release source",
+        id: 903,
+        status: conclusion ? "completed" : "in_progress",
+        conclusion,
+        html_url: "https://example.com/job/903",
+      };
+      test.jobsApi(1, [...test.jobs, source]);
+      if (raw) {
+        test.rawArtifact();
+      } else {
+        test.list(
+          "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100",
+          "artifacts",
+          [],
+        );
+      }
+      const result = test.wait("source-and-package", { FIXTURE_STOP_ON_WAIT: "true" });
+      if (error) {
+        expectRejected(result, error);
+        expect(result.outputs.prepared_bundle_json).toBeUndefined();
+      } else {
+        expectSuccess(result);
+        expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+      }
+    },
+  );
+
+  it.each(["skipped", "neutral", "missing descriptor"])(
+    "stops on terminal package evidence: %s",
+    (fault) => {
+      const test = fixture();
+      test.jobsApi(1, [
+        { ...test.jobs[0], conclusion: fault === "missing descriptor" ? "success" : fault },
+        { ...test.jobs[0], id: 903, name: "Prepare npm artifacts / Check npm release source" },
+      ]);
+      test.runApi("81", completed);
+      test.list(
+        "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100",
+        "artifacts",
+        [],
+      );
+      expectRejected(
+        test.wait("source-and-package", { FIXTURE_ADVANCE_RETRY_CLOCK: "true" }),
+        fault === "missing descriptor" ? "no verified package descriptor" : `ended with ${fault}`,
+      );
+    },
+  );
+
+  it.each([
+    ["green original", "success", 1, ""],
+    ["failed original", "failure", 1, "ended with failure"],
+    ["skipped original", "skipped", 1, "ended with skipped"],
+    ["cancelled original", "cancelled", 1, "ended with cancelled"],
+    ["missing original", "success", 0, "Missing successful"],
+    ["ambiguous original", "success", 2, "Ambiguous scheduling job"],
+  ] as const)(
+    "uses only the initial parent preparation on rerun: %s",
+    (_case, conclusion, count, error) => {
+      const test = fixture();
+      const job = {
+        ...test.jobs[0],
+        run_id: 51,
+        name: "Prepare initial release npm artifacts",
+        conclusion,
+      };
+      test.runApi("51/attempts/1", {
+        id: 51,
+        path: ".github/workflows/full-release-validation.yml",
+        status: "completed",
+      });
+      test.list("actions/runs/51/attempts/1/jobs?per_page=100&page=1", "jobs", [
+        ...Array.from({ length: count }, (_, index) => ({ ...job, id: 901 + index })),
+        { ...job, id: 903, name: "Prepare release npm artifacts", conclusion: "skipped" },
+      ]);
+      const result = test.run("verify-initial-npm", {
+        GITHUB_RUN_ATTEMPT: "2",
+        FIXTURE_STOP_ON_WAIT: "true",
+      });
+      if (error) {
+        expectRejected(result, error);
+      } else {
+        expectSuccess(result);
+      }
+      expect(Object.keys(result.apiCalls).join(" ")).not.toContain("attempts/2");
+    },
+  );
+
   it("keeps polling when the npm descriptor appears before its producer job completes", () => {
     const test = fixture();
     const pending = { ...test.jobs[0], status: "in_progress", conclusion: null };
@@ -1326,11 +1425,18 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
 });
 
 function selectionFixture(
-  options: { packageMismatch?: boolean; tamperedReceipt?: boolean; workloadChanged?: boolean } = {},
+  options: {
+    packageMismatch?: boolean;
+    tamperedReceipt?: boolean;
+    workloadChanged?: boolean;
+    preflightFirst?: boolean;
+    bothNpmExecuted?: boolean;
+  } = {},
 ) {
   const retained = publicationReuseFixture(false, true);
   const f = candidatePublicationFixture({
     runId: "51",
+    preflightFirst: options.preflightFirst,
     candidateSha: SOURCE_SHA,
     qualificationSha: TOOLING_SHA,
     candidateVersion: "2026.8.1",
@@ -1339,6 +1445,7 @@ function selectionFixture(
   f.parent.conclusion = "failure";
   const current = candidatePublicationFixture({
     runId: "99",
+    preflightFirst: options.preflightFirst,
     candidateSha: f.c,
     qualificationSha: "c".repeat(40),
     candidateVersion: "2026.8.1",
@@ -1384,9 +1491,23 @@ function selectionFixture(
   const artifacts = new Map<string, Array<Record<string, unknown>>>();
   const runs = new Map<string, Record<string, unknown>>();
   const logs = new Map<number, string>();
-  const jobs: Array<Record<string, unknown>> = [];
+  const jobs: Array<Record<string, unknown>> = [
+    {
+      id: 521,
+      name: options.preflightFirst
+        ? "Prepare release npm artifacts"
+        : "Prepare initial release npm artifacts",
+      conclusion: options.bothNpmExecuted ? "success" : "skipped",
+    },
+  ];
   for (const { stage, id, name } of [
-    { stage: "npm", id: "81", name: "Prepare release npm artifacts" },
+    {
+      stage: "npm",
+      id: "81",
+      name: options.preflightFirst
+        ? "Prepare initial release npm artifacts"
+        : "Prepare release npm artifacts",
+    },
     { stage: "docker", id: "91", name: "Prepare release Docker artifacts" },
   ]) {
     const run = {
@@ -1605,8 +1726,8 @@ function selectionFixture(
   return { f, current, client, env, candidate, archives, artifacts, qualified };
 }
 
-async function selectedPublicationFixture() {
-  const { f, current, client, env } = selectionFixture();
+async function selectedPublicationFixture(preflightFirst = false) {
+  const { f, current, client, env } = selectionFixture({ preflightFirst });
   const selected = await selectPublicationArtifactSource(
     { runId: "51", runAttempt: 1 },
     env,
@@ -1678,8 +1799,8 @@ async function selectedPublicationFixture() {
   return { f, current, client, env, selected, finalClient };
 }
 
-async function retainedRecoveryFixture(legacy = false) {
-  const selectedFixture = await selectedPublicationFixture();
+async function retainedRecoveryFixture(legacy = false, preflightFirst = false) {
+  const selectedFixture = await selectedPublicationFixture(preflightFirst);
   const { current, finalClient } = selectedFixture;
   if (legacy) {
     const getWorkflowSource = finalClient.getWorkflowSource;
@@ -1687,8 +1808,16 @@ async function retainedRecoveryFixture(legacy = false) {
       getWorkflowSource(sha, path).replace('  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"\n', "");
   }
   const parentJobs = await current.client.getRunAttemptJobs(current.runId);
+  const parallel = "Prepare release npm artifacts";
+  const initial = "Prepare initial release npm artifacts";
+  parentJobs.push({
+    ...parentJobs[0]!,
+    id: 19999,
+    name: preflightFirst ? parallel : initial,
+    conclusion: "skipped",
+  });
   for (const name of [
-    "Prepare release npm artifacts",
+    preflightFirst ? initial : parallel,
     "Prepare release Docker artifacts",
     "Prepare exact plugin npm artifacts",
     ...current.plan.children
@@ -1738,26 +1867,32 @@ async function retainedRecoveryFixture(legacy = false) {
 }
 
 describe("explicit publication artifact selection", () => {
-  it("forwards the existing GitHub credential to retained candidate downloads", async () => {
-    const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
-    const downloadArchive = finalClient.downloadArtifactArchive;
-    let downloads = 0;
-    finalClient.downloadArtifactArchive = async (options) => {
-      if (!("token" in options) || options.token !== "synthetic-recovery-token") {
-        throw new Error("Retained candidate download omitted the existing GitHub credential");
+  it.each([false, true])(
+    "recovers retained bytes with the admitted npm slot and existing credential (preflight first: %s)",
+    async (preflightFirst) => {
+      const { current, recoveryClient, finalClient } = await retainedRecoveryFixture(
+        false,
+        preflightFirst,
+      );
+      const downloadArchive = finalClient.downloadArtifactArchive;
+      let downloads = 0;
+      finalClient.downloadArtifactArchive = async (options) => {
+        if (!("token" in options) || options.token !== "synthetic-recovery-token") {
+          throw new Error("Retained candidate download omitted the existing GitHub credential");
+        }
+        downloads += 1;
+        return downloadArchive(options);
+      };
+      vi.stubEnv("GH_TOKEN", "synthetic-recovery-token");
+      try {
+        await preflightContinuation(current.plan, current.runId, recoveryClient);
+        expect(downloads).toBeGreaterThan(0);
+        expect(JSON.stringify(current.plan)).not.toContain("synthetic-recovery-token");
+      } finally {
+        vi.unstubAllEnvs();
       }
-      downloads += 1;
-      return downloadArchive(options);
-    };
-    vi.stubEnv("GH_TOKEN", "synthetic-recovery-token");
-    try {
-      await preflightContinuation(current.plan, current.runId, recoveryClient);
-      expect(downloads).toBeGreaterThan(0);
-      expect(JSON.stringify(current.plan)).not.toContain("synthetic-recovery-token");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+    },
+  );
   it.each([false, true])(
     "recovers a retained-original parent without inventing a new npm dispatch (legacy: %s)",
     async (legacy) => {
@@ -1925,6 +2060,12 @@ describe("explicit publication artifact selection", () => {
       retained.verifyRetained({ verifyPayloads: true }, undefined, { RELEASE_TAG: "v2026.8.2" }),
       RECEIPT_MISMATCH,
     );
+  });
+  it("rejects an inactive npm slot that also executed", async () => {
+    const { client, env } = selectionFixture({ preflightFirst: true, bothNpmExecuted: true });
+    await expect(
+      selectPublicationArtifactSource({ runId: "51", runAttempt: 1 }, env, client),
+    ).rejects.toThrow("inactive npm scheduling slot also executed");
   });
   it("adopts exact original bytes from a failed parent without changing producer Q", async () => {
     const { f, client, env } = selectionFixture();

@@ -111,31 +111,40 @@ suite.define(() => {
   );
 
   it("explains blocked palette readiness and clears it before creation", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-      await page.keyboard.press("ControlOrMeta+K");
-      const palette = page.locator("openclaw-command-palette");
-      const input = palette.locator(".cmd-palette__input");
-      await input.press("Tab");
-      await input.fill("Keep preparation out of errors");
-      const start = palette.locator(".cmd-palette__create");
-      const notice = palette.locator(".cmd-palette__creation-error");
-      expect(await start.isDisabled()).toBe(true);
-      expect(await notice.count()).toBe(0);
-      await input.press("ControlOrMeta+Enter");
-      await expect.poll(() => notice.textContent()).toBe("Refreshing agent defaults…");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(await input.inputValue()).toBe("Keep preparation out of errors");
-      await gateway.resolveDeferred("agents.list");
-      await palette.locator(".cmd-palette__create:not(:disabled)").waitFor();
-      expect(await notice.count()).toBe(0);
-      expect(await input.inputValue()).toBe("Keep preparation out of errors");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await start.click();
-      await gateway.waitForRequest("sessions.create");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    });
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, colorScheme: "light" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
+        await page.goto(`${suite.server.baseUrl}new?agent=main`);
+        await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+        await page.keyboard.press("ControlOrMeta+K");
+        const palette = page.locator("openclaw-command-palette");
+        const input = palette.locator(".cmd-palette__input");
+        await input.press("Tab");
+        await input.fill("Keep preparation out of errors");
+        const start = palette.locator(".cmd-palette__create");
+        const notice = palette.locator(".cmd-palette__creation-error");
+        expect(await start.isDisabled()).toBe(true);
+        expect(await notice.count()).toBe(0);
+        await input.press("ControlOrMeta+Enter");
+        await expect.poll(() => notice.textContent()).toBe("Refreshing agent defaults…");
+        const bounds = (await notice.boundingBox())!;
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual((await input.boundingBox())!.y);
+        await captureUiProof(suite, page, "palette-readiness-mobile.png");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        expect(await input.inputValue()).toBe("Keep preparation out of errors");
+        await gateway.resolveDeferred("agents.list");
+        await palette.locator(".cmd-palette__create:not(:disabled)").waitFor();
+        expect(await notice.count()).toBe(0);
+        expect(await input.inputValue()).toBe("Keep preparation out of errors");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        await start.click();
+        await gateway.waitForRequest("sessions.create");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      },
+    );
   });
 });
