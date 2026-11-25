@@ -1,5 +1,5 @@
 // Openclaw Performance Workflow tests cover openclaw performance workflow script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -16,7 +16,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflow, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflow,
+  evaluateWorkflowRunner,
+  runWorkflowCommand,
+} from "./ci-workflow.test-support.js";
 
 const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -145,9 +149,8 @@ function runTargetMetadataResolution({
   expect(existsSync(join(root, "node_modules"))).toBe(false);
   const output = join(root, "output");
   const step = findStep("Resolve OpenClaw target ref", "resolve_target");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runWorkflowCommand("bash", ["-c", step.run ?? ""], {
     cwd: root,
-    encoding: "utf8",
     env: {
       ...process.env,
       ...readWorkflow().env,
@@ -186,8 +189,7 @@ function runCandidateTrustClassification({
   const step = findStep("Classify performance candidate trust", "resolve_target");
   const root = tempDirs.make("openclaw-performance-candidate-trust-");
   const output = join(root, "output");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
-    encoding: "utf8",
+  const result = runWorkflowCommand("bash", ["-c", step.run ?? ""], {
     env: {
       ...process.env,
       CANDIDATE_SHA: candidateSha,
@@ -245,8 +247,7 @@ describe("OpenClaw performance workflow", () => {
     for (const entry of kovaMatrixEntries()) {
       const lane = expectDefined(entry.lane, "Kova lane");
       const output = join(root, lane);
-      const result = spawnSync("bash", ["-c", decide], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", ["-c", decide], {
         env: {
           ...process.env,
           GITHUB_OUTPUT: output,
@@ -355,8 +356,7 @@ describe("OpenClaw performance workflow", () => {
     const output = join(root, "results");
     mkdirSync(output);
     const target = "a".repeat(40);
-    const result = spawnSync("bash", ["-c", validation.run ?? ""], {
-      encoding: "utf8",
+    const result = runWorkflowCommand("bash", ["-c", validation.run ?? ""], {
       env: {
         ...process.env,
         BASELINE_REF: "refs/heads/main",
@@ -591,8 +591,7 @@ describe("OpenClaw performance workflow", () => {
     const runBoundary = (kovaRef: string, name: string) => {
       const resolveOutput = join(root, `${name}-resolve-output`);
       const laneOutput = join(root, `${name}-lane-output`);
-      const resolve = spawnSync("bash", ["-c", resolveTarget.run ?? ""], {
-        encoding: "utf8",
+      const resolve = runWorkflowCommand("bash", ["-c", resolveTarget.run ?? ""], {
         env: {
           ...process.env,
           GITHUB_OUTPUT: resolveOutput,
@@ -614,8 +613,7 @@ describe("OpenClaw performance workflow", () => {
           .split("\n")
           .map((line) => line.split("=", 2)),
       );
-      const lane = spawnSync("bash", ["-c", decideLaneRun], {
-        encoding: "utf8",
+      const lane = runWorkflowCommand("bash", ["-c", decideLaneRun], {
         env: {
           ...process.env,
           GITHUB_OUTPUT: laneOutput,
@@ -770,8 +768,7 @@ describe("OpenClaw performance workflow", () => {
       writeFileSync(trustedAction, "trusted action\n");
       writeFileSync(trustedEnsureNode, "trusted script\n");
 
-      const result = spawnSync("bash", ["-c", stage.run ?? ""], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", ["-c", stage.run ?? ""], {
         env: {
           ...process.env,
           GITHUB_WORKSPACE: workspace,
@@ -1180,8 +1177,7 @@ printf '%s\\n' \
     chmodSync(join(bin, "gh"), 0o755);
 
     try {
-      const result = spawnSync("bash", ["-c", artifact.run ?? ""], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", ["-c", artifact.run ?? ""], {
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH ?? ""}`,
@@ -1233,8 +1229,7 @@ printf '%s\\n' \
       const output = join(root, `${partialPolicy}.output`);
       const summary = join(root, `${partialPolicy}.summary`);
       const invocations = join(root, `${partialPolicy}.invocations`);
-      const result = spawnSync("bash", ["-c", gateScript], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", ["-c", gateScript], {
         env: {
           ...process.env,
           evidence_status: "0",

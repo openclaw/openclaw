@@ -180,7 +180,7 @@ function ReadAloudPlayback(props: {
         <span slot="content">{label()}</span>
         <button
           ref={(element) => props.input.buttonRef?.(element)}
-          class="chat-read-aloud-btn"
+          class="chat-read-aloud-btn chat-footer-btn"
           type="button"
           aria-label={label()}
           aria-pressed={playing() ? "true" : "false"}

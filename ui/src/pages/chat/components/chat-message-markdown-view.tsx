@@ -168,6 +168,7 @@ export function MessageActions(props: {
       <Show when={props.details?.markdown}>
         <CopyButton
           text={props.details!.markdown!}
+          class="chat-footer-btn"
           bare
           ref={(element) => {
             elements.copy = element;
@@ -207,7 +208,7 @@ export function ReplyButton(props: {
   return (
     <openclaw-tooltip prop:content={t("chat.messages.reply")} prop:describe={false}>
       <button
-        class="chat-reply-btn"
+        class="chat-reply-btn chat-footer-btn"
         type="button"
         aria-label={t("chat.messages.replyToMessage")}
         onClick={() => props.onReply(props.target)}
