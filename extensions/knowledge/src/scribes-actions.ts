@@ -2,19 +2,26 @@
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  repairPrompt,
+  checkRunMessage,
+  defaultOptions,
   rescheduledRunMessage,
+  runPrompt,
+  SCRIBE_SESSION_TARGET,
+  scribeAutomationName,
+  scribeDeclarationKey,
   scribeLabel,
+  scribeSetup,
   setupIdempotencyKey,
+  type ScribeSetup,
 } from "./scribes-catalog.js";
-import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
+import { jobConversationKey, type ScribeJob, type ScribeSnapshot } from "./scribes-state.js";
 
 type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
 
 /**
- * The scribe's conversation, ready for a message: its existing session (restored from the
- * archive if needed), or a new one titled with the scribe's name, recorded on the snapshot. A
- * scribe keeps one conversation, so its automation and history stay in one place.
+ * The scribe's conversation, ready for a message or an automation: its existing session (restored
+ * from the archive if needed), or a new one titled with the scribe's name, recorded on the
+ * snapshot. A scribe keeps one conversation, so its automation and history stay in one place.
  */
 async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId: string) {
   const existing = snapshot.session;
@@ -38,84 +45,176 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   if (!key) {
     throw new Error("The scribe’s conversation could not be created.");
   }
-  // A retry after a failed send reuses this conversation instead of creating another.
+  // A retry after a failed write reuses this conversation instead of creating another.
   snapshot.session = { key, displayName: scribeLabel(snapshot.scribe) };
   return key;
 }
 
 /**
- * Start a scribe: find or create its conversation, then send the prompt the start dialog shows,
- * as generated or as the operator edited it. `attempt` identifies one start attempt so a
- * retried send is not delivered twice.
+ * An automation an agent turn created: its runs use that turn's account authority, which can't
+ * read channels such as Slack on a schedule, and an administrator's edit can't widen it.
+ */
+const isTurnCreated = (job: ScribeJob) => job.scheduledToolPolicy?.mode === "account";
+
+/** What an ongoing scribe's automation is declared with. */
+type Declaration = {
+  schedule: ScribeJob["schedule"];
+  runMessage: string;
+  /** Options saved on an earlier automation, passed on when it is replaced. */
+  saved?: ReturnType<typeof savedOptions>;
+  /** Set it on or off; left out, an automation kept stays as it is and a replaced pause carries over. */
+  enabled?: boolean;
+};
+
+/**
+ * Declare the scribe's one automation for this agent, in its conversation, as this page's
+ * administrator: runs use the operator's authority, so they can read channel plugins.
+ * - An automation the page wrote earlier is kept and updated in place, moved to this conversation.
+ * - Automations an agent turn created, and any extra ones, are removed first; their authority
+ *   can't be widened in place. Their options are carried over and a pause stays.
+ * Removal comes before the new automation is added: a same-key automation would take the new
+ * declaration with its old authority. If adding then fails, the scribe reads as Available and
+ * can be started again.
+ */
+async function declareScribe(
+  host: ScribeHost,
+  snapshot: ScribeSnapshot,
+  agentId: string,
+  declaration: Declaration,
+): Promise<ScribeJob | undefined> {
+  const { scribe } = snapshot;
+  const sessionKey = await conversation(host, snapshot, agentId);
+  const owned = snapshot.jobs.filter((job) => !isTurnCreated(job));
+  const keep = owned.find((job) => jobConversationKey(job) === sessionKey) ?? owned[0];
+  const replaced = snapshot.jobs.filter((job) => job !== keep);
+  for (const job of replaced) {
+    await turnOffScribe(host, job);
+  }
+  const enabled = declaration.enabled ?? keep?.enabled ?? !replaced.some((job) => !job.enabled);
+  const definition = {
+    name: scribeAutomationName(scribe),
+    sessionKey,
+    sessionTarget: SCRIBE_SESSION_TARGET,
+    enabled,
+    schedule: declaration.schedule,
+  };
+  const result = keep
+    ? await host.request("cron.update", {
+        id: keep.id,
+        patch: { ...definition, payload: { kind: "agentTurn", message: declaration.runMessage } },
+        ...(keep.configRevision ? { expectedConfigRevision: keep.configRevision } : {}),
+      })
+    : await host.request("cron.add", {
+        delivery: { mode: "none" },
+        failureAlert: { after: 2 },
+        ...declaration.saved?.job,
+        ...definition,
+        agentId,
+        declarationKey: scribeDeclarationKey(scribe.id),
+        // An explicit cap records the administrator's authority for the runs' tools, channel
+        // reads included; a saved cap replaces it.
+        payload: {
+          toolsAllow: ["*"],
+          ...declaration.saved?.payload,
+          kind: "agentTurn",
+          message: declaration.runMessage,
+        },
+      });
+  // SAFETY: cron.add and cron.update answer with the written job.
+  return isRecord(result) && typeof result.id === "string" ? (result as ScribeJob) : undefined;
+}
+
+/**
+ * Start a scribe. A once scribe gets the prompt the start dialog shows, as generated or as the
+ * operator edited it, in its conversation; `attempt` identifies one start so a retried send is
+ * not delivered twice. An ongoing scribe gets its automation, with the run message shown, and its
+ * first run is requested unless the automation stays disabled.
  */
 export async function startScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
   agentId: string,
-  prompt: string,
+  setup: ScribeSetup,
+  text: string,
   attempt: string,
 ) {
-  const sessionKey = await conversation(host, snapshot, agentId);
-  await host.request("chat.send", {
-    sessionKey,
-    agentId,
-    message: prompt,
-    idempotencyKey: setupIdempotencyKey(snapshot.scribe.id, sessionKey, attempt),
+  if (setup.mode === "once") {
+    const sessionKey = await conversation(host, snapshot, agentId);
+    await host.request("chat.send", {
+      sessionKey,
+      agentId,
+      message: text,
+      idempotencyKey: setupIdempotencyKey(snapshot.scribe.id, sessionKey, attempt),
+    });
+    return;
+  }
+  const expr = "schedule" in setup.options ? setup.options.schedule : undefined;
+  if (!expr) {
+    throw new Error("An ongoing scribe needs a schedule.");
+  }
+  const job = await declareScribe(host, snapshot, agentId, {
+    schedule: { kind: "cron", expr, tz: setup.timezone },
+    runMessage: text,
   });
-  return sessionKey;
+  if (job?.enabled) {
+    await runScribeNow(host, job);
+  }
+}
+
+/** The run message a repair or update keeps: the job's own, an unedited earlier one upgraded. */
+function keptRunMessage(snapshot: ScribeSnapshot, job: ScribeJob) {
+  const message = job.payload?.message;
+  if (message === undefined) {
+    const { scribe } = snapshot;
+    return runPrompt(scribeSetup(scribe.id, "ongoing", defaultOptions(scribe.id), job.schedule.tz));
+  }
+  const check = checkRunMessage(snapshot.scribe.id, message, job.schedule);
+  return check.state === "outdated" ? check.current : message;
 }
 
 /**
- * Repair a scribe so its automation runs again in its own conversation.
- * - Archived conversation: restore it and turn the automation back on, without a model turn.
- *   Archiving turned the automation off; one paused before archiving also comes back on, a
- *   visible change Disable undoes.
- * - Deleted conversation, or a failing scribe: the automation must be owned by the scribe's
- *   conversation, which only a turn there can do, so send it the repair prompt (in a new
- *   conversation when the old one was deleted).
+ * Repair a scribe so its automation runs again in its own conversation, turned on.
+ * - Archived conversation: restore it and turn the automation back on. Archiving turned the
+ *   automation off; one paused before archiving also comes back on, a visible change Disable
+ *   undoes.
+ * - Otherwise its automation is declared again in its conversation (a new one when the old one
+ *   was deleted), keeping its schedule, run message and options.
  */
 export async function repairScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
   job: ScribeJob,
   agentId: string,
-  attempt: string,
 ) {
-  const { scribe } = snapshot;
-  const sessionKey = await conversation(host, snapshot, agentId);
-  if (snapshot.status === "missing" && snapshot.session?.archived) {
+  if (snapshot.status === "missing" && snapshot.session?.archived && !isTurnCreated(job)) {
+    await conversation(host, snapshot, agentId);
     if (!job.enabled) {
       await setScribePaused(host, job, false);
     }
-    return sessionKey;
+    return;
   }
-  const prompt = repairPrompt(scribe.id, {
+  await declareScribe(host, snapshot, agentId, {
     schedule: job.schedule,
-    ...(job.payload?.message ? { runMessage: job.payload.message } : {}),
+    runMessage: keptRunMessage(snapshot, job),
     saved: savedOptions(job),
+    enabled: true,
   });
-  await host.request("chat.send", {
-    sessionKey,
-    agentId,
-    message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${attempt}`,
-  });
-  return sessionKey;
 }
 
-// Payload fields a scribe prompt sets itself, or the scheduler derives; the rest are run options.
+// Payload fields the page sets itself, or the scheduler derives; the rest are run options.
 // An explicit tool list (not a generated default) is a saved option too: it caps the runs.
 const DECLARED_PAYLOAD = new Set(["kind", "message", "toolsAllowIsDefault"]);
 
-/** Options saved on the automation that a re-declaration would drop unless passed again. */
+/** Options saved on the automation that a replacement would drop unless passed again. */
 function savedOptions(job: ScribeJob) {
-  const saved: Record<string, unknown> = {};
+  const payload: Record<string, unknown> = {};
   for (const [field, value] of Object.entries(job.payload ?? {})) {
     const generatedTools = field === "toolsAllow" && job.payload?.toolsAllowIsDefault === true;
     if (!DECLARED_PAYLOAD.has(field) && !generatedTools && value !== undefined) {
-      saved[field] = value;
+      payload[field] = value;
     }
   }
+  const saved: Record<string, unknown> = {};
   for (const field of [
     "activeHours",
     "pacing",
@@ -128,15 +227,15 @@ function savedOptions(job: ScribeJob) {
       saved[field] = job[field];
     }
   }
-  return saved;
+  return { payload, job: saved };
 }
 
 // What a refused run means for the operator, by the scheduler's reason.
 const RUN_REFUSALS: Record<string, string> = {
   stopped: "the scheduler is stopped",
   disabled: "the automation is disabled",
-  ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
-  "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
+  ownerless: "the automation lost its owner; Repair sets it up again",
+  "invalid-spec": "its schedule is invalid; Repair sets it up again",
 };
 
 /**
@@ -165,8 +264,10 @@ export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolea
 
 /**
  * Whether this scribe's automation is behind this version of Knowledge:
+ * - an agent turn created it, so scheduled runs can't read channel plugins with its authority,
+ * - more than one automation of this agent has its declaration key,
  * - it runs in its conversation's own session instead of a fresh child session per run (only the
- *   shape setup generated, its own creating conversation, counts), or
+ *   shape earlier setups generated, its own creating conversation, counts), or
  * - its run message is an unedited one an earlier version generated. An edited one never counts;
  *   the page offers it as an update instead.
  * Missing or running scribes wait: an update must not race a repair or a run in progress.
@@ -177,53 +278,38 @@ export function needsUpdate(snapshot: ScribeSnapshot) {
     return false;
   }
   return (
+    snapshot.jobs.some(isTurnCreated) ||
+    snapshot.jobs.length > 1 ||
     (Boolean(job.sessionKey) && job.sessionTarget === `session:${job.sessionKey}`) ||
     runMessage?.state === "outdated"
   );
 }
 
 /**
- * Ask the scribe's conversation to bring its automation up to date, with `runMessage` (the job's
- * own message by default, an unedited earlier one becoming the current one), or to move it to
- * `schedule`, with the run message that schedule takes. The conversation re-declares the
- * automation in a turn, as setup did. A direct edit from the page would drop the owner's turn
- * authority that the automation's runs use. One request per automation revision and change.
+ * Bring the scribe's automation up to date: an administrator's automation in its conversation,
+ * each run in a fresh session, with `runMessage` (the job's own message by default, an unedited
+ * earlier one becoming the current one), or moved to `schedule` with the run message that
+ * schedule takes. A disabled automation stays disabled.
  */
 export async function updateScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
   job: ScribeJob,
   agentId: string,
-  change: { runMessage?: string; schedule?: ScribeJob["schedule"]; attempt?: string } = {},
+  change: { runMessage?: string; schedule?: ScribeJob["schedule"] } = {},
 ) {
-  const { scribe } = snapshot;
-  const { schedule, attempt = "1" } = change;
+  const { schedule } = change;
   const saved = job.payload?.message;
   const runMessage =
     change.runMessage ??
-    (schedule && saved ? rescheduledRunMessage(scribe.id, saved, job.schedule, schedule) : saved);
-  const sessionKey = await conversation(host, snapshot, agentId);
-  const prompt = repairPrompt(
-    scribe.id,
-    {
-      schedule: schedule ?? job.schedule,
-      ...(runMessage ? { runMessage } : {}),
-      saved: savedOptions(job),
-    },
-    schedule ? "reschedule" : "update",
-  );
-  const kind = schedule
-    ? `schedule:${schedule.expr ?? schedule.kind}:${schedule.tz ?? ""}`
-    : runMessage === saved
-      ? "update"
-      : "reset";
-  await host.request("chat.send", {
-    sessionKey,
-    agentId,
-    message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:${kind}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
+    (schedule && saved
+      ? rescheduledRunMessage(snapshot.scribe.id, saved, job.schedule, schedule)
+      : keptRunMessage(snapshot, job));
+  await declareScribe(host, snapshot, agentId, {
+    schedule: schedule ?? job.schedule,
+    runMessage,
+    saved: savedOptions(job),
   });
-  return sessionKey;
 }
 
 /** Turn the scribe off: remove its automation and keep its conversation. */

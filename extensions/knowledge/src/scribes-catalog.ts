@@ -163,7 +163,10 @@ export const SCRIBES: readonly ScribeDefinition[] = [
 export const scribeById = (id: string) => SCRIBES.find((scribe) => scribe.id === id);
 /** Display name of a scribe's conversation; the page finds the session by it. */
 export const scribeLabel = (scribe: ScribeDefinition) => `Scribe · ${scribe.title}`;
-/** declarationKey of the one automation an ongoing scribe creates. */
+/** Name of the automation an ongoing scribe runs on. */
+export const scribeAutomationName = (scribe: ScribeDefinition) =>
+  `Knowledge scribe · ${scribe.title}`;
+/** declarationKey of the one automation an ongoing scribe has per agent. */
 export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
 /**
  * Session target of a scribe's automation: each run is a fresh child session of the scribe's
@@ -172,7 +175,7 @@ export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
  */
 export const SCRIBE_SESSION_TARGET = "current";
 /**
- * chat.send idempotency key for one start attempt in one session. A scribe reuses its
+ * chat.send idempotency key for one once-run attempt in one session. A scribe reuses its
  * conversation across starts, so each attempt (one dialog) gets its own key; retries within
  * the attempt stay deduplicated.
  */
@@ -258,14 +261,6 @@ export const SCHEDULE_CHOICES: Partial<Record<ScribeId, readonly string[]>> = {
 };
 /** An offered cron schedule in words ("weekly, Sundays at 3:45 AM"); undefined for any other. */
 export const scheduleWords = (expr: string): string | undefined => SCHEDULE_WORDS[expr];
-
-/** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
-function scheduleLine(expr: string, timezone: string) {
-  const words = SCHEDULE_WORDS[expr];
-  return words
-    ? `Runs ${words} ${timezone} (cron \`${expr}\`).`
-    : `Runs on cron \`${expr}\`, time zone ${timezone}.`;
-}
 
 // "a, b and c".
 const listWords = (items: string[]) =>
@@ -437,48 +432,10 @@ const numbered = (steps: string[]) =>
   steps.map((step, i) => `${i + 1}. ${step.replaceAll("\n", "\n   ")}`);
 
 /**
- * Steps that declare an ongoing scribe's one automation in this conversation: clear same-key
- * jobs of other conversations of this agent (carrying a pause over), add, then check the target.
- * Another agent's automations are never touched. `keep` is a repair's condition for leaving a
- * healthy automation alone; `saved` is an update's line for the options it carries over.
- */
-// `enabled` is how the added automation's enabled flag is set: setup keeps a pause, repair turns it on.
-function automationSteps(
-  scribe: ScribeDefinition,
-  schedule: string,
-  enabled: string,
-  keep = "",
-  saved?: string,
-) {
-  const key = scribeDeclarationKey(scribe.id);
-  return [
-    `With the automations tool, list automations for this agent (pass \`agentId\` from Runtime), including disabled ones, and take those with declaration key \`${key}\` whose recorded \`owner.agentId\` is this agent's ID from Runtime. Leave any with another or missing owner agent unchanged; never remove another agent's automation.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one whose session target is not \`${SCRIBE_SESSION_TARGET}\`, update its session target to \`${SCRIBE_SESSION_TARGET}\`.`,
-    [
-      "Add the automation with the automations tool:",
-      "- agent: this agent's ID from Runtime",
-      `- name: Knowledge scribe · ${scribe.title}`,
-      `- declaration key: \`${key}\``,
-      `- schedule: ${schedule}`,
-      `- session target: \`${SCRIBE_SESSION_TARGET}\`, so each run starts in a fresh session of this conversation`,
-      "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
-      saved
-        ? "- delivery and failure alert: as saved on the current automation (below)"
-        : "- delivery: none; failure alert after 2 failed runs",
-      ...(saved ? [saved] : []),
-      `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
-    ].join("\n"),
-    `Get the automation and check that its session target is \`${SCRIBE_SESSION_TARGET}\` and its session key is this conversation's.`,
-  ];
-}
-
-// A run message in a fence, after the prompt that installs it.
-const runMessageBlock = (message: string) => ["Run message:", "", "```text", message, "```"];
-
-/**
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
+export function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const scribe = scribeById(setup.scribe)!;
   const settings = workSettings(setup, wording, amounts);
   return [
@@ -501,64 +458,31 @@ function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true
 }
 
 /**
- * The message the page sends to start a scribe: what it does, its settings as bullets, and
- * numbered steps. An ongoing scribe declares its automation and carries its run message; a once
- * scribe does the work in this turn. Never includes vault content.
+ * The message the page sends to run a scribe once: what it does, its settings as bullets, and
+ * numbered steps that do the work in this turn. Never includes vault content. An ongoing scribe
+ * sends no setup message: the page declares its automation with the run message itself.
  */
 export function setupPrompt(setup: ScribeSetup) {
   const scribe = scribeById(setup.scribe)!;
-  const schedule =
-    setup.options && "schedule" in setup.options ? setup.options.schedule : undefined;
-  const settings = [
-    ...(setup.mode === "ongoing" && schedule
-      ? [scheduleLine(schedule, setup.timezone)]
-      : ["Runs once, now, in this turn. Nothing is scheduled."]),
-    ...workSettings(setup),
-  ].map((line) => `- ${line}`);
-  const access = accessStep("Starting the scribe again from the Scribes page fixes it.");
-  if (setup.mode === "once") {
-    return [
-      `Run the Knowledge scribe "${scribe.title}" once, in this conversation. ${UNATTENDED}`,
-      "",
-      `${PURPOSE[scribe.id]} The ${scribe.skill} skill does the work.`,
-      "",
-      "Settings:",
-      ...settings,
-      "",
-      "Steps:",
-      ...numbered([
-        access,
-        WORK[scribe.id],
-        endStep("done", `one sentence with counts: ${COUNTS[scribe.id]}`),
-      ]),
-      "",
-      FAILED,
-      ...(CURRENT_WORDING.rules?.[scribe.id] ? ["", CURRENT_WORDING.rules[scribe.id]!] : []),
-    ].join("\n");
-  }
   return [
-    `Set up the Knowledge scribe "${scribe.title}" in this conversation. ${UNATTENDED}`,
+    `Run the Knowledge scribe "${scribe.title}" once, in this conversation. ${UNATTENDED}`,
     "",
-    `${PURPOSE[scribe.id]} The ${scribe.skill} skill does the work on each run.`,
+    `${PURPOSE[scribe.id]} The ${scribe.skill} skill does the work.`,
     "",
     "Settings:",
-    ...settings,
+    ...["Runs once, now, in this turn. Nothing is scheduled.", ...workSettings(setup)].map(
+      (line) => `- ${line}`,
+    ),
     "",
     "Steps:",
     ...numbered([
-      access,
-      ...automationSteps(
-        scribe,
-        "the cron expression and time zone in the settings",
-        "Pass `enabled: false` only when a removed automation was paused and this conversation had none, so the pause carries over. Otherwise leave `enabled` out: never turn on a paused automation.",
-      ),
-      "Don't start a run from this turn: a run started here is skipped when the turn ends. The Scribes page starts the first run.",
-      `Report the automation's ID and next run time. ${endStep("on", "one sentence: the automation and its next run")}`,
+      accessStep("Starting the scribe again from the Scribes page fixes it."),
+      WORK[scribe.id],
+      endStep("done", `one sentence with counts: ${COUNTS[scribe.id]}`),
     ]),
     "",
     FAILED,
-    "",
-    ...runMessageBlock(runPrompt(setup)),
+    ...(CURRENT_WORDING.rules?.[scribe.id] ? ["", CURRENT_WORDING.rules[scribe.id]!] : []),
   ].join("\n");
 }
 
@@ -696,92 +620,4 @@ export function rescheduledRunMessage(
     CURRENT_WORDING,
     options !== undefined,
   );
-}
-
-/** First words of every repair prompt; the page never forces a first run after one. */
-export const REPAIR_HEADING = "Repair the Knowledge scribe";
-/** First words of every update prompt; the page never forces a first run after one either. */
-export const UPDATE_HEADING = "Update the Knowledge scribe";
-
-/** What a repair or update keeps from the scribe's current automation. */
-export type RepairSource = {
-  schedule: { kind: string; expr?: string; tz?: string };
-  runMessage?: string;
-  /**
-   * Options saved on the automation that a re-declaration would otherwise drop or reset (payload
-   * model or thinking, active hours, pacing, idle-only, trigger, delivery and failure alert), so the
-   * turn passes them on.
-   */
-  saved?: Record<string, unknown>;
-};
-
-/**
- * The message that asks a scribe's conversation to re-declare its automation, keeping its
- * schedule and run message (an unedited one from an earlier version becomes the current one).
- * It does no work.
- * - repair: take the automation over and turn it back on.
- * - update: bring it up to this version (fresh session per run, the given run message) and keep
- *   it paused or on as it is.
- * - reschedule: an update that also moves it to `current.schedule`, a new one, from the page's
- *   Change schedule. A turn in the conversation re-declares it, so the automation keeps
- *   the authority of the owner's authenticated turn; an edit from the page would drop it.
- */
-export function repairPrompt(
-  id: ScribeId,
-  current: RepairSource,
-  purpose: "repair" | "update" | "reschedule" = "repair",
-) {
-  const scribe = scribeById(id)!;
-  const { schedule } = current;
-  const timezone = schedule.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const scheduleSetting =
-    schedule.kind === "cron" && schedule.expr
-      ? scheduleLine(schedule.expr, timezone)
-      : "Keeps the schedule of its current automation.";
-  const check =
-    current.runMessage === undefined
-      ? undefined
-      : checkRunMessage(id, current.runMessage, current.schedule);
-  const runMessage =
-    check?.state === "outdated"
-      ? check.current
-      : (current.runMessage ?? runPrompt(scribeSetup(id, "ongoing", defaultOptions(id), timezone)));
-  const repair = purpose === "repair";
-  const saved =
-    current.saved && Object.keys(current.saved).length
-      ? `- also these options saved on the current automation, exactly as written: \`${JSON.stringify(current.saved)}\`${"toolsAllow" in current.saved ? '. Pass `toolsAllowMode: "exact"` so its tool list stays exactly as saved' : ""}`
-      : undefined;
-  const healthy = `this conversation owns it, its session target is \`${SCRIBE_SESSION_TARGET}\` with this conversation's session key, its message is the run message below`;
-  return [
-    `${repair ? REPAIR_HEADING : UPDATE_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
-    "",
-    purpose === "reschedule"
-      ? "Settings, kept from its current automation except the new schedule:"
-      : "Settings, kept from its current automation:",
-    `- ${scheduleSetting}`,
-    "- Run message: the text below.",
-    "",
-    "Steps:",
-    ...numbered([
-      accessStep("Starting the scribe again from the Scribes page fixes it."),
-      ...automationSteps(
-        scribe,
-        "the schedule in the settings",
-        repair
-          ? "Pass `enabled: true`: a repair turns the scribe back on, even when the scheduler paused it after failed runs."
-          : "Leave `enabled` out: an update keeps a paused automation paused.",
-        repair
-          ? ` If exactly one exists, ${healthy} and it is enabled, leave it as it is and go to the last step.`
-          : purpose === "update"
-            ? ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`
-            : "",
-        saved,
-      ),
-      endStep("on", `one sentence: what the ${repair ? "repair" : "update"} changed`),
-    ]),
-    "",
-    FAILED,
-    "",
-    ...runMessageBlock(runMessage),
-  ].join("\n");
 }

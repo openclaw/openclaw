@@ -7,6 +7,7 @@ import {
   GRANOLA_SCHEDULE,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
+  runPrompt,
   scribeLabel,
   scribeSetup,
   setupPrompt,
@@ -21,6 +22,7 @@ import {
   type ScribeMode,
   type ScribeOptions,
   type ScribePlugin,
+  type ScribeSetup,
 } from "./scribes-catalog.js";
 import { neededPluginState, type PluginReadiness, type ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
@@ -31,10 +33,15 @@ export type StartDialogInput = {
   agentName: string;
   detection: ScribeDetection;
   canWrite: boolean;
+  /** An ongoing scribe is an automation, which only an administrator writes. */
+  canAdmin: boolean;
   /** The Control UI's base path, for links to the Plugins page. */
   basePath: string;
-  /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
-  start: (prompt: string) => Promise<void>;
+  /**
+   * Starts the scribe with its choices and the text shown: a once run's prompt, or an ongoing
+   * scribe's run message. A rejection keeps the dialog open with the error.
+   */
+  start: (setup: ScribeSetup, text: string) => Promise<void>;
 };
 
 /** Scribe tile: the catalog icon on its tone's wash. */
@@ -443,21 +450,26 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
   const { scribe } = input;
   const effect = el("div", undefined, "knowledge-effect");
   const lead = el("p");
-  lead.append(
-    "Knowledge will send the prompt above to the ",
-    el("strong", scribeLabel(scribe)),
-    " conversation, creating it if needed. ",
-    mode === "once"
-      ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
-      : scribe.id === "claim-consolidation"
-        ? "It sets up its own schedule and does one test run first."
-        : "If you keep it learning, it sets up its own schedule and does one test run first.",
-  );
+  if (mode === "once") {
+    lead.append(
+      "Knowledge will send the prompt above to the ",
+      el("strong", scribeLabel(scribe)),
+      ` conversation, creating it if needed. It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`,
+    );
+  } else {
+    lead.append(
+      "Knowledge will create an automation that sends the run message above on its schedule, each run in a fresh session of the ",
+      el("strong", scribeLabel(scribe)),
+      " conversation (created if needed), and requests its first run now.",
+    );
+  }
   effect.append(
     lead,
     el(
       "p",
-      `This request uses the conversation’s model settings. Follow its progress there${mode === "once" ? "." : ", and manage its automation from Scribes."}`,
+      mode === "once"
+        ? "This request uses the conversation’s model settings. Follow its progress there."
+        : "Runs use the conversation’s model settings. Manage the automation from Scribes.",
       "knowledge-muted",
     ),
   );
@@ -465,8 +477,9 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
 }
 
 /**
- * The editable "Prompt" area: the full message Start sends. It follows the choices until the
- * operator types in it; then it keeps their text until they ask for the generated one again.
+ * The editable "Prompt" area: the full message a once run sends, or the run message each run of
+ * an ongoing scribe receives. It follows the choices until the operator types in it; then it
+ * keeps their text until they ask for the generated one again or switch between once and ongoing.
  */
 function promptField(generate: () => string, changed: () => void) {
   const details = el("details", undefined, "scribe-prompt");
@@ -504,7 +517,11 @@ function promptField(generate: () => string, changed: () => void) {
   const foot = el("span", undefined, "scribe-prompt-foot");
   foot.append(note, reset);
   details.append(el("summary", "Prompt"), text, foot);
-  return { node: details, sync, value: () => text.value, edited: () => edited };
+  const discard = () => {
+    edited = false;
+    sync();
+  };
+  return { node: details, sync, discard, value: () => text.value, edited: () => edited };
 }
 
 /** Open the start dialog for one scribe. Starting is disabled without write access. */
@@ -512,6 +529,7 @@ export function openStartDialog(input: StartDialogInput) {
   const { scribe } = input;
   const frame = dialogFrame(scribe.dialogTitle, scribeTile(scribe));
   const effectSlot = el("div");
+  const permission = el("p", "", "knowledge-muted");
   let mode: () => ScribeMode = () => scribe.modes[0]!;
   let options: () => ScribeOptions[ScribeId] = () => defaultOptions(scribe.id);
   let valid = () => true;
@@ -521,14 +539,30 @@ export function openStartDialog(input: StartDialogInput) {
   // A needed plugin must be ready. A hand-edited prompt then only needs text; a generated one
   // needs valid choices.
   const ready = () => pluginReady && (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
+  const allowed = () => input.canWrite && (input.canAdmin || mode() === "once");
   const refresh = () => {
-    submit.disabled = starting || !input.canWrite || !ready();
+    submit.disabled = starting || !allowed() || !ready();
     submit.textContent = starting ? "Starting…" : scribe.submitLabel;
     effectSlot.replaceChildren(effectText(input, mode()));
+    permission.textContent = !input.canWrite
+      ? "Starting a scribe needs write access to this Gateway."
+      : allowed()
+        ? ""
+        : "An ongoing scribe is an automation, which needs a Gateway administrator (operator.admin).";
   };
-  const prompt = promptField(() => setupPrompt(scribeSetup(scribe.id, mode(), options())), refresh);
-  // A changed choice regenerates the prompt unless it was edited by hand.
+  const setup = () => scribeSetup(scribe.id, mode(), options());
+  const prompt = promptField(
+    () => (mode() === "once" ? setupPrompt(setup()) : runPrompt(setup())),
+    refresh,
+  );
+  // A changed choice regenerates the prompt unless it was edited by hand; switching between
+  // once and ongoing changes what the text is, so it discards a hand edit.
+  let shownMode = mode();
   const changed = () => {
+    if (mode() !== shownMode) {
+      shownMode = mode();
+      prompt.discard();
+    }
     prompt.sync();
     refresh();
   };
@@ -565,12 +599,9 @@ export function openStartDialog(input: StartDialogInput) {
     valid = fields.valid;
     options = fields.options;
   }
+  shownMode = mode();
   prompt.sync();
-  frame.body.append(prompt.node, effectSlot);
-  if (!input.canWrite) {
-    frame.feedback.textContent = "Starting a scribe needs write access to this Gateway.";
-    frame.feedback.classList.add("knowledge-muted");
-  }
+  frame.body.append(prompt.node, effectSlot, permission);
   // Start once with the prompt shown; keep the dialog and its text when the Gateway rejects it.
   async function run() {
     if (starting || submit.disabled) {
@@ -581,7 +612,7 @@ export function openStartDialog(input: StartDialogInput) {
     frame.feedback.textContent = "";
     frame.feedback.className = "knowledge-dialog-feedback";
     try {
-      await input.start(prompt.value());
+      await input.start(setup(), prompt.value());
       frame.close();
     } catch (error) {
       frame.feedback.textContent = `The scribe was not started. ${error instanceof Error ? error.message : String(error)}`;
