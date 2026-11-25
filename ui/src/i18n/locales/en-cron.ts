@@ -46,8 +46,7 @@ const enCron = {
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
-      deliveryModeRequired:
-        "Choose where to send results, or run openclaw doctor --fix to repair older settings.",
+      deliveryModeRequired: "Choose an option before saving.",
       webhookUrlRequired: "Webhook URL is required.",
       webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",
@@ -325,7 +324,7 @@ const enCron = {
       bestEffortHelp:
         "The run still counts as successful when its results can’t be sent. Default failure alerts are turned off.",
       cantAddYet: "Can’t save yet",
-      fillRequired: "Fill in the required fields below to save.",
+      fillRequired: "Select a field below to fix it.",
       fixFields: "Fix {count} field to continue.",
       fixFieldsPlural: "Fix {count} fields to continue.",
       saving: "Saving…",
