@@ -7,7 +7,10 @@ import {
   isCronExecutionInputProvenance,
   normalizeInputProvenance,
 } from "../sessions/input-provenance.js";
-import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../shared/chat-message-content.js";
 import {
   collectToolCallIds,
   isContractToolCallBlock,
@@ -21,7 +24,7 @@ import {
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyText } from "./tokens.js";
 
 // Saved transcripts retain calls to the retired response tool.
 const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
@@ -201,6 +204,40 @@ export function isHeartbeatOkResponse(
   );
 }
 
+// Cron executions are ordinary automation turns: a span is eligible for
+// removal only when it demonstrably finished quietly. `display: false` is not
+// enough (cron turns stamp every non-error assistant row invisible), so the
+// terminal ack must be an actual silent control token.
+function isCronSilentTerminalAck(
+  message: HeartbeatTranscriptMessage,
+  ackMaxChars?: number,
+  allowTruncated = false,
+): boolean {
+  if (message.role !== "assistant" || collectAssistantToolCalls(message).length > 0) {
+    return false;
+  }
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  return (
+    !hasNonTextContent &&
+    (isSilentReplyText(text) || isHeartbeatAcknowledgementText(text, ackMaxChars, allowTruncated))
+  );
+}
+
+// Tool names that deliver user-visible messages. The delivery mirror on a
+// completed send is the authoritative signal; the names cover transcripts
+// persisted before mirrors existed.
+const MESSAGING_TOOL_NAMES = new Set(["message", "conversations_send", "conversations_turn"]);
+
+function hasVisibleDeliveryEvidence(
+  message: HeartbeatTranscriptMessage,
+  toolCalls: Array<Record<string, unknown>>,
+): boolean {
+  return (
+    readTerminalSourceReplyDeliveryMirror(message) !== undefined ||
+    toolCalls.some((block) => MESSAGING_TOOL_NAMES.has(readToolCallName(block) ?? ""))
+  );
+}
+
 function advancePastAdjacentToolResults(
   messages: HeartbeatTranscriptMessage[],
   startIndex: number,
@@ -251,8 +288,22 @@ function resolveHeartbeatArtifactSpanEnd(
   ackMaxChars?: number,
   allowTruncated = false,
 ): number | undefined {
+  // Cron-execution wakes are ordinary automation turns, not legacy heartbeat
+  // prompts: removal needs proof the run finished quietly and delivered
+  // nothing visible. Legacy spans keep the historical scanner behavior.
+  const cronWake = isCronExecutionInputProvenance(
+    normalizeInputProvenance(
+      (
+        expectDefined(messages[startIndex], "messages entry at startIndex") as {
+          provenance?: unknown;
+        }
+      ).provenance,
+    ),
+  );
   let index = startIndex + 1;
   let sawTerminalHeartbeatArtifact = false;
+  let sawCronSilentAck = false;
+  let sawVisibleDelivery = false;
   let sawNonTerminalAssistantOutput = false;
 
   while (index < messages.length) {
@@ -264,12 +315,23 @@ function resolveHeartbeatArtifactSpanEnd(
     if (message.role === "user" && !isEmbeddedToolResultOnlyContent(message.content)) {
       break;
     }
-    if (isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)) {
-      sawTerminalHeartbeatArtifact = true;
+    const toolCalls = collectAssistantToolCalls(message);
+    if (cronWake && hasVisibleDeliveryEvidence(message, toolCalls)) {
+      sawVisibleDelivery = true;
+    }
+    if (
+      cronWake
+        ? isCronSilentTerminalAck(message, ackMaxChars, allowTruncated)
+        : isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)
+    ) {
+      if (cronWake) {
+        sawCronSilentAck = true;
+      } else {
+        sawTerminalHeartbeatArtifact = true;
+      }
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
     }
-    const toolCalls = collectAssistantToolCalls(message);
     const heartbeatCalls = toolCalls.filter(
       (block) => readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME,
     );
@@ -295,6 +357,15 @@ function resolveHeartbeatArtifactSpanEnd(
     index++;
   }
 
+  if (cronWake) {
+    // A cron span is removable only when it ended in an actual silent ack and
+    // nothing visible was delivered: interrupted runs and delivered messages
+    // stay in the following model context (#204878, #205126 review).
+    if (!sawCronSilentAck || sawVisibleDelivery || sawNonTerminalAssistantOutput) {
+      return undefined;
+    }
+    return index;
+  }
   if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
     return undefined;
   }
