@@ -122,18 +122,19 @@ export function inspectAgentDatabaseSchema(
 ): AgentSchemaInspection {
   if (!input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness) {
     try {
-      const { userVersion, ...header } = readSqliteSchemaHeader(
+      const { userVersion, agentSchemaMeta, ...header } = readSqliteSchemaHeader(
         database,
-        input.inspectOwnership ? input.supportedVersion : undefined,
+        input.supportedVersion,
       );
       return {
         version: userVersion,
         ...header,
+        ...(input.inspectOwnership ? { agentSchemaMeta } : {}),
         ...(input.inspectEmptyStore
           ? {
               emptyStore:
                 userVersion <= input.supportedVersion &&
-                isEmptyAgentStore(database, input, userVersion, header.agentSchemaMeta),
+                isEmptyAgentStore(database, input, userVersion, agentSchemaMeta),
             }
           : {}),
       };
