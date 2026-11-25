@@ -475,8 +475,10 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
-  // upgrade-survivor-docker.sh runs the release-update scenario by path.
+  // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -579,6 +581,10 @@ const repositoryScriptEntries = [
   // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
   "test/manual-release-approval.config.ts",
   "test/manual-release-approval.checks.ts",
+  "test/manual-build-only-workflow.checks.ts",
+  "test/manual-build-only-artifacts.checks.ts",
+  "test/manual-build-only-evidence.checks.ts",
+  "test/manual-build-only-parent.checks.ts",
   "test/manual-fast-track-button.checks.ts",
   "test/manual-fast-track-publication.checks.ts",
   "test/manual-fast-track-receipt.checks.ts",

@@ -25,7 +25,8 @@ import type { GatewayClient } from "./server-methods/shared-types.js";
 export function captureQueuedOperatorRecoverySource(
   authority: AdmittedRunOperatorAuthority | undefined,
 ): QueuedOperatorRecoverySource | undefined {
-  if (!authority) {
+  // A configured channel owner records no source: each start re-admits it from config.
+  if (!authority || authority.channelOwner) {
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);

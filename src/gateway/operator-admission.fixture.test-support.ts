@@ -570,6 +570,8 @@ export async function runCase(
         "owner-disabled",
         "plugin-resume-mismatch",
         "plugin-authorize-denied",
+        // A configured owner's queued work re-admits against the current owner list.
+        "owner-revoked-before-start",
       ].includes(scenario)
     ) {
       if (!restartSentinel) {
@@ -637,7 +639,7 @@ export async function runCase(
         }
       }
       await fixture.finishQueuedRun(() => revokeAdmissionSource(fixture, c));
-      if (scenario === "mixed-owner-group" || scenario === "owner-revoked-before-start") {
+      if (scenario === "mixed-owner-group") {
         expect(c.ownerToolChecks).toBeGreaterThan(0);
       }
     }

@@ -1979,7 +1979,8 @@ jobs:
       ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
       TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
-      NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      # Build-only seals the exact publication channel; full validation qualifies stable on beta.
+      NPM_DIST_TAG: ${{ inputs.rerun_group == 'build-only' && fromJSON(needs.resolve_target.outputs.publication_selection_json).npmDistTag || needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
       NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
       PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'build-only' && 'build-only' || (inputs.rerun_group == 'all' && 'all' || 'prepare') }}
