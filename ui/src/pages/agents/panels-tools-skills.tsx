@@ -72,10 +72,9 @@ export function AgentTools(
       ? target.slice("agent.tools.access.".length)
       : undefined;
   });
-  const toolGroups = new Map<
-    HTMLDetailsElement,
-    { readonly tools: AgentToolEntry[]; open: () => void }
-  >();
+  const [toolGroups, setToolGroups] = createSignal<
+    { element: HTMLDetailsElement; readonly tools: AgentToolEntry[]; open: () => void }[]
+  >([]);
   const toolTargets = new Map<
     HTMLElement,
     {
@@ -85,30 +84,31 @@ export function AgentTools(
       group: HTMLDetailsElement;
     }
   >();
-  const jumpToTool = (event: Event, anchorId: string) => {
-    // Closed groups have no rows yet. Open the matching live group before resolving its row.
-    const group = Array.from(toolGroups).find(
-      ([element, entry]) =>
-        element.isConnected && entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
+  const resolveJump = (anchorId: string) => {
+    // Only offer a jump when the catalog has a row for this preview tool.
+    const group = toolGroups().find((entry) =>
+      entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
     );
     if (!group) {
-      return;
+      return undefined;
     }
-    event.preventDefault();
-    group[1].open();
-    const nextUrl = new URL(window.location.href);
-    nextUrl.hash = anchorId;
-    window.history.replaceState(null, "", nextUrl);
-    onSettled(() => {
-      const target = Array.from(toolTargets.values()).find(
-        (entry) => entry.anchorId() === anchorId && entry.group === group[0],
-      );
-      if (target?.details.isConnected) {
-        target.details.open = true;
-        target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
-        target.summary.focus();
-      }
-    });
+    return (event: Event) => {
+      event.preventDefault();
+      group.open();
+      const nextUrl = new URL(window.location.href);
+      nextUrl.hash = anchorId;
+      window.history.replaceState(null, "", nextUrl);
+      onSettled(() => {
+        const target = Array.from(toolTargets.values()).find(
+          (entry) => entry.anchorId() === anchorId && entry.group === group.element,
+        );
+        if (target?.details.isConnected) {
+          target.details.open = true;
+          target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
+          target.summary.focus();
+        }
+      });
+    };
   };
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
   const agentTools = () => config().entry?.tools ?? {};
@@ -327,22 +327,25 @@ export function AgentTools(
             </>
           }
         >
-          {renderAgentPanelFacts([
-            ["agentTools.profile", <code>{profile()}</code>],
-            ["agentTools.source", profileSource()],
+          {renderAgentPanelFacts(
             [
-              "agentTools.enabled",
-              <code>
-                {enabledCount()}/{toolIds().length}
-              </code>,
+              ["agentTools.profile", <code>{profile()}</code>],
+              ["agentTools.source", profileSource()],
+              [
+                "agentTools.enabled",
+                <code>
+                  {enabledCount()}/{toolIds().length}
+                </code>,
+              ],
+              [
+                "agentTools.listed",
+                <EffectiveBoundary>
+                  {(preview) => <ToolListed preview={preview()} />}
+                </EffectiveBoundary>,
+              ],
             ],
-            [
-              "agentTools.listed",
-              <EffectiveBoundary>
-                {(preview) => <ToolListed preview={preview()} />}
-              </EffectiveBoundary>,
-            ],
-          ])}
+            "agent-tool-access-facts",
+          )}
           <Show when={canEdit()}>
             <SettingsRow
               setting="agent.tools.profile"
@@ -398,7 +401,8 @@ export function AgentTools(
                 }
               };
               onSettled(() => {
-                toolGroups.set(group, {
+                const entry = {
+                  element: group,
                   get tools() {
                     return section().tools;
                   },
@@ -406,8 +410,9 @@ export function AgentTools(
                     group.open = true;
                     setExpanded(true);
                   },
-                });
-                return () => toolGroups.delete(group);
+                };
+                setToolGroups((current) => [...current, entry]);
+                return () => setToolGroups((current) => current.filter((item) => item !== entry));
               });
               // Name order, so a row never moves when its toggle or the preview changes.
               const sortedTools = createMemo(() =>
@@ -624,7 +629,7 @@ export function AgentTools(
           <ToolRuntime
             preview={preview()}
             sessionKey={params.runtimeSessionKey}
-            onJump={hasConfig() ? jumpToTool : undefined}
+            resolveJump={resolveJump}
           />
         )}
       </EffectiveBoundary>

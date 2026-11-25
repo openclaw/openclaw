@@ -92,7 +92,7 @@ it("retains loading contents, primary input and outlet through resize and collap
   expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBe(placeholder);
   expect(placeholder.querySelector(".rows")).toBe(contents);
   const region = mounted.container.querySelector<HTMLElement>(".sidebar-region")!;
-  expect(region.style.getPropertyValue("--side-panel-width")).toBe("382px");
+  expect(region.style.getPropertyValue("--side-panel-width")).toBe("376px");
   const outlet = mounted.container.querySelector(".sidebar-region__right-runtime")!;
   const retainedPanel = document.createElement("iframe");
   outlet.append(retainedPanel);

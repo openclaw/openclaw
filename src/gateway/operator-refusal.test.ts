@@ -15,6 +15,12 @@ const SENTENCES = {
     "I did not start this request. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role.",
   "channel-unverified":
     "I did not start this request. This channel cannot confirm who you are. Use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
+  "agent-not-in-role":
+    "I did not start this request. Your role on this Gateway does not include this agent. Choose an allowed agent, or ask a Gateway admin to add it to your role.",
+  "tool-policy-denies":
+    "I did not start this request. This session's current tool policy does not allow it. Ask a Gateway admin to change the session's tool policy, or use another session.",
+  "channel-access-ended":
+    "I did not start this request. The sender no longer has access to this channel. Review the channel access settings, then ask the sender to send it again.",
   "owner-removed":
     "I did not start this request. Your channel account is no longer listed as a Gateway owner. Ask the Gateway owner to add it back to commands.ownerAllowFrom, then send a new message.",
   "requester-access-ended":
