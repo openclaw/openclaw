@@ -12,8 +12,12 @@ import {
   type AgentToolPendingInput,
 } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
+import { getAgentToolExecutionLocation } from "../agent-tool-metadata.js";
+import { prepareCoreToolPolicy } from "../prepared-tool-surface.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { createToolSurfacePresentationForTest } from "../tool-surface-plan.test-support.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 const owner = vi.hoisted(() => ({
   runs: [] as SubagentRunRecord[],
@@ -200,6 +204,47 @@ describe("subagents native run contract", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(owner.cancel).not.toHaveBeenCalled();
     expect(owner.listeners.size).toBe(0);
+  });
+  it("gives a worker's Gateway call enough time to outlive every wait it accepts", async () => {
+    const location = getAgentToolExecutionLocation(tool);
+    expect(location.kind).toBe("gateway");
+    const invokeGatewayTool = vi.fn(
+      async (_params: unknown, _options?: { timeoutMs?: number }) =>
+        ({ type: "res", id: "response-1", ok: true, payload: { content: [] } }) as const,
+    );
+    const [proxy] = createWorkerGatewayToolProxies(
+      {
+        generation: "generation-1",
+        presentation: createToolSurfacePresentationForTest(),
+        policy: prepareCoreToolPolicy({}),
+        tools: [
+          {
+            id: "tool-1",
+            execution: "gateway",
+            ...(location.kind === "gateway" && location.timeout
+              ? { timeout: location.timeout }
+              : {}),
+            definition: {
+              name: tool.name,
+              label: tool.label,
+              description: tool.description,
+              parameters: {},
+            },
+          },
+        ],
+      },
+      { invokeGatewayTool, cancelGatewayTool: vi.fn() },
+    );
+    for (const timeoutSeconds of [undefined, 55, 60]) {
+      await proxy!.execute("wait", { action: "wait", runIds: ["run-1"], timeoutSeconds });
+    }
+    // Worker requests otherwise use a 30 s default, which a 30 s wait races and a 55 s wait loses.
+    const [byDefault, at55, atMaximum] = invokeGatewayTool.mock.calls.map(
+      (call) => call[1]?.timeoutMs,
+    );
+    expect(byDefault).toBeGreaterThan(30_000);
+    expect(at55).toBeGreaterThan(55_000);
+    expect(atMaximum).toBeGreaterThan(60_000);
   });
   it("never lets a revoked controller selection cancel after an await", async () => {
     owner.cancel.mockImplementation(

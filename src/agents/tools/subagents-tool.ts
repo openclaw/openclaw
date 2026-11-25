@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { bindAgentToolExecutionLocation } from "../agent-tool-metadata.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
@@ -293,7 +294,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     }
     return { cfg, controller, readable: [...readable.values()], controlled };
   };
-  return {
+  const tool: AnyAgentTool = {
     label: "Subagents",
     name: "subagents",
     parameters: SubagentsToolSchema,
@@ -456,4 +457,10 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
     },
   };
+  // A worker reaches this tool over the Gateway; its call must outlive the requested wait.
+  bindAgentToolExecutionLocation(tool, {
+    kind: "gateway",
+    timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+  });
+  return tool;
 }
