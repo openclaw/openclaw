@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { prepareGitReleaseLayout } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -13,13 +14,10 @@ import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-defer
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
-import {
-  confirmUpdateDowngrade,
-  resolveGitInstallDir,
-  type UpdateCommandOptions,
-} from "./shared.js";
+import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
+  tryRunReleaseUpdateCommand,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -119,6 +117,9 @@ async function updateCommandWithRuntime(
         async (configReadable, malformedConfig) => {
           // Late admission refusals retain the captured malformed-source report decision.
           reportHints.writeArtifacts = !malformedConfig;
+          if (await tryRunReleaseUpdateCommand(inputOpts, prepared, env)) {
+            return;
+          }
           if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
             defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
           }
@@ -319,8 +320,15 @@ async function updateCommandInternal(
       });
     }
 
+    // Every Git install runs from releases behind the release link.
+    const gitRelease = updateInstallKind === "git";
+    const releaseLayoutWarning = gitRelease ? prepareGitReleaseLayout() : undefined;
+    if (releaseLayoutWarning) {
+      defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
+    }
     const finalizationContext = {
       opts,
+      gitRelease,
       root,
       previousInstallRoot: discoveredRoot,
       requestedChannel,
@@ -458,6 +466,11 @@ async function updateCommandInternal(
       const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
       assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
       preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+      // A Git release update never rewrites the tree this updater runs from.
+      if (gitRelease) {
+        mutableUpdatePrepared = true;
+        return;
+      }
       // Retention can walk the full dependency tree before the first staging step.
       // Record that work so the completed capacity check does not look stalled.
       const retentionStep = {
@@ -469,7 +482,7 @@ async function updateCommandInternal(
       const retentionStartedAt = Date.now();
       await progress.onStepStart?.(retentionStep);
       const retention = await retainRuntime({
-        mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+        mutationRoots: [root],
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,
@@ -527,6 +540,16 @@ async function updateCommandInternal(
     if (retainedRuntimeStep) {
       result.steps.unshift(retainedRuntimeStep);
     }
+    if (releaseLayoutWarning) {
+      result.steps.unshift({
+        name: "git-release-layout",
+        command: "select Git release layout",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: releaseLayoutWarning },
+      });
+    }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
       await activateCurrentCore();
@@ -569,6 +592,8 @@ async function updateCommandInternal(
             inspectActivatedUpdateState({
               result,
               root,
+              gitRelease,
+              candidateOpenedState: execution.candidateOpenedState,
               packageUpdateNodeRunner,
               schemaVersions: execution.schemaVersions,
               candidateSchemaVersions: execution.candidateSchemaVersions,

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs";
+import { registerHooks } from "node:module";
 import path from "node:path";
-import { isMainThread, Worker, workerData } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { fileLogTransport } from "./logger-file-transport.js";
@@ -16,36 +19,27 @@ import {
 async function withoutSyncFs(operation: () => Promise<void>): Promise<void> {
   const counts: Record<string, number> = {};
   const restore: Array<() => void> = [];
+  const track = (owner: object, key: string) => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key)!;
+    Object.defineProperty(owner, key, {
+      ...descriptor,
+      value: new Proxy(descriptor.value, {
+        apply(fn, receiver, args) {
+          counts[key] = (counts[key] ?? 0) + 1;
+          return Reflect.apply(fn, receiver, args);
+        },
+      }),
+    });
+    restore.push(() => Object.defineProperty(owner, key, descriptor));
+  };
   try {
     // Linux exposes unsupported methods such as lchmodSync as undefined.
     for (const key of Object.keys(fs).filter(
       (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
     )) {
-      const descriptor = Object.getOwnPropertyDescriptor(fs, key)!;
-      Object.defineProperty(fs, key, {
-        ...descriptor,
-        value: new Proxy(descriptor.value, {
-          apply(fn, receiver, args) {
-            counts[key] = (counts[key] ?? 0) + 1;
-            return Reflect.apply(fn, receiver, args);
-          },
-        }),
-      });
-      restore.push(() => Object.defineProperty(fs, key, descriptor));
+      track(fs, key);
     }
-    const nativeRealpath = Object.getOwnPropertyDescriptor(fs.realpathSync, "native")!;
-    Object.defineProperty(fs.realpathSync, "native", {
-      ...nativeRealpath,
-      value: new Proxy(nativeRealpath.value, {
-        apply(fn, receiver, args) {
-          counts["realpathSync.native"] = (counts["realpathSync.native"] ?? 0) + 1;
-          return Reflect.apply(fn, receiver, args);
-        },
-      }),
-    });
-    restore.push(() => {
-      Object.defineProperty(fs.realpathSync, "native", nativeRealpath);
-    });
+    track(fs.realpathSync, "native");
     await operation();
   } finally {
     restore.toReversed().forEach((undo) => undo());
@@ -153,18 +147,64 @@ async function proveDefaultTargets(): Promise<void> {
   );
   assert.equal(starts.length, 1);
   await drainGlobalSingletonLifecycleState();
-  process.stdout.write(
-    JSON.stringify({
-      defaultAppend: true,
-      reload: true,
-      fallback: true,
-      rollover: true,
-      refusal: true,
-      forcedRescue: true,
-      mainThreadSyncCalls: 0,
-      workers: starts.length,
-    }) + "\n",
+}
+
+async function proveInFlightRescue(): Promise<void> {
+  const file = path.join(directory, "rescued.log");
+  const payloads = [0, 1, 2, 3].map(
+    (index) => `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`,
   );
+  const queuedPayload = '{"index":4}\n';
+  const entries = payloads.map((payload) => ({
+    file,
+    hostname: "transport-test-host",
+    maxFileBytes: 1024 * 1024,
+    payload,
+  }));
+  const read = () => fs.readFileSync(file, "utf8");
+  const append = fs.appendFileSync;
+  const firstPayload = entries[0]!.payload;
+  let rescue: Promise<{ issued: string; rescued: string }> | undefined;
+  fs.appendFileSync = (target, data, options) => {
+    append(target, data, options);
+    if (!rescue && data.toString().startsWith(firstPayload)) {
+      // Let the real append close its descriptor, then rescue before the transport
+      // handles the append result. The native worker owns both the queue and this I/O.
+      rescue = Promise.resolve().then(() => {
+        const issued = read();
+        fileLogTransport.enqueue({ ...entries[0]!, payload: queuedPayload });
+        fileLogTransport.drainSync();
+        return { issued, rescued: read() };
+      });
+    }
+  };
+  try {
+    for (const entry of entries) {
+      fileLogTransport.enqueue(entry);
+    }
+    await fileLogTransport.flush();
+    assert.ok(rescue, "Logger flush completed without reaching the first append");
+    const { issued, rescued } = await rescue;
+    const issuedCount = issued.trimEnd().split("\n").length;
+    assert.ok(issuedCount > 1 && issuedCount < entries.length, "Rescue must straddle a batch");
+    const expected = payloads.join("") + queuedPayload;
+    assert.ok(rescued === expected, "Sync drain must write just the unissued tail in order");
+    assert.ok(read() === expected, "Async settlement must not replay rescued records");
+    assert.ok(entries.every((entry) => entry.payload === ""));
+  } finally {
+    fs.appendFileSync = append;
+  }
+}
+
+if (!isMainThread && workerData.interruptAppend) {
+  const open = fs.promises.open;
+  fs.promises.open = (...args) => {
+    const pending = open(...args);
+    parentPort!.postMessage("opening", []);
+    // Hold FileHandle delivery, not the native open or the descriptor it allocates.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    return pending;
+  };
 }
 
 await runWithWorkerStartObserver(
@@ -181,8 +221,29 @@ await runWithWorkerStartObserver(
       sourceMapPolicy,
       "Logger construction must preserve the environment captured by runtime workers",
     );
-    await fileLogTransport.flush();
+    let lateWriterImport: string | undefined;
+    // An in-place update can remove the old hashed writer chunk before this first flush.
+    const hooks = isMainThread
+      ? undefined
+      : registerHooks({
+          resolve(specifier, context, nextResolve) {
+            if (/\/logger-file-worker(?:-[\w-]+)?\.[cm]?js$/.test(specifier)) {
+              lateWriterImport = specifier;
+              throw new Error("The old writer chunk is no longer installed");
+            }
+            return nextResolve(specifier, context);
+          },
+        });
+    try {
+      await fileLogTransport.flush();
+    } finally {
+      hooks?.deregister();
+    }
     if (!isMainThread) {
+      assert.equal(lateWriterImport, undefined, "Worker logging must not load the writer pool");
+      if (!workerData.interruptAppend) {
+        await proveInFlightRescue();
+      }
       assert.deepEqual(starts, [], "Worker logging must not start another logging worker");
       await drainGlobalSingletonLifecycleState();
       return;
@@ -219,28 +280,78 @@ await runWithWorkerStartObserver(
       /synthetic file transport record/,
     );
 
-    const failed = path.join(directory, "failed.log");
-    fs.mkdirSync(failed);
+    const directoryTarget = path.join(directory, "directory.log");
+    fs.mkdirSync(directoryTarget);
+    setLoggerOverride({ level: "info", file: directoryTarget });
+    getLogger().info("rejected file target");
+    await fileLogTransport.flush();
+    fs.rmdirSync(directoryTarget);
+    getLogger().info("recovered file target");
+    await fileLogTransport.flush();
+    assert.match(fs.readFileSync(directoryTarget, "utf8"), /recovered file target/);
+
+    const blockedParent = path.join(directory, "blocked-parent");
+    const failed = path.join(blockedParent, "failed.log");
+    fs.writeFileSync(blockedParent, "blocking parent file");
     setLoggerOverride({ level: "info", file: failed });
     getLogger().info("rejected target");
     await fileLogTransport.flush();
-    fs.rmdirSync(failed);
+    fs.unlinkSync(blockedParent);
     getLogger().info("recovered target");
     await fileLogTransport.flush();
-    assert.match(fs.readFileSync(failed, "utf8"), /recovered target/);
+    assert.ok(fs.existsSync(failed), "Log writes must recover after repairing the directory");
+    const recovered = fs.readFileSync(failed, "utf8");
+    assert.match(recovered, /recovered target/);
+    assert.doesNotMatch(recovered, /rejected target/);
     assert.equal(starts.length, 1, "One serial logger worker owns all file targets");
+
+    const { readConfiguredLogTailInWorker } = await import("./log-tail-worker.js");
+    const { registerSecretValueForRedaction } = await import("./secret-redaction-registry.js");
+    const secret = "file-worker-secret-0123456789";
+    registerSecretValueForRedaction(secret);
+    getLogger().info({ value: secret }, "tail redaction proof");
+    await fileLogTransport.flush();
+    assert.match(fs.readFileSync(failed, "utf8"), new RegExp(secret));
+    const tail = await readConfiguredLogTailInWorker();
+    assert.match(tail.lines.join("\n"), /tail redaction proof/);
+    assert.doesNotMatch(tail.lines.join("\n"), new RegExp(secret));
 
     getLogger().info("lifecycle drain");
     await drainGlobalSingletonLifecycleState();
     assert.match(fs.readFileSync(failed, "utf8"), /lifecycle drain/);
-    const worker = new Worker(new URL(import.meta.url), { workerData: { directory } });
-    await new Promise<void>((resolve, reject) => {
-      worker.once("error", reject);
-      worker.once("exit", (code) =>
-        code === 0 ? resolve() : reject(new Error(`Nested logger failed: ${code}`)),
-      );
-    });
-    assert.match(fs.readFileSync(path.join(directory, "nested.log"), "utf8"), /warm transport/);
+    const target = path.join(directory, "nested.log");
+    const retained = () =>
+      fs.readdirSync("/proc/self/fd").filter((fd) => {
+        try {
+          return fs.readlinkSync(`/proc/self/fd/${fd}`) === target;
+        } catch {
+          return false;
+        }
+      });
+    for (const interruptAppend of process.platform === "linux" ? [false, true] : [false]) {
+      const worker = new Worker(new URL(import.meta.url), {
+        workerData: { directory, interruptAppend },
+      });
+      const exited = once(worker, "exit");
+      if (interruptAppend) {
+        const [message] = await Promise.race([once(worker, "message"), exited]);
+        if (message === "opening") {
+          const deadline = Date.now() + 5_000;
+          while (retained().length === 0 && Date.now() < deadline) {
+            await setImmediate();
+          }
+          assert.ok(retained().length > 0, "Native open must allocate a real descriptor");
+          await worker.terminate();
+        }
+      } else {
+        assert.equal((await exited)[0], 0);
+      }
+      await exited;
+      if (process.platform === "linux") {
+        assert.deepEqual(retained(), [], "Terminated log writers must not retain file descriptors");
+      }
+    }
+    assert.match(fs.readFileSync(target, "utf8"), /warm transport/);
 
     // The existing explicit diagnostic opt-in keeps source-map resolution available.
     process.env.TSLOG_SOURCE_MAPS = "on";

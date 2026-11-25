@@ -528,7 +528,7 @@ describe("broadcast send outcomes through native actions", () => {
       expect(result.toolResult?.content).toEqual([
         {
           type: "text",
-          text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+          text: "Recorded reply in the current chat history via internal-ui. This send did not deliver it to an external channel.",
         },
       ]);
     });

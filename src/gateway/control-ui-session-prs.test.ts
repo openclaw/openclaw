@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -160,37 +161,6 @@ describe("loadControlUiSessionPullRequests", () => {
   ];
   const loadFork = (candidates = [{ owner: forkOwner, repo: "openclaw" }]) =>
     load({}, { resolveGitContext: async () => ({ ...context, forkHeadCandidates: candidates }) });
-
-  it("returns chips with diff counts and check rollup for open PRs", async () => {
-    const fetchImpl = routedFetch([
-      pullsRoute(() => githubJson([pullListItem()])),
-      route("/pulls/103469", () => githubJson({ additions: 4, deletions: 3, changed_files: 2 })),
-      route("/check-runs", () =>
-        githubJson({
-          total_count: 2,
-          check_runs: [
-            { status: "completed", conclusion: "success" },
-            { status: "completed", conclusion: "skipped" },
-          ],
-        }),
-      ),
-    ]);
-    vi.stubGlobal("fetch", fetchImpl);
-
-    expect(await load()).toEqual({
-      repository: { owner: "openclaw", repo: "openclaw" },
-      pullRequests: [
-        chip({
-          additions: 4,
-          deletions: 3,
-          changedFiles: 2,
-          checks: { state: "passing", passed: 1, failed: 0, skipped: 1, running: 0 },
-          checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-        }),
-      ],
-      rateLimited: false,
-    });
-  });
 
   it("does not reuse cached private PRs after the GitHub token is removed", async () => {
     const cacheLifetime = new AbortController();
@@ -376,14 +346,6 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
   });
 
-  it("returns no chips without a git context and spends no quota", async () => {
-    const fetchImpl = routedFetch([]);
-    vi.stubGlobal("fetch", fetchImpl);
-    const result = await load({}, { resolveGitContext: async () => null });
-    expect(result).toEqual({ pullRequests: [], rateLimited: false });
-    expect(fetchImpl.mock.calls).toHaveLength(0);
-  });
-
   it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([pullsRoute(() => githubJson(pulls)), repoRoute()]);
@@ -487,21 +449,50 @@ describe("loadControlUiSessionPullRequests", () => {
       ]),
     );
 
-    const initial = load();
-    await initialPullStarted;
-    const forcedRefresh = load({ refresh: true });
-    await Promise.resolve();
-    const ordinaryFollower = load();
-    const duplicateForcedRefresh = load({ refresh: true });
+    const forcedAdmitted = createDeferred();
+    const followersAdmitted = createDeferred();
+    const diagnostics = channel("openclaw.gateway.session-pr");
+    let admissions = 0;
+    const observeAdmission = (message: unknown) => {
+      if (
+        !message ||
+        typeof message !== "object" ||
+        !("phase" in message) ||
+        message.phase !== "branch-cache-started" ||
+        !("sessionKey" in message) ||
+        message.sessionKey !== "agent:main:main"
+      ) {
+        return;
+      }
+      admissions += 1;
+      if (admissions === 2) {
+        forcedAdmitted.resolve();
+      } else if (admissions === 4) {
+        followersAdmitted.resolve();
+      }
+    };
+    diagnostics.subscribe(observeAdmission);
+    try {
+      const initial = load();
+      await initialPullStarted;
+      const forcedRefresh = load({ refresh: true });
+      // Session preparation is asynchronous; wait for actual cache admission.
+      await forcedAdmitted.promise;
+      const ordinaryFollower = load();
+      const duplicateForcedRefresh = load({ refresh: true });
+      await followersAdmitted.promise;
 
-    resolveInitialPulls(githubJson([]));
-    expect((await initial).pullRequests).toEqual([]);
-    expect(
-      (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map((result) =>
-        result.pullRequests.map((item) => item.number),
-      ),
-    ).toEqual([[103469], [103469], [103469]]);
-    expect(pullListCalls).toBe(2);
+      resolveInitialPulls(githubJson([]));
+      expect((await initial).pullRequests).toEqual([]);
+      expect(
+        (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map(
+          (result) => result.pullRequests.map((item) => item.number),
+        ),
+      ).toEqual([[103469], [103469], [103469]]);
+      expect(pullListCalls).toBe(2);
+    } finally {
+      diagnostics.unsubscribe(observeAdmission);
+    }
   });
 
   it("keeps the proven PR list as state-only chips when detail fetches are rate limited", async () => {

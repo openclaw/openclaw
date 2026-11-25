@@ -355,6 +355,7 @@ describe("agent creation", () => {
       agentId: expect.stringMatching(/^bot-/),
       name: "New agent",
       onboarding: true,
+      locale: "en",
     });
     expect(agents.state.agentsList).toEqual(roster);
     expect(agents.state.pendingAgent).toBeUndefined();

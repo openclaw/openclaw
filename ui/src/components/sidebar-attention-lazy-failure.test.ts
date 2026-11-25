@@ -10,6 +10,7 @@ import {
   hiddenScopeUpgradeCapability,
 } from "../test-helpers/application-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import "./sidebar-attention.tsx";
 
@@ -28,16 +29,21 @@ vi.mock("../lib/idle-import.ts", async (original) => {
     },
   };
 });
+// mock-isolation: simulate a failed owner-action chunk before its exports can run.
+vi.mock("../lib/openclaw-id/open-browser-approval.ts", () => {
+  throw new Error("Owner action unavailable");
+});
 let store: ReturnType<typeof createSidebarAttentionStore> | undefined;
 afterEach(() => {
   document.body.replaceChildren();
   store?.dispose();
   store = undefined;
+  vi.restoreAllMocks();
   loadFailure.mockReset();
   vi.mocked(showToast).mockClear();
 });
 
-async function mountAttention() {
+async function mountAttention(entries?: SidebarInboxEntry[]) {
   const sources = {
     config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
     gateway: {
@@ -56,6 +62,9 @@ async function mountAttention() {
     sources as unknown as Parameters<typeof createSidebarAttentionStore>[0],
   );
   store.activate(SidebarAttentionStoreOwner);
+  if (entries) {
+    vi.spyOn(store, "entries", "get").mockReturnValue(entries);
+  }
   // SAFETY: The context fixture fills unrelated application capabilities.
   const provider = createApplicationContextProvider({
     ...sources,
@@ -99,4 +108,31 @@ it("retires an Inbox import failure when its route changes", async () => {
   await pending.promise.catch(() => undefined);
   await waitForSolid(() => expect(showToast).not.toHaveBeenCalled());
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("refreshes recovery even when the outer owner-action chunk fails to load", async () => {
+  const { trigger } = await mountAttention([
+    {
+      type: "attention",
+      kind: "openClawIdKeys",
+      category: "system",
+      severity: "error",
+      icon: "key",
+      label: "Recovery needed",
+      detail: "Open recovery",
+      signature: "recovery",
+      dismissal: null,
+      requiresAction: true,
+      action: { kind: "openClawIdRecovery", label: "Recover" },
+    },
+  ]);
+  const refresh = vi.spyOn(store!, "refreshOpenClawId");
+  trigger.click();
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(document.querySelector(".sidebar-issues-panel")).not.toBeNull());
+  [...document.querySelectorAll("button")]
+    .find((button) => button.textContent?.includes("Recover"))!
+    .click();
+  await waitForSolid(() => expect(showToast).toHaveBeenCalled());
+  expect(refresh).toHaveBeenCalledOnce();
 });

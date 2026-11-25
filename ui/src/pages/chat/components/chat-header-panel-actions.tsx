@@ -1,5 +1,6 @@
 import {
   createMemo,
+  createSignal,
   createUniqueId,
   Errored,
   lazy,
@@ -228,18 +229,82 @@ export type ChatPanelMenuContentProps = {
   controls: MenuControls;
   readMenu: () => MenuHandle | undefined;
   onReady: (handlers: ChatPanelMenuHandlers | undefined) => void;
-  renderItems: (items: () => readonly MenuEntry[]) => Element;
 };
 
-/** Hand off initial keyboard focus only while the opening gesture still owns it. */
-function createPanelMenuFocusHandoff() {
+/** Keep registered content and initial focus owned by the same panel menu. */
+function createPanelMenu(
+  menuProps: ChatPanelMenuContentProps["menuProps"],
+  Content: (props: ChatPanelMenuContentProps) => Element,
+  id: string,
+) {
+  const controls = createMenuControls();
+  const [handlers, setHandlers] = createSignal<ChatPanelMenuHandlers>();
   let menu: MenuHandle | undefined;
   let openingFocus: globalThis.Element | null | undefined;
   let focusLast = false;
   let stopKeyboard: (() => void) | undefined;
   onSettled(() => () => stopKeyboard?.());
+  const focusReady = () => {
+    if (!menu?.overlay.open) {
+      return;
+    }
+    const active = menu.overlay.surface.ownerDocument.activeElement;
+    if (
+      active !== openingFocus &&
+      active !== menu.overlay.surface &&
+      active !== menu.overlay.surface.ownerDocument.body
+    ) {
+      return;
+    }
+    const last = focusLast ? menu.itemElements().at(-1) : undefined;
+    if (last) {
+      last.focus({ preventScroll: true });
+    } else {
+      menu.focusFirst();
+    }
+  };
+  const items = (): readonly MenuEntry[] =>
+    handlers()?.items() ?? [{ id: "loading", label: t("common.loading"), disabled: true }];
+  const entries: MenuEntry[] = [
+    {
+      kind: "group",
+      id,
+      get items() {
+        return items();
+      },
+      render: (renderItems) => (
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusReady);
+            return (
+              <LazyViewError error={error()} onRetry={reset} retryRef={controls.ref()} inline />
+            );
+          }}
+        >
+          <Loading fallback={renderItems(items)}>
+            <Content
+              menuProps={menuProps}
+              controls={controls}
+              readMenu={() => menu}
+              onReady={(next) => {
+                setHandlers(next);
+                if (next) {
+                  onSettled(focusReady);
+                }
+              }}
+            />
+            {renderItems(items)}
+          </Loading>
+        </Errored>
+      ),
+    },
+  ];
   return {
-    read: () => menu,
+    controls,
+    items: entries,
+    get onSelect() {
+      return handlers()?.select;
+    },
     bind(this: void, handle: MenuHandle) {
       menu = handle;
       stopKeyboard?.();
@@ -266,46 +331,7 @@ function createPanelMenuFocusHandoff() {
         focusLast = false;
       }
     },
-    focusReady(this: void) {
-      if (!menu?.overlay.open) {
-        return;
-      }
-      const active = menu.overlay.surface.ownerDocument.activeElement;
-      if (
-        active !== openingFocus &&
-        active !== menu.overlay.surface &&
-        active !== menu.overlay.surface.ownerDocument.body
-      ) {
-        return;
-      }
-      const last = focusLast ? menu.itemElements().at(-1) : undefined;
-      if (last) {
-        last.focus({ preventScroll: true });
-      } else {
-        menu.focusFirst();
-      }
-    },
   };
-}
-
-function ChatPanelMenuBoundary(props: {
-  controls: MenuControls;
-  focusReady: () => void;
-  fallback: Element;
-  children: Element;
-}) {
-  return (
-    <Errored
-      fallback={(error, reset) => {
-        onSettled(props.focusReady);
-        return (
-          <LazyViewError error={error()} onRetry={reset} retryRef={props.controls.ref()} inline />
-        );
-      }}
-    >
-      <Loading fallback={props.fallback}>{props.children}</Loading>
-    </Errored>
-  );
 }
 
 /** External Dashboard controls reuse the layout and page-widget owners. */
@@ -315,12 +341,10 @@ export function ChatDashboardMenu(
   },
 ) {
   const id = createUniqueId();
-  const controls = createMenuControls();
-  const focus = createPanelMenuFocusHandoff();
-  let handlers: ChatPanelMenuHandlers | undefined;
+  const menu = createPanelMenu(props, DashboardContent, "dashboard-content");
   return (
     <Menu
-      controls={controls}
+      controls={menu.controls}
       lazy="while-open"
       id={`chat-dashboard-${id}`}
       label={t("chat.sidePanel.dashboardOptions")}
@@ -335,41 +359,11 @@ export function ChatDashboardMenu(
           <Icon name="chevronDown" class="chat-dashboard-menu__chevron" />
         </>
       }
-      items={[
-        {
-          kind: "group",
-          id: "dashboard-content",
-          get items() {
-            return handlers?.items() ?? [];
-          },
-          render: (renderItems) => (
-            <ChatPanelMenuBoundary
-              controls={controls}
-              focusReady={focus.focusReady}
-              fallback={renderItems(() => [
-                { id: "loading", label: t("common.loading"), disabled: true },
-              ])}
-            >
-              <DashboardContent
-                menuProps={props}
-                controls={controls}
-                readMenu={focus.read}
-                onReady={(next) => {
-                  handlers = next;
-                  if (next) {
-                    onSettled(focus.focusReady);
-                  }
-                }}
-                renderItems={renderItems}
-              />
-            </ChatPanelMenuBoundary>
-          ),
-        },
-      ]}
-      ref={focus.bind}
-      onBeforeShow={focus.beforeShow}
-      onOpenChange={focus.openChange}
-      onSelect={(item, event) => handlers?.select(item, event)}
+      items={menu.items}
+      ref={menu.bind}
+      onBeforeShow={menu.beforeShow}
+      onOpenChange={menu.openChange}
+      onSelect={menu.onSelect}
     />
   );
 }
@@ -405,17 +399,15 @@ let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
-  const controls = createMenuControls();
-  const focus = createPanelMenuFocusHandoff();
+  const menu = createPanelMenu(props, LayoutContent, "layout-content");
   const model = createMemo(() => chatPaneLayoutModel(props));
-  let handlers: ChatPanelMenuHandlers | undefined;
 
   return (
     <Show
       when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
     >
       <Menu
-        controls={controls}
+        controls={menu.controls}
         lazy
         id={id}
         class={[
@@ -433,41 +425,11 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
             <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
           </>
         }
-        items={[
-          {
-            kind: "group",
-            id: "layout-content",
-            get items() {
-              return handlers?.items() ?? [];
-            },
-            render: (renderItems) => (
-              <ChatPanelMenuBoundary
-                controls={controls}
-                focusReady={focus.focusReady}
-                fallback={renderItems(() => [
-                  { id: "loading", label: t("common.loading"), disabled: true },
-                ])}
-              >
-                <LayoutContent
-                  menuProps={props}
-                  controls={controls}
-                  readMenu={focus.read}
-                  onReady={(next) => {
-                    handlers = next;
-                    if (next) {
-                      onSettled(focus.focusReady);
-                    }
-                  }}
-                  renderItems={renderItems}
-                />
-              </ChatPanelMenuBoundary>
-            ),
-          },
-        ]}
-        ref={focus.bind}
-        onBeforeShow={focus.beforeShow}
-        onOpenChange={focus.openChange}
-        onSelect={(item, event) => handlers?.select(item, event)}
+        items={menu.items}
+        ref={menu.bind}
+        onBeforeShow={menu.beforeShow}
+        onOpenChange={menu.openChange}
+        onSelect={menu.onSelect}
       />
     </Show>
   );

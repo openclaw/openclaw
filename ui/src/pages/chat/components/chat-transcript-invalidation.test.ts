@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -22,6 +23,7 @@ import {
 import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
+import { openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import {
   buildCachedChatItems,
   getExpandedToolCards,
@@ -233,6 +235,7 @@ describe("chat transcript invalidation", () => {
     let container: HTMLDivElement;
 
     beforeEach(() => {
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
       vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
       onOpenSidebar.mockClear();
       revokeObjectURL.mockClear();
@@ -269,7 +272,7 @@ describe("chat transcript invalidation", () => {
       await flushDeferredRowPrune();
     }
 
-    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+    it("places mixed user media above text and starts inline playback only on activation", async () => {
       await renderPreview();
       const bubble = find(container, ".chat-bubble--with-images");
       const gallery = bubble?.querySelector(":scope > .chat-message-images");
@@ -277,9 +280,11 @@ describe("chat transcript invalidation", () => {
       expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
       expect(find(container, "video, openclaw-chat-video-player")).toBeNull();
       gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      await waitForSolid(() =>
+        expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
       );
+      expect(find(container, ".chat-video-preview--active")).not.toBeNull();
+      expect(onOpenSidebar).not.toHaveBeenCalled();
     });
 
     it.each(["video", "image"])(
@@ -299,10 +304,11 @@ describe("chat transcript invalidation", () => {
         expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
           HTMLElement,
         );
-        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
-        expect(onOpenSidebar).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        required(container, '.chat-video-preview button[aria-label^="Play:"]').click();
+        await waitForSolid(() =>
+          expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
         );
+        expect(onOpenSidebar).not.toHaveBeenCalled();
       },
     );
 
@@ -422,7 +428,7 @@ describe("chat transcript invalidation", () => {
           toolName: "read",
           runId: completedRunId,
         }),
-        msg("assistant", "Workspace checked", 3_000, {
+        openAIMessage("Workspace checked", 3_000, {
           phase: "final_answer",
           stopReason: "stop",
           runId: completedRunId,
@@ -461,9 +467,7 @@ describe("chat transcript invalidation", () => {
       expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
       expect(finalBubble.textContent).toContain("Workspace checked");
       expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-      expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
-        [],
-      );
+      expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(false);
     } finally {
       transcript.dispose();
     }

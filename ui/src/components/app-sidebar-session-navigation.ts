@@ -12,14 +12,12 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   SESSION_NAVIGATION_KEY_PARAM,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
@@ -32,8 +30,6 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
-  personalSidebarGroupRows,
-  personalGroupSessionReferences,
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
@@ -56,7 +52,6 @@ import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
-  resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
   restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
@@ -82,7 +77,6 @@ import {
   storeSidebarSessionSortMode,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
-  type SidebarPinZone,
   type SidebarToolActivity,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -93,7 +87,6 @@ import type { SessionOrganizer } from "./session-organizer.ts";
 import { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
-import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { SidebarProjectionMemo, SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import {
   memoizedSidebarCatalogs,
@@ -191,7 +184,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.sessionProjection.refreshPresencePresentation(this, sidebarPresenceScope(this));
   }
 
-  abstract readonly navigationCatalog: SidebarNavigationCatalog;
   sessionPullRequests!: SessionPullRequestIndicators;
 
   readSessionPullRequestRows(): readonly SidebarRecentSession[] {
@@ -252,7 +244,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionOwnershipVisibility = { filters: false, avatars: false };
 
   private readonly sessionSelection = createSidebarSessionSelection(
-    () => this.visibleSessionAppearancesInOrder(),
+    () => this.visibleSessionRowsInOrder(),
     () => this.invalidate(),
   );
   get selectedSessionKeys(): ReadonlySet<string> {
@@ -505,29 +497,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return personalSidebarZone(this, liveRows);
   }
 
-  resolvePersonalGroupSession(key: string): SidebarRecentSession | undefined {
-    // Startup snapshots are presentation only; group membership resolves through current access.
-    return this.sidebarSnapshot ? undefined : this.reconciledSidebarZone().sessionRows.get(key);
-  }
-
-  collapsedPersonalSessionGroups: ReadonlySet<string> = new Set();
-
-  togglePersonalSessionGroup(id: string): void {
-    const next = new Set(this.collapsedPersonalSessionGroups);
-    if (!next.delete(id)) {
-      next.add(id);
-    }
-    this.collapsedPersonalSessionGroups = next;
-    this.invalidate();
-  }
-
-  personalGroupSessionReferences = () => personalGroupSessionReferences(this);
-
-  personalGroupSessionRows = (group: PersonalSessionGroup, zone?: SidebarPinZone) =>
-    personalSidebarGroupRows(this, group, zone, () =>
-      this.selectedAgentSessionRows(this.getSessionNavigationState()),
-    );
-
   /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {
     const serialized = serializeSidebarEntry({ type: "session", key });
@@ -537,24 +506,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.onUpdateSidebarEntries?.(this.sidebarEntries.filter((entry) => entry !== serialized));
   }
 
-  /** Shift ranges retain each visible occurrence, including repeated group membership. */
-  private visibleSessionAppearancesInOrder(): SidebarRecentSession[] {
+  protected visibleSessionRowsInOrder = (): SidebarRecentSession[] => {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     const { visibleRows } = this.zonedVisibleSections(rows);
-    const personalRows = (this.context.navigation.snapshot.personalSessionGroups ?? [])
-      .filter((group) => !this.collapsedPersonalSessionGroups.has(group.id))
-      .flatMap((group) => this.personalGroupSessionRows(group));
-    return sidebarVisibleRowsInOrder(
-      this.reconciledSidebarZone(rows),
-      visibleRows,
-      this,
-      personalRows,
-    );
-  }
-
-  /** A session shown in several places still has only one batch target and live-data owner. */
-  protected visibleSessionRowsInOrder = (): SidebarRecentSession[] =>
-    distinctSidebarSessionRows(this.visibleSessionAppearancesInOrder());
+    return sidebarVisibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows, this);
+  };
 
   protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
     return this.sessionProjection.visibleTree(this.visibleSessionRowsInOrder(), this);
@@ -601,28 +557,30 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       identities: this.context.agentIdentity.entries(),
       pending: this.context.agents.state.pendingAgent,
       creation: this.context.chatSubmissions.readCreate(),
-      sessionKey: this.sessionKey,
+      // The shell's key still names the previous chat while a provisional one is open.
+      sessionKey: this.getRouteSessionKey(),
       chipMode: this.sidebarAgentsMode === "chip",
     });
   }
 
-  private agentResumeKey(agentId: string): string {
-    const latest = resolveLatestSidebarAgentSession({
-      agentId,
-      result: this.selectedAgentSessionResult(agentId),
-      context: this.context,
-    });
-    return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
-  }
-
-  switchChipAgent(agentId: string) {
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ) {
     this.sidebarMenus.closeAgentMenu();
     this.expandAgent(agentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
     if (this.activeRouteId !== "skills") {
       if (this.connected) {
-        this.selectSession(this.agentResumeKey(agentId));
+        this.selectSession(
+          resolveKey({
+            agentId,
+            result: this.selectedAgentSessionResult(agentId),
+            context: this.context,
+            mainKey: this.sessionMainKey(),
+          }),
+        );
       } else {
         this.onNavigate?.("appearance");
       }
@@ -774,7 +732,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   };
 
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
-    return this.sessionProjection.children.isExpanded(session.key);
+    return this.sessionProjection.children.isExpanded(
+      session.key,
+      Boolean(session.snapshot && session.containsActiveDescendant),
+    );
   }
 
   isSessionChildrenFullyShown(sessionKey: string): boolean {

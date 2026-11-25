@@ -113,6 +113,17 @@ export function formatModelLabel(
 export type ChatModelPickerOptionProps = {
   rowKey?: string;
   favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
+  reorder?: {
+    disabled: boolean;
+    dragging: boolean;
+    indicator?: "before" | "after";
+    onDragStart: (event: DragEvent) => void;
+    onDragEnd: () => void;
+    onDragOver: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onDragLeave: (event: DragEvent) => void;
+    onDrop: (event: DragEvent & { currentTarget: HTMLElement }) => void;
+    onMove: (offset: number) => void;
+  };
   contextWindow?: ChatContextWindowControlParams;
   hideCooldown?: boolean;
   sessionKey?: string;
@@ -146,7 +157,7 @@ export function prepareChatModelPickerPanel(
   },
   favorites?: {
     keys: readonly string[];
-    opening: { keys: readonly string[]; selected: string };
+    opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
   },
 ) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -187,11 +198,7 @@ export function prepareChatModelPickerPanel(
       group.more = group.lead.splice(9);
     }
   }
-  const byModel = new Map(
-    params.modelOptions
-      .filter((option) => !option.isDefault)
-      .map((option) => [option.value, option]),
-  );
+  const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
   const favoriteOptions = (favorites?.keys ?? [])
     .map((key) => byModel.get(key))
     .filter((option) => option !== undefined);
@@ -213,9 +220,13 @@ export function prepareChatModelPickerPanel(
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
   const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let openingProvider = activeProvider;
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
+    if (favorites?.opening.favoritesTab) {
+      openingProvider = FAVORITES_GROUP;
+    }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(
@@ -232,6 +243,7 @@ export function prepareChatModelPickerPanel(
   return {
     orderedProviderGroups,
     activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    openingProvider: openingProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
     orderedOptions,
     optionIndex,
     targetGroups,

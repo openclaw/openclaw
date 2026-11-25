@@ -16,6 +16,26 @@ schema edges or rehearse migrations on copied databases. See the
 
 ## Schema updates and recovery
 
+For an ordinary same-schema deployment, configuration that already meets the
+candidate's strict contract takes the unchanged path. Otherwise, the candidate's
+config-only Doctor planner projects known config-contract migrations before final
+strict admission. Unknown invalid settings still refuse deployment.
+Preparation leaves the serving Gateway's config untouched and does not run
+Doctor state or database migrations.
+
+When a migration changes config, the controller preserves the original authored
+bytes, projected replacement and changed key paths in its private transaction
+artifacts. The activation journal binds that plan before the existing managed
+stop. Only after the predecessor stops does the controller publish the prepared
+config and rebind its protected identity. Recovery reconciles an interrupted
+publication against the recorded bytes; rollback restores the original config
+before starting the predecessor. This ordering keeps the incumbent on its own
+config while retaining the same lock, journal and rollback owner.
+
+Adopt the complete reviewed controller closure through `steady-successor` after
+landing. The candidate must contain `dist/infra/update-config-projection.worker.js`;
+landing alone changes neither the installed controller nor the serving Gateway.
+
 Ordinary deployments wait up to 180 seconds when the canonical deployment lock
 is busy, allowing routine health checks and disk maintenance to finish without
 discarding the update request. The controller retains the same exclusive lock
@@ -117,6 +137,12 @@ attempt; an invalid or foreign listener still fails verification. Deadline expir
 still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
+
+Convergence samples HTTP health, readiness, then startup after the status/channel
+RPCs. This prevents an earlier `startup-sidecars` response from contradicting a
+later ready response when startup settles during an RPC. The probes remain
+snapshots; persistent startup or channel recovery still fails at the original
+deadline, and malformed or terminal evidence still fails verification.
 
 Before the marker, the owner waits for native `/startupz` to report that critical
 initial startup has settled, `/readyz` to report readiness without a refusal for

@@ -34,7 +34,9 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
-  or expired questions keep their wording alongside the outcome.
+  or expired questions keep their wording alongside the outcome. When you reply
+  in the main composer instead, your text stays visible as a user message and
+  the resolved question disappears without a summary or **Skipped** rows.
   A pending question from a direct child session also docks in the parent
   chat, marked **Asked by** with a link to the child's session. The parent's
   composer stays available, including its draft and attachments. Collapsing the
@@ -91,13 +93,22 @@ without it entering the chat, the transcript, or the model's context.
 ## Required manual steps
 
 Use `requiredAction` instead of `questions` when the task is blocked on a
-specific, supported step only the human can perform—for example, completing a
-browser challenge or a manual device step in an already selected surface.
+specific, observed external step only the human can perform while the current
+run waits—for example, completing a browser challenge or a manual device step
+in an already selected surface.
 The existing question panel shows the reason, instructions, and an optional
 **Open link** action while the original agent turn waits.
 Code mode includes this handoff guidance when the built-in `ask_user` tool is
 available, even when full tool descriptions are deferred. The agent should use
-the handoff instead of ending the task with manual sign-in instructions.
+the handoff for these external steps instead of ending the task with manual
+sign-in instructions.
+
+Do not invent an approval or manual prerequisite for work the user has already
+authorized. An inactive [Goal](/tools/goal) stops automatic pursuit, not the
+current user-requested turn: executable work can continue within its actual
+permissions without Goal Resume. Do not wait in `ask_user` for Goal Resume or
+any native session control that requires an idle session. If such a control is
+genuinely needed, explain it and finish the current turn so the user can use it.
 
 Opening the link does not answer the question. **Ready to recheck** returns
 `status: "ready_to_verify"`: the agent must re-observe the original target through
@@ -189,6 +200,19 @@ does not pause or extend that attempt's execution budget.
 For an ordinary decision question, if it expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
+
+In the Control UI, a reply from the main composer can answer one ordinary
+question in the active turn, including an answer outside its options. It appears
+as a user message without starting another turn. For a multi-question prompt,
+the Gateway passes the text to that same turn as a new instruction instead of
+guessing which question it answers. The question panel and its summary disappear.
+
+The same replacement behavior applies to required manual steps and credential
+requests, but does not complete the step or store a credential. The manual step
+remains `action_unresolved` and dependent actions remain blocked; credentials
+belong in the protected question input, never the chat composer. Child-session
+questions, MCP forms, commands, and explicitly queued messages keep their existing
+input handling. A rejected message does not dismiss the pending question.
 
 Gateway question records include the optional originating `runId`. Clients can
 use it to keep the prompt and its terminal answer summary with the correct agent

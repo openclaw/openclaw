@@ -84,7 +84,7 @@ export async function update(
   const attempt = map.get(asked) ?? { id: crypto.randomUUID(), sent: false };
   map.set(asked, attempt);
   try {
-    await updateScribe(ui.s.context.host, snapshot, job, agentId, undefined, attempt.id);
+    await updateScribe(ui.s.context.host, snapshot, job, agentId, { attempt: attempt.id });
     attempt.sent = true;
     markUpdating(
       ui,
@@ -134,6 +134,45 @@ export async function repair(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob,
       (current) => repair(current, target, job, agentId),
     );
   }
+}
+
+/**
+ * Change schedule: ask the scribe's conversation to move its automation to `schedule`. Attempts
+ * are kept per Gateway like Replace with new, so the page a reconnect brings repeats a lost
+ * request instead of sending another turn. The job shows as updating until a read has the new
+ * schedule.
+ */
+export async function reschedule(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  job: ScribeJob,
+  agentId: string,
+  schedule: { kind: "cron"; expr: string; tz: string },
+) {
+  const map = attemptsOf(ui);
+  const asked = `schedule:${job.id}:${job.configRevision ?? ""}:${schedule.expr}:${schedule.tz}`;
+  const attempt = map.get(asked) ?? { id: crypto.randomUUID(), sent: false };
+  map.set(asked, attempt);
+  await updateScribe(ui.s.context.host, snapshot, job, agentId, {
+    schedule,
+    attempt: attempt.id,
+  });
+  // Keep a late retry's identity until its send succeeds.
+  let retryAttempt = crypto.randomUUID();
+  markUpdating(
+    ui,
+    job,
+    agentId,
+    (read) => read.job?.schedule.expr === schedule.expr && read.job.schedule.tz === schedule.tz,
+    async (current) => {
+      await updateScribe(current.s.context.host, snapshot, job, agentId, {
+        schedule,
+        attempt: retryAttempt,
+      });
+      retryAttempt = crypto.randomUUID();
+    },
+  );
+  ui.announce(`${snapshot.scribe.title}: changing its schedule…`);
 }
 
 /**
@@ -264,14 +303,21 @@ export function updateNotice(
   const replace = button(
     "Replace with new…",
     () => {
-      // One request per dialog: confirming again after a failed send repeats the same request.
-      const attempt = crypto.randomUUID();
       openConfirmDialog(
         "Replace with the new run instructions?",
         `Later runs of ${scribe.title} follow the new run message. These lines change; the saved message is not kept.`,
         "Replace with new",
         async () => {
-          await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt);
+          // Per Gateway, like an update, so the page a reconnect brings repeats a lost request.
+          // Once sent, the job shows as updating until a new revision, which asks under a new key.
+          const map = attemptsOf(ui);
+          const asked = `replace:${job.id}:${job.configRevision ?? ""}`;
+          const attempt = map.get(asked) ?? { id: crypto.randomUUID(), sent: false };
+          map.set(asked, attempt);
+          await updateScribe(ui.s.context.host, snapshot, job, agentId, {
+            runMessage: next,
+            attempt: attempt.id,
+          });
           // Keep a late retry's identity until its send succeeds.
           let retryAttempt = crypto.randomUUID();
           markUpdating(
@@ -280,14 +326,10 @@ export function updateNotice(
             agentId,
             (read) => read.job?.payload?.message === next,
             async (current) => {
-              await updateScribe(
-                current.s.context.host,
-                snapshot,
-                job,
-                agentId,
-                next,
-                retryAttempt,
-              );
+              await updateScribe(current.s.context.host, snapshot, job, agentId, {
+                runMessage: next,
+                attempt: retryAttempt,
+              });
               retryAttempt = crypto.randomUUID();
             },
           );

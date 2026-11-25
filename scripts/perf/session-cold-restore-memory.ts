@@ -15,7 +15,7 @@
  * Restored transcript and metadata hashes plus unchanged generation/window/node
  * snapshots are asserted after measurement. Fixture generation keeps one <=8 MiB
  * encoded chunk live in --events mode; compressed chunks are ordinary archive files.
- * --owner-module selects a frozen baseline worker module; all its changed dependencies
+ * --owner-module selects a frozen pre-batched baseline worker module; all its changed dependencies
  * must also be frozen. Omit it for current source. Use >=5 alternating base/candidate
  * processes for timing/memory, and separate --allocation processes. --requests 1 is
  * one restore; larger values enqueue concurrent requests through the REAL process-wide
@@ -23,8 +23,9 @@
  * of Gateway transport, whole-Gateway latency, or the native reclamation-worker pool.
  * One forced GC after imports/open is outside measurement; GC during restores is natural.
  * Main thread samples process RSS every 5ms while a worker executes real preparation
- * and the atomic write transaction. Per-isolate heap/external are sampled every 128
- * records and at phase boundaries; they are sampled lower bounds, not precise peaks.
+ * and the bounded write transactions. Per-isolate heap/external are sampled at each
+ * admission (every 128 records for frozen baselines) and at phase boundaries;
+ * they are sampled lower bounds, not precise peaks.
  * Native proxy = RSS minus worker heapUsed and external; includes other isolates,
  * heap slack, SQLite and allocator retention. It is not native allocator accounting.
  * resourceUsage maxRSS includes module load; sampled RSS is bounded to the restore burst.
@@ -46,8 +47,11 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import { zstdCompressSync } from "node:zlib";
 import type { SessionColdChunkMetadata } from "../../src/config/sessions/session-accessor.sqlite-archive-types.js";
 import type { SessionColdRecord } from "../../src/config/sessions/session-cold-storage-codec.js";
+import type { SessionColdMutationPlan } from "../../src/config/sessions/session-cold-storage-worker.js";
+import type { SessionColdMutationResult } from "../../src/config/sessions/session-cold-storage.types.js";
 import { isPostgresSqlConnection, type SqlConnection } from "../../src/infra/sql-connection.js";
 import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
+import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 
 const MiB = 1024 * 1024;
 const { values } = parseArgs({
@@ -434,12 +438,23 @@ async function measureWorker() {
     await import("../../src/config/sessions/transcript-payload.js");
   const { runExclusiveSqliteTranscriptArchiveWorker } =
     await import("../../src/config/sessions/session-accessor.sqlite-archive.js");
-  const owner: typeof import("../../src/config/sessions/session-cold-storage-worker.js") =
-    await import(
-      values["owner-module"]
-        ? pathToFileURL(path.resolve(values["owner-module"])).href
-        : "../../src/config/sessions/session-cold-storage-worker.js"
-    );
+  type RestorePlan = Extract<SessionColdMutationPlan, { kind: "cold-restore" }>;
+  type LegacyRecords = (database: OpenClawAgentDatabase) => Iterable<SessionColdRecord>;
+  // Frozen baseline modules keep the interface measured in their original revision.
+  const legacyOwner:
+    | {
+        prepareSessionColdRestoreInWorker(plan: RestorePlan): Promise<LegacyRecords>;
+        mutateSessionColdTranscriptInWorker(
+          plan: RestorePlan,
+          records: LegacyRecords,
+          onCommit: (database: OpenClawAgentDatabase) => void,
+        ): SessionColdMutationResult;
+      }
+    | undefined = values["owner-module"]
+    ? await import(pathToFileURL(path.resolve(values["owner-module"])).href)
+    : undefined;
+  const { restoreSessionColdTranscriptInWorker } =
+    await import("../../src/config/sessions/session-cold-storage-restore.js");
   const manifest: Fixture = JSON.parse(readFileSync(manifestPath, "utf8"));
   const count = positive(values.requests, "requests");
   assert(count <= manifest.sessions.length, "requests exceeds prepared sessions");
@@ -526,6 +541,7 @@ async function measureWorker() {
   const started = performance.now();
   gcStart = started;
   let records = 0;
+  let admissions = 0;
   await Promise.all(
     manifest.sessions.slice(0, count).map(({ sessionId }) =>
       runExclusiveSqliteTranscriptArchiveWorker(async () => {
@@ -537,21 +553,36 @@ async function measureWorker() {
           sessionId,
           archive,
         };
-        const prepared = await owner.prepareSessionColdRestoreInWorker(plan);
-        sample();
-        const result = owner.mutateSessionColdTranscriptInWorker(
-          plan,
-          (current) =>
-            (function* () {
-              for (const record of prepared(current)) {
-                if ((records++ & 127) === 0) {
-                  sample();
+        let result: SessionColdMutationResult;
+        if (legacyOwner) {
+          const prepared = await legacyOwner.prepareSessionColdRestoreInWorker(plan);
+          sample();
+          result = legacyOwner.mutateSessionColdTranscriptInWorker(
+            plan,
+            (current) =>
+              (function* () {
+                for (const record of prepared(current)) {
+                  if ((records++ & 127) === 0) {
+                    sample();
+                  }
+                  yield record;
                 }
-                yield record;
-              }
-            })(),
-          () => {},
-        );
+              })(),
+            () => {},
+          );
+        } else {
+          result = await restoreSessionColdTranscriptInWorker(
+            plan,
+            async (run) => {
+              admissions++;
+              sample();
+              const completed = run();
+              sample();
+              return completed;
+            },
+            () => {},
+          );
+        }
         assert(result.restored);
         sample();
       }),
@@ -615,7 +646,7 @@ async function measureWorker() {
       envelopeBytes: manifest.envelopeBytes.slice(0, count * manifest.chunksPerSession),
       elapsedMs,
       cpuMs: (used.user + used.system) / 1000,
-      records,
+      ...(legacyOwner ? { records } : { admissions }),
       before,
       after,
       peaks,

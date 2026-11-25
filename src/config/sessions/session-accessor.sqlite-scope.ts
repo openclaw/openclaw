@@ -217,7 +217,13 @@ export async function runExclusiveSqliteSessionWrite<T>(
       { operation, ownerKind: isMainThread ? "main" : "worker", actorId: threadId },
       () =>
         writer === "worker"
-          ? runOpenClawAgentWorkerWrite(databaseOptions, admitted, timing, signal)
+          ? runOpenClawAgentWorkerWrite(
+              databaseOptions,
+              admitted,
+              timing,
+              signal,
+              operation === "session.history.free-pages" ? "background" : undefined,
+            )
           : runOpenClawAgentWriteAdmission(
               databaseOptions,
               admitted,

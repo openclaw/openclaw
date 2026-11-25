@@ -443,6 +443,7 @@ export function normalizeManifestCatalog(value: unknown): PluginManifestCatalog 
     featured: typeof value.featured === "boolean" ? value.featured : undefined,
     order:
       typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined,
+    sidebar: typeof value.sidebar === "boolean" ? value.sidebar : undefined,
   });
 }
 

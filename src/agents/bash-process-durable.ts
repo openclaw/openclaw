@@ -3,17 +3,21 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import type { GatewayRestartResumeWindows } from "../infra/gateway-boot-lifecycle.js";
 import { logWarn } from "../logger.js";
 import { readCgroupMemoryUsage, watchHostExecMemory } from "../process/child-memory.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type {
   ManagedRun,
+  ReleasedProcess,
   RunExit,
   SpawnInput,
   TerminationReason,
 } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import {
   createDurableProcessStore,
   type DurableProcessRecord,
@@ -26,12 +30,18 @@ import {
   createProcessSession,
   listExecSessionsForCancellation,
   setDurableProcessObserver,
+  setExitWakeRecorder,
   type ProcessSession,
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { systemdDurableSupervisor } from "./bash-process-systemd.js";
-import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
-import { buildExecExitOutcome, buildExecRuntimeErrorOutcome } from "./bash-tools.exec-output.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
+import { captureExecRequesterSource, maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
+import {
+  buildExecExitOutcome,
+  buildExecRuntimeErrorOutcome,
+  hasExitWake,
+} from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 
@@ -57,8 +67,148 @@ async function observe() {
   }
 }
 
-/** Restore registry entries, never requester continuations or a second process manager. */
-export async function initializeDurableProcesses(options: { assertCurrent?: () => void } = {}) {
+const ordinaryRecords = new WeakMap<ProcessSession, DurableProcessRecord>();
+// Writes per ordinary process stay ordered: an exit never lands before its own arm record.
+const ordinaryWrites = new Map<string, Promise<void>>();
+function writeOrdinary(id: string, write: () => Promise<void>) {
+  const next = (ordinaryWrites.get(id) ?? Promise.resolve())
+    .then(write)
+    .catch(() => logWarn("exec: could not record a background command for restart reporting."));
+  ordinaryWrites.set(id, next);
+  void next.finally(() => {
+    if (ordinaryWrites.get(id) === next) {
+      ordinaryWrites.delete(id);
+    }
+  });
+}
+
+/** Best effort: a wake-armed ordinary process leaves a row only while it runs. */
+const ordinaryExitWakeRecorder = {
+  backgrounded(session: ProcessSession) {
+    const persistence = store;
+    if (
+      !persistence ||
+      session.durable ||
+      !hasExitWake(session) ||
+      !session.agentId ||
+      !session.sessionKey ||
+      // Incognito state stays in memory; it never reaches shared storage.
+      isIncognitoSessionKey(session.sessionKey)
+    ) {
+      return;
+    }
+    const unitName = supervisor().unitName(session.id);
+    const record: DurableProcessRecord = {
+      kind: "ordinary",
+      ...(session.sandboxContainerName ? { sandboxed: true as const } : {}),
+      id: session.id,
+      agentId: session.agentId,
+      sessionKey: session.sessionKey,
+      scopeKey: session.scopeKey,
+      // An older reader finds no unit and records the process as lost, which stays true.
+      unitName,
+      logPath: path.join(resolveStateDir(), "processes", `${unitName}.log`),
+      // Arguments may contain credentials; the transcript keeps the command.
+      command: "Background exec",
+      cwd: session.cwd,
+      startedAt: session.startedAt,
+      cleanupMs: session.cleanupMs,
+      maxOutputChars: session.maxOutputChars,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: session.notifyOnExitEmptySuccess,
+      // The lost-process notice wakes the chat as the requester who started the command.
+      operatorSource: captureExecRequesterSource(session.notifySessionTarget),
+    };
+    ordinaryRecords.set(session, record);
+    writeOrdinary(session.id, () => persistence.upsert(record));
+  },
+  exited(session: ProcessSession) {
+    const persistence = store;
+    const record = ordinaryRecords.get(session);
+    if (!persistence || !record) {
+      return;
+    }
+    ordinaryRecords.delete(session);
+    writeOrdinary(session.id, () => persistence.remove(record.id));
+  },
+};
+
+/** Report a wake-armed ordinary process the last Gateway lost; never adopt or rerun it. */
+async function settleLostOrdinaryProcess(
+  record: DurableProcessRecord,
+  crashWindows: GatewayRestartResumeWindows | undefined,
+) {
+  const session = createProcessSession({
+    ...record,
+    totalOutputChars: 0,
+    pendingStdoutChars: 0,
+    pendingStderrChars: 0,
+    pendingOutputDropped: false,
+    exited: false,
+    truncated: false,
+    backgrounded: true,
+    cursorKeyMode: "normal",
+  });
+  const startedAt = new Date(record.startedAt).toISOString();
+  // The boot owner records each unclean Gateway lifetime; outside one, shutdown stopped it.
+  const crashed = crashWindows?.[record.agentId]?.some(
+    (window) => record.startedAt >= window.startedAt && record.startedAt < window.endedAt,
+  );
+  // Measured: shutdown stops Gateway-host commands, and Linux stops them when the Gateway
+  // dies; a killed macOS Gateway can leave one running, and a sandbox's fate is unobserved.
+  const stopped = !record.sandboxed && (!crashed || process.platform === "linux");
+  appendOutput(
+    session,
+    "stderr",
+    stopped
+      ? `This background command (started ${startedAt}) was stopped when the Gateway ${crashed ? "restarted unexpectedly" : "shut down"}, so its result will not arrive. If you still need it, check its output and side effects, then run it again.\n`
+      : `The Gateway ${crashed ? "restarted unexpectedly" : "restarted"} while this background command (started ${startedAt}) was running. It may still be running, but its result will not wake this conversation. Check its output and side effects before running it again.\n`,
+  );
+  session.finalizing = true;
+  // After a crash, agent database preparation finishes after the listener binds.
+  await waitForAgentDatabasePreparation(record.agentId);
+  // Eligibility and authority are rechecked against the current session, as for durable outcomes.
+  await prepareAdoptedDurableProcessNotification(session);
+  // The registry's exit hook deletes the row once the notice settles.
+  ordinaryRecords.set(session, record);
+  addSession(session);
+  await settleExecProcessExit({
+    session,
+    outcome: buildExecExitOutcome({
+      // Report a lost outcome, never the shutdown's own stop, which would suppress the wake.
+      exit: {
+        reason: "spawn-error",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: Date.now() - record.startedAt,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: session.aggregated,
+      durationMs: Date.now() - record.startedAt,
+      timeoutSec: null,
+      processContinuationAvailable: false,
+    }),
+    notifyOnExit: (target, status) => maybeNotifyOnExit(target, status, false),
+    failureOutcome: (error) =>
+      buildExecRuntimeErrorOutcome({
+        error,
+        aggregated: session.aggregated,
+        durationMs: Date.now() - record.startedAt,
+      }),
+  });
+}
+
+/** Restore registry entries, never a second process manager; exits admit saved requesters again. */
+export async function initializeDurableProcesses(
+  options: {
+    assertCurrent?: () => void;
+    /** Unclean Gateway lifetimes per agent, from the boot lifecycle owner. */
+    crashWindows?: GatewayRestartResumeWindows;
+  } = {},
+) {
   if (store) {
     throw new Error("Durable processes already have a Gateway owner");
   }
@@ -71,14 +221,30 @@ export async function initializeDurableProcesses(options: { assertCurrent?: () =
     },
   });
   store = current;
+  setExitWakeRecorder(ordinaryExitWakeRecorder);
   for (const record of await current.list()) {
+    if (record.kind === "ordinary") {
+      // Reporting waits for agent readiness; durable adoption must not wait behind it.
+      // A failed report keeps the row, so the next start reports it again.
+      void settleLostOrdinaryProcess(record, options.crashWindows).catch(() =>
+        logWarn("exec: could not report a background command the last Gateway lost."),
+      );
+      continue;
+    }
     if (
       record.notificationSettled &&
       record.endedAt !== undefined &&
       record.endedAt + record.cleanupMs <= Date.now()
     ) {
-      await current.remove(record.id);
-      await forgetLog(record.logPath);
+      // Release a job retained for what its command left running; keep the row if that fails.
+      // Unit queries stay off the startup path.
+      void supervisor()
+        .cleanup(record.unitName, { assertCurrent: current.assertCurrent })
+        .then(async () => {
+          await current.remove(record.id);
+          await forgetLog(record.logPath);
+        })
+        .catch(warn);
       continue;
     }
     const session = createProcessSession({
@@ -92,23 +258,30 @@ export async function initializeDurableProcesses(options: { assertCurrent?: () =
       backgrounded: true,
       cursorKeyMode: "normal",
     });
+    // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
+    const prepareNotification = () => {
+      session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
+      return prepareAdoptedDurableProcessNotification(session);
+    };
+    await prepareNotification();
     const run = bind(session, record, current);
     addSession(session);
     void run
       .wait()
       .then(async (exit) => {
         session.finalizing = true;
-        session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
-        await prepareAdoptedDurableProcessNotification(session, record.sessionId);
+        await prepareNotification();
+        const outcome = buildExecExitOutcome({
+          exit,
+          aggregated: session.aggregated,
+          durationMs: exit.durationMs,
+          timeoutSec: null,
+          processContinuationAvailable: true,
+        });
         await settleExecProcessExit({
           session,
-          outcome: buildExecExitOutcome({
-            exit,
-            aggregated: session.aggregated,
-            durationMs: exit.durationMs,
-            timeoutSec: null,
-            processContinuationAvailable: true,
-          }),
+          // What the command left running becomes ordinary background sessions, named here.
+          outcome: await settleHostExecDescendants(session, run, outcome, []),
           notifyOnExit: (target, status) => maybeNotifyOnExit(target, status, false),
           failureOutcome: (error) =>
             buildExecRuntimeErrorOutcome({
@@ -127,6 +300,8 @@ export async function initializeDurableProcesses(options: { assertCurrent?: () =
 /** Join accepted bookkeeping; the user manager keeps running the physical tree. */
 export async function disposeDurableProcesses() {
   setDurableProcessObserver(undefined);
+  setExitWakeRecorder(undefined);
+  await Promise.all(ordinaryWrites.values());
   await Promise.allSettled(sessions().map((session) => session.durable!.drain()));
   await Promise.all(
     sessions()
@@ -138,11 +313,10 @@ export async function disposeDurableProcesses() {
 
 export async function startDurableExecProcess(
   session: ProcessSession,
-  sessionId: string | undefined,
   input: SpawnInput,
   notification: { notifyOnExit?: boolean; notifyOnExitEmptySuccess?: boolean } = {},
 ): Promise<ManagedRun> {
-  if (!store || !session.agentId || !session.sessionKey || !sessionId || input.mode !== "child") {
+  if (!store || !session.agentId || !session.sessionKey || input.mode !== "child") {
     throw new Error(
       "Durable exec requires a Gateway-host session on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session; sandbox, node, worker, and one-shot execution are unsupported.",
     );
@@ -159,7 +333,6 @@ export async function startDurableExecProcess(
     agentId: session.agentId,
     sessionKey: session.sessionKey,
     scopeKey: session.scopeKey,
-    sessionId,
     unitName,
     logPath,
     // Arguments may contain credentials. Only the live registry retains the command.
@@ -171,6 +344,8 @@ export async function startDurableExecProcess(
     notifyOnExit: notification.notifyOnExit ?? session.notifyOnExit,
     notifyOnExitEmptySuccess:
       notification.notifyOnExitEmptySuccess ?? session.notifyOnExitEmptySuccess,
+    // The exit after a restart wakes the chat as the requester who started the command.
+    operatorSource: captureExecRequesterSource(session.notifySessionTarget),
   };
   const assertCurrent = () => {
     persistence.assertCurrent();
@@ -220,6 +395,9 @@ function bind(
     terminal = false,
     stopReason: TerminationReason | undefined;
   let cgroupDirectory: string | undefined;
+  // Processes the command left running when it exited; they become ordinary background
+  // sessions (process list, kill, session reset and Gateway stop end them).
+  let survivors: ReleasedProcess[] = [];
   const decoder = new StringDecoder("utf8"),
     sanitize = createStreamingBinaryOutputSanitizer();
   // Observation timers detach request context; retain only the process transport owner.
@@ -267,6 +445,8 @@ function bind(
       if (observed.state === "exited" && observed.note) {
         appendOutput(session, "stderr", observed.note);
       }
+      // Accepted edge case: when they cannot be listed, they keep running untracked.
+      survivors = (observed.state === "exited" && observed.survivors) || [];
       const result = {
         reason:
           stopReason ?? (observed.state === "exited" ? observed.reason : ("spawn-error" as const)),
@@ -282,10 +462,6 @@ function bind(
       record.result = result;
       record.endedAt = endedAt;
     }
-    // Record the real status before releasing the supervisor's retained job.
-    await supervisor().cleanup(record.unitName, {
-      assertCurrent: persistence.assertCurrent,
-    });
     session.endedAt = record.endedAt;
     appendOutput(session, "stdout", sanitize(decoder.end()));
     terminal = true;
@@ -297,7 +473,12 @@ function bind(
       timedOut: record.result.reason === "overall-timeout",
       noOutputTimedOut: false,
     });
+    // The recorded result comes first; release never waits for what the command left
+    // running, and a job that still holds it is released at retention end or restart.
+    await release();
   };
+  const release = () =>
+    supervisor().cleanup(record.unitName, { assertCurrent: persistence.assertCurrent });
   const cancel = (reason: TerminationReason, assertSource?: () => void) => {
     const assertCurrent = () => {
       persistence.assertCurrent();
@@ -353,6 +534,7 @@ function bind(
     },
     remove: () => {
       void enqueue(async () => {
+        await release();
         await persistence.remove(record.id);
         await forgetLog(record.logPath);
       }).catch(warn);
@@ -379,6 +561,12 @@ function bind(
     startedAtMs: record.startedAt,
     activity,
     wait: () => exit.promise,
+    releasesOnRootExit: true,
+    // Exec settlement hands these to the leftover-session owner, as for ordinary exec.
+    waitForExtinction: async () => {
+      await exit.promise;
+      return { status: "released", survivors };
+    },
     cancel: (reason = "manual-cancel") => {
       void cancel(reason).catch(warn);
     },

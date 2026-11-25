@@ -90,8 +90,11 @@ export function createCarrierLifecycleHarness(
   );
   return { call, endCall, handler, processEvent };
 }
-export async function connectCarrierStream(handler: RealtimeCallHandler) {
-  const { streamUrl } = handler.issueStreamSession();
+export async function connectCarrierStream(handler: RealtimeCallHandler, callId = "CA-startup") {
+  const { streamUrl } = handler.issueStreamSession({
+    providerName: "twilio",
+    callId,
+  });
   const server = await startUpgradeWsServer({
     urlPath: new URL(streamUrl).pathname,
     onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
@@ -106,4 +109,26 @@ export async function connectCarrierStream(handler: RealtimeCallHandler) {
 }
 export function sendCarrierStart(ws: WebSocket, streamSid: string, callSid: string | undefined) {
   ws.send(JSON.stringify({ event: "start", start: { streamSid, callSid } }));
+}
+
+export async function startStreamSessionServer(handler: RealtimeCallHandler, streamUrl: string) {
+  const server = await startUpgradeWsServer({
+    urlPath: new URL(streamUrl).pathname,
+    onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
+  });
+  onTestFinished(server.close);
+  return server;
+}
+
+export async function startRealtimeServer(
+  handler: RealtimeCallHandler,
+  callId = "CA-test",
+  params = new URLSearchParams(),
+) {
+  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params, callId);
+  const streamUrl = payload.body.match(/wss:\/\/[^" ]+/)?.[0];
+  if (!streamUrl) {
+    throw new Error("TwiML did not contain a realtime stream URL");
+  }
+  return startStreamSessionServer(handler, streamUrl);
 }

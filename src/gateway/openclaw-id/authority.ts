@@ -19,8 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  type AuthorityEvent,
-  type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
   type InactivityWindows,
@@ -41,6 +39,7 @@ import {
   assertSameClawIdentity,
   assertStoredClawText,
   clawStoreRows,
+  emptyRecord,
   readStoredClaw,
   writeStoredClaw,
   storedOwnerProfile,
@@ -50,15 +49,26 @@ import {
 } from "./claw-store.js";
 import { nextPeopleExpiry } from "./invite-expiry.js";
 import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
+import { createBrowserRequestHandler, retainBrowserRequests } from "./member-browser-requests.js";
+import { canonicalMemberProfiles, type OpenClawIdMemberProfiles } from "./member-profiles.js";
+import { retainMemberRecoveryUses } from "./member-recovery-uses.js";
 import {
-  canonicalMemberProfiles,
-  retainMemberProfiles,
-  type OpenClawIdMemberProfiles,
-} from "./member-profiles.js";
-import { readMemberView, readOwnerView } from "./membership-views.js";
+  assertMemberRoleDefined,
+  assertSandboxGrantReady,
+  roleChangeDisconnects,
+  refuseMemberRole,
+} from "./member-role-change.js";
+import {
+  listAdmitted,
+  listBoundMemberTokens,
+  listOrphanedMemberTokens,
+  readMemberView,
+  readOwnerView,
+} from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+import { createUnlinkOperations } from "./unlink-operations.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
 export type LinkPreparation = {
@@ -89,22 +99,6 @@ export type RedemptionSender = {
   location_hint?: string | null;
 };
 
-function emptyRecord(clawId: string): StoredClaw {
-  return {
-    v: 1,
-    claw_id: clawId,
-    hostname: null,
-    authority: null,
-    binding: null,
-    discovery: {
-      owner_account_id: null,
-      published_binding_seq: 0,
-      published_snapshot_seq: 0,
-      mailbox_cursor: null,
-    },
-  };
-}
-
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
 
@@ -118,6 +112,7 @@ export function createOpenClawIdAuthority(
     read: readStoredClaw,
     write: writeStoredClaw,
   },
+  memberRolesEnabled: () => boolean = () => true,
 ) {
   const profiles = store.profiles ?? canonicalMemberProfiles;
   let record: StoredClaw | undefined;
@@ -136,18 +131,12 @@ export function createOpenClawIdAuthority(
     let current = needsAllowlistUpgrade(stored)
       ? await upgradeToAllowlist(stored, nowSeconds())
       : stored;
-    current = upgradeNodeCollections(current);
-    if (
-      Object.keys(current.authority?.members ?? {}).some(
-        (id) => !Object.hasOwn(current.member_approved_at ?? {}, id),
-      )
-    ) {
-      current = await retainMemberProfiles(stored, current, profiles);
+    current = retainBrowserRequests(upgradeNodeCollections(current), nowSeconds());
+    const retained = await retainMemberRecoveryUses(stored, current, profiles, memberRolesEnabled);
+    if (retained.record !== stored) {
+      await store.write(retained.record, retained.assertCurrent);
     }
-    if (current !== stored) {
-      await store.write(current);
-    }
-    record = current;
+    record = retained.record;
   };
 
   // Check the live failure cell after awaits instead of retaining a narrowed pre-await value.
@@ -181,11 +170,17 @@ export function createOpenClawIdAuthority(
   };
 
   const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
-    const next = await retainMemberProfiles(record, candidate, profiles);
+    const retained = retainBrowserRequests(candidate, nowSeconds(), record);
+    const prepared = await retainMemberRecoveryUses(record, retained, profiles, memberRolesEnabled);
+    const next = prepared.record;
     const previous = record;
-    assertCurrent?.();
+    const assertCommitCurrent = () => {
+      prepared.assertCurrent();
+      assertCurrent?.();
+    };
+    assertCommitCurrent();
     try {
-      await store.write(next, assertCurrent);
+      await store.write(next, assertCommitCurrent);
     } catch (error) {
       // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
       // before reconciliation; no synchronous admission or later write may use a stale row.
@@ -218,6 +213,7 @@ export function createOpenClawIdAuthority(
     if (
       previous?.authority !== next.authority ||
       previous?.invite_reports !== next.invite_reports ||
+      previous?.member_browser_requests !== next.member_browser_requests ||
       previous?.owner_profile !== next.owner_profile ||
       previous?.discovery.owner_account_id !== next.discovery.owner_account_id
     ) {
@@ -280,6 +276,22 @@ export function createOpenClawIdAuthority(
     /** Loads the record (once); call before reading state synchronously. */
     load,
 
+    /** Completes deferred role imports in the same queue as membership writes. */
+    initializeMemberProfileRoles(): Promise<void> {
+      return serialize(async () => {
+        const current = await load();
+        if (
+          memberRolesEnabled() &&
+          current &&
+          Object.keys(current.authority?.members ?? {}).some(
+            (id) => !current.member_profile_roles?.[id],
+          )
+        ) {
+          await commit(current);
+        }
+      });
+    },
+
     /** Observes committed membership and account display changes from every writer. */
     onPeopleChanged: (listener: () => void): (() => void) =>
       registerListener(peopleListeners, listener),
@@ -315,6 +327,9 @@ export function createOpenClawIdAuthority(
 
     /** Reads member display from the canonical profile owner, never as access authority. */
     memberProfiles: profiles.read,
+    memberBrowserRequest: createBrowserRequestHandler({ serialize, load, commit }),
+    /** Eligible local profiles for owner-selected invitations; never membership authority. */
+    inviteProfiles: profiles.inviteProfiles,
 
     /** The current record, if loaded. */
     current(): StoredClaw | undefined {
@@ -395,8 +410,10 @@ export function createOpenClawIdAuthority(
           return binding;
         }
         // The caller's live ceremony authority is checked at the durable write itself.
+        // No registration has been sent for this claw yet (unlink-operations.ts).
+        const discovery = { ...current.discovery, registration_unsent: true };
         await commit(
-          { ...current, authority: added.state, binding: binding.statement },
+          { ...current, authority: added.state, binding: binding.statement, discovery },
           expected.guard,
         );
         return {
@@ -409,7 +426,7 @@ export function createOpenClawIdAuthority(
 
     /** Applies an owner-signed statement that arrived on `channel`. */
     submit(input: unknown, channel: Channel): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -426,6 +443,11 @@ export function createOpenClawIdAuthority(
             await commit(current);
           }
           return { ok: false, code: result.code, detail: result.detail };
+        }
+        const roleChange = assertMemberRoleDefined(input);
+        await assertSandboxGrantReady(input);
+        if (roleChange && result.status === "applied") {
+          await profiles.setRole(roleChange.account_id, roleChange.role, false);
         }
         const resolved = resolvedInvite(input);
         await commit({
@@ -448,7 +470,7 @@ export function createOpenClawIdAuthority(
           status: result.status,
           events: [...expiry, ...result.events, ...reconnect],
         };
-      });
+      }).catch(refuseMemberRole);
     },
 
     /**
@@ -456,10 +478,10 @@ export function createOpenClawIdAuthority(
      * owner device (tunnel or loopback, never the mailbox).
      */
     registerInvite(
-      input: { cap: unknown; proofKey: Uint8Array },
+      input: { cap: unknown; proofKey: Uint8Array; existingProfileId?: string },
       channel: Channel,
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -479,14 +501,44 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
-        await commit({ ...current, authority: result.state });
+        await assertSandboxGrantReady(input.cap);
+        let inviteReports = current.invite_reports;
+        if (input.existingProfileId !== undefined) {
+          const profile = (await profiles.inviteProfiles()).find(
+            ({ id }) => id === input.existingProfileId,
+          );
+          if (!profile) {
+            return {
+              ok: false,
+              code: "profile_unavailable",
+              detail:
+                "Choose a personal profile that is not linked to OpenClaw ID, or invite without an existing profile.",
+            };
+          }
+          const inviteId = Object.keys(result.state.invites).find(
+            (id) => !Object.hasOwn(current.authority.invites, id),
+          )!;
+          inviteReports = {
+            ...inviteReports,
+            [inviteId]: {
+              email: null,
+              display_name: null,
+              location_hint: null,
+              existingProfile: profile,
+            },
+          };
+        }
+        const next = { ...current, authority: result.state };
+        Object.assign(next, inviteReports ? { invite_reports: inviteReports } : {});
+        await commit(next);
         return { ok: true, status: result.status, events: [...events, ...result.events] };
-      });
+      }).catch(refuseMemberRole);
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
 
     ...createRebindOperations({ serialize, load, commit }),
+    ...createUnlinkOperations({ serialize, load, commit, emptyRecord }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
@@ -503,18 +555,20 @@ export function createOpenClawIdAuthority(
           { ...stored, authority: stored.authority },
           now,
         );
-        const identity = { account_id: sender.account_id, email: sender.email };
-        const result = await submitRedemption(current.authority, input, identity, now);
-        if (!result.ok) {
+        const result = await submitRedemption(current.authority, input, sender, now);
+        if (!result.ok || result.state === current.authority) {
           if (events.length > 0) {
             await commit(current);
           }
-          return { ok: false, code: result.code, detail: result.detail };
+          return result.ok
+            ? { ok: true, status: result.status, events }
+            : { ok: false, code: result.code, detail: result.detail };
         }
         const inviteId = parseStatement(input, "InviteRedemption");
         const display = (value: string | null | undefined) =>
           value ? truncateUtf16Safe(value.trim(), 256) : null;
         const report: InviteReport = {
+          ...(inviteId.ok ? current.invite_reports?.[inviteId.statement.body.invite_id] : {}),
           account_id: sender.account_id,
           email: display(sender.email),
           display_name: display(sender.display_name),
@@ -561,13 +615,7 @@ export function createOpenClawIdAuthority(
 
     /** The tunnel-issued tokens bound to these device keys (from memory; load first). */
     tokensBoundTo(peerKeys: readonly string[]): DeviceTokenRef[] {
-      return (record?.token_bindings ?? [])
-        .filter((binding) => peerKeys.includes(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
+      return listBoundMemberTokens(record, peerKeys);
     },
 
     /**
@@ -576,15 +624,7 @@ export function createOpenClawIdAuthority(
      * meanwhile.
      */
     async orphanedTokens(): Promise<DeviceTokenRef[]> {
-      const current = await load();
-      const members = new Set<string>(current?.authority ? memberKeys(current.authority) : []);
-      return (current?.token_bindings ?? [])
-        .filter((binding) => !members.has(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
+      return listOrphanedMemberTokens(await load());
     },
 
     /** Drops the bindings of tokens whose revocation was confirmed. */
@@ -629,7 +669,7 @@ export function createOpenClawIdAuthority(
     /** Only this member account's devices, without owner, invite or other-account details. */
     async memberView(peerKey: string) {
       const current = await load();
-      const view = await readMemberView(current, currentPeer(peerKey));
+      const view = await readMemberView(current, currentPeer(peerKey), profiles.read);
       return record === current ? view : undefined;
     },
 
@@ -641,7 +681,7 @@ export function createOpenClawIdAuthority(
      */
     async ownerView(peerKey: string) {
       const current = await load();
-      const view = await readOwnerView(current, peerKey);
+      const view = await readOwnerView(current, peerKey, profiles.read);
       return record === current ? view : undefined;
     },
 
@@ -719,7 +759,7 @@ export function createOpenClawIdAuthority(
 
     /** Next time-derived People change in the loaded record, even with the tunnel offline. */
     nextPeopleExpiry(): number | undefined {
-      return nextPeopleExpiry(record?.authority, nowSeconds());
+      return nextPeopleExpiry(record, nowSeconds());
     },
 
     /**
@@ -755,8 +795,11 @@ export function createOpenClawIdAuthority(
       return [...expired].filter((key) => !isAdmitted(state, key, now)).toSorted();
     },
 
-    /** Records mirror progress; recovery may require the same committed binding through settlement. */
-    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
+    /**
+     * Records mirror progress; recovery may require the same committed binding through settlement.
+     * With a claw id as `expected`, progress for another claw (one unlinked meanwhile) is dropped.
+     */
+    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw | string) {
       return serialize(async () => {
         for (const field of ["owner_account_id", "mailbox_cursor"] as const) {
           if (Object.hasOwn(update, field)) {
@@ -764,7 +807,10 @@ export function createOpenClawIdAuthority(
           }
         }
         const current = await load();
-        if (expected) {
+        if (typeof expected === "string" ? current?.claw_id !== expected : false) {
+          return;
+        }
+        if (expected && typeof expected !== "string") {
           assertSameClawIdentity(current, expected);
         }
         if (current) {
@@ -787,28 +833,4 @@ export type OpenClawIdAuthority = ReturnType<typeof createOpenClawIdAuthority>;
 // Inactivity windows with the protocol defaults filled in.
 function withDefaults(windows: Partial<InactivityWindows>): InactivityWindows {
   return { ...DEFAULT_INACTIVITY_WINDOWS, ...windows };
-}
-
-// A member whose role changed reconnects, so their Gateway connections pick up the
-// new role's scope ceiling instead of keeping the one granted at connect.
-function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): AuthorityEvent[] {
-  const peerKeys = Object.entries(after.members).flatMap(([accountId, member]) => {
-    const previous = before.members[accountId];
-    return previous && previous.role !== member.role ? member.peer_keys : [];
-  });
-  return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
-}
-
-// Every listed node, member or owner device key, admitted now or not.
-function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
-  return new Set<IrohEndpointKey>([
-    ...Object.values(state.members).flatMap((member) => member.peer_keys),
-    ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
-    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
-  ]);
-}
-
-// Every candidate key that passes the protocol's admission rule at `now`.
-function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
-  return [...memberKeys(state)].filter((key) => isAdmitted(state, key, now)).toSorted();
 }

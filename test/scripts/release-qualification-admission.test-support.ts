@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   buildQualificationAdmissionRequest,
   produceQualificationAdmission,
@@ -27,11 +28,12 @@ export function request(
   overrides: Record<string, string | number | boolean> = {},
   selectedSha = candidateSha,
   selectedTransportRef = "release-ci/" + selectedSha.slice(0, 12) + "-123",
+  qualificationSha = selectedSha,
 ) {
   return buildQualificationAdmissionRequest({
     repository,
     candidateSha: selectedSha,
-    qualificationSha: selectedSha,
+    qualificationSha,
     requestId,
     transportRef: selectedTransportRef,
     reviewed: true,
@@ -43,6 +45,11 @@ export function request(
       mode: "both",
       codex_plugin_spec: "",
       trusted_workflow_json: JSON.stringify({
+        trustedWorkflow: {
+          ref: selectedTransportRef,
+          fullRef: "refs/heads/" + selectedTransportRef,
+          sha: qualificationSha,
+        },
         laneInputs: { qualification_baselines_json: qualificationBaselinesJson },
       }),
       ...overrides,
@@ -54,22 +61,31 @@ export function fixture(
   protectedTag = false,
   options: {
     inputs?: Record<string, string | number | boolean>;
+    missingLedger?: boolean;
     policy?: unknown;
     workflowSource?: string;
+    baselinePolicySource?: string;
     candidateSha?: string;
+    qualificationSha?: string;
     transportRef?: string;
     candidateVersion?: string;
     oldestSupportedBaseline?: string | null;
     publisherSha?: string;
+    selectedRequest?: ReturnType<typeof buildQualificationAdmissionRequest>;
+    runId?: number;
   } = {},
 ) {
   const admissionSha = options.publisherSha ?? publisherSha;
-  const selected = request(options.inputs, options.candidateSha, options.transportRef);
+  const runId = options.runId ?? 40;
+  const selected =
+    options.selectedRequest ??
+    request(options.inputs, options.candidateSha, options.transportRef, options.qualificationSha);
   const sourceSha = selected.candidateSha;
+  const qualificationSha = selected.qualificationSha;
   const ref = protectedTag ? "release-publish/bbbbbbbbbbbb-10" : "main";
   const producer = {
     repository,
-    runId: 40,
+    runId,
     runAttempt: 1,
     workflowPath: QUALIFICATION_ADMISSION_WORKFLOW,
     workflowEvent: "workflow_dispatch",
@@ -79,7 +95,7 @@ export function fixture(
   };
   const actor = { id: 91, login: "release-operator", type: "User" };
   const run = {
-    id: 40,
+    id: runId,
     run_attempt: 1,
     path: producer.workflowPath,
     event: "workflow_dispatch",
@@ -89,11 +105,16 @@ export function fixture(
     head_repository: { full_name: repository },
     status: "in_progress",
     conclusion: null as string | null,
-    display_title: "Qualification Admission " + requestId,
+    display_title: "Qualification Admission " + selected.requestId,
     actor,
     triggering_actor: { ...actor },
   };
-  const authority = { permission: "write", ancestry: "ahead", tagSha: admissionSha };
+  const authority = {
+    permission: "write",
+    ancestry: "ahead",
+    qualificationAncestry: "diverged",
+    tagSha: admissionSha,
+  };
   const policy = options.policy ?? {
     schema: "openclaw.release-qualification-policy/v1",
     profiles: { beta: ["ci"], stable: ["ci"], full: ["ci"] },
@@ -114,40 +135,47 @@ export function fixture(
     Object.entries({
       [admissionSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW]:
         'env:\n  RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\njobs:\n  admit_qualification:\n',
-      [sourceSha + ":" + QUALIFICATION_WORKFLOW]:
+      [qualificationSha + ":" + QUALIFICATION_WORKFLOW]:
         options.workflowSource ??
         "on:\n  workflow_dispatch:\n    inputs:\n" +
           Object.keys(selected.inputs)
             .map((key) => "      " + key + ":\n        type: string\n")
             .join("") +
           "jobs:\n  untrusted:\n    run: NEVER_EXECUTE_Q\n",
-      [sourceSha + ":scripts/lib/release-qualification-coverage.json"]: JSON.stringify(policy),
+      [qualificationSha + ":scripts/lib/release-validation-waivers.json"]: readFileSync(
+        "scripts/lib/release-validation-waivers.json",
+        "utf8",
+      ),
+      [qualificationSha + ":scripts/lib/release-qualification-coverage.json"]:
+        JSON.stringify(policy),
       [sourceSha + ":package.json"]: JSON.stringify({
         version: options.candidateVersion ?? "2026.8.1",
       }),
-      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]: JSON.stringify({
-        oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
-          ? options.oldestSupportedBaseline
-          : "2026.6.34",
-      }),
+      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]:
+        options.baselinePolicySource ??
+        JSON.stringify({
+          oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
+            ? options.oldestSupportedBaseline
+            : "2026.6.34",
+        }),
     }),
   );
   const metadata = {
     id: 70,
-    name: qualificationAdmissionArtifactName(40, 1),
+    name: qualificationAdmissionArtifactName(runId, 1),
     digest: "",
     size_in_bytes: 0,
     expired: false,
     created_at: "2026-09-28T00:00:02Z",
     expires_at: "2099-01-01T00:00:00Z",
-    workflow_run: { id: 40, head_sha: admissionSha },
+    workflow_run: { id: runId, head_sha: admissionSha },
   };
   const jobs = {
     total_count: 1,
     jobs: [
       {
         name: QUALIFICATION_ADMISSION_JOB,
-        run_id: 40,
+        run_id: runId,
         run_attempt: 1,
         head_sha: admissionSha,
         status: "completed",
@@ -176,32 +204,37 @@ export function fixture(
     calls.push(endpoint);
     const path = endpoint.slice(prefix.length);
     const routes: Record<string, unknown> = {
+      ["compare/" + qualificationSha + "...main"]: { status: authority.qualificationAncestry },
       ["compare/" + admissionSha + "...main"]: { status: authority.ancestry },
       ["git/ref/tags/" + ref]: {
         ref: producer.workflowFullRef,
         object: { type: "commit", sha: authority.tagSha },
       },
-      "actions/runs/40/attempts/1": run,
+      ["actions/runs/" + runId + "/attempts/1"]: run,
       ["collaborators/" + actor.login + "/permission"]: {
         permission: authority.permission,
         user: actor,
       },
       "actions/artifacts/70": metadata,
-      "actions/runs/40/attempts/1/jobs?per_page=100": jobs,
+      ["actions/runs/" + runId + "/attempts/1/jobs?per_page=100"]: jobs,
     };
     if (Object.hasOwn(routes, path)) {
       return JSON.stringify(routes[path]);
     }
-    if (path.startsWith("actions/runs/40/artifacts?")) {
+    if (path.startsWith("actions/runs/" + runId + "/artifacts?")) {
       return JSON.stringify({ total_count: 1, artifacts: [metadata] });
     }
     if (path.startsWith("contents/")) {
       const [sourcePath, sha] = path.slice(9).split("?ref=");
       const text = sources.get(sha + ":" + sourcePath);
-      if (text === undefined) {
+      if (options.missingLedger && sourcePath === "scripts/lib/release-validation-waivers.json") {
+        throw new Error("gh: Not Found (HTTP 404)");
+      }
+      const source = text;
+      if (source === undefined) {
         throw new Error("Unexpected source acquisition: " + path);
       }
-      const bytes = Buffer.from(text);
+      const bytes = Buffer.from(source);
       return JSON.stringify({
         type: "file",
         path: sourcePath,
@@ -234,7 +267,7 @@ export function fixture(
       descriptor,
       repository,
       candidateSha: sourceSha,
-      qualificationSha: sourceSha,
+      qualificationSha,
       workflowRef: selected.transportRef,
       inputs,
       runGh,

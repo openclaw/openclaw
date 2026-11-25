@@ -306,6 +306,40 @@ it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () =
   ]);
 });
 
+it("offers likely chat models only; unlikely ones stay reachable by manual entry", async () => {
+  providerAuthEvaluations.set("anthropic", {
+    availability: true,
+    routeResolution: null,
+    selectedAuthMode: "api-key",
+    evidence: "provider-config",
+  });
+  const row = (id: string) => ({
+    ...catalogModel("anthropic", id, id),
+    api: "anthropic-messages",
+  });
+  loadModelCatalog.mockResolvedValue([
+    row("claude-sonnet-4-6"),
+    { ...row("claude-voice-fixture"), inference: { chat: true, chatEvidence: "unlikely" } },
+  ]);
+  const { select } = await promptDefaultPicker();
+  expect(optionValues(pickerOptions(select))).toEqual([
+    "__manual__",
+    "anthropic/claude-sonnet-4-6",
+  ]);
+});
+
+it("can leave a fresh setup unconfigured while still offering manual model entry", async () => {
+  const { result, select } = await promptDefaultPicker({
+    config: {},
+    allowKeep: true,
+    allowSkipUnconfigured: true,
+    loadCatalog: false,
+  });
+  expect(optionValues(pickerOptions(select))).toEqual(["__keep__", "__manual__"]);
+  expect(requireOption(pickerOptions(select), "__keep__").label).toBe("Skip for now");
+  expect(result).toEqual({});
+});
+
 it("keeps provider browsing cold and preserves literal labels through selection", async () => {
   pickerRuntime.resolvePluginProviders.mockReturnValue([
     { id: "nvidia", preserveLiteralProviderPrefix: true },

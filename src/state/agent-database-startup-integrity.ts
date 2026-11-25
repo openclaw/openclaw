@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readSqliteIntegrityFileIdentityAsync } from "../infra/sqlite-file-generation.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteDatabaseHeader,
@@ -8,21 +9,23 @@ import {
 import type { SqliteTableContractReader } from "../infra/sqlite-schema-contract.js";
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
-  resolveDatabasePathKey,
+  type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { createPermitPool } from "../shared/permit-pool.js";
 import type { AgentDatabasePreparedIntegrity } from "./agent-database-preparation-context.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-identity.types.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export type AgentDatabaseStartupVerifier = (input: {
   agentId: string;
   paths: readonly string[];
+  identity: DatabasePathIdentity;
+  integrityWitness: Awaited<ReturnType<typeof readSqliteIntegrityFileIdentityAsync>>;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   assertCurrent: () => void;
@@ -31,7 +34,7 @@ export type AgentDatabaseStartupVerifier = (input: {
 }) => Promise<void>;
 
 type IntegrityWork = {
-  pathname: string;
+  identity: DatabasePathIdentity;
   statePath: string;
   signal: AbortSignal;
   assertCurrent: () => void;
@@ -51,16 +54,28 @@ function releaseAgentDatabaseStartupVerification(signal: AbortSignal): void {
 }
 
 /** Startup may defer verification only while its exact background owner remains live. */
-export function captureAgentDatabaseStartupVerification(pathname: string, env: NodeJS.ProcessEnv) {
-  const canonicalPath = resolveDatabasePathKey(pathname);
+export function captureAgentDatabaseStartupVerification(
+  canonicalPath: string,
+  env: NodeJS.ProcessEnv,
+  nativeIdentity: AgentDatabaseExecutionFileIdentity | undefined,
+) {
+  if (nativeIdentity?.birthtime === undefined) {
+    return undefined;
+  }
   const statePath = resolveOpenClawStateSqlitePath(env);
   for (const owner of pending.values()) {
     if (
-      owner.pathname === canonicalPath &&
+      owner.identity.canonicalPath === canonicalPath &&
       owner.statePath === statePath &&
       !owner.signal.aborted &&
       (owner.status === "pending" || owner.status === "running")
     ) {
+      if (
+        owner.identity.key !== `file:${nativeIdentity.physicalIdentity}` ||
+        owner.identity.birthtime !== nativeIdentity.birthtime
+      ) {
+        throw new Error("SQLite database file identity changed before existing-only open");
+      }
       owner.assertCurrent();
       return owner.assertCurrent;
     }
@@ -111,7 +126,10 @@ export function admitAgentDatabaseRuntimeStructure(
 
 /** Startup and runtime admission share the same bounded background verification owner. */
 export function prepareAgentDatabaseStartupVerification(
-  input: Omit<Parameters<AgentDatabaseStartupVerifier>[0], "assertCurrent">,
+  input: Omit<
+    Parameters<AgentDatabaseStartupVerifier>[0],
+    "assertCurrent" | "identity" | "integrityWitness"
+  >,
   activation: { isCurrent: () => boolean; verifyIntegrity?: AgentDatabaseStartupVerifier },
   permits: ReturnType<typeof createPermitPool>,
   prepared?: AgentDatabasePreparedIntegrity,
@@ -158,7 +176,7 @@ export function prepareAgentDatabaseStartupVerification(
         }
       }
       const owner: IntegrityWork = {
-        pathname: identity.canonicalPath,
+        identity,
         statePath,
         signal: input.signal,
         status: prepared?.integrityVerifiedAt !== undefined ? "settled" : "pending",
@@ -167,7 +185,6 @@ export function prepareAgentDatabaseStartupVerification(
           if (pending.get(key) !== owner || !activation.isCurrent()) {
             throw new Error(`Gateway no longer owns integrity verification for ${input.agentId}`);
           }
-          assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
         },
       };
       pending.set(key, owner);
@@ -192,10 +209,18 @@ export function prepareAgentDatabaseStartupVerification(
             try {
               release = await permits.acquire({ signal: owner.signal });
               owner.assertCurrent();
+              const integrityWitness = await readSqliteIntegrityFileIdentityAsync(
+                owner.identity.canonicalPath,
+                undefined,
+                owner.identity,
+              );
+              owner.assertCurrent();
               await verify({
                 ...input,
                 configurationBound: prepared === undefined,
-                paths: [owner.pathname],
+                paths: [owner.identity.canonicalPath],
+                identity: owner.identity,
+                integrityWitness,
                 assertCurrent: owner.assertCurrent,
               });
               // The verifier publishes either verified proof or quarantine; completion itself is neither.

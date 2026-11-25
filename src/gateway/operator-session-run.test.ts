@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import { prepareGatewayOperatorSessionRun } from "./operator-session-run.js";
 
@@ -9,10 +9,9 @@ it("follows newly installed command sources while refusing an obsolete prepared 
     assertSourceCurrent?: () => void;
   } = { assertSourceCurrent() {} };
   const run = prepareGatewayOperatorSessionRun({
-    authority: createAdmittedRunOperatorAuthority({
+    authority: createTestOperatorAuthority({
       profileId: "synthetic-operator",
       scopes: ["operator.write"],
-      assertCurrent() {},
     }),
     cfg: {},
     agentId: "main",

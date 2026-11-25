@@ -42,14 +42,16 @@ export function hasSessionPendingInputsSchema(db: EngineConnection): boolean {
   return tableExists(db, SESSION_PENDING_INPUTS_TABLE);
 }
 
-/** Install canonical first-use storage and migrate older same-version tables. */
+/** Install canonical first-use storage and its optional consumption tracking column. */
 export function ensureSessionPendingInputsSchema(db: EngineConnection): void {
   if (isPostgresSqlConnection(db)) {
     return;
   }
   ensurePendingTable(db);
   if (!hasPendingInputConsumptionColumn(db)) {
-    runSqliteImmediateTransactionSync(db, () => ensurePendingInputConsumptionColumn(db));
+    runSqliteImmediateTransactionSync(db, () => {
+      ensurePendingInputConsumptionColumn(db);
+    });
   }
 }
 

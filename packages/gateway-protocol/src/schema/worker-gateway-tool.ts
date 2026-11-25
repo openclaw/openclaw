@@ -115,6 +115,18 @@ export const WorkerToolSurfaceSchema = closedObject({
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
         async: Type.Optional(Type.Literal(false)),
+        // Tool-owned repeat-guard exemption: always, or only for the listed `action` values.
+        repeatable: Type.Optional(
+          Type.Union([
+            Type.Literal(true),
+            closedObject({
+              actions: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), {
+                minItems: 1,
+                maxItems: 16,
+              }),
+            }),
+          ]),
+        ),
       }),
     }),
     { maxItems: 256 },
@@ -127,6 +139,8 @@ export const WorkerToolSurfaceSchema = closedObject({
     applyPatchContainmentSource: Type.Optional(Type.Enum(["config", "session", "required-root"])),
     modelContextWindowTokens: Type.Optional(Type.Integer({ minimum: 1 })),
     modelHasVision: Type.Optional(Type.Boolean()),
+    // Resolved `tools.loopDetection.enabled`; only `false` turns the repeat guard off.
+    toolRepeatGuard: Type.Optional(Type.Boolean()),
     memoryFlushWritePath: Type.Optional(Type.String({ minLength: 1, maxLength: 4_096 })),
     imageSanitization: closedObject({
       maxBytes: Type.Optional(Type.Integer({ minimum: 1 })),

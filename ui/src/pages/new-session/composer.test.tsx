@@ -15,6 +15,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { prepareComposerWidthEdge } from "../chat/components/chat-composer-width-ref.tsx";
+import { placeComposerDictation } from "../chat/composer-dictation-session.ts";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
@@ -377,6 +378,43 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["MacIntel", false, ["⏎", "⌘⏎"]],
+    ["MacIntel", true, ["⌘⏎", "⌘⇧⏎"]],
+    ["Win32", false, ["Enter", "CtrlEnter"]],
+    ["Win32", true, ["CtrlEnter", "Ctrl⇧Enter"]],
+  ] as const)(
+    "shows start keycaps on %s with modifier mode=%s",
+    (platform, requiresModifier, keys) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { composer } = renderComposer({ requiresModifier, onBackgroundSubmit: vi.fn() });
+      const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+      const hints = tooltip.querySelector('[slot="content"]');
+      expect(hints?.textContent).toContain("Send");
+      expect(hints?.textContent).toContain("Background");
+      expect(Array.from(hints?.querySelectorAll("kbd") ?? [], (key) => key.textContent)).toEqual(
+        keys,
+      );
+    },
+  );
+
+  it("omits the background hint when background start is unavailable", () => {
+    const { composer } = renderComposer();
+    const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+    expect(tooltip.querySelectorAll("kbd")).toHaveLength(1);
+    expect(tooltip.textContent).not.toContain("Background");
+  });
+
+  it.each([
+    { submitDisabledReason: "Pick a device" },
+    { submitting: true },
+    { nativeTerminal: true },
+  ])("preserves the start status instead of shortcuts for %j", (options) => {
+    const { composer } = renderComposer({ ...options, onBackgroundSubmit: vi.fn() });
+    const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+    expect(tooltip.querySelector('[slot="content"]')).toBeNull();
+  });
+
   describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
     beforeEach(() => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
@@ -504,7 +542,7 @@ describe("new-session composer start control", () => {
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(start?.getAttribute("aria-busy")).toBe("true");
-    expect(start?.getAttribute("aria-label")).toBe("Starting…");
+    expect(start?.getAttribute("aria-label")).toBe("Starting");
   });
 
   it.each(["button", "Enter"])("native terminal %s uses the sole primary submission", (action) => {
@@ -800,7 +838,9 @@ describe("new-session composer dictation insertion", () => {
     const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
     composerTextarea.captureSelection();
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
     expect(textarea.value).toBe("ship please it");
   });
 
@@ -809,7 +849,9 @@ describe("new-session composer dictation insertion", () => {
     composerTextarea.captureSelection();
     textarea.value = "ship it today";
     textarea.setSelectionRange(4, 4);
-    expect(composerTextarea.insertTranscript("please", true)).toBe("ship please it today");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please", true)).toBe(
+      "ship please it today",
+    );
     expect(textarea.value).toBe("ship please it today");
   });
 
@@ -824,36 +866,44 @@ describe("new-session composer dictation insertion", () => {
       if (capture) {
         composerTextarea.captureSelection();
       }
-      expect(composerTextarea.insertTranscript(transcript)).toBe(expected);
+      expect(composerTextarea.insertTranscript(placeComposerDictation, transcript)).toBe(expected);
     },
   );
 
   it("leaves the draft alone for a blank transcript", () => {
     const { textarea, composerTextarea } = draft();
     composerTextarea.captureSelection();
-    expect(composerTextarea.insertTranscript("   ")).toBeNull();
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "   ")).toBeNull();
     expect(textarea.value).toBe("ship it");
   });
 
   it("spends a captured caret once, then appends", () => {
     const { composerTextarea } = draft("ship it", "ship it", 0);
     composerTextarea.captureSelection();
-    expect(composerTextarea.insertTranscript("please")).toBe("please ship it");
-    expect(composerTextarea.insertTranscript("now")).toBe("please ship it now");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "please ship it",
+    );
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "now")).toBe(
+      "please ship it now",
+    );
   });
 
   it("previews without consuming or mutating the captured draft", () => {
     const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
     composerTextarea.captureSelection();
-    expect(composerTextarea.previewTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.previewTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
     expect(textarea.value).toBe("ship it");
-    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "please")).toBe(
+      "ship please it",
+    );
   });
 
   it("has nothing to insert into once the draft is gone", () => {
     const { composerTextarea } = draft();
     composerTextarea.captureSelection();
     composerTextarea.disconnect();
-    expect(composerTextarea.insertTranscript("it")).toBeNull();
+    expect(composerTextarea.insertTranscript(placeComposerDictation, "it")).toBeNull();
   });
 });

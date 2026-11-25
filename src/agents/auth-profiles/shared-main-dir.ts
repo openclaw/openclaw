@@ -1,7 +1,7 @@
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveStateDir } from "../../config/state-dir.js";
+import { resolveUserPath } from "../../infra/home-dir.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
-import { resolveUserPath } from "../../utils.js";
 
 /** Resolve the shipped shared-main auth store, including its supported relocation. */
 export function resolveSharedMainAuthAgentDir(env: NodeJS.ProcessEnv = process.env): string {

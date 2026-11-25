@@ -25,7 +25,6 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   using jsonSchema = vi.spyOn(OpenClawSchema, "toJSONSchema");
   const config: OpenClawConfig = {
     ui: { prefs: { locale: "de" } },
-    gateway: { controlUi: { experimental: { templates: true } } },
     tts: {
       provider: "openai",
       maxTextLength: 1234,
@@ -66,11 +65,9 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
     },
     entries: {
       "ui.themeMode": "light",
-      "ui.personalSessionGroups": [
-        { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
-      ],
     },
   });
+  expect(bootstrap?.entries).not.toHaveProperty(["ui.personalSessionGroups"]);
   expect(getCanonicalUserPreferences).toHaveBeenCalledWith(
     "synthetic-viewer",
     expect.arrayContaining(["ui.themeMode", "ui.railShortcuts"]),

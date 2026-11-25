@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
+import { canAccess } from "../../infra/path-existence.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import {
   throwSqliteLifecycleErrors,
@@ -10,7 +10,7 @@ import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker-context.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -142,7 +142,7 @@ async function readCronState({
   inspect?: CronReadOnlyRequest["inspect"];
 }): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
+  if (!(await canAccess(statePath))) {
     return { ok: true };
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.

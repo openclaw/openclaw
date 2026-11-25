@@ -24,7 +24,7 @@ import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { spawnPsSync } from "./spawn-ps.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
   readWindowsListeningPidsOnPortSync,

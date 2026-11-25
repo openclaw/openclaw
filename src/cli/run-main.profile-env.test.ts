@@ -73,18 +73,19 @@ const dotenvState = vi.hoisted(() => {
   };
 });
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  type ExistsSyncPath = Parameters<typeof actual.existsSync>[0];
-  return {
-    ...actual,
-    existsSync: vi.fn((target: ExistsSyncPath) => {
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
+    existsSync: vi.fn((target: Parameters<typeof actual.existsSync>[0]) => {
       if (typeof target === "string" && target.endsWith(".env")) {
         return fileState.hasCliDotEnv;
       }
       return actual.existsSync(target);
     }),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 vi.mock("./dotenv.js", () => ({

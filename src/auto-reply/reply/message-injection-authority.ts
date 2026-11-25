@@ -1,3 +1,4 @@
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -90,7 +91,7 @@ export function enqueueMessageInjection<T>(backend: object, run: () => Promise<T
 /** A refused owner assertion is terminal for this input, not permission to redispatch it. */
 export class MessageInjectionAuthorityError extends Error {
   constructor(options?: ErrorOptions) {
-    super("Message injection authority is no longer current", options);
+    super("The message input is no longer available. Start a new turn to retry.", options);
     this.name = "MessageInjectionAuthorityError";
   }
 }
@@ -208,6 +209,9 @@ export function createMessageInjectionAuthority(canInject: () => boolean): () =>
           return;
         }
       } catch (cause) {
+        if (isOperatorAuthorityUnavailable(cause)) {
+          throw cause;
+        }
         revoked = new MessageInjectionAuthorityError({ cause });
       }
       revoked ??= new MessageInjectionAuthorityError();

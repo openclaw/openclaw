@@ -197,11 +197,6 @@ export async function createVitestWorkerCache(
     return undefined;
   }
   const { CompilerInputSnapshot } = await import("./compiler-input-snapshot.mts");
-  const snapshot = new CompilerInputSnapshot(root, {
-    toolchainFiles: resolveTsdownCompilerFiles(),
-    generatorInputs: ["package.json", "pnpm-lock.yaml"],
-    isGeneratorInput: (file) => file.endsWith("/package.json"),
-  });
   // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
     `output=${fs.realpathSync(directory)}`,
@@ -214,6 +209,12 @@ export async function createVitestWorkerCache(
   let metadata: Promise<string> | undefined;
   const prepare = () =>
     (metadata ??= (async () => {
+      // Live cache handles need the signature, not the captured compiler inputs.
+      const snapshot = new CompilerInputSnapshot(root, {
+        toolchainFiles: resolveTsdownCompilerFiles(),
+        generatorInputs: ["package.json", "pnpm-lock.yaml"],
+        isGeneratorInput: (file) => file.endsWith("/package.json"),
+      });
       await snapshot.prepare();
       return snapshot.environmentSignature(args);
     })());

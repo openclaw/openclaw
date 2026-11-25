@@ -1,16 +1,17 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import type { SessionTranscriptFactsBackfill } from "../config/sessions/session-transcript-facts-backfill.js";
+import type {
+  createSessionTranscriptFactsBackfill,
+  SessionTranscriptFactsBackfill,
+} from "../config/sessions/session-transcript-facts-backfill.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
-import { getQueueSize } from "../process/command-queue.js";
+import { getSqliteDatabaseAdmissionSourceForPath } from "../infra/sqlite-database-admission.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { getCommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -23,6 +24,10 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 export type PreparedStartupSessionDatabase = {
   database: OpenClawAgentDatabaseOptions & { path: string };
   assertCurrent: () => void;
+  backfillSource: Pick<
+    Parameters<typeof createSessionTranscriptFactsBackfill>[0],
+    "assertCurrent" | "readCustody"
+  >;
 };
 
 export type GatewaySessionFactsBackfillScheduler = (
@@ -38,7 +43,7 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
 }): GatewaySessionFactsBackfillScheduler {
   const scheduled = new Set<string>();
   return (databases) => {
-    for (const { database, assertCurrent } of databases) {
+    for (const { database, backfillSource } of databases) {
       if (scheduled.has(database.path)) {
         continue;
       }
@@ -47,6 +52,7 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
       let complete = false;
       let delayMs = 250;
       let backfill: SessionTranscriptFactsBackfill | undefined;
+      let deferrals = 0;
       scheduleGatewayIdleTask({
         id: `maintenance:transcript-facts:${database.path}`,
         scheduler: params.scheduler,
@@ -55,19 +61,33 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
         retryDelayMs: 1_000,
         waitForReady: params.waitForReady,
         isClosing: () => complete || params.signal.aborted,
-        isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
+        // Resumed turns stay active in this lane for hours; only recovery work still
+        // waiting for a slot defers the pass. Record a long wait instead of parking silently.
+        isBusy: () => {
+          const queued = getCommandLaneSnapshot(CommandLane.RestartRecovery).queuedCount;
+          if (queued === 0) {
+            deferrals = 0;
+            return false;
+          }
+          if (++deferrals === 60) {
+            params.log.info(
+              `session: transcript facts backfill waiting for ${queued} queued restart-recovery turn(s)`,
+            );
+          }
+          return true;
+        },
         log: params.log,
         errorMessage: "Transcript facts backfill failed",
         run: async (signal) => {
           signal.throwIfAborted();
           params.signal.throwIfAborted();
-          assertCurrent();
+          backfillSource.assertCurrent();
           if (!backfill) {
             const { createSessionTranscriptFactsBackfill } =
               await import("../config/sessions/session-transcript-facts-backfill.js");
             backfill = createSessionTranscriptFactsBackfill({
               database,
-              assertCurrent,
+              ...backfillSource,
               signal: AbortSignal.any([signal, params.signal]),
               log: params.log,
             });
@@ -97,15 +117,35 @@ export async function prepareGatewayStartupSessions(params: {
     ...params,
     handoffDatabase: async (database) => {
       params.assertCurrent?.();
-      const identity = readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(database));
+      const source = getSqliteDatabaseAdmissionSourceForPath(
+        resolveOpenClawAgentSqlitePath(database),
+      );
+      if (!source) {
+        throw new Error("Startup session database admission was not retained");
+      }
+      const identity = { ...source.identity, canonicalPath: source.canonicalPath };
       const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(database.env));
       const assertAdmitted = captureAgentDatabaseAdmission(database.agentId, { env: database.env });
+      const assertCurrent = () => {
+        state.admission.assertCurrent();
+        assertAdmitted();
+      };
       databases.push({
         database: { ...database, path: identity.canonicalPath },
         assertCurrent: () => {
-          state.admission.assertCurrent();
-          assertAdmitted();
+          assertCurrent();
           assertExistingDatabaseIdentity(identity.canonicalPath, identity.key, identity.birthtime);
+        },
+        backfillSource: {
+          assertCurrent,
+          readCustody: [
+            {
+              sourcePath: identity.canonicalPath,
+              candidates: [
+                { path: identity.canonicalPath, physicalPath: identity.canonicalPath, identity },
+              ],
+            },
+          ],
         },
       });
     },

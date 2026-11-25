@@ -179,24 +179,49 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["plugin-errors", "probe-failed"])(
-    "does not claim current local health from %s",
-    async (observation) => {
-      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
-        healthy: true,
-        waitOutcome: "healthy",
-        ...(observation === "plugin-errors"
-          ? { activatedPluginErrors: ["fixture plugin failed"] }
-          : {}),
-      });
-      mocks.probeGateway.mockResolvedValue({
-        ...unreachableProbe(),
-        ok: observation !== "probe-failed",
-      });
-      const result = await resolveGatewayProbeSnapshot();
-      expect(result.localGatewayHealthy).toBe(false);
-    },
-  );
+  it("preserves a connected scope denial without another probe", async () => {
+    const warning =
+      "Gateway connected, but this CLI lacks operator.read. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: false,
+      waitOutcome: "connected-no-operator-scope",
+      operatorScopeWarning: warning,
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result).toMatchObject({
+      gatewayReachable: true,
+      localGatewayHealthy: false,
+      gatewayProbe: {
+        ok: false,
+        gatewayReached: true,
+        error: `${warning}; warn`,
+        auth: { capability: "connected_no_operator_scope" },
+      },
+    });
+    expect(result.gatewayProbe?.startupPhase).toBeUndefined();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { observation: "plugin-errors", healthy: true },
+    { observation: "probe-failed", healthy: false },
+  ])("reports local health with $observation", async ({ observation, healthy }) => {
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: true,
+      waitOutcome: "healthy",
+      // Plugin load errors are notices; the Gateway still serves.
+      ...(observation === "plugin-errors"
+        ? { activatedPluginErrors: ["fixture plugin failed"] }
+        : {}),
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ...unreachableProbe(),
+      ok: observation !== "probe-failed",
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result.localGatewayHealthy).toBe(healthy);
+  });
 
   it.each([true, false])(
     "uses bounded local fallback with explicit credentials=%s",

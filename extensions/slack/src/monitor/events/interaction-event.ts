@@ -175,14 +175,14 @@ export async function captureSlackInteractionEventRoute(
 }
 
 export async function enqueueSlackInteractionEvent(
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown> | string,
   route: SlackInteractionEventRoute,
   options: Omit<SessionEventOptions, keyof SlackInteractionEventRoute>,
   log?: (message: string) => void,
 ): Promise<boolean> {
   try {
     const receipt = getSlackRuntime().system.enqueueSessionEvent(
-      formatSlackInteractionSystemEvent(payload),
+      typeof payload === "string" ? payload : formatSlackInteractionSystemEvent(payload),
       {
         ...options,
         createIfMissing: true,

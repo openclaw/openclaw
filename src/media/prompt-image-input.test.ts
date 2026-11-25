@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { hasPromptImageInput } from "./prompt-image-input.js";
 
 describe("hasPromptImageInput", () => {

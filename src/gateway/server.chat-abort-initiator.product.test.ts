@@ -403,7 +403,8 @@ it(
         pendingInputs: { queuedCount: 0 },
       });
 
-      // Revoke the Stop request's current role while real metadata preparation awaits.
+      // Authority is checked once at admission: revoking the role during an admitted Stop's
+      // metadata preparation closes the connection, but the admitted Stop still cancels.
       const revokeHold = holdNext();
       const revokeRun = await send(second);
       await wait(
@@ -436,12 +437,34 @@ it(
       releaseAbort.resolve();
       await expect(denied).rejects.toThrow("gateway closed (4001): gateway policy changed");
       expect(await wait(terminal(revokeRun.runId))).toBe("aborted");
-      const revocationEffects = cancellation.mock.calls
-        .filter(([, params]) => params.runId === revokeRun.runId)
-        .map(([, params]) => params.diagnosticReason);
-      expect(revocationEffects.length).toBeGreaterThan(0);
-      // Automatic revocation cleanup owns this effect; the denied Stop never reaches it.
-      expect(revocationEffects.every((reason) => reason === "authority-revoked")).toBe(true);
+      expect(
+        cancellation.mock.calls.filter(([, params]) => params.runId === revokeRun.runId),
+      ).toHaveLength(1);
+      prepareAbort.mockRestore();
+      prepareAbort = undefined;
+
+      // A role change alone never cancels a run; a Stop requested after revocation is refused
+      // at request admission and the run finishes normally.
+      setUserProfileRole(aliceId, "writer");
+      const restored = await connect("alice", identity("restored"));
+      const keptHold = holdNext();
+      const keptRun = await send(restored);
+      await wait(
+        awaitGateBeforeSettlement(
+          keptHold.entered.promise,
+          terminal(keptRun.runId),
+          "Kept run settled before provider",
+        ),
+      );
+      setUserProfileRole(aliceId, "none");
+      await expect(stop(restored, keptRun.runId)).rejects.toThrow(
+        "gateway closed (4001): gateway policy changed",
+      );
+      keptHold.release.resolve();
+      expect(await wait(terminal(keptRun.runId))).toBe("final");
+      expect(
+        cancellation.mock.calls.filter(([, params]) => params.runId === keptRun.runId),
+      ).toHaveLength(0);
       expect(errors).toEqual([]);
     } finally {
       releasePreparation.resolve();

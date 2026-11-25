@@ -80,7 +80,7 @@ describe("AppSidebar agent roster pins", () => {
     });
     vi.setSystemTime(10_000);
     const before = thread("main", "before", 3);
-    const target = thread("working", "snoozed", 2, {
+    const target = thread("main", "snoozed", 2, {
       sessionId: "off-roster-snooze",
       snoozedUntil: 11_500,
     });

@@ -1,4 +1,4 @@
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
+import { BOARD_WIDGET_PUT_CANVAS_DOC } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { isNativeMobileHost } from "../../app/native-web-chrome.ts";
@@ -304,9 +304,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const canGrant = !gateway || hasOperatorApprovalsAccess(auth);
     const canPinWidgets =
       canMutate &&
-      (!gateway ||
-        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
-          true);
+      (!gateway || isGatewayCapabilityAdvertised(gateway, BOARD_WIDGET_PUT_CANVAS_DOC) === true);
     const canPinMcpApps =
       canMutate &&
       (!gateway ||

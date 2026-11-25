@@ -22,7 +22,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import type { CommandSecretResolutionMode } from "../command-secret-gateway.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import type { CapabilityTransport } from "./metadata.js";
+import type { CapabilityTransport } from "./result-types.js";
 
 export function resolveTransport(opts: {
   local?: boolean;
@@ -124,6 +124,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   commandName: string;
   targetIds: Set<string>;
   mode?: CommandSecretResolutionMode;
+  localGatewayAbsent?: true;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
   optionalActivePaths?: Set<string>;
@@ -135,6 +136,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
     commandName: params.commandName,
     targetIds: params.targetIds,
     ...(params.mode ? { mode: params.mode } : {}),
+    ...(params.localGatewayAbsent ? { localGatewayAbsent: params.localGatewayAbsent } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
     ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),

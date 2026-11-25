@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  readRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -38,6 +39,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "../../agents/harness/context-engine-lifecycle.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { assertParticipationWorkerExecution } from "../../agents/participation-ceiling.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -422,6 +424,13 @@ export async function finalizeWorkerTurnResult(
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
   }
+  // The turn's rows, including any prompt delta on its user row, are committed: advance the series.
+  if (promptContext.commitSystemPrompt) {
+    await promptContext.commitSystemPrompt(completed, (run) =>
+      withSessionTranscriptWriteAssertion(resultTarget, assertResultCurrent, run),
+    );
+    assertResultCurrent();
+  }
   // Reply accounting needs the admitted writer even when this turn did not compact.
   if (transcriptTarget.expectedWriterRunId !== undefined) {
     turn.onCompactionAccounting?.({
@@ -592,6 +601,7 @@ export async function finalizeWorkerTurnResult(
 }
 
 export function assertSupportedTurn(params: SessionPlacementTurnParams) {
+  assertParticipationWorkerExecution(readRunOperatorAuthority(params)?.participationCeiling);
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }

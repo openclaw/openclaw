@@ -10,6 +10,7 @@ import {
   type NodeInviteRecord,
   type UnixSeconds,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import type { StoredClaw } from "./claw-store.js";
 
 /** True when a pending redemption has waited longer than the pending window. */
 export function isPendingExpired(
@@ -69,14 +70,17 @@ function nextInviteExpiry(
   return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
 }
 
-/** Earliest visible invite or owner-device expiry in the loaded authority. */
-export function nextPeopleExpiry(
-  state: AuthorityState | null | undefined,
-  now: number,
-): number | undefined {
+/** Earliest visible invite, browser request or owner-device expiry in the loaded claw. */
+export function nextPeopleExpiry(record: StoredClaw | undefined, now: number): number | undefined {
+  const state = record?.authority;
   const deadlines = [
     nextInviteExpiry(state, now),
     state ? nextOwnerExpiry(state, now) : undefined,
+    ...Object.entries(record?.member_browser_requests ?? {}).flatMap(([accountId, entry]) =>
+      Object.hasOwn(state?.members ?? {}, accountId) && entry.notice && entry.notice.expiresAt > now
+        ? [entry.notice.expiresAt]
+        : [],
+    ),
   ].filter((value): value is number => value !== undefined && value !== null);
   return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
 }

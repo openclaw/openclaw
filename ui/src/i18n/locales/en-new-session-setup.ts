@@ -7,6 +7,8 @@ const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    incognitoPermissionDenied: "You don’t have permission to start an Incognito session.",
+    fullAccessPermissionDenied: "You don’t have permission to turn on Full access.",
     openClawWorker: "Cloud device",
     deviceFolder: "Existing folder",
     deviceFolderOn: "Existing folder on {device}",
@@ -28,7 +30,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",
@@ -143,7 +144,6 @@ const enNewSessionSetup = {
     worktreeName: "Name",
     worktreeNamePlaceholder: "From session title",
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
-    worktreeBranchFromTitleNote: "Uses the session title if blank.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
@@ -153,6 +153,7 @@ const enNewSessionSetup = {
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    backgroundSend: "Background",
     created: "Session created",
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
@@ -162,7 +163,7 @@ const enNewSessionSetup = {
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",
-    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    nativeTerminalPrompt: "What should the CLI agent do first? (optional)",
     terminalNodeFolder: "Existing absolute folder on this device",
     terminalAttachmentsUnsupported:
       "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
@@ -200,7 +201,7 @@ const enNewSessionSetup = {
     searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
-      "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+      "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",
     recentFolders: "Recent",
     what: "What",

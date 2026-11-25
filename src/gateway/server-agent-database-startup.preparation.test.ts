@@ -49,7 +49,7 @@ vi.mock("../infra/sqlite-integrity-worker.js", () => ({
 }));
 // mock-isolation: Native execution transport must not open the synthetic identity files.
 vi.mock("../state/openclaw-agent-execution.js", () => ({
-  captureOpenClawAgentDatabaseExecution: () => ({
+  captureOpenClawAgentDatabaseExecutionAsync: async () => ({
     onTerminal: () => () => {},
     release: async () => {},
     runExisting: async (
@@ -173,6 +173,7 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
+  mocks.integrityCheck.mockResolvedValue(undefined);
   mocks.refreshModels.mockResolvedValue(undefined);
   mocks.retireModels.mockResolvedValue(undefined);
   mocks.modelSnapshot.mockReturnValue({});

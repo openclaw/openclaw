@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
@@ -152,7 +153,7 @@ export async function serveRegisteredToolsMcpServer(params: {
 }): Promise<void> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   sdkResourceHost.bindScheduler(scheduler);
   let acquisition: PluginToolRegistryAcquisition | undefined;
 

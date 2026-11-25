@@ -9,9 +9,13 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { runSummaryWork } from "./summary-work.js";
-import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
+import { summarizeTranscripts } from "./summary.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 const MODEL_SUMMARY_INPUT_MAX_CHARS = 48_000;
 const MODEL_SUMMARY_TIMEOUT_MS = 20_000;

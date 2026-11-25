@@ -68,7 +68,7 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
           input.pathname,
           "source",
           (database) => runSqliteReadSnapshotSync(database, () => inspect(database)),
-          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, waitForAdmission: true },
         );
       } else {
         inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
@@ -146,6 +146,7 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
     } else {
       inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
         allowClosedWal: input.allowClosedWal || readVerification() !== undefined,
+        preserveSourceArtifacts: input.preserveSourceArtifacts,
       })?.value;
     }
     send({

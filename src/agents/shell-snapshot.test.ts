@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import fsAsync from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -121,6 +122,58 @@ describe("exec shell snapshots", () => {
 
     expect(wrapped).toBe(command);
   });
+
+  it.skipIf(isWin).each(["capture", "shell failure", "symlink collision"])(
+    "creates capture output asynchronously in a private directory and cleans it up: %s",
+    async (scenario) => {
+      const { home, wrap } = setup("/bin/bash");
+      writeRc(
+        home,
+        scenario === "shell failure" ? "exit 1\n" : "alias snapshot_async='printf captured'\n",
+      );
+      const protectedFile = path.join(home, "untouched");
+      fs.writeFileSync(protectedFile, "original");
+      const open = fsAsync.open;
+      const creates: {
+        directory: string;
+        flags: Parameters<typeof fsAsync.open>[1];
+        mode: Parameters<typeof fsAsync.open>[2];
+        dirMode: number;
+      }[] = [];
+      vi.spyOn(fsAsync, "open").mockImplementation(async (file, flags, mode) => {
+        if (typeof file === "string" && path.basename(file) === "snapshot.out") {
+          const directory = path.dirname(file);
+          creates.push({
+            directory,
+            flags,
+            mode,
+            dirMode: (await fsAsync.stat(directory)).mode & 0o777,
+          });
+          if (scenario === "symlink collision") {
+            await fsAsync.symlink(protectedFile, file);
+          }
+        }
+        return open(file, flags, mode);
+      });
+
+      const command = "snapshot_async";
+      const { wrapped } = await wrap(command);
+      expect(creates).toHaveLength(1);
+      const created = creates[0]!;
+      expect(created.dirMode).toBe(0o700);
+      expect(created.mode).toBe(0o600);
+      expect(created.flags).toBe(
+        fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      );
+      expect(fs.existsSync(created.directory)).toBe(false);
+      expect(fs.readFileSync(protectedFile, "utf8")).toBe("original");
+      if (scenario !== "capture") {
+        expect(wrapped).toBe(command);
+      } else {
+        expect(wrapped).not.toBe(command);
+      }
+    },
+  );
 
   it("does not honor per-call env for selecting the snapshot state dir", async () => {
     // Per-call env may be model/tool-controlled, so snapshot roots come from process env.

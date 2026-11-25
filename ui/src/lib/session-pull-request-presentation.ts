@@ -32,8 +32,12 @@ export function primarySessionPullRequest(requests: readonly ControlUiSessionPul
   return undefined;
 }
 
-export type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
-  state?: ControlUiSessionPullRequest["state"];
+export type SessionDisplayPullRequest = (
+  | ControlUiSessionPullRequest
+  | (Omit<ControlUiSessionPullRequest, "state"> & { state?: undefined })
+) & {
+  /** The current checkout cannot inspect or monitor CI for this task receipt. */
+  taskOnly?: true;
   sourceSessionKey?: string;
   sourceAgentId?: string;
 };
@@ -44,20 +48,21 @@ export function displaySessionPullRequests(
 ): SessionDisplayPullRequest[] {
   const requests = new Map<string, SessionDisplayPullRequest>();
   for (const task of snapshot?.taskPullRequests ?? []) {
-    requests.set(task.url, {
+    const receipt = {
       owner: task.owner,
       repo: task.repo,
       number: task.number,
       branch: task.branch,
       url: task.url,
       title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
-      ...task.pullRequest,
+      taskOnly: true as const,
       sourceSessionKey: task.sourceSessionKey,
       sourceAgentId: task.sourceAgentId,
-    });
+    };
+    requests.set(task.url, task.pullRequest ? { ...receipt, ...task.pullRequest } : receipt);
   }
   for (const request of snapshot?.pullRequests ?? []) {
-    requests.set(request.url, { ...requests.get(request.url), ...request });
+    requests.set(request.url, { ...requests.get(request.url), ...request, taskOnly: undefined });
   }
   return orderSessionPullRequests([...requests.values()]);
 }

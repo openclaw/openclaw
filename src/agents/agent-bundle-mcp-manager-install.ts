@@ -28,6 +28,7 @@ import {
 type RuntimeEntryParams = Omit<Parameters<CreateSessionMcpRuntime>[0], "configFingerprint"> & {
   configReloadAtAdmission?: SessionMcpConfigPublication;
   runtimeKey: string;
+  recordOwnedResource: () => void;
 };
 
 type RequesterRuntimeParams = RuntimeEntryParams & {
@@ -81,6 +82,7 @@ export function createSessionMcpRuntimeManagerInstall(
     }
     lifecycle.ensureIdleSweepTimer();
     if (slot && store.liveRuntimeSlots.has(slot)) {
+      params.recordOwnedResource();
       lifecycle.catalogs.observeCatalog(runtime, params.runtimeKey, {
         sessionId,
         sessionKey: params.sessionKey,
@@ -111,7 +113,16 @@ export function createSessionMcpRuntimeManagerInstall(
       params.requesterConnect,
     );
     const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
-    const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
+    const {
+      runtimeKey,
+      configReloadAtAdmission,
+      recordOwnedResource: _recordOwnedResource,
+      ...input
+    } = params;
+    const runtimeParams = {
+      ...input,
+      lastListedCatalogByServerIdentity: store.lastListedCatalogByServerIdentity,
+    };
     const catalogBinding = {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -272,6 +283,7 @@ export function createSessionMcpRuntimeManagerInstall(
     try {
       return await installRequesterRuntime({
         runtimeKey: params.runtimeKey,
+        recordOwnedResource: params.recordOwnedResource,
         configReloadAtAdmission: params.configReloadAtAdmission,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,

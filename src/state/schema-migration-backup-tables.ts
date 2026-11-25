@@ -47,6 +47,9 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     41: ["session_transcript_active_event_facts"],
     // Empty ranking table; migration does not scan or rewrite transcripts.
     42: ["agent_tool_usage"],
+    // Pending input columns and legacy retirement facts change together.
+    43: ["session_pending_inputs"],
+    44: ["session_members"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -105,5 +108,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     38: ["session_repository_workspaces", "worker_workspace_pending_results"],
     39: ["worker_environments"],
     40: ["worker_environments"],
+    41: ["operator_approvals"],
+    42: ["worker_session_placements"],
   },
 };

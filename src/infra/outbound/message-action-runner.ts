@@ -31,7 +31,6 @@ import {
 } from "../../shared/clawhub-recommendations.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { runInAgentRunWriteContext } from "../agent-run-terminal-writes.js";
 import { formatErrorMessage, toErrorObject } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import {
@@ -61,6 +60,7 @@ import {
   waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
+  requirePresentationTableCaptions,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
@@ -327,7 +327,13 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message) && !normalizeOptionalString(params.caption)) {
+    // Successful cards speak for themselves. Keep lookup failures visible, and
+    // preserve any explicit message or media caption supplied by the caller.
+    if (
+      recommendations.cards.length === 0 &&
+      !normalizeOptionalString(params.message) &&
+      !normalizeOptionalString(params.caption)
+    ) {
       params.message = recommendations.text;
     }
   }
@@ -368,17 +374,15 @@ async function handleInternalSourceReplySendAction(
     actionParams: params,
     input,
     agentId,
+    // Only verified Gateway-authored cards may satisfy a card-only send.
+    resolvedChannelData: recommendations?.cards.length
+      ? {
+          ...asOptionalRecord(params.channelData),
+          [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
+        }
+      : undefined,
   });
   let sourceReplyPayload = sourceReply.payload;
-  if (recommendations) {
-    sourceReplyPayload = {
-      ...sourceReplyPayload,
-      channelData: {
-        ...sourceReplyPayload.channelData,
-        [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
-      },
-    };
-  }
   const requestedMediaCount =
     resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
   if (!dryRun && requestedMediaCount > 0) {
@@ -434,10 +438,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    // The run's own reply: its CLI history writer must cover the row, or the gap refuses saved
-    // history to the next fresh CLI session.
-    const persist = () => runInAgentRunWriteContext(input.runId, persistReply);
-    const persistReply = () =>
+    const persist = () =>
       persistInternalSourceReply({
         cfg: input.cfg,
         sessionKey,
@@ -485,12 +486,12 @@ async function handleInternalSourceReplySendAction(
     dryRun,
   };
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
-  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
-  // have no viewer here, so claim no visible delivery.
+  // A WebChat transcript shows this reply to its user. An inter-session turn in a session bound
+  // to an external chat may have no viewer here, so claim no visible delivery.
   const receipt = input.sourceReplyTranscriptOnly
     ? payload.dryRun
-      ? "Prepared reply for the current session transcript."
-      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+      ? "Prepared reply for the current chat history."
+      : `Recorded reply in the current chat history${sink}. This send did not deliver it to an external channel.`
     : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
@@ -532,6 +533,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
   parseJsonMessageParam(params, "presentation");
+  requirePresentationTableCaptions(params);
   parseJsonMessageParam(params, "delivery");
   parseJsonMessageParam(params, "interactive");
 

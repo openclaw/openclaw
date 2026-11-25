@@ -4,13 +4,9 @@ import type {
   SessionGitHubActionResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import {
-  getGatewayToolCallerIdentity,
-  resolveGatewayToolOperatorSelection,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -23,14 +19,17 @@ import {
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  captureGitHubPublicationActionAuthority,
+  prepareGitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
 import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   params: Exclude<
     SessionGitHubActionParams,
-    { action: "refresh_base" | "inspect_pr" | "prepare_pr" }
+    { action: "refresh_base" | "inspect_pr" | "prepare_pr" | "create_issue" }
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
@@ -47,9 +46,6 @@ function assertPreservedPublicationFooter(before: string, after: string) {
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
-  const callerOperator = caller
-    ? resolveGatewayToolOperatorSelection().operatorAuthority
-    : undefined;
   if (
     caller &&
     (params.sessionKey !== caller.sessionKey ||
@@ -58,12 +54,12 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
-  const explicitPullRequestUrl =
-    params.action === "edit" || params.action === "request_review"
-      ? params.pullRequestUrl
-      : undefined;
+  const explicitPullRequestUrl = "pullRequestUrl" in params ? params.pullRequestUrl : undefined;
   if (explicitPullRequestUrl && params.requestId) {
     throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
+  }
+  if (explicitPullRequestUrl && "publishingSessionKey" in params && params.publishingSessionKey) {
+    throw new Error("Select a PR by pullRequestUrl or publishingSessionKey, not both.");
   }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
@@ -93,7 +89,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   using resources = new DisposableStack();
   const target = await preparePublishingSession(
     { ...params, agentId: caller?.agentId ?? params.agentId },
-    () => options.sessionMutationAuthorization?.assertCurrent(),
+    () => options.signal?.throwIfAborted(),
     resources,
   );
   const loaded = target.selected.readCurrent();
@@ -106,29 +102,20 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   resources.defer(admitted.release);
-  // The in-process bridge is System-backed; it cannot mint the tool caller's operator authority.
-  const actionScopes = caller
-    ? intersectOperatorScopes(admitted.requester.snapshot.scopes, callerOperator?.scopes ?? [])
-    : admitted.requester.snapshot.scopes;
-  const requiresOperatorWrite =
+  // Rights come from the tool caller's turn grant (or this direct request's admission).
+  if (
     !ownPublicationAction &&
-    !(params.action === "ready" && params.publishingSessionKey === undefined);
+    !(params.action === "ready" && params.publishingSessionKey === undefined) &&
+    !captureGitHubPublicationActionAuthority(admitted.requester).operatorWrite
+  ) {
+    throw new Error(
+      `The ${params.action} action needs operator write permission. Ask a Gateway admin to run it, or to give your role operator.write.`,
+    );
+  }
+  // Stop and session revision fences only; authority was admitted when the turn started.
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
-    if (requiresOperatorWrite) {
-      callerOperator?.assertCurrent();
-    }
-    if (
-      requiresOperatorWrite &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: actionScopes,
-      })
-    ) {
-      throw new Error("GitHub pull request actions require full operator write permission.");
-    }
   };
   const explicit = explicitPullRequestUrl
     ? await inspectOwnGitHubPullRequest({
@@ -272,11 +259,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   assertHead(before);
   const prepareImportedEffect = async () => {
     if (explicitPullRequestUrl) {
-      // Metadata does not require permission to push source or an unprotected head branch.
+      // Metadata and lifecycle actions do not require permission to push source or an unprotected head branch.
       const current = await read();
       assertHead(current);
       if (current.state === "closed" || current.state === "merged") {
-        throw new Error("The PR is closed; no metadata action was performed.");
+        throw new Error("The PR is closed; no action was performed.");
       }
       return current;
     }

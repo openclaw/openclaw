@@ -10,10 +10,6 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import {
-  isMessagePresentationInteractiveBlock,
-  normalizeMessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -167,6 +163,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           asVideoNote: optionalBoolean(
             "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
           ),
+          effectId: Type.Optional(
+            Type.String({ description: "Numeric Telegram message effect id; private chats only." }),
+          ),
+          effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
+          quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
           location: Type.Optional(
             Type.Object(
               {
@@ -222,15 +223,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
     const messageEffectId = readTelegramMessageEffectId(ctx.params, to);
-    // message(action=send) controls belong to the conversation's agent: a tap no
-    // plugin handler claims reaches the agent instead of expiring like a retired
-    // plugin control.
-    const hasControls = Boolean(
-      normalizeMessagePresentation(payload.presentation)?.blocks.some(
-        isMessagePresentationInteractiveBlock,
-      ),
-    );
-    if (!quoteText && !messageEffectId && !hasControls) {
+    if (!quoteText && !messageEffectId) {
       return payload;
     }
     const telegramData = asNonArrayRecord(payload.channelData?.telegram);
@@ -242,7 +235,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           ...telegramData,
           ...(quoteText ? { quoteText } : {}),
           ...(messageEffectId ? { messageEffectId } : {}),
-          ...(hasControls ? { typedCallbackOwner: "agent" } : {}),
         },
       },
     };

@@ -7,7 +7,8 @@ import type {
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
+import type { AssistantHistoryMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
@@ -15,6 +16,7 @@ import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.j
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextPressure } from "../../context-pressure.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
@@ -108,6 +110,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Resume an admitted turn's history without re-admitting its original input after steering. */
+  replayCurrentTranscript?: true;
   /** Set only by prompt admission after validating an already-delivered input. */
   inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
@@ -120,6 +124,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Looks up move destinations under the admitted requester when the harness offers session_project. */
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
+  sessionProjectMoveEligible?: boolean;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -318,6 +325,8 @@ export type EmbeddedRunAttemptResult = {
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?: {
     route: Exclude<PreemptiveCompactionRoute, "fits">;
+    /** Only "overflow" may fail the turn; "maintenance" always continues it. */
+    pressure: ContextPressure;
     source?: "mid-turn";
     estimatedPromptTokens?: number;
     promptBudgetBeforeReserve?: number;
@@ -397,6 +406,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "harness"; readonly data: unknown }
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
+  /** Presentation accepted for this attempt's ordinary final, never evidence of completion. */
+  finalPresentation?: MessagePresentation;
   assistantTexts: string[];
   /** A registered tool was requested as structured text without a native call. */
   textToolCallAttempt?: boolean;
@@ -423,14 +434,14 @@ export type EmbeddedRunAttemptResult = {
   requesterContinuationSettled?: true;
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
   runtimeContinuationStarted?: boolean;
-  lastAssistant: AssistantMessage | undefined;
+  lastAssistant: AssistantHistoryMessage | undefined;
   /**
    * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`
    * means this attempt produced no assistant response.
    */
-  currentAttemptAssistant?: AssistantMessage | undefined;
+  currentAttemptAssistant?: AssistantHistoryMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
-  currentAttemptCompletedAssistant?: AssistantMessage | undefined;
+  currentAttemptCompletedAssistant?: AssistantHistoryMessage | undefined;
   /** A real model response completed successfully during this attempt, before any later failure. */
   hasSuccessfulModelResponse?: boolean;
   lastToolError?: ToolErrorSummary;
@@ -477,6 +488,8 @@ export type EmbeddedRunAttemptResult = {
   yieldAcknowledgment?: string;
   /** The registry accepted this attempt's explicit incoming-message wait. */
   yieldMessageWaitRegistered?: boolean;
+  /** This attempt's sessions_yield armed background commands whose exit resumes the session. */
+  yieldExecWakeArmed?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is

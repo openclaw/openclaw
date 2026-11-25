@@ -296,7 +296,6 @@ export function isSessionSharingOwnerEquivalent(
     return false;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   // Attribution alone grants nothing; neither side may widen session-only scopes.
   return (
     authority.profileId === actor.profileId &&
@@ -436,7 +435,11 @@ export async function authorizeResolvedSessionMutationAsync(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<ErrorShape | null> {
-  if (isGatewayAdmin(params.client) && !isNamedOperatorRoleEnforcementEnabled(params.cfg)) {
+  if (
+    isGatewayAdmin(params.client) &&
+    !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+    resolveOperatorRolePolicy(params.client, params.cfg) === undefined
+  ) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
@@ -473,7 +476,8 @@ export function authorizePreparedSessionMutation(
   const authorizesAgentRun = prepared.authorizesAgentRun !== false;
   if (
     isGatewayAdmin(params.client) &&
-    (!authorizesAgentRun || !isNamedOperatorRoleEnforcementEnabled(params.cfg))
+    (!authorizesAgentRun ||
+      (!isNamedOperatorRoleEnforcementEnabled(params.cfg) && prepared.policy === undefined))
   ) {
     return null;
   }
@@ -548,6 +552,8 @@ export function authorizeSessionAgentRun(
     client: GatewayClient | null;
     /** File readers reuse the admission policy with read-specific recovery guidance. */
     sandboxRequiredMessage?: string;
+    /** Host-resolved invitation to another person's session; never request data. */
+    invitedSession?: boolean;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
       entry?: Pick<SessionEntry, "sandbox">;
     };
@@ -562,7 +568,6 @@ export function authorizeSessionAgentRun(
     return agentError;
   }
   if (
-    isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
     params.target.entry?.sandbox !== "required" &&
     (prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg))?.sandbox ===
       "required"

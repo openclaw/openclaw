@@ -1,9 +1,18 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
+import {
+  runSqliteReadOnlyWorker,
+  withSqliteReadOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import * as ledger from "../infra/update-run-ledger.js";
@@ -24,6 +33,75 @@ const fixture = setupDoctorAdmissionFixture();
 const warmSources = ["cached-writer", "admitted-read-only"] as const;
 const runningSql =
   "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL";
+
+it("observes readonly worker requests without adding IPC listeners to other children", async ({
+  signal,
+}) => {
+  using context = fixture();
+  await closeOpenClawStateDatabaseAsync();
+  // Complete the real session first so fixture disposal can verify its recorded requests.
+  await withSqliteReadOnlyWorkerScope(async () => {
+    const snapshot = await runSqliteReadOnlyWorker(context.database, {
+      mode: "sync",
+      stagingRoot: context.createStateDir(),
+      signal,
+    });
+    const reader = new DatabaseSync(snapshot, { readOnly: true });
+    try {
+      expect(reader.prepare("SELECT status FROM update_runs").all()).toEqual([
+        { status: "succeeded" },
+      ]);
+    } finally {
+      reader.close();
+    }
+  });
+
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `process.send(process.listenerCount("message"), (error) => {
+        if (error) { console.error(error); process.exitCode = 1; }
+        process.disconnect();
+      });`,
+    ],
+    { env: process.env, stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  // An error can reject readiness, but cleanup still joins the actual close event.
+  const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+    child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
+  });
+  try {
+    const [listeners] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "IPC child exited before reporting",
+      ),
+      signal,
+    );
+    expect(await withinTest(closed, signal)).toEqual([0, null]);
+    const witness = JSON.parse(
+      fs.readFileSync(
+        path.join(context.env.OPENCLAW_STATE_DIR, `sqlite-open-guard-${child.pid}.json`),
+        "utf8",
+      ),
+    );
+    expect(witness).toMatchObject({
+      pid: child.pid,
+      databasePath: resolveManagedUpdateLeaseDatabasePath(),
+    });
+    expect(listeners).toBe(0);
+  } finally {
+    try {
+      await stopChildProcess(child, 1_000, { force: true });
+    } finally {
+      await closed;
+    }
+  }
+});
+
 async function withMaintenance(
   source: (typeof warmSources)[number] | "cold-read-only",
   action: (

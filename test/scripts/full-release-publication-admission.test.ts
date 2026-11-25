@@ -436,7 +436,7 @@ async function fixture(
     qualification?: "valid" | "wrong-input" | "wrong-archive" | "expired";
     legacyGhArchive?: boolean;
     toolingFullRef?: string;
-    androidPin?: string;
+    androidPin?: string | null;
     legacyPlatforms?: "absent-helper" | "dormant-helper";
     registry?:
       | "healthy"
@@ -506,7 +506,9 @@ async function fixture(
   const androidVersion = JSON.stringify({
     version: options.androidPin ?? version.split("-")[0],
   });
-  write(target, "apps/android/version.json", androidVersion);
+  if (options.androidPin !== null) {
+    write(target, "apps/android/version.json", androidVersion);
+  }
   const writePlugins = (directory: string) => {
     for (let index = 0; index < (options.pluginCount ?? 1); index += 1) {
       const plugin = writePublishablePluginFixture(directory, {
@@ -842,7 +844,9 @@ globalThis.fetch = async (input, init = {}) => {
     const manifest = readJson(join(tooling, "package.json"));
     writeJson(tooling, "package.json", { ...manifest, version, dependencies: { yaml: "2.9.1" } });
     writePlugins(tooling);
-    write(tooling, "apps/android/version.json", androidVersion);
+    if (options.androidPin !== null) {
+      write(tooling, "apps/android/version.json", androidVersion);
+    }
   }
   let toolingSha = commit(tooling);
   let toolingFullRef = options.toolingFullRef ?? "refs/heads/main";
@@ -1473,7 +1477,7 @@ describe("FRV required registry admission", () => {
     "binds actual post-upload admission without rewriting uploaded observations: %s",
     withCase(async (uploadFault, processFixture, check) => {
       const result = await fixture(processFixture, check, { registry: "healthy", uploadFault });
-      check(result.uploadedObservations).toBe(result.observationText);
+      check(result.uploadedObservations, result.stderr).toBe(result.observationText);
       check(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
         result.effects.indexOf("Finalize publication admission"),
       );
@@ -2320,6 +2324,7 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
+    { version: stable, pin: null, core: true, selected: false },
     { version: stable, pin: stable, core: true, selected: true },
     { version: "2026.9.9-1", pin: stable, core: true, selected: true },
     { version: stable, pin: "2026.8.1", core: true, selected: false },
@@ -2401,6 +2406,66 @@ describe("FRV publication source admission", () => {
 });
 
 describe("publication source intent and durable binding", () => {
+  publicationIt(
+    "preserves empty source coverage and binds explicit selection to the manifest",
+    () => {
+      const request = publicationSourceRequest(publicationSourceEnv());
+      const source = createPublicationSourceFact(
+        request,
+        { packages: [], platforms: [] },
+        { version: stable, packages: [], platforms: [] },
+      );
+      // beta.3 Q records this key even when no historical artifact source is selected.
+      source.coverage.publication_artifact_source_json = "";
+      refreshDigest(source);
+      const bytes = publicationSourceJson(source);
+      const validationInputs = {
+        ...publicationIntentInputs(source),
+        targetContextRef: source.targetContextRef,
+        extensionTestExcludePatternsJson: "[]",
+        allowUnreleasedChangelog: "false",
+      };
+      expect(bindSource(source, { validationInputs })).toBe(source);
+      expect(
+        bindSource(source, {
+          validationInputs: { ...validationInputs, publicationArtifactSourceJson: "" },
+        }),
+      ).toBe(source);
+      expect(publicationSourceJson(source)).toBe(bytes);
+
+      const missingField = structuredClone(source);
+      delete missingField.coverage.publication_artifact_source_json;
+      expect(() => bindSource(missingField)).toThrow("source admission digest mismatch");
+      const pin = '{"runId":"123","runAttempt":1}';
+      const selected = structuredClone(source);
+      selected.coverage.publication_artifact_source_json = pin;
+      refreshDigest(selected);
+      expect(
+        bindSource(selected, {
+          validationInputs: { ...validationInputs, publicationArtifactSourceJson: pin },
+        }),
+      ).toBe(selected);
+      expect(() => bindSource(selected, { validationInputs })).toThrow(
+        "coverage publicationArtifactSourceJson differs from manifest",
+      );
+      expect(() =>
+        bindSource(source, {
+          validationInputs: { ...validationInputs, publicationArtifactSourceJson: pin },
+        }),
+      ).toThrow("coverage publicationArtifactSourceJson differs from manifest");
+      for (const value of ["{}", " ", '{"runAttempt":1,"runId":"123"}']) {
+        const malformed = structuredClone(source);
+        malformed.coverage.publication_artifact_source_json = value;
+        refreshDigest(malformed);
+        expect(() => bindSource(malformed)).toThrow();
+      }
+      const unknown = structuredClone(source);
+      unknown.coverage.unknown_artifact_source_json = "";
+      refreshDigest(unknown);
+      expect(() => bindSource(unknown)).toThrow("invalid source admission coverage");
+    },
+  );
+
   publicationIt.concurrent.for([
     "scripts/full-release-publication-contract.mjs",
     "scripts/full-release-publication-admission.mts",

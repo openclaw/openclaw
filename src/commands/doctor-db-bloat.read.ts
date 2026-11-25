@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
@@ -202,6 +202,7 @@ export async function readSqliteDatabaseBloat(params: {
     withOpenClawStateDatabaseReadSnapshot(async () => readRegisteredAgentDatabases(params, false), {
       ...params,
       signal,
+      preferLiveOwner: true,
     }),
   );
   for (const entry of registered) {

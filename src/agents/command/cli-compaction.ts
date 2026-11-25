@@ -23,6 +23,7 @@ import {
 } from "../agent-settings.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { clearCliSessionInStore } from "../cli-session-store.js";
+import { exceedsContextWindow } from "../context-pressure.js";
 import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
@@ -38,6 +39,7 @@ import {
   type AcceptedCompactionSuccessor,
 } from "../embedded-agent-runner/compaction-successor.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
@@ -179,7 +181,7 @@ export async function runCliTurnCompactionLifecycle(
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
     const assertActive = composeSessionSourceAssertion(
-      [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
+      [assertSourceActive, host.assertActive],
       (assertSources) => {
         params.abortSignal?.throwIfAborted();
         assertSources();
@@ -249,6 +251,14 @@ export async function runCliTurnCompactionLifecycle(
       preemptiveCompaction.estimatedPromptTokens,
       floorPositiveFiniteNumber(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
     );
+    // Post-turn maintenance fails the command only when the next prompt cannot fit.
+    const settleFailedMaintenance = (message: string) => {
+      assertActive();
+      if (exceedsContextWindow(currentTokenCount, contextTokenBudget)) {
+        throw new Error(message);
+      }
+      log.warn(`${message}; continuing because the next prompt fits the context window`);
+    };
     if (
       !preemptiveCompaction.shouldCompact &&
       currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
@@ -425,7 +435,7 @@ export async function runCliTurnCompactionLifecycle(
           if (nativeOutcome.compacted) {
             compactionKind = "native-harness";
           } else if (!nativeOutcome.fallbackToContextEngine && nativeOutcome.failureReason) {
-            throw new Error(
+            settleFailedMaintenance(
               `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
             );
           }
@@ -448,6 +458,7 @@ export async function runCliTurnCompactionLifecycle(
               currentTokenCount,
               trigger: "cli_budget",
             });
+            attachCompactionAccountingRecorder(runtimeContext, { operatorAuthority });
             const runtimeSettings = buildContextEngineRuntimeSettings({
               contextEngineHost: buildGenericCliContextEngineHostSupport({
                 backendId: params.provider,
@@ -574,8 +585,9 @@ export async function runCliTurnCompactionLifecycle(
           const contextOutcome = await compactCliTranscript();
           contextCompactionOutcome = contextOutcome;
           compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
+          // Post-turn maintenance fails the command only when the next prompt cannot fit.
           if (!compactionKind && contextOutcome.failureReason) {
-            throw new Error(
+            settleFailedMaintenance(
               `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
             );
           }

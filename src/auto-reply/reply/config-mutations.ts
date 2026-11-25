@@ -33,13 +33,11 @@ function assertValidConfig(next: Record<string, unknown>, action: string): OpenC
 export async function mutateConfigPath(
   path: string[],
   mutation: { action: "set"; value: unknown } | { action: "unset" },
-  assertCurrent?: () => void,
 ): Promise<boolean> {
   try {
     await mutateConfigFileWithRetry({
       base: "source",
       afterWrite: { mode: "auto" },
-      writeOptions: { assertCurrent },
       mutate: (next) => {
         if (mutation.action === "set") {
           setConfigValueAtPath(next, path, mutation.value);
@@ -63,11 +61,9 @@ export async function setPluginEnabledFromCommand(params: {
   pluginId: string;
   action: "enable" | "disable";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
-  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       const enabled = params.action === "enable";
       if (enabled) {
@@ -75,7 +71,6 @@ export async function setPluginEnabledFromCommand(params: {
           config: currentConfig,
           pluginId: params.pluginId,
           onCapabilityConsent: params.onCapabilityConsent,
-          beforePersistentApply: params.assertCurrent,
         });
       }
       const next = setPluginEnabledInConfig(
@@ -95,12 +90,10 @@ export async function applyAllowlistConfigMutation(params: {
   action: "add" | "remove";
   entry: string;
   applyConfigEdit: NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>;
-  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
-    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       const latestParsedConfig = structuredClone(currentConfig) as Record<string, unknown>;
       const latestEditResult = await params.applyConfigEdit({
