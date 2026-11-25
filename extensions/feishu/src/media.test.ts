@@ -399,6 +399,24 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(uploadData().file_name).toBe("报告—详情（2026）.pdf");
   });
 
+  it("uploads with the explicit fileName override instead of the loaded basename (#205246)", async () => {
+    loadWebMediaMock.mockResolvedValue(webMedia("report_en.pdf", "application/pdf", "%PDF-1.7"));
+
+    await sendMedia({ mediaUrl: "/tmp/repro/report_en.pdf", fileName: "季度报告.pdf" });
+
+    expect(uploadData().file_name).toBe("季度报告.pdf");
+    expect(uploadData().file_type).toBe("pdf");
+    expect(messageData()).toMatchObject({ msg_type: "file" });
+  });
+
+  it("uploads with the loaded basename when no fileName override is given (#205246)", async () => {
+    loadWebMediaMock.mockResolvedValue(webMedia("report_en.pdf", "application/pdf", "%PDF-1.7"));
+
+    await sendMedia({ mediaUrl: "/tmp/repro/report_en.pdf" });
+
+    expect(uploadData().file_name).toBe("report_en.pdf");
+  });
+
   it("keeps approved workspace access authoritative over legacy access", async () => {
     const readFile = vi.fn(async () => Buffer.from("approved image"));
     const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));

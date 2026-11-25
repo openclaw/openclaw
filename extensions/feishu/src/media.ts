@@ -281,6 +281,8 @@ function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
+export { resolveFeishuMediaAttachmentFileName } from "./media-attachment-name.js";
+
 type SendUploadedMediaParams = {
   cfg: ClawdbotConfig;
   to: string;

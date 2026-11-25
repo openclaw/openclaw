@@ -35,6 +35,7 @@ import {
   materializeFeishuPostMarkdownSoftBreaks,
 } from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
+import { resolveFeishuMediaAttachmentFileName } from "./media-attachment-name.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -132,6 +133,8 @@ type FeishuSendTextContext = Parameters<NonNullable<ChannelOutboundAdapter["send
 export type FeishuOutboundSendMedia = (
   params: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0] & {
     propagateMediaUploadFailure?: boolean;
+    /** Explicit display filename override (message tool `filename`); Feishu-only extra. */
+    fileName?: string;
   },
 ) => ReturnType<NonNullable<ChannelOutboundAdapter["sendMedia"]>>;
 
@@ -336,11 +339,17 @@ async function sendFeishuFallbackPayload(params: {
   // Card fallbacks can exceed media-caption limits. Deliver attachments first,
   // then preserve the complete fallback through the normal 4k text fanout.
   let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
-  for (const mediaUrl of mediaUrls) {
+  for (const [index, mediaUrl] of mediaUrls.entries()) {
+    const fileName = resolveFeishuMediaAttachmentFileName({
+      attachments: params.payload.attachments,
+      mediaUrl,
+      index,
+    });
     lastResult = await sendMedia({
       ...ctx,
       text: "",
       mediaUrl,
+      ...(fileName ? { fileName } : {}),
       replyToId: nextReplyToId(),
       audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
       ...(propagateMediaUploadFailure ? { propagateMediaUploadFailure: true } : {}),
@@ -394,11 +403,19 @@ async function sendFeishuTtsSupplementPayload(params: {
     }
   }
 
-  for (const mediaUrl of normalizeStringEntries(resolvePayloadMediaUrls(params.payload))) {
+  for (const [index, mediaUrl] of normalizeStringEntries(
+    resolvePayloadMediaUrls(params.payload),
+  ).entries()) {
+    const fileName = resolveFeishuMediaAttachmentFileName({
+      attachments: params.payload.attachments,
+      mediaUrl,
+      index,
+    });
     lastResult = await sendMedia({
       ...ctx,
       text: "",
       mediaUrl,
+      ...(fileName ? { fileName } : {}),
       replyToId: nextReplyToId(),
       audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
     });
@@ -556,12 +573,18 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
               attachChannelToResult("feishu", toFeishuOutboundResult(deliveryResult)),
             );
           },
-          send: async ({ mediaUrl }) => {
+          send: async ({ mediaUrl, index }) => {
             const { replyToMessageId, replyInThread } = nextReplyMode();
+            const fileName = resolveFeishuMediaAttachmentFileName({
+              attachments: payload.attachments,
+              mediaUrl,
+              index,
+            });
             return await sendMediaFeishu({
               cfg: ctx.cfg,
               to: ctx.to,
               mediaUrl,
+              ...(fileName ? { fileName } : {}),
               accountId: ctx.accountId ?? undefined,
               mediaAccess: ctx.mediaAccess,
               mediaLocalRoots: ctx.mediaLocalRoots,
@@ -684,7 +707,16 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaLocalRoots,
         mediaReadFile,
         propagateMediaUploadFailure,
+        fileName: explicitFileName,
       } = ctx;
+      // Payload-carrying callers (sendPayload fallbacks via the shared
+      // text/media helper) spread the payload into this context at runtime;
+      // its attachments carry the message tool's filename override.
+      const payloadFileName = resolveFeishuMediaAttachmentFileName({
+        attachments: (ctx as { payload?: FeishuOutboundPayload }).payload?.attachments,
+        mediaUrl,
+      });
+      const fileName = explicitFileName?.trim() || payloadFileName;
       const sendParams = { cfg, to, accountId: ctx.accountId ?? undefined };
       const nextReplyToId = createFeishuReplyFanout(ctx);
       const nextReplyMode = () => {
@@ -736,6 +768,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         mediaResult = await sendMediaFeishu({
           ...sendParams,
           mediaUrl,
+          ...(fileName ? { fileName } : {}),
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
