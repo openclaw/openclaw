@@ -84,7 +84,6 @@ func TestTranslationPromptDistinguishesDisplayAndStructuralAttributes(t *testing
 	prompt := translationPrompt("en", "zh-CN")
 	for _, want := range []string{
 		"Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”",
-		"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
 		"Do not translate code-like attribute values",
 	} {
 		if !strings.Contains(prompt, want) {

@@ -174,12 +174,10 @@ describe("getReplyFromConfig configOverride", () => {
   });
 
   it("rejects forged operator authority at the public SDK reply entry", async () => {
-    const assertCurrent = vi.fn();
     const plain = {
       canonicalIdentity: null,
       profileId: "guest",
       scopes: ["operator.admin"],
-      assertCurrent,
     };
     const issued = createTestOperatorAuthority(plain);
     for (const operatorAuthority of [plain, { ...issued }]) {
@@ -188,13 +186,12 @@ describe("getReplyFromConfig configOverride", () => {
         "operator run authority must be issued by the host",
       );
     }
-    expectCallCounts(0, assertCurrent, loadConfig, mocks.initSessionState, runReply);
+    expectCallCounts(0, loadConfig, mocks.initSessionState, runReply);
   });
   it("pins the issued operator source once through public reply option copies", async () => {
     const issued = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     let reads = 0;
     const options = {

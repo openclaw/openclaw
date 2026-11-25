@@ -120,7 +120,7 @@ export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 /** Raw maintenance writers revoke admitted facts before changing stored bytes. */
 export function invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname: string): void {
   maintenanceAuthority.getStore()?.authority.assertOwned();
-  invalidateOpenClawAgentDatabaseValidation(pathname);
+  invalidateOpenClawAgentDatabaseValidation(pathname, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(pathname);
 }
 
@@ -446,7 +446,7 @@ export function recordOpenClawAgentDatabaseAdmission(
 function clearAgentDatabaseLeaseVerifications(database: EngineConnection, pathname: string): void {
   for (const held of new Set([pathname, ...agentDatabaseLeasePaths(database)])) {
     if (mayShareAgentDatabaseFile(held, pathname)) {
-      invalidateOpenClawAgentDatabaseValidation(held);
+      invalidateOpenClawAgentDatabaseValidation(held, "a lease release without a confirmed close");
       revokeSqliteDatabaseAdmissionsForPath(held);
     }
   }

@@ -21,6 +21,19 @@ export function createSessionPrimaryWindows(
   readPrimary: () => SessionListSnapshot,
 ) {
   let invalidationRevision = 0;
+  const release = (entry: ManagedSessionList) => {
+    if (
+      !entry.retainSnapshot &&
+      !entry.warmPrimary &&
+      entry.listeners.size === 0 &&
+      !entry.pending &&
+      entry.reads.size === 0 &&
+      managedLists.get(entry.key) === entry
+    ) {
+      entry.coordinator.dispose();
+      managedLists.delete(entry.key);
+    }
+  };
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) => {
     const retiredAgents = new Set<string>();
     for (const entry of managedLists.values()) {
@@ -28,13 +41,11 @@ export function createSessionPrimaryWindows(
         continue;
       }
       entry.warmPrimary = false;
+      entry.retainSnapshot = false;
       if (entry.scope.agentId) {
         retiredAgents.add(normalizeAgentId(entry.scope.agentId));
       }
-      if (entry.listeners.size === 0 && !entry.pending) {
-        entry.coordinator.dispose();
-        managedLists.delete(entry.key);
-      }
+      release(entry);
     }
     // Consumers must withdraw a retired window even while its replacement RPC is pending.
     if (retiredAgents.size > 0) {
@@ -61,27 +72,15 @@ export function createSessionPrimaryWindows(
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
       entry.queued = null;
-      const release = () => {
-        if (
-          !entry.warmPrimary &&
-          entry.listeners.size === 0 &&
-          managedLists.get(entry.key) === entry
-        ) {
-          entry.coordinator.dispose();
-          managedLists.delete(entry.key);
-        }
-      };
-      // Route replacement may briefly remove every subscriber while this query still owns a request.
-      if (entry.pending) {
-        void entry.pending.finally(release);
-      } else {
-        release();
-      }
+      entry.retainSnapshot = false;
+      // Admitted requests release their entry through the same guarded owner on settlement.
+      release(entry);
     };
   };
 
   return {
     subscribe,
+    release,
     snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
       if (isPrimarySessionListQuery(scope)) {
         const { result, agentId, loading, error, startupPending } = readPrimary();

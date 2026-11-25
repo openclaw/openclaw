@@ -1,5 +1,4 @@
 import type { OperatorAdmissionContext } from "../../../gateway/operator-admission.js";
-import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import {
   restoreGatewayQueuedOperatorRecovery,
@@ -128,7 +127,6 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
   const state = custody(run);
   const authority = run.operatorAuthority;
   authority?.signal?.throwIfAborted();
-  authority?.assertCurrent();
   if (!state.enqueued) {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;
@@ -173,7 +171,6 @@ export async function prepareFollowupRunOperatorAuthority(
   }
   try {
     const automation = run.run.scheduledAutomation;
-    const operatorSource = automation?.job.operatorSource;
     // Each queued start needs the grant that created it: the automation grant for a cron
     // conversation event, talk for a Talk consult (only Talk sets this trusted provenance),
     // and write for chat.
@@ -185,9 +182,8 @@ export async function prepareFollowupRunOperatorAuthority(
     const restored = await restore({
       context,
       agentId: run.run.agentId,
-      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority) ?? { kind: "unavailable" },
       liveAuthority: run.operatorAuthority,
-      operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {
         if (context.resolveGatewayContext && !context.resolveGatewayContext()) {
           throw new GatewayOperatorAccessUnavailableError();

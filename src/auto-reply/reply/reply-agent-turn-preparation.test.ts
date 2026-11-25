@@ -386,7 +386,6 @@ it("preserves operator precedence for the admitted operator", async () => {
   queued.operatorAuthority = createTestOperatorAuthority({
     profileId: "alice-profile",
     scopes: ["operator.admin"],
-    assertCurrent: () => {},
   });
   queued.run.requesterOrigin = {
     sessionKey: "agent:original:telegram:direct:alice",

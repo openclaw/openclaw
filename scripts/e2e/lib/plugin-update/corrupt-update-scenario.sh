@@ -30,7 +30,7 @@ if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm 
 fi
 
 package_root="$(openclaw_e2e_package_root /tmp/npm-prefix)"
-entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+entry="$package_root/openclaw.mjs"
 export OPENCLAW_ENTRY="$entry"
 
 npm_pack_dir="$(mktemp -d "/tmp/openclaw-corrupt-plugin-pack.XXXXXX")"
@@ -133,13 +133,12 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-corrupt-plugin-unavailable.json >&2
   exit "$update_status"
 fi
-node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-unavailable /tmp/openclaw-corrupt-plugin-unavailable.json demo-corrupt-plugin
+node scripts/e2e/lib/plugin-update/probe.mjs assert-settled-corrupt-update /tmp/openclaw-corrupt-plugin-unavailable.json demo-corrupt-plugin "$entry" "$future_version" unavailable
 if [ "$(capture_corrupt_state)" != "$state_before_update" ]; then
   echo "Unavailable plugin update changed its install record, retained payload, or user choices." >&2
   exit 1
 fi
 node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
-node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$future_version" unavailable-plugin-tolerance
 
 # Reinstall the same explicit core artifact after the plugin registry becomes available.
 # The plugin must recover even though the installed core version is already current.
@@ -158,7 +157,7 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.json >&2
   exit "$update_status"
 fi
-node scripts/e2e/lib/release-scenarios/assertions.mjs   assert-package-version "$package_root" "$future_version" same-version-plugin-repair
+node scripts/e2e/lib/plugin-update/probe.mjs assert-settled-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin "$entry" "$future_version" repaired
 
 node --input-type=module - "$state_before_update" "$(capture_corrupt_state)" <<'NODE'
 import assert from "node:assert/strict";
@@ -176,11 +175,4 @@ assert.equal(after.entry, before.entry, "plugin repair changed the expected entr
 assert.equal(after.manifest, before.manifest, "plugin repair changed the expected manifest payload");
 NODE
 
-if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin; then
-  echo "corrupt update JSON payload:" >&2
-  openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.json >&2
-  echo "corrupt update stderr:" >&2
-  openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
-  exit 1
-fi
 node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin

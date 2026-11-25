@@ -12,11 +12,33 @@ import {
 import {
   capturePostgresBackupInWorker,
   preparePostgresRestoreInWorker,
+  inspectPostgresUpgradeInWorker,
+  preflightPostgresUpgradeInWorker,
+  clonePostgresUpgradeInWorker,
+  validatePostgresUpgradeInWorker,
+  retirePostgresUpgradeInWorker,
   type BackupTask,
   type BackupReply,
 } from "./database-backup.operations.js";
 
 serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
+  if (task.operation === "inspect-upgrade") {
+    return control.runNativeSection(() => inspectPostgresUpgradeInWorker(task.params));
+  }
+  if (task.operation === "preflight-upgrade") {
+    return control.runNativeSection(() => preflightPostgresUpgradeInWorker(task.params));
+  }
+  if (task.operation === "clone-upgrade") {
+    return control.runNativeSection(() =>
+      clonePostgresUpgradeInWorker({ ...task.params, assertCurrent: control.throwIfCancelled }),
+    );
+  }
+  if (task.operation === "validate-upgrade") {
+    return control.runNativeSection(() => validatePostgresUpgradeInWorker(task.params));
+  }
+  if (task.operation === "retire-upgrade") {
+    return control.runNativeSection(() => retirePostgresUpgradeInWorker(task.params));
+  }
   if (task.operation === "discard") {
     return control.runNativeSection(() =>
       withDatabasePortConnection(task.params.config, async (client) => {

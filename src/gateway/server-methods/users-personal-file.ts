@@ -96,7 +96,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       // Dispatch may issue a narrower grant. Bind by the opaque original source
       // and subject, while retaining both the run and narrowed grant lifetimes.
       assertAdmittedRunOperatorAuthority(requesterAuthority);
-      operatorAuthority.assertCurrent();
       id = operatorAuthority.profileId;
     } else {
       if (

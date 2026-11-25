@@ -84,7 +84,7 @@ it("launches an independent user service with private environment, cgroup limits
       "--user",
       `--unit=${unitName}`,
       "--working-directory=/workspace",
-      "--property=ExitType=cgroup",
+      expect.stringMatching(/^--property=SuccessExitStatus=1 2 .* 255 SIGHUP .*SIGKILL .*SIGSYS$/),
       "--property=RemainAfterExit=yes",
       "--property=KillMode=control-group",
       "--property=LimitCORE=0",
@@ -115,11 +115,25 @@ it.each([
   ],
   [
     "ActiveState=active\nSubState=exited\nExecMainCode=1\nExecMainStatus=7\nResult=exit-code",
-    { state: "exited", exitCode: 7, exitSignal: null, reason: "exit", result: "exit-code" },
+    {
+      state: "exited",
+      exitCode: 7,
+      exitSignal: null,
+      reason: "exit",
+      result: "exit-code",
+      survivors: [],
+    },
   ],
   [
     "ActiveState=failed\nSubState=failed\nExecMainCode=2\nExecMainStatus=9\nResult=oom-kill",
-    { state: "exited", exitCode: null, exitSignal: 9, reason: "memory-limit", result: "oom-kill" },
+    {
+      state: "exited",
+      exitCode: null,
+      exitSignal: 9,
+      reason: "memory-limit",
+      result: "oom-kill",
+      survivors: [],
+    },
   ],
   [
     "ActiveState=failed\nSubState=failed\nExecMainCode=0\nExecMainStatus=0\nResult=resources",
@@ -129,6 +143,7 @@ it.each([
       exitSignal: null,
       reason: "spawn-error",
       result: "resources",
+      survivors: [],
     },
   ],
 ])("reads retained systemd status: %s", async (fields, expected) => {
@@ -168,13 +183,15 @@ it("checks current stop authority and never selects arbitrary units", async () =
   await expect(supervisor.stop(unitName, { assertCurrent })).rejects.toThrow(
     "control was not confirmed",
   );
+  // Cleanup first reads the unit: a retained unit with an empty cgroup is released.
+  respond("LoadState=loaded\nActiveState=active\nSubState=exited\nExecMainCode=1\n");
   respond();
   respond();
   await supervisor.cleanup(unitName);
-  expect(spawn.mock.calls[1]![0]).toMatchObject({
+  expect(spawn.mock.calls[2]![0]).toMatchObject({
     argv: ["/gateway/bin/systemctl", "--user", "--no-ask-password", "stop", "--", unitName],
   });
-  expect(spawn.mock.calls[2]![0]).toMatchObject({
+  expect(spawn.mock.calls[3]![0]).toMatchObject({
     argv: ["/gateway/bin/systemctl", "--user", "--no-ask-password", "reset-failed", "--", unitName],
   });
 });

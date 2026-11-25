@@ -332,6 +332,18 @@ dispatch_workflow_at_ref() {
       '$inputs + {($key): $value}')"
   done
 
+  # Carry the exact reviewed exception through the existing publication dispatch owner.
+  case "$workflow" in
+    openclaw-release-publish.yml|openclaw-npm-release.yml|plugin-npm-release.yml|plugin-clawhub-release.yml|plugin-clawhub-new.yml|plugin-clawhub-recovery.yml)
+      if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+        inputs_json="$(jq -ce --arg approval "$FAST_TRACK_REQUEST_JSON" '
+          if has("fast_track_request") and .fast_track_request != $approval then
+            error("Child fast-track request differs from the parent")
+          else . + {fast_track_request: $approval} end' <<< "$inputs_json")" || return 1
+      fi
+      ;;
+  esac
+
   dispatch_body="$(jq -cn \
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
@@ -590,7 +602,9 @@ wait_for_run() {
     CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
       const created = Date.parse(process.env.CREATED_AT ?? "");
       const updated = Date.parse(process.env.UPDATED_AT ?? "");
-      console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+      const seconds = Number.isFinite(created) && Number.isFinite(updated)
+        ? Math.max(0, Math.round((updated - created) / 1000)) : "";
+      process.stdout.write(String(seconds) + "\n");
     '
   )"
   if [[ -n "${duration_seconds}" ]]; then
@@ -1120,6 +1134,30 @@ upload_dependency_evidence_release_asset() {
     --name "${artifact_name}" \
     --dir "${download_dir}"
 
+  if [[ ! -d "${download_dir}/dependency-evidence" ]] &&
+    [[ "$(jq -r '.version' "${download_dir}/preflight-manifest.json")" == "4" ]]; then
+    # Reauthenticate the exact approved build-only artifact, not just packet presence.
+    BUILD_ONLY_NPM_DIR="$download_dir" node --input-type=module <<'NODE' || return 1
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from './.release-harness/scripts/npm-prepared-bundle.mjs';
+import { verifyNpmPreflightPublicationLineage } from './.release-harness/scripts/npm-preflight-tooling-identity.mjs';
+const env = process.env;
+const manifest = JSON.parse(readFileSync(`${env.FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json`, 'utf8'));
+const bytes = readFileSync(`${env.BUILD_ONLY_NPM_DIR}/preflight-manifest.json`);
+const npm = JSON.parse(bytes);
+const descriptor = manifest.publicationArtifacts?.npmPreflight;
+if (!isBuildOnlyNpmPreflight(npm) || descriptor?.schema !== SEALED_NPM_PREFLIGHT_SCHEMA ||
+    createHash('sha256').update(bytes).digest('hex') !== descriptor.manifestSha256 ||
+    npm.npmDistTag !== env.RELEASE_NPM_DIST_TAG) throw new Error('Invalid build-only dependency-evidence exemption.');
+await verifyNpmPreflightPublicationLineage({ manifest, fastTrackRequest: env.FAST_TRACK_REQUEST_JSON,
+  repository: env.GITHUB_REPOSITORY, sourceSha: env.TARGET_SHA, toolingSha: npm.producer.workflowSha,
+  publisherSha: env.PARENT_WORKFLOW_SHA, publisherFullRef: env.PARENT_WORKFLOW_FULL_REF,
+  producerRunId: npm.producer.runId, producerRunAttempt: npm.producer.runAttempt });
+NODE
+    echo "- Dependency validation evidence: skipped by the exact approved build-only release" >> "$GITHUB_STEP_SUMMARY"
+    return 0
+  fi
   if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
     echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
     find "${download_dir}" -maxdepth 2 -type f -print >&2 || true
@@ -1210,6 +1248,14 @@ upload_release_evidence_assets() {
   if [[ ! -f "${evidence_path}" ]]; then
     echo "Postpublish release evidence is missing from ${POSTPUBLISH_EVIDENCE_DIR}." >&2
     exit 1
+  fi
+
+  if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+    local approval_asset="openclaw-${release_version}-fast-track-approval.json"
+    printf '%s\n' "$FAST_TRACK_REQUEST_JSON" > "${RUNNER_TEMP}/${approval_asset}"
+    (cd "${RUNNER_TEMP}" && sha256sum "$approval_asset" > "${approval_asset}.sha256")
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}" "$approval_asset"
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}.sha256" "${approval_asset}.sha256"
   fi
 
   cp "${manifest_path}" "${RUNNER_TEMP}/${manifest_asset}"
@@ -1345,6 +1391,10 @@ verify_published_release() {
     verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
   fi
 
+  if [[ -n "${FAST_TRACK_REQUEST_JSON:-}" ]]; then
+    verify_args+=(--full-release-validation-run "$FULL_RELEASE_VALIDATION_RUN_ID")
+  fi
+
   verifier="release-verify-beta.ts"
   if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
     verifier="release-verify-publish.ts"
@@ -1396,15 +1446,16 @@ verify_published_release() {
     --arg validation_target_sha "${target_sha}" \
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
+      ([.workflowRuns[]? | select(.label == $validation_label)] | first // {}) as $validation |
       .releasePublishRunId = $release_publish_run_id |
-      .workflowRuns += [{
+      .workflowRuns = ((.workflowRuns // []) | map(select(.label != $validation_label))) + [{
         id: $validation_run_id,
         label: $validation_label,
         runAttempt: $validation_run_attempt,
         targetSha: $validation_target_sha,
         url: $validation_url,
         workflowRef: $validation_workflow_ref
-      }]
+      } + ($validation | {conclusion} | with_entries(select(.value != null)))]
     ' \
     "${evidence_path}" > "${evidence_path}.next"
   # Expose a success receipt only after both verifier and parent binding pass.

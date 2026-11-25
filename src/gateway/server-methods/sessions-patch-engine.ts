@@ -322,7 +322,6 @@ export async function executeSessionPatchMutations(params: {
                   expectDefined(originalCommitGuards[index], "original patch guard"),
                 );
                 const assertCommitAllowed = () => {
-                  operatorAuthority?.assertCurrent();
                   assertSessionPatchCommitAllowed({
                     personalModelSelection,
                     guards: commitGuards.size ? commitGuards : originalGuards,
@@ -358,7 +357,6 @@ export async function executeSessionPatchMutations(params: {
                           ],
                           archiveTransitions: [],
                         });
-                        operatorAuthority?.assertCurrent();
                       }
                       // Preflight facts can stale behind the writer queue; resolve this snapshot
                       // again so a new legacy alias is rejected rather than promoted or deleted.

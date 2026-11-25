@@ -10,9 +10,14 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { rewrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { runWithAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
+import { DEFAULT_PARTICIPATION_TOOLS } from "../../participation-ceiling.js";
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -147,11 +152,18 @@ async function prepareTools(
     : undefined;
   // Execute every listed tool through the direct, preparer and dispatch paths.
   const refusals = await Promise.all(
-    tools.map(async (tool) => [tool.name, await refusedVia(tool)] as const),
+    tools.map(
+      async (tool) =>
+        [
+          tool.name,
+          await refusedVia(tool, Boolean(readRunOperatorAuthority(attempt)?.participationCeiling)),
+        ] as const,
+    ),
   );
   return {
     dispatched,
     emptyAllowlistError: catalog.emptyExplicitToolAllowlistError?.message,
+    catalogNames: [...catalog.toolSearchRunPlan.liveAllowedToolNames].toSorted(),
     listed: tools.map((tool) => tool.name).toSorted(),
     callable: (
       await Promise.all(tools.map(async (tool) => ((await executes(tool)) ? [tool.name] : [])))
@@ -252,12 +264,14 @@ async function executes(tool: AnyAgentTool): Promise<boolean> {
   return started && !refused;
 }
 
-async function refusedVia(tool: AnyAgentTool) {
-  const direct = isGated(await settle(() => tool.execute("direct", {}, aborted)));
+async function refusedVia(tool: AnyAgentTool, validArgs = false) {
+  const args = validArgs ? placeholderArgs(tool.parameters) : {};
+  const signal = validArgs ? undefined : aborted;
+  const direct = isGated(await settle(() => tool.execute("direct", args, signal)));
   const preparer = getInternalToolExecutionPreparer(tool);
   const prepared = preparer
     ? await settle(async () => {
-        const step = await preparer({ toolCallId: "prepared", args: {}, signal: aborted });
+        const step = await preparer({ toolCallId: "prepared", args, signal });
         try {
           return step.kind === "ready" ? await step.execute() : step;
         } finally {
@@ -269,7 +283,7 @@ async function refusedVia(tool: AnyAgentTool) {
     ? isGated(prepared) || isGated((prepared as { result?: unknown } | undefined)?.result)
     : direct;
   const dispatch = isGated(
-    await settle(() => rewrapToolWithBeforeToolCallHook(tool).execute("dispatch", {}, aborted)),
+    await settle(() => rewrapToolWithBeforeToolCallHook(tool).execute("dispatch", args, signal)),
   );
   return { direct, preparer: viaPreparer, dispatch };
 }
@@ -569,3 +583,47 @@ it("narrows an isolated cron session to its allowlist and keeps a shared session
   expect(shared.listed).toContain("exec");
   expect(shared.callable).toEqual(isolated.callable);
 });
+
+it.each([{ tools: undefined }, { tools: [] }, { tools: ["read", "sessions_list", "web_fetch"] }])(
+  "enforces default or configured participation tools $tools through assembly and deferred dispatch",
+  async ({ tools }) => {
+    const config = tools
+      ? { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } }
+      : { ...baseConfig, tools: { ...baseConfig.tools, alsoAllow: ["*"] } };
+    const run = await prepareTools(
+      {
+        runId: "participant",
+        trigger: "user",
+        senderIsOwner: true,
+        admittedRunContext: await prepareParticipationTestRun({
+          kind: "send",
+          profileId: "guest",
+          sessionKey,
+          tools,
+        }).preparedRunAdmission.admit("embedded"),
+        approvalReviewerDeviceId: "guest-device",
+      },
+      config,
+      "world__calendar_list",
+    );
+    expect(run.listed).toEqual(run.callable);
+    expect(run.dispatched).toBeUndefined();
+    if (tools) {
+      expect(run.callable).toEqual(tools.filter((name) => name !== "web_fetch").toSorted());
+      expect(run.catalogNames).toEqual(run.callable);
+    } else {
+      expect(run.callable.length).toBeGreaterThan(0);
+      expect(run.callable.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
+      expect(run.catalogNames.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(
+        true,
+      );
+      const ordinary = await prepareTools(
+        { runId: "ordinary", trigger: "user", senderIsOwner: true },
+        config,
+      );
+      expect(ordinary.listed).toEqual(
+        expect.arrayContaining(["message", "sessions_spawn", "world__calendar_list"]),
+      );
+    }
+  },
+);

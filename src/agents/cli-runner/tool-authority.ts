@@ -1,5 +1,5 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
+import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy-inheritance.js";
 import { intersectSessionEventToolsAllow } from "../../auto-reply/reply/session-event-target.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { readSessionControllerOperationState } from "../../sessions/session-controller.state.js";
