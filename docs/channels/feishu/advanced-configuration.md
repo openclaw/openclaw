@@ -129,6 +129,8 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 
 Per-account gates live under `accounts.<id>.tools`.
 
+`feishu_chat` is treated as a host-restricted conversation-read tool: in delegated agent turns, OpenClaw exposes it only when the Feishu plugin comes from the bundled origin (both runtime registration and manifest). Non-bundled installs (for example, from ClawHub or a workspace/config override) exclude `feishu_chat` during delegated turns and log a one-time warning per plugin registry while keeping other workspace tools available; direct operator tool invocations still see it.
+
 After a configuration update is applied, new agent turns use the updated tool
 gates and account selection without restarting the Gateway. Tools already created
 for an in-progress turn keep their original configuration.
