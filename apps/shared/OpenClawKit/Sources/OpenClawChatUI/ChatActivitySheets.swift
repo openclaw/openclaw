@@ -49,9 +49,8 @@ struct ChatActivitySheetView: View {
     }
 
     private var restingDetent: PresentationDetent {
-        .height(max(
-            ChatActivitySheetMetrics.minimumHeight,
-            self.fittedHeight ?? ChatActivitySheetMetrics.minimumHeight))
+        let fitted = (self.fittedHeight ?? 0) - ChatActivitySheetMetrics.emptySpaceAfterLastGroup
+        return .height(max(ChatActivitySheetMetrics.minimumHeight, fitted))
     }
 
     @ViewBuilder
@@ -80,6 +79,9 @@ struct ChatActivitySheetView: View {
 
 enum ChatActivitySheetMetrics {
     static let minimumHeight: CGFloat = 280
+    /// What an inset grouped list runs on past its last group, as the "+" sheet measured it (iOS 27.2):
+    /// without it the sheet rests with an empty band above the home indicator.
+    static let emptySpaceAfterLastGroup: CGFloat = 43.8
 }
 
 // MARK: - Goal

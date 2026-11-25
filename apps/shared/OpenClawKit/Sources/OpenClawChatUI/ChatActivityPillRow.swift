@@ -217,8 +217,8 @@ private struct ChatActivityPillSurface: ViewModifier {
                 content.background(.regularMaterial, in: Capsule())
             }
         }
+        // No shadow: the row scrolls inside its own frame, which would clip a shadow into a hard slab.
         .overlay(Capsule().strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
-        .shadow(color: .black.opacity(0.05), radius: 8, y: 4)
     }
 }
 
