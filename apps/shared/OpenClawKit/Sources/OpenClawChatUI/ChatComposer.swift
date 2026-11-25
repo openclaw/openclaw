@@ -911,18 +911,21 @@ struct OpenClawChatComposer: View {
 
 extension OpenClawChatComposer {
     private var slashQuery: String? {
-        let text = inputModel?.input.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Self.slashQuery(forDraft: inputModel?.input ?? "")
+    }
+
+    /// The command name being typed, or nil when the panel has nothing to complete. As in the Control UI, a space
+    /// after the name ends completion: "/release " is a command with its arguments next, not a search. "/skill"
+    /// keeps the panel while its one argument, the skill's name, is typed.
+    nonisolated static func slashQuery(forDraft draft: String) -> String? {
+        let text = draft.drop(while: \.isWhitespace)
         guard text.hasPrefix("/"), !text.hasPrefix("//") else { return nil }
         let body = String(text.dropFirst())
-        guard !body.isEmpty else { return "" }
         let lower = body.lowercased()
-        if lower == "skill" || lower.hasPrefix("skill ") {
+        if lower.hasPrefix("skill "), !lower.dropFirst("skill ".count).contains(where: \.isWhitespace) {
             return body
         }
-        if body.contains(where: \.isWhitespace) {
-            return nil
-        }
-        return body
+        return body.contains(where: \.isWhitespace) ? nil : body
     }
 
     var slashCommandPanel: some View {
