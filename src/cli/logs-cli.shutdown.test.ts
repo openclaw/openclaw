@@ -50,7 +50,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
 
 vi.mock("./gateway-rpc.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCli: mocks.callGateway,
+  callGatewayFromCliWithTransport: mocks.callGateway,
 }));
 
 let delayStarted = createDeferred<{ ms: number; signal?: AbortSignal }>();
