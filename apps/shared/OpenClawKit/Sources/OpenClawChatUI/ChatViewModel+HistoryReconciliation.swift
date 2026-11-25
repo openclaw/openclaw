@@ -1009,7 +1009,14 @@ extension OpenClawChatViewModel {
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         let isCompletePage = replacingCanonicalHistory || !preservingOptimisticLocalMessages || !incoming.isEmpty
-        self.noteLiveHistoryPage(request.id, isComplete: (isDelta || isCompletePage) && !retainsAnsweredTurn)
+        // A tail delta inherits its snapshot's coverage. A new incomplete anchor cannot prove absence.
+        let coversHistory = isDelta ? self.outboxRestoreEvidence.latestLiveHistoryRequestID > 0 : isCompletePage
+        let hasOlderPage = payload.hasMore ?? (payload.olderCursor != nil)
+        if hasOlderPage || (!coversHistory && !retainsAnsweredTurn && payload.deltaCursor != nil) {
+            self.outboxRestoreEvidence.latestLiveHistoryRequestID = 0
+        } else {
+            self.noteLiveHistoryPage(request.id, isComplete: coversHistory && !retainsAnsweredTurn)
+        }
         if isCompletePage {
             // The cache store writes only gateway-derived rows. It filters
             // locally retained outbox bubbles until history proves their keys.

@@ -540,6 +540,58 @@ extension ChatViewModelOutboxTests {
         #expect(await store.loadComposerDraft(key: draftKey) == .empty)
     }
 
+    @Test @MainActor func `a paginated history refresh keeps a rejected message out of the reopened draft`() async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
+            switch cursor {
+            case nil:
+                return OpenClawChatHistoryPayload(
+                    sessionKey: key, sessionId: "session", messages: [canonicalRow("recent")], thinkingLevel: nil,
+                    deltaCursor: "tip", olderCursor: "older", hasMore: true)
+            case "older":
+                return OpenClawChatHistoryPayload(
+                    sessionKey: key, sessionId: "session",
+                    messages: [canonicalRow("already delivered", idempotencyKey: "landed:user")],
+                    thinkingLevel: nil, hasMore: false)
+            case "tip":
+                return OpenClawChatHistoryPayload(
+                    sessionKey: key, sessionId: "session", messages: [], thinkingLevel: nil,
+                    kind: "delta", deltaCursor: "tip")
+            default:
+                throw URLError(.badServerResponse)
+            }
+        })
+        let vm = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport, activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main", outbox: store)
+        await settleComposerDraft(vm)
+        #expect(await store.enqueueCommand(rejectedCommand(id: "landed", text: "already delivered")))
+        await presentOutbox(vm)
+        let messageID = try outboxMessageID(vm, text: "already delivered")
+        vm.setComposerPresentationActive(true)
+
+        await reloadHistory(vm)
+        #expect(vm.canEditOutboxMessage(messageID))
+        #expect(vm.input.isEmpty && vm.composerNotice == nil)
+        #expect(await vm.loadOlderHistory())
+        #expect(vm.messages.first?.idempotencyKey == "landed:user")
+        // Reaching the end by scrolling does not turn a tail delta into proof of absence.
+        await reloadHistory(vm)
+        #expect(vm.input.isEmpty && vm.composerNotice == nil)
+
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let reopenedStore = reopened.store(gatewayID: store.gatewayID)
+        let restored = try await loadedModel(reopenedStore)
+        defer { restored.detachTransport() }
+        #expect(restored.input.isEmpty)
+        #expect(await reopenedStore.loadComposerDraft(key: draftKey) == .empty)
+    }
+
     @Test(arguments: [false, true])
     @MainActor
     func `an empty delta proves absence unless an earlier page showed the turn`(earlierShowed: Bool) async throws {
