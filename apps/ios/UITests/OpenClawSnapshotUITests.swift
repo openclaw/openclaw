@@ -943,6 +943,32 @@ extension OpenClawSnapshotUITests {
         app.buttons["Stop response"].tap()
     }
 
+    func testEffortChipOpensTheBarDuringActiveResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-model-sign-in-fixture", "ordinary",
+                "--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        let effort = app.buttons["chat-composer-inline-effort"]
+        XCTAssertTrue(effort.waitForExistence(timeout: 5))
+        effort.tap()
+        self.attachScreenshot(named: "chat-effort-tap-active-response")
+        // A reply in progress locks the levels; the chip still opens the bar, which says why.
+        XCTAssertTrue(app.descendants(matching: .any)["chat-effort-bar"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Available after the current response finishes."].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["chat-effort-bar-slider"].isEnabled)
+        self.attachScreenshot(named: "chat-effort-bar-active-response")
+        app.buttons["Stop response"].tap()
+    }
+
     func testModelSignInRemainsReachableWithoutModelChoices() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

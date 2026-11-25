@@ -64,6 +64,11 @@ extension OpenClawChatViewModel {
         return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
     }
 
+    /// Whether the effort control has anything to offer: levels to choose, or speed options.
+    var composerOffersEffortChoices: Bool {
+        self.showsThinkingPicker || self.selectedModelSupportsFastMode
+    }
+
     public var composerVerboseMutationAvailable: Bool {
         guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
         return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable

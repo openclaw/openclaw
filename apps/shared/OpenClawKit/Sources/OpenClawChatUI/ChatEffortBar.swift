@@ -14,7 +14,8 @@ struct ChatEffortBar: View {
         let shownIndex = self.previewIndex ?? selectedIndex
         let level = shownIndex.map { options[$0].displayLabel }
             ?? OpenClawChatThinkingLevelOption.displayLabel(for: self.viewModel.thinkingLevel)
-        let isEnabled = self.viewModel.composerEffortMutationAvailable && !self.viewModel.isUpdatingSessionSettings
+        let lockReason = self.viewModel.composerPhoneEffortLockReason
+        let isEnabled = lockReason == nil && !self.viewModel.isUpdatingSessionSettings
         VStack(alignment: .leading, spacing: 10) {
             if !options.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -73,10 +74,17 @@ struct ChatEffortBar: View {
                 }
                 .frame(minHeight: ChatEffortBarMetrics.touch)
             }
+            if let lockReason {
+                Text(verbatim: lockReason)
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .footnote))
+                    .foregroundStyle(OpenClawChatTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("chat-effort-bar-locked")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
-        .padding(.bottom, self.viewModel.selectedModelSupportsFastMode ? 8 : 14)
+        .padding(.bottom, self.viewModel.selectedModelSupportsFastMode && lockReason == nil ? 8 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(CleanChatComposerSurface(cornerRadius: ChatEffortBarMetrics.radius))
         .onChange(of: self.viewModel.thinkingLevelOptions) { _, _ in self.previewIndex = nil }
@@ -103,6 +111,7 @@ private struct ChatEffortTrack: View {
     let onCommit: (Int) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     @ScaledMetric(relativeTo: .body) private var height: CGFloat = 32
     @State private var width: CGFloat = 0
 
@@ -137,6 +146,7 @@ private struct ChatEffortTrack: View {
             }
             // Drawn as one layer: on the glass surface, vibrant fills would let the stops show through.
             .compositingGroup()
+            .opacity(self.isEnabled ? 1 : 0.4)
         }
         .frame(height: self.height)
         // The track draws at 32 pt; the touch target reaches 44.
@@ -173,6 +183,15 @@ private struct ChatEffortTrack: View {
     }
 }
 
+/// Leaves the effort chip out when the model has no levels and no speed options: nothing to open.
+struct ChatEffortChipPresence: ViewModifier {
+    let isPresent: Bool
+
+    func body(content: Content) -> some View {
+        if self.isPresent { content }
+    }
+}
+
 enum ChatEffortBarMetrics {
     static let radius: CGFloat = 26
     static let thumbWidth: CGFloat = 38
@@ -180,6 +199,18 @@ enum ChatEffortBarMetrics {
 }
 
 extension OpenClawChatViewModel {
+    /// Why the effort bar's controls are locked, shown under them. Nil while they can change, including
+    /// the moment a change saves, so the bar does not grow and shrink on every pick.
+    var composerPhoneEffortLockReason: String? {
+        if self.hasActiveRunForComposerSettings {
+            return String(localized: "Available after the current response finishes.")
+        }
+        if !self.composerEffortMutationAvailable {
+            return String(localized: "You don’t have permission to change effort or speed.")
+        }
+        return nil
+    }
+
     /// The effort chip's VoiceOver value: the level, and the speed when it is not Standard.
     var composerPhoneEffortLabel: String {
         guard self.showsThinkingPicker else { return ChatEffortBar.speedLabel(self.composerSpeedSelection) }

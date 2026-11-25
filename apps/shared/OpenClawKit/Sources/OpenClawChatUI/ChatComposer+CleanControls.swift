@@ -351,7 +351,8 @@ extension OpenClawChatComposer {
             .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
             .fixedSize()
         #elseif os(iOS)
-        // The phone opens the effort bar over the composer (ChatEffortBar).
+        // The phone opens the effort bar over the composer (ChatEffortBar). The chip always opens it; while
+        // the bar's controls are locked it says why. A model with nothing to choose has no chip.
         ChatComposerPanelButton(panel: .effort, isFocused: self.isFocused) {
             HStack(spacing: 3) {
                 CleanChatEffortGauge(
@@ -371,16 +372,12 @@ extension OpenClawChatComposer {
             .frame(height: self.cleanControlHeight)
             .contentShape(Rectangle())
         }
-        .disabled(
-            !self.viewModel.composerEffortMutationAvailable ||
-                self.viewModel.isUpdatingSessionSettings ||
-                (!self.viewModel.showsThinkingPicker && !self.viewModel.selectedModelSupportsFastMode))
-        .disabled(self.viewModel.hasActiveRunForComposerSettings)
         // A model with speed options and no levels: the bar shows only Speed, and so does the chip.
         .accessibilityLabel(self.viewModel.showsThinkingPicker ? "Effort" : "Speed")
         .accessibilityValue(self.viewModel.composerPhoneEffortLabel)
         .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-effort")
+        .modifier(ChatEffortChipPresence(isPresent: self.viewModel.composerOffersEffortChoices))
         #else
         Menu {
             if self.viewModel.showsThinkingPicker {
