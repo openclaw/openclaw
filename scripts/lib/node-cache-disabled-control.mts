@@ -248,25 +248,17 @@ async function qualifyControls(input: Context, full: boolean) {
           });
           const pnpm = input.pnpmBin;
           const pnpmSha256 = hashPreparedPnpmExecutable(pnpm);
-          const environment = (scope: string, enabled = false) => ({
-            ...buildBenchmarkCommandEnv(
+          const environment = (scope: string, enabled = false) =>
+            buildBenchmarkCommandEnv(
               path.join(scratch, scope, "home"),
               path.join(scratch, scope, "state"),
               { executable: pnpm, resolvedExecutable: pnpm, version: definition.pnpmVersion },
-              {
-                PATH: [path.dirname(pnpm), path.dirname(process.execPath), process.env.PATH]
-                  .filter(Boolean)
-                  .join(path.delimiter),
-              },
+              process.env,
               {
                 kind: enabled ? "seeded" : "disabled",
                 nodeCache: path.join(scratch, scope, "node-cache"),
               },
-            ),
-            COREPACK_ENABLE_NETWORK: "0",
-            npm_config_offline: "true",
-            pnpm_config_manage_package_manager_versions: "false",
-          });
+            );
           Object.assign(record, {
             definition,
             definitionSha256: sha256(JSON.stringify(definition)),

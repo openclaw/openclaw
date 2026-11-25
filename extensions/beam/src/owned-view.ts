@@ -31,7 +31,7 @@ function parseRequest(
     operation === "list"
       ? ["agentId", "catalogId", "search", "hostIds", "limitPerHost", "cursors"]
       : operation === "read"
-        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"]
+        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor", "includePreviewImage"]
         : ["agentId", "catalogId", "hostId", "threadId"];
   if (
     Object.keys(params).some((key) => !allowed.includes(key)) ||
@@ -45,6 +45,7 @@ function parseRequest(
       params.hostId !== "gateway" ||
       typeof params.threadId !== "string" ||
       !/^[a-f0-9]{32}$/.test(params.threadId) ||
+      (params.includePreviewImage !== undefined && params.includePreviewImage !== true) ||
       (params.cursor !== undefined &&
         (typeof params.cursor !== "string" || params.cursor.length > 256))
     ) {
@@ -66,6 +67,7 @@ function parseRequest(
       request: {
         hostId: "gateway",
         threadId: params.threadId,
+        ...(params.includePreviewImage === true ? { includePreviewImage: true as const } : {}),
         cursor: params.cursor,
         limit: limit(params.limit),
       } satisfies SessionCatalogReadProviderParams,

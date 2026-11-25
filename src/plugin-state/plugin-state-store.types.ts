@@ -58,7 +58,12 @@ export type PluginStateOperationTransaction = {
   lookup(store: number, key: string): unknown;
   lookupMany<T = unknown>(keys: readonly { store: number; key: string }[]): Array<T | undefined>;
   entries<T = unknown>(store: number): PluginStateEntry<T>[];
-  set(store: number, key: string, value: unknown, options?: { ttlMs?: number }): void;
+  set(
+    store: number,
+    key: string,
+    value: unknown,
+    options?: { ttlMs?: number; evictSameKeysFrom?: number },
+  ): void;
   delete(store: number, key: string): boolean;
 };
 

@@ -40,15 +40,28 @@ async function fixture() {
     },
   });
   const receipts: SessionPendingInputReceipt[] = [];
-  const stage = async (runId: string, disposition?: "interrupted" | "cancelled") => {
+  const stage = async (
+    runId: string,
+    disposition?: "interrupted" | "cancelled",
+    authorId?: string,
+    content?: string,
+  ) => {
     const receipt = expectDefined(
       await stageSessionPendingInput(scope, {
         runId,
         message: {
           role: "user",
-          content: `Synthetic retained prompt ${runId}`,
+          content: content ?? `Synthetic retained prompt ${runId}`,
           timestamp: 1,
           idempotencyKey: `${runId}:user`,
+          ...(authorId
+            ? {
+                __openclaw: {
+                  requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: authorId },
+                  participationRevoked: true,
+                },
+              }
+            : {}),
         },
         requestFingerprint: "e".repeat(64),
         assertCurrent: () => {},
@@ -57,7 +70,7 @@ async function fixture() {
     );
     receipts.push(receipt);
     if (disposition) {
-      receipt.finish(disposition, "failed");
+      receipt.finish(disposition, authorId ? "revoked" : "failed");
       await receipt.settled?.();
     }
     return receipt.inputId;
@@ -68,6 +81,7 @@ async function fixture() {
   const cancelled = await stage("cancelled", "cancelled");
   return {
     client,
+    stage,
     context,
     receipts,
     queued,
@@ -198,4 +212,66 @@ it("requires session write authority at the registered RPC", () =>
     expect(await f.retained()).toEqual(before);
     f.client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
     expect((await f.dismiss([f.cancelled]))[0]).toBe(true);
+  }));
+
+it("retains revoked input for its author alone after session access is removed", () =>
+  withDismissTest(async (f) => {
+    const author = roleClient("none", "revoked-author");
+    const other = roleClient("none", "other-author");
+    const authorId = expectDefined(author.authenticatedUserProfile, "author").profileId;
+    const originalText = "Synthetic retained prompt private-queued-text".repeat(400);
+    const id = await f.stage("private-queued-text", "cancelled", authorId, originalText);
+    const own = (caller = author, inputIds?: string[]) =>
+      chatRpc(f.context, caller, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        agentId: scope.agentId,
+        ...(inputIds ? { inputIds } : {}),
+      });
+    expect(
+      (await chatRpc(f.context, author, "chat.history", { sessionKey: scope.sessionKey }))[0],
+    ).toBe(false);
+    const response = await own();
+    const [ok, result] = response;
+    expect(ok, JSON.stringify(response)).toBe(true);
+    expect(result).toMatchObject({
+      sessionId: scope.sessionId,
+      pendingInputs: { total: 1, items: [{ id, state: "cancelled", endCause: "revoked" }] },
+    });
+    expect(JSON.stringify(result)).toContain("Synthetic retained prompt private-queued-text");
+    expect(
+      await chatRpc(f.context, author, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        inputId: id,
+      }),
+    ).toEqual([true, { text: originalText }]);
+    expect(
+      await chatRpc(f.context, other, "chat.pendingInputs.own", {
+        sessionKey: scope.sessionKey,
+        inputId: id,
+      }),
+    ).toEqual([true, { text: null }]);
+    expect(result).not.toHaveProperty("messages");
+    expect(result).not.toHaveProperty("sessionInfo");
+    expect(await own(other, [id])).toEqual([
+      true,
+      { pendingInputs: { items: [], total: 0, queuedCount: 0 } },
+    ]);
+    const [, shared] = await chatRpc(f.context, f.client, "chat.history", {
+      sessionKey: scope.sessionKey,
+    });
+    expect(JSON.stringify(shared)).not.toContain("private-queued-text");
+    expect(
+      await chatRpc(f.context, f.client, "chat.message.get", {
+        sessionKey: scope.sessionKey,
+        messageId: `pending:${id}`,
+      }),
+    ).toEqual([true, { ok: false, unavailableReason: "not_found" }]);
+    const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
+    expect(await own(author, [id])).toEqual([
+      true,
+      { pendingInputs: { items: [], total: 0, queuedCount: 0 } },
+    ]);
+    expect(changed).not.toHaveBeenCalled();
+    expect((await f.retained())[id]).toBe("cancelled:hidden");
+    expect(await own()).toEqual([true, { pendingInputs: { items: [], total: 0, queuedCount: 0 } }]);
   }));

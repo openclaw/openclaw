@@ -2,6 +2,7 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogProfileRelation,
+  SessionsCatalogReadResult,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -664,6 +665,7 @@ export abstract class ChatPaneStateOwner {
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
   readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
+    catalogPreviewImage: SessionsCatalogReadResult["previewImage"];
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
@@ -672,6 +674,7 @@ export abstract class ChatPaneStateOwner {
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
   }>({
+    catalogPreviewImage: undefined,
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,

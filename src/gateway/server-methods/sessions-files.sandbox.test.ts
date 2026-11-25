@@ -15,6 +15,10 @@ import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as checkoutDiff from "../../sessions/session-diff.js";
@@ -464,6 +468,62 @@ it("keeps real guest file requests in their session's private sandbox", async ()
       } finally {
         connection.abort();
       }
+    },
+  );
+});
+
+it("lets opted-in sandbox-required members read only their invited owner's workspace", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+      };
+      const role = cfg.gateway!.roles!.definitions.invited!;
+      role.sessions.maxInvitedAccess = "send";
+      role.scopes = ["operator.sessions.read"];
+      role.sandbox = "required";
+      setRuntimeConfigSnapshot(cfg);
+      const client = roleClient("invited", "invited-file-reader");
+      client.connect.scopes = role.scopes;
+      const profileId = client.authenticatedUserProfile!.profileId;
+      const scope = { agentId: "main", sessionKey: "agent:main:invited-host-files" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "invited-host-files",
+        updatedAt: 1,
+        sessionRoot: state.workspaceDir,
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
+      addSessionMember(scope, { identityId: profileId, addedBy: "owner", access: "read" });
+      await fs.writeFile(path.join(state.workspaceDir, "invited.txt"), "invited workspace bytes");
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const read = async (file: string) => {
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "invited-read",
+            method: "sessions.files.get",
+            params: { ...scope, path: file },
+          },
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+        return respond.mock.calls.map(([ok, payload, error]) => ({ ok, payload, error }));
+      };
+      const result = await read("invited.txt");
+      expect(result[0]?.error).toBeUndefined();
+      expect(expectOkPayload(result).file.content).toBe("invited workspace bytes");
+      expectError(await read("../outside.txt"));
+      delete role.sessions.maxInvitedAccess;
+      expect(expectError(await read("invited.txt"))).toMatchObject({ code: "FORBIDDEN" });
+      role.sessions.maxInvitedAccess = "send";
+      removeSessionMember(scope, profileId);
+      expectError(await read("invited.txt"));
     },
   );
 });
