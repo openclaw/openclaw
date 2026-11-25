@@ -100,7 +100,8 @@ struct RealtimeTalkRelaySessionPlaybackTests {
 
     @Test func `a whole reply delivered in one burst does not overflow playback`() async throws {
         // xAI delivers a reply faster than realtime; 10 s arriving before playback drains is normal.
-        let player = StalledPCMStreamingAudioPlayer()
+        let barrier = RealtimeRelayStartupBarrier()
+        let player = DrainingPCMStreamingAudioPlayer(drainBarrier: barrier)
         var terminations: [RealtimeTalkRelayTermination] = []
         let session = RealtimeTalkRelaySession(
             transport: RealtimeTalkRelayTransport(
@@ -113,13 +114,29 @@ struct RealtimeTalkRelaySessionPlaybackTests {
             onIssue: { _ in },
             onTermination: { terminations.append($0) },
             onSpeakingChanged: { _ in })
+        defer { session.stop() }
         session._test_setRelaySessionId("relay-1")
-
-        for _ in 0..<500 {
-            await session._test_handleGatewayEvent(
-                outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
+        let expectedFrames = (0..<500).map { index in
+            var frame = Data(repeating: 1, count: 960)
+            frame[0] = UInt8(index % 256)
+            frame[1] = UInt8(index / 256)
+            return frame
         }
 
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1", data: expectedFrames[0]))
+        try await barrier.waitUntilEntered()
+        for frame in expectedFrames.dropFirst() {
+            await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-1", data: frame))
+        }
+
+        #expect(player.frames.isEmpty)
+        #expect(terminations.isEmpty)
+        #expect(player.stopCount == 0)
+        await session._test_handleGatewayEvent(outputAudioDoneEvent(turnId: "turn-1"))
+        await barrier.release()
+        try await player.waitUntilPlaybackFinished()
+
+        #expect(player.frames == expectedFrames)
         #expect(terminations.isEmpty)
         #expect(player.stopCount == 0)
     }
