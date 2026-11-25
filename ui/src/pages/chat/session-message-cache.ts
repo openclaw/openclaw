@@ -25,7 +25,11 @@ import type {
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
+  chatHistoryTrimOrder,
+  sameChatHistoryPagination,
+  trimmedChatHistoryPagination,
+} from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -563,7 +567,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.details === snapshot.details &&
     existing.snapshot.rowDisplay === snapshot.rowDisplay &&
     existing.snapshot.avatarSources === snapshot.avatarSources &&
-    samePagination(existing.snapshot.pagination, snapshot.pagination)
+    sameChatHistoryPagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
   }
@@ -600,7 +604,7 @@ export function readChatSessionSnapshot(
 }
 
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
+  let messageWeights: number[] = [];
   for (const message of snapshot.messages) {
     const weight = serializedArrayItemWeight(message);
     if (weight === null) {
@@ -649,6 +653,13 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     if (start >= snapshot.messages.length) {
       return null;
     }
+    if (start === 0) {
+      const order = chatHistoryTrimOrder(snapshot.messages);
+      if (order) {
+        snapshot = { ...snapshot, messages: order.map((index) => snapshot.messages[index]) };
+        messageWeights = order.map((index) => messageWeights[index]!);
+      }
+    }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
@@ -694,20 +705,6 @@ function serializedArrayItemWeight(value: unknown): number | null {
   } catch {
     return null;
   }
-}
-
-function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
-  if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
-    return false;
-  }
-  if (left.hasMore && right.hasMore) {
-    return (
-      left.nextOffset === right.nextOffset &&
-      left.olderCursor === right.olderCursor &&
-      left.needsBoundary === right.needsBoundary
-    );
-  }
-  return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
 
 function trimChatSessionSnapshotCache(cache: ChatMessageCache, updatedKey: string): void {

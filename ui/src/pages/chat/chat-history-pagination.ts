@@ -1,3 +1,49 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.ts";
+
+export function nativeHistoryMessagePosition(message: unknown) {
+  return readTranscriptDisplayPosition(
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+  );
+}
+
+/** A trimmed snapshot must retain a physical suffix that its older cursor can refill. */
+export function chatHistoryTrimOrder(messages: readonly unknown[]): number[] | undefined {
+  const positions = messages.map(nativeHistoryMessagePosition);
+  let order: number[] | undefined;
+  for (let start = 0; start < positions.length;) {
+    const first = positions[start];
+    let end = start + 1;
+    if (first) {
+      let previous = first;
+      let relocated = Boolean(first.activity);
+      let inverted = false;
+      while (end < positions.length) {
+        const next = positions[end];
+        // Unpositioned rows and distinct transcript generations are ordering barriers.
+        if (!next || next.source !== first.source) {
+          break;
+        }
+        inverted ||= next.rawSeq < previous.rawSeq;
+        relocated ||= Boolean(next.activity);
+        previous = next;
+        end++;
+      }
+      if (relocated && inverted) {
+        order ??= messages.map((_, index) => index);
+        const physical = order
+          .slice(start, end)
+          .sort((a, b) => positions[a]!.rawSeq - positions[b]!.rawSeq);
+        for (const [offset, index] of physical.entries()) {
+          order[start + offset] = index;
+        }
+      }
+    }
+    start = end;
+  }
+  return order;
+}
+
 export type ChatHistoryPagination =
   | { hasMore: false; totalMessages?: number; completeSnapshot?: true }
   | {
@@ -25,4 +71,21 @@ export function trimmedChatHistoryPagination(
     needsBoundary: true,
     ...(pagination.totalMessages !== undefined ? { totalMessages: pagination.totalMessages } : {}),
   };
+}
+
+export function sameChatHistoryPagination(
+  left: ChatHistoryPagination,
+  right: ChatHistoryPagination,
+): boolean {
+  if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
+    return false;
+  }
+  if (left.hasMore && right.hasMore) {
+    return (
+      left.nextOffset === right.nextOffset &&
+      left.olderCursor === right.olderCursor &&
+      left.needsBoundary === right.needsBoundary
+    );
+  }
+  return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
