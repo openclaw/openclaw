@@ -1303,8 +1303,18 @@ function resolveInheritedIncludeScope(
   ownedTargets?: ReadonlySet<string>,
   root?: string,
   runtime: VitestPatternRuntime = {},
+  watchMode = false,
 ) {
   const owned = includePatterns.filter((pattern) => ownedTargets?.has(pattern));
+  if (root && runtime.matchesGlob && runtime.resolvePattern && !watchMode) {
+    // One-shot runs can intersect physical files; watch must retain live symbolic constraints.
+    return expandVitestIncludePatterns(
+      includePatterns,
+      root,
+      runtime,
+      uniqueOrdered([...inheritedPatterns, ...owned]),
+    );
+  }
   const selection = intersectIncludePatterns(
     uniqueOrdered([...inheritedPatterns, ...owned]),
     includePatterns,
@@ -6571,6 +6581,7 @@ export function createVitestRunSpecs(
               ownedTargets,
               cwd,
               params,
+              originalPlan.watchMode,
             ),
           }
         : originalPlan;
@@ -6688,8 +6699,10 @@ function expandVitestIncludePatterns(
   includePatterns: string[],
   cwd: string,
   runtime: VitestPatternRuntime = {},
+  constraintPatterns?: string[],
 ) {
   const selection = splitIncludePatterns(includePatterns);
+  const constraints = constraintPatterns && splitIncludePatterns(constraintPatterns);
   const needsExpansion = (pattern: string) =>
     isGlobTarget(pattern) || Boolean(runtime.resolvePattern && pattern.includes("\\"));
   const candidateFiles = selection.include.some(needsExpansion)
@@ -6702,7 +6715,7 @@ function expandVitestIncludePatterns(
       path.resolve(cwd, file).split(path.sep).join("/"),
       resolvePattern(pattern, cwd),
     );
-  return uniqueOrdered(
+  const selectedFiles = uniqueOrdered(
     selection.include.flatMap((pattern) => {
       if (!needsExpansion(pattern)) return [pattern];
       return candidateFiles
@@ -6711,6 +6724,13 @@ function expandVitestIncludePatterns(
     }),
   )
     .filter((file) => !selection.exclude.some((pattern) => matches(file, pattern)))
+    .flatMap((file) => {
+      if (!constraints) return [file];
+      if (constraints.exclude.some((pattern) => matches(file, pattern))) return [];
+      return constraints.include
+        .filter((pattern) => matches(file, pattern))
+        .map((pattern) => (path.isAbsolute(pattern) ? path.resolve(cwd, file) : file));
+    })
     .map((file) => {
       if (!runtime.resolvePattern) return file;
       const encoded = resolvePattern(".", path.resolve(cwd, file));
@@ -6718,6 +6738,7 @@ function expandVitestIncludePatterns(
         ? encoded
         : path.posix.relative(resolvePattern(".", cwd), encoded);
     });
+  return uniqueOrdered(selectedFiles);
 }
 
 export function writeVitestIncludeFile(

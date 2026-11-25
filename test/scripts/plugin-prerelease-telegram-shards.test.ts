@@ -82,7 +82,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     );
   });
 
-  it("supplements manifest-only and root tests for an older package-only planner", () => {
+  it.each([false, true])("discovers missing owners (hook: %s)", (deferred) => {
     const sourceTest = "extensions/source-only/index.test.ts";
     const rootTest = "extensions/root.test.ts";
     const root = fixtures.target(
@@ -104,8 +104,14 @@ export const splitExtensionTestJobTargets=(_config,files)=>[files];
         "scripts/lib/bundled-plugin-source-utils.mjs": `
 export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPath:'extensions/source-only/openclaw.plugin.json'}];
 `,
-        "test/vitest/extensions.mjs":
-          "export default {test:{include:['extensions/**/*.test.ts']}};\n",
+        "test/vitest/extensions.mjs": deferred
+          ? `import path from 'node:path';
+export default {plugins:[{name:'fixture-selection',config:()=>({
+  root:path.resolve('extensions/source-only'),
+  test:{dir:path.resolve('extensions'),include:['**/*.test.ts'],exclude:['**/ignored.test.ts']},
+})}]};`
+          : "export default {test:{include:['extensions/**/*.test.ts']}};\n",
+        ...(deferred ? { "extensions/source-only/ignored.test.ts": "" } : {}),
         [sourceTest]: "",
         [rootTest]: "",
         "extensions/packaged/index.test.ts": "",

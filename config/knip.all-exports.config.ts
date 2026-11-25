@@ -51,6 +51,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  // The opt-in authority Vitest config owns this proof; Knip does not run its pattern hook.
+  "test/codex-worker-authority.proof.ts!",
   // The isolated live steering launcher is invoked directly by its documented command.
   "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
