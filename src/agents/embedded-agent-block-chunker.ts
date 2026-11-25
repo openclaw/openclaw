@@ -11,6 +11,11 @@ import {
 } from "../../packages/markdown-core/src/fences.js";
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
+  findHtmlBlockBreakIndex,
+  findHtmlBlockSpans,
+  mergeBreakSpans,
+} from "./embedded-agent-block-chunker.html.js";
+import {
   findTableBreakIndex,
   findTableContinuationAtBoundary,
   findTableContinuationHeader,
@@ -343,11 +348,17 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findTableSpans(source, fenceSpans, maxChars, !force);
+    const htmlBlocks = findHtmlBlockSpans(source, fenceSpans, maxChars, !force);
     const unsafe =
-      tables.length > 0
-        ? [...fenceSpans, ...tables].toSorted((left, right) => left.start - right.start)
-        : fenceSpans;
-    const spans: BreakSpans = { fences: fenceSpans, tables, unsafe };
+      htmlBlocks.length > 0
+        ? mergeBreakSpans([...fenceSpans, ...tables, ...htmlBlocks])
+        : tables.length > 0
+          ? [...fenceSpans, ...tables].toSorted((left, right) => left.start - right.start)
+          : fenceSpans;
+    // Paragraph flushes must not cut through an HTML island either.
+    const paragraphSpans =
+      htmlBlocks.length > 0 ? mergeBreakSpans([...fenceSpans, ...htmlBlocks]) : fenceSpans;
+    const spans: BreakSpans = { fences: fenceSpans, tables, htmlBlocks, unsafe };
     const originalIndex = (index: number) =>
       removedFenceInfo.reduce(
         (offset, removed) => offset + (removed.at <= index ? removed.length : 0),
@@ -388,7 +399,7 @@ export class EmbeddedBlockChunker {
       }
 
       if (chunking.flushOnParagraph && !force) {
-        const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
+        const paragraphBreak = findNextParagraphBreak(source, paragraphSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
         if (paragraphBreak !== null && paragraphBreak - start <= paragraphLimit) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak)}`;
@@ -640,6 +651,11 @@ export class EmbeddedBlockChunker {
       return { index: -1 };
     }
 
+    const htmlBreak = findHtmlBlockBreakIndex(buffer, offset, window.length, spans);
+    if (htmlBreak !== undefined) {
+      return { index: htmlBreak };
+    }
+
     const tableBreak = findTableBreakIndex(buffer, offset, window.length, spans);
     if (tableBreak !== undefined) {
       return { index: tableBreak };
@@ -725,7 +741,7 @@ function skipLeadingNewlines(value: string, start = 0): number {
 
 function findNextParagraphBreak(
   buffer: string,
-  fenceSpans: FenceSpan[],
+  fenceSpans: readonly BreakSpan[],
   startIndex = 0,
   minCharsFromStart = 1,
 ): number | null {

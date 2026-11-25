@@ -7,7 +7,9 @@ type TableSpan = BreakSpan & { header?: string };
 export type BreakSpans = {
   fences: FenceSpan[];
   tables: TableSpan[];
-  /** Fences and tables, sorted by start. */
+  /** Block-level HTML islands that fit in one chunk. */
+  htmlBlocks?: BreakSpan[];
+  /** Fences, tables, and HTML islands, sorted by start. */
   unsafe: BreakSpan[];
 };
 
