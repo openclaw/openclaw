@@ -247,6 +247,12 @@ export type SessionMaintenanceMetadataResult =
       ageFact?: SessionEntryMaintenanceAgeFact;
     };
 
+/** An exact committed storage generation whose final current entry was removed. */
+export type SessionMaintenanceMcpRelease = {
+  sessionIds: string[];
+  source: { agentId: string; databaseIdentity: string; databaseBirthtime?: string };
+};
+
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       kind: "lifecycle-projection-plan";
@@ -273,6 +279,7 @@ export type SqliteSessionReclamationPlan =
       agentId: string;
       entries: SessionEntryRemovalPlan[];
       kind: "maintenance-finalize";
+      retainedMcpSessionIds?: readonly string[];
     })
   | (SessionReclamationPlanBase & {
       deleteParams: ReclamationDeleteParams;
@@ -320,6 +327,7 @@ type SqliteSessionReclamationValue =
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
         /** Positions in the captured plan; never echo its saved entry snapshots. */
         committedEntryIndices: number[];
+        mcpRelease?: SessionMaintenanceMcpRelease;
       };
     }
   | {

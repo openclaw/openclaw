@@ -1,5 +1,6 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { bindSessionMcpStoreOwner } from "../../agents/agent-bundle-mcp-store-owner.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -65,7 +66,32 @@ export function createCronSessionRowWriter(params: {
 }): CronSessionRowWriter {
   const { agentId, agentSessionKey } = params;
   let baseSessionMaintenanceStarted = false;
-  return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+  return async ({
+    storePath,
+    sessionKey,
+    operation,
+    resetBoundary,
+    assertCommitAllowed,
+    storeAdmission,
+  }) => {
+    // Only the pre-run write requests a witness. Publication waits for the entire write to succeed.
+    if (storeAdmission) {
+      bindSessionMcpStoreOwner(storeAdmission, undefined);
+    }
+    let databaseIdentity: string | undefined;
+    let databaseBirthtime: string | undefined;
+    const publish = (entry: MutableCronSession["sessionEntry"] | null) => {
+      if (storeAdmission && entry && databaseIdentity !== undefined) {
+        bindSessionMcpStoreOwner(storeAdmission, {
+          agentId,
+          sessionId: entry.sessionId,
+          sessionKey,
+          databaseIdentity,
+          databaseBirthtime,
+        });
+      }
+      return entry;
+    };
     const assertCurrent = () => {
       params.assertCurrent?.();
       assertCommitAllowed?.();
@@ -82,6 +108,12 @@ export function createCronSessionRowWriter(params: {
         agentId,
         storePath,
         commitGuard: assertCurrent,
+        onLifecycleCommitted: storeAdmission
+          ? (source) => {
+              databaseIdentity = source?.physicalIdentity;
+              databaseBirthtime = source?.birthtime;
+            }
+          : undefined,
         upserts: [
           {
             sessionKey,
@@ -92,7 +124,7 @@ export function createCronSessionRowWriter(params: {
         ],
         skipMaintenance: true,
       });
-      return entry;
+      return publish(entry);
     }
     const { applySessionEntryOperation } =
       await import("../../config/sessions/session-accessor.sqlite-entry.js");
@@ -102,11 +134,19 @@ export function createCronSessionRowWriter(params: {
       // The maintenance owner follows later writes through its receipt subscription.
       skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
       workerGuard: { assertCurrent },
+      onCommittedSource: storeAdmission
+        ? (source) => {
+            if (source.agentId === agentId) {
+              databaseIdentity = source.databaseIdentity;
+              databaseBirthtime = source.databaseBirthtime;
+            }
+          }
+        : undefined,
     });
     if (sessionKey === agentSessionKey) {
       baseSessionMaintenanceStarted = true;
     }
-    return entry;
+    return publish(entry);
   };
 }
 

@@ -84,6 +84,7 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 export type CronSessionRowWriter = (params: {
   operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>;
   resetBoundary?: SessionResetBoundaryWrite;
+  storeAdmission?: object;
   sessionKey: string;
   storePath: string;
   assertCommitAllowed?: () => void;
@@ -93,6 +94,7 @@ export type CronSessionRowWriter = (params: {
 export type PersistCronSessionEntry = (
   assertCommitAllowed?: () => void,
   entry?: SessionEntry,
+  storeAdmission?: object,
 ) => Promise<void>;
 
 /** Hidden exact-run row retained while detached cron work can still resume. */
@@ -220,7 +222,11 @@ export function createPersistCronSessionEntry(params: {
   workspaceDir: string;
   persistSessionEntry: CronSessionRowWriter;
 }): PersistCronSessionEntry {
-  return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
+  return async (
+    assertCommitAllowed,
+    liveEntry = params.cronSession.sessionEntry,
+    storeAdmission,
+  ) => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     // Reset admission completes before a CLI turn can own settlement.
     if (assertCommitAllowed && resetBoundaryPending) {
@@ -244,6 +250,7 @@ export function createPersistCronSessionEntry(params: {
       committedEntry = await params.persistSessionEntry({
         storePath: params.cronSession.storePath,
         sessionKey: params.agentSessionKey,
+        storeAdmission,
         operation: {
           kind: "cron-session",
           sessionKey: params.agentSessionKey,

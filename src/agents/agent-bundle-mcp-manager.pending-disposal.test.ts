@@ -15,11 +15,14 @@ import {
   makeManagerRuntime,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
+import { bindSessionMcpStoreOwner } from "./agent-bundle-mcp-store-owner.js";
 
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 type RuntimeParams = Parameters<ReturnType<typeof createSessionMcpRuntimeManager>["acquire"]>[0];
 
-async function verifyPendingDisposal(mode: "idle sweep" | "captured retirement") {
+async function verifyPendingDisposal(
+  mode: "idle sweep" | "captured retirement" | "store retirement",
+) {
   const terminate = createDeferred();
   const server = await startCatalogRecoveryMcpServer("idle-empty-successor", {
     holdTermination: terminate.promise,
@@ -41,10 +44,13 @@ async function verifyPendingDisposal(mode: "idle sweep" | "captured retirement")
     },
   };
   const sessionKey = expectDefined(params.sessionKey, "MCP session key");
+  const source = { agentId: "test", databaseIdentity: "first" };
+  const admission = {};
+  bindSessionMcpStoreOwner(admission, { ...source, sessionId: params.sessionId, sessionKey });
   let sweep: Promise<void> | undefined;
   let retirement: Promise<void> | undefined;
   try {
-    const original = await manager.acquire(params);
+    const original = await manager.acquire({ ...params, storeAdmission: admission });
     try {
       expect((await original.runtime.getCatalog()).tools).toHaveLength(1);
       clock.setTime(original.runtime.lastUsedAt + 100);
@@ -72,6 +78,18 @@ async function verifyPendingDisposal(mode: "idle sweep" | "captured retirement")
       expect(retired).toBe(false);
     }
     const acquiring = manager.acquire({ ...params, cfg });
+    if (mode === "store retirement") {
+      const captured = expectDefined(
+        manager.captureStoreRetirement(params.sessionId),
+        "closing store",
+      );
+      let retired = false;
+      retirement = captured(source).then(() => {
+        retired = true;
+      });
+      await nextTurn();
+      expect(retired).toBe(false);
+    }
     expect(manager.resolveSessionId(sessionKey)).toBe(params.sessionId);
     terminate.resolve();
     await Promise.all([sweep, retirement]);
@@ -99,7 +117,7 @@ async function verifyPendingDisposal(mode: "idle sweep" | "captured retirement")
   }
 }
 
-it.for(["idle sweep", "captured retirement"] as const)(
+it.for(["idle sweep", "captured retirement", "store retirement"] as const)(
   "forgets an empty successor binding after %s settles",
   verifyPendingDisposal,
 );

@@ -5,6 +5,10 @@ import {
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
+import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../agents/agent-bundle-mcp-store-owner.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
@@ -39,6 +43,7 @@ export function prepareCronRunAdmission(params: {
   runId: string;
   sessionId?: string;
   sessionKey: string;
+  storeAdmission?: object;
   sourceReplySessionKey?: string;
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
@@ -141,7 +146,9 @@ export function prepareCronRunAdmission(params: {
         expiresWithRun: true,
       })
     : undefined;
+  inheritSessionMcpStoreOwner(params.storeAdmission, operationalRunInstance);
   const close = () => {
+    bindSessionMcpStoreOwner(operationalRunInstance, undefined);
     params.scheduledExecution.release();
     revokeMessageActionTurnCapability(messageActionTurnCapability);
     preparedRunAdmission.close();

@@ -15,6 +15,10 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../agent-bundle-mcp-store-owner.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
 import type { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -270,5 +274,23 @@ export function retainAgentHarnessCompactionSource(
       released = true;
       release?.();
     }
+  };
+}
+
+/** The MCP store witness and work already admitted by the host expire together. */
+export function createHarnessHostLifetime(storeAdmission: object | undefined) {
+  const controller = new AbortController();
+  return {
+    signal: controller.signal,
+    bindAbortSignal(signal: AbortSignal | undefined) {
+      return signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    },
+    bindCapabilities(capabilities: object) {
+      inheritSessionMcpStoreOwner(storeAdmission, capabilities);
+      return () => {
+        bindSessionMcpStoreOwner(capabilities, undefined);
+        controller.abort();
+      };
+    },
   };
 }
