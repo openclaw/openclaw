@@ -28,7 +28,8 @@ export function createPreparedSessionTargetAssertion(input: {
     | "attempt_inactive"
     | "session_identity_changed"
     | "target_changed"
-    | "run_inactive";
+    | "source_authority_refused"
+    | "scope_authority_refused";
   let refusalRecorded = false;
   const recordTargetRefusal = (reason: RefusalReason, field?: (typeof targetFields)[number]) => {
     // Retained callbacks can refuse after terminal publication. Keep the first
@@ -63,13 +64,22 @@ export function createPreparedSessionTargetAssertion(input: {
       throw new SessionWorkStartChangedError("Session target preparation outlived its attempt");
     }
   };
-  // Admitted once at run start: only Stop, run lifetime and the selected target fence this.
-  return composeSessionSourceAssertion([], () => {
+  return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
+    assertTargetCurrent();
+    try {
+      assertSource();
+    } catch (cause) {
+      recordTargetRefusal("source_authority_refused");
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
+        cause,
+      });
+    }
+    // Source callbacks can retire this attempt or replace its selected target.
     assertTargetCurrent();
     try {
       assertActiveRun.assertScopeCurrent();
     } catch (cause) {
-      recordTargetRefusal("run_inactive");
+      recordTargetRefusal("scope_authority_refused");
       throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
         cause,
       });
