@@ -324,11 +324,12 @@ suite.define(() => {
 
   it("keeps the remove button reachable for a long dashboard author on a phone", async () => {
     const author = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
-    const rows = dashboardRows.slice(0, 2).map((row, index) => ({
-      ...row,
-      hasBoard: true,
-      createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
-    }));
+    const rows = dashboardRows.slice(0, 2).map((row, index) =>
+      Object.assign({}, row, {
+        hasBoard: true,
+        createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
+      }),
+    );
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
