@@ -14,7 +14,7 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
-In the Control UI, the **Context compacted** divider shows the tokens saved and the percentage reduction from the pre-compaction token count when both before and after counts are available.
+In the Control UI, compaction appears as ordinary activity: **Compacting** while running and **Compacted context** when complete. It joins nearby tool activity; the collapsed summary describes the work without showing operation counts. Manual compaction while the agent is idle uses the same standalone activity row. Expand the row to see tokens saved and the percentage reduction when both before and after counts are available.
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
@@ -84,9 +84,9 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-Built-in client maintenance starts at the smaller of 80% of the active window
+Built-in client maintenance starts at the smaller of 85% of the active window
 and the window minus its compaction reserve. A 1,000,000-token window therefore
-starts maintenance at 800,000 tokens, while the summary reserve stays 20,000.
+starts maintenance at 850,000 tokens, while the summary reserve stays 20,000.
 During tool loops, completed provider usage triggers this maintenance before the
 next request. The request boundary also checks projected occupancy, including
 new tool results, against the full window even when proactive compaction is
@@ -110,9 +110,9 @@ trigger a second accounting pass over the entire conversation history.
 
 In the built-in runtime, automatic compaction runs at normal request boundaries,
 including between completed tool rounds. It starts when the known or projected
-request occupancy reaches the smaller of the reserve-based prompt budget and 80%
+request occupancy reaches the smaller of the reserve-based prompt budget and 85%
 of the context window (rounded down), the same trigger as client maintenance.
-For a 500,000-token window with a 20,000-token reserve, that means 400,000
+For a 500,000-token window with a 20,000-token reserve, that means 425,000
 tokens, not 480,000. The remaining headroom holds new tool results and the
 summary request itself. Native ChatGPT
 sign-in uses V2 compaction there; every other route sends a

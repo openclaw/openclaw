@@ -31,7 +31,6 @@ describe("prepared harness tool environment", () => {
           operatorAuthority: createTestOperatorAuthority({
             profileId: "requester",
             scopes: ["operator.read"],
-            assertCurrent: () => {},
           }),
         },
       ),

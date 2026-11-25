@@ -302,9 +302,7 @@ describe("createOpenClawCodingTools", () => {
 
     releaseRun?.();
     await activeRun;
-    await expect(retainedResolver!()).rejects.toThrow(
-      "Configured MCP cron authority is no longer active for this run",
-    );
+    await expect(retainedResolver!()).rejects.toThrow("This run's MCP cron access has ended");
     const retired = createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false });
     await expectOwnerGated(retired, "automations");
     expect(resolve).toHaveBeenCalledTimes(1);

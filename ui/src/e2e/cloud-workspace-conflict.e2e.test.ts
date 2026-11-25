@@ -227,7 +227,7 @@ suite.define(() => {
   });
 
   it.each(["failed", "reclaimed", "request"])(
-    "exposes the full %s diagnostic with keyboard and clipboard access",
+    "preserves the full %s diagnostic on its owning error surface",
     async (failedState) => {
       await suite.withPage(
         { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] },
@@ -261,11 +261,34 @@ suite.define(() => {
           await alert.waitFor({ timeout: 10_000 });
           expect(await alert.textContent()).toContain("provider reported lease destroyed");
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
-          const summary = alert.locator("summary");
+          if (failedState !== "request") {
+            const notice = page.locator(".chat-error--reply");
+            const message = notice.locator(".app-toast__message");
+            for (const width of [1440, 320]) {
+              await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+              expect(await message.textContent()).toBe(workerFailureDiagnostic);
+              expect(
+                await notice
+                  .locator(
+                    "img, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(await message.evaluate((node) => getComputedStyle(node).textOverflow)).toBe(
+                "ellipsis",
+              );
+              expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+                true,
+              );
+            }
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            return;
+          }
+          const toggle = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator(".lazy-view-error__detail");
-          const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
-          expect(await summary.count()).toBe(1);
+          const expected = workerFailureDiagnostic;
+          expect(await toggle.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {
             await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
@@ -283,7 +306,7 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
-            await summary.press("Enter");
+            await toggle.press("Enter");
             await diagnostic.waitFor({ state: "visible" });
             expect(await diagnostic.textContent()).toBe(expected);
             expect(await alert.locator("img").count()).toBe(0);
@@ -298,10 +321,11 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            await page.keyboard.press("Tab");
-            expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
-            await page.keyboard.press("Tab");
-            expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+            const focusOrder = [diagnostic, copy];
+            for (const target of focusOrder) {
+              await page.keyboard.press("Tab");
+              expect(await target.evaluate((node) => node === document.activeElement)).toBe(true);
+            }
             await page.keyboard.press("Shift+Tab");
             await page.keyboard.press("PageDown");
             await expect
@@ -325,7 +349,7 @@ suite.define(() => {
               window.getSelection()?.removeAllRanges();
               node.scrollTop = node.scrollHeight;
             });
-            await summary.press("Space");
+            await toggle.press("Space");
             await expect.poll(() => diagnostic.isVisible()).toBe(false);
             await alert
               .getByRole("button", { name: "Copy error", exact: true, includeHidden: true })

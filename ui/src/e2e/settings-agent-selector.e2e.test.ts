@@ -99,7 +99,7 @@ suite.define(() => {
   it.each([1440, 390])("closes only the agent menu on Escape at %ipx", async (width) => {
     await withSettingsPage(width, "appearance", async (page) => {
       if (width === 390) {
-        await page.locator(".topbar-nav-toggle").click();
+        await page.locator(".topbar-nav-toggle").press("Enter");
       }
       const picker = page.locator(".settings-sidebar openclaw-agent-select");
       const trigger = picker.locator(".agent-select__trigger");

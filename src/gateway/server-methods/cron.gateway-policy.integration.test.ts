@@ -108,11 +108,7 @@ async function withModelTurn(
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const capability = expectDefined(
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "local" },
-      source === "channel-owner" ? { source, isCurrent: () => true } : { source },
-    ),
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source }),
     "model authority",
   );
   const identity: AgentRuntimeIdentity = {

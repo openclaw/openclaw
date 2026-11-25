@@ -54,21 +54,15 @@ function expectUntouched(fixture: Fixture, operation: Operation, cancel: ReturnT
 
 it.for([
   { change: "same profile", boundary: "native" },
-  { change: "profile merge", boundary: "native" },
   { change: "target closed", boundary: "native" },
   { change: "same profile", boundary: "mailbox" },
-  { change: "profile merge", boundary: "mailbox" },
 ] as const)(
   "keeps bound native V2 steering on its captured owner ($change at $boundary)",
   async ({ change, boundary }, { signal }) => {
     await using fixture = await createFixture();
     fixture.params.queueMode = "steer";
     const operation = activeOperation(fixture);
-    const { profile, merge } = bindChatProfile(
-      fixture.client,
-      "native-steering@example.test",
-      true,
-    );
+    const { profile } = bindChatProfile(fixture.client, "native-steering@example.test", true);
     const fingerprint = "native-steering-tools";
     bindSteeringTools(operation, fingerprint);
     operation.setPhase("running");
@@ -148,9 +142,7 @@ it.for([
       }
       expect(enqueued).not.toHaveBeenCalled();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      if (change === "profile merge") {
-        merge();
-      } else if (change === "target closed") {
+      if (change === "target closed") {
         operation.complete();
       }
       release.resolve();
@@ -164,13 +156,9 @@ it.for([
         expect(nativeEntered).toHaveBeenCalledOnce();
         expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
       } else {
-        expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
+        expect(nativeEntered).toHaveBeenCalledOnce();
         expect.soft(enqueued).not.toHaveBeenCalled();
-        const errorMessage = expect.stringContaining(
-          boundary === "mailbox" || change === "profile merge"
-            ? "Authenticated profile verification is unavailable"
-            : "The message input is no longer available",
-        );
+        const errorMessage = expect.stringContaining("The message input is no longer available");
         const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect.soft(failure).toMatchObject({
           ok: false,
@@ -305,16 +293,12 @@ it.each(["backend", "question dispatcher"] as const)(
       profileId: profile.id,
       scopes: fixture.client.connect.scopes,
     });
-    expect(authority.assertCurrent).not.toThrow();
     expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
       total: 1,
       items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
     });
     expectUntouched(fixture, operation, cancel);
     await fixture.finishDispatch();
-    expect(authority.assertCurrent).toThrow(
-      "Operator execution ended. Reconnect to the Gateway, then resend your message.",
-    );
   },
 );
 

@@ -315,7 +315,6 @@ describe("registered decision capability", () => {
       const operatorAuthority = createTestOperatorAuthority({
         profileId: "decision-reader",
         scopes: ["operator.write"],
-        assertCurrent: () => {},
         modelPolicy: prepareOperatorModelPolicy({
           cfg: selected,
           policy: { sourceAgent: "main", allow: ["fixture/*"], deny: ["fixture/fixture-v1"] },

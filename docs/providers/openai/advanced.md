@@ -185,8 +185,12 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     For the embedded OpenClaw runtime, the Control UI uses provider model and
     route limits when offering Standard, Fast, and Ultrafast. This works for
     auth profiles, environment keys, and provider config (including SecretRefs).
-    Models limited to Standard or Fast keep those restrictions. Custom endpoints
-    and ChatGPT account catalogs retain their own tier policy.
+    With an OpenAI API key, OpenClaw also reads each model's tiers from the same
+    account model listing Codex uses for that key, and offers only those: for
+    example, GPT-6 Cyber advertises no Fast or Ultrafast tier, so the picker
+    shows Standard only. When that listing is unavailable, every tier stays
+    offered. Models limited to Standard or Fast keep those restrictions. Custom
+    endpoints and ChatGPT account catalogs retain their own tier policy.
 
     If a response to an Ultrafast request echoes a different `service_tier`,
     OpenClaw records a temporary observation for that credential, model, and route.
@@ -200,12 +204,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     tool activity, or active-response steering, OpenClaw automatically retries
     that request at a slower tier: Ultrafast → Fast → Standard. The hint records
     that recovery without changing saved preferences. After two consecutive
-    Ultrafast rejections in the same run and account/model route, later model
-    requests use Fast directly for ten minutes or twenty model requests,
-    whichever ends first. The next Ultrafast request probes the tier again: a
-    rejection renews the cooldown, while a successful Ultrafast request resets
-    the rejection count. A new run starts fresh. A successful response served at
-    a different tier does not itself trigger a cooldown.
+    Ultrafast rejections for the same account/model route, later model requests
+    on that route, including later turns and runs, use Fast directly for ten
+    minutes or twenty model requests, whichever ends first. The next Ultrafast
+    request probes the tier again: a rejection renews the cooldown, while a
+    successful Ultrafast request resets the rejection count. The cooldown is
+    kept in memory and starts fresh after a Gateway restart. A successful
+    response served at a different tier does not itself trigger a cooldown.
 
     The cooldown also applies to explicit Ultrafast request overrides; other
     tiers remain as configured. OpenClaw does not retry tier errors after
@@ -303,8 +308,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Uses `store: true` until input contains a compaction checkpoint, then uses
       `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
-    - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
-      unavailable)
+    - Default `compact_threshold`: 85% of `contextWindow` (or `80000` when
+      unavailable), the same fraction as client compaction
 
     The same resolved route and effective threshold gate the client preflight,
     so OpenClaw does not delay local compaction unless the transport will inject
@@ -371,13 +376,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     including after the session is restored.
 
     V2 starts when the known or projected request occupancy reaches
-    `min(context window - effective reserve, floor(0.8 × context window))`,
+    `min(context window - effective reserve, floor(0.85 × context window))`,
     the same trigger as client maintenance on every other route.
-    With a 500,000-token window and 20,000-token reserve, this is 400,000 tokens.
+    With a 500,000-token window and 20,000-token reserve, this is 425,000 tokens.
     It uses completed-request usage when available and prices pending content at
     the next normal request boundary. This earlier trigger leaves room for tool
     output and the compaction request; it does not lower the model's physical
-    context limit or change the public API-key route's 70% inline threshold.
+    context limit or change the public API-key route's 85% inline threshold.
 
     The entire outgoing request must still fit that physical window. If one
     pending message or tool result crosses it before V2 can run, OpenClaw falls

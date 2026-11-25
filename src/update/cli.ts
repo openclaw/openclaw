@@ -1,9 +1,14 @@
 // `openclaw update`, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
-import { requestUpdateDowngradeConfirmation } from "../cli/update-cli/shared.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import {
+  assertGlobalUpdateOwner,
+  requestUpdateDowngradeConfirmation,
+} from "../cli/update-cli/shared.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import {
   callGateway,
@@ -14,18 +19,25 @@ import {
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { releaseOpenClawStateDatabaseCustody } from "../state/openclaw-state-db-cache.js";
 import { VERSION } from "../version.js";
 import {
   checkUpdateInstallationSlot,
+  resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
+  UnverifiedForegroundUpdateOwnerError,
 } from "./installation-identity.js";
-import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
+import { TRIAL_BUDGET_MS } from "./launcher.js";
+import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
+import { readTrial, resolvePrefix } from "./store.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
@@ -55,9 +67,159 @@ export type ReleaseUpdateOptions = {
   yes?: boolean;
 };
 
+/** Prepare for an admitted managed action; its native owner still activates the release. */
+export async function tryAdoptInstalledPackageForGateway(opts: {
+  json: boolean;
+  action: "start" | "restart";
+}): Promise<string | false | undefined> {
+  const pending = await readTrial();
+  if (pending?.phase === "pending") {
+    return pending.runId;
+  }
+  const runningRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+  if (!runningRoot) {
+    return undefined;
+  }
+  const delegated = await delegateInstalledPackageUpdate(
+    { json: opts.json, runningRoot, restart: false },
+    opts.action,
+  );
+  if (!delegated) {
+    return undefined;
+  }
+  if (process.exitCode !== 0) {
+    return false;
+  }
+  const prepared = await readTrial();
+  return prepared?.phase === "pending" ? prepared.runId : undefined;
+}
+
+/** Preparation serializes one trial; its launcher-owned outcome is observed without opening state. */
+export async function waitForReleaseUpdateFailure(): Promise<string | undefined> {
+  let deadline = Date.now() + TRIAL_BUDGET_MS;
+  for (;;) {
+    const trial = await readTrial();
+    if (!trial) {
+      return "The update trial is no longer available. Run `openclaw update status` to see the result.";
+    }
+    if (trial.phase === "committed") {
+      return undefined;
+    }
+    if (trial.phase === "rolled-back") {
+      return `Update failed: ${trial.outcome?.reason ?? "new build failed to start"}`;
+    }
+    if (trial.phase !== "pending" && trial.createdAt > 0) {
+      deadline = Math.min(deadline, trial.createdAt + TRIAL_BUDGET_MS);
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return "The update did not finish in time. Run `openclaw update status` to see it.";
+    }
+    await sleep(Math.min(POLL_MS, remaining));
+  }
+}
+
+async function delegateInstalledPackageUpdate(
+  opts: ReleaseUpdateOptions,
+  action?: "start" | "restart",
+): Promise<boolean> {
+  const frontend = await resolveInstalledPackageFrontend(opts.runningRoot);
+  if (!frontend) {
+    return false;
+  }
+  const prefix = resolvePrefix();
+  const launcher = path.join(prefix, "openclaw-launcher.mjs");
+  await assertGlobalUpdateOwner({
+    root: opts.runningRoot,
+    installKind: "package",
+    timeoutMs: opts.timeoutMs ?? 10_000,
+  });
+  const order = compareSemverStrings(frontend.version, frontend.selectedVersion);
+  const sameBuild =
+    order === 0 && Boolean(frontend.buildId) && frontend.buildId === frontend.selectedBuildId;
+  const installedTarget =
+    !opts.tag &&
+    !opts.channel &&
+    !opts.sha &&
+    (order === 1 || (order === 0 && !sameBuild && !action));
+  const notice = (message: string) =>
+    opts.json ? defaultRuntime.error(message) : defaultRuntime.log(message);
+  if (order === -1) {
+    notice(
+      `The managed Gateway is newer than this npm package. It was not downgraded. To use ${frontend.version}, run: ${formatCliCommand(`openclaw update --tag ${frontend.version}`)}`,
+    );
+  }
+  if (sameBuild || order === -1) {
+    await markForwarding(opts.runningRoot, launcher, prefix).catch((error: unknown) =>
+      notice(
+        `The npm entry could not be attached to the resident launcher: ${formatErrorMessage(error)}. It remains a separate CLI.`,
+      ),
+    );
+  }
+  if (action && !installedTarget) {
+    if (!sameBuild && order !== -1) {
+      notice(
+        `CLI and active release have different or unknown builds. Run: ${formatCliCommand("openclaw update")}`,
+      );
+    }
+    return false;
+  }
+  if (installedTarget) {
+    notice(
+      action
+        ? `Applying the npm-installed OpenClaw ${frontend.version} before starting the Gateway.`
+        : `Applying the npm-installed OpenClaw ${frontend.version}. The selected Gateway release is ${frontend.selectedVersion} while checks run.`,
+    );
+  }
+  // Profile/state selection already ran. The resident owns VERSION, before and trial.previous.
+  const argv = [
+    process.execPath,
+    launcher,
+    "update",
+    ...(installedTarget
+      ? ["--tag", `file:${path.resolve(opts.runningRoot)}`]
+      : opts.tag
+        ? ["--tag", opts.tag]
+        : []),
+    ...(opts.channel ? ["--channel", opts.channel] : []),
+    ...(opts.sha ? ["--sha", opts.sha] : []),
+    ...(opts.json ? ["--json"] : []),
+    ...(!opts.restart ? ["--no-restart"] : []),
+    ...(opts.yes ? ["--yes"] : []),
+    ...(opts.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(opts.timeoutMs ? ["--timeout", String(Math.ceil(opts.timeoutMs / 1000))] : []),
+  ];
+  const preparationJson = Boolean(action && opts.json);
+  await releaseOpenClawStateDatabaseCustody();
+  const result = await runCommandWithTimeout(argv, {
+    timeoutMs: opts.timeoutMs ?? RUN_DEADLINE_MS,
+    stdinFileDescriptor: process.stdin.fd,
+    outputCapture: preparationJson ? { stdout: "head", stderr: "discard" } : "discard",
+    onOutputChunk: (chunk, stream) => {
+      process[preparationJson ? "stderr" : stream].write(chunk);
+    },
+    killProcessTree: true,
+  });
+  process.exitCode = result.code ?? 1;
+  if (preparationJson && process.exitCode !== 0) {
+    process.stdout.write(result.stdout);
+  }
+  return true;
+}
+
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
   const startedAt = Date.now();
-  await checkUpdateInstallationSlot(opts.runningRoot);
+  if (await delegateInstalledPackageUpdate(opts)) {
+    return;
+  }
+  try {
+    await checkUpdateInstallationSlot(opts.runningRoot);
+  } catch (error) {
+    if (!(error instanceof UnverifiedForegroundUpdateOwnerError) || !opts.restart || opts.tag) {
+      throw error;
+    }
+    // A local update.run can identify its own argv; preparation rechecks under its lock.
+  }
   const { channel } = opts;
   let timeoutMs = opts.timeoutMs;
   if (!opts.yes) {
@@ -230,6 +392,7 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
       method: "gateway.restart.request",
       params: { reason: "update.run" },
       timeoutMs: Math.min(30_000, timeoutMs),
+      prepareDispatchCurrent: releaseOpenClawStateDatabaseCustody,
     });
     if (!response.ok) {
       throw new Error("The Gateway refused to restart into the prepared release.");
@@ -282,6 +445,7 @@ async function requestGatewayUpdate(
           params.acceptCapabilities = opts.acceptCapabilities;
         }
       },
+      prepareDispatchCurrent: releaseOpenClawStateDatabaseCustody,
       assertDispatchCurrent: () => {
         if (consentRetry && !supportsConsent) {
           throw new Error(
@@ -395,6 +559,18 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
+function updateFailure(record: UpdateRunRecord | undefined): string | undefined {
+  if (!record || record.status === "running") {
+    return "The update did not finish in time. Run `openclaw update status` to see it.";
+  }
+  if (record.status === "succeeded" || record.status === "skipped") {
+    return undefined;
+  }
+  const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
+  const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
+  return `Update failed: ${detail ? `${detail}\n${message}` : message}`;
+}
+
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
@@ -402,9 +578,7 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
   }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
   if (!record || (record.status === "running" && !isPendingActivation(record))) {
-    defaultRuntime.error(
-      "The update did not finish in time. Run `openclaw update status` to see it.",
-    );
+    defaultRuntime.error(updateFailure(record));
     return;
   }
   const plugins = record.steps.find(({ step }) => step === "plugins");
@@ -412,6 +586,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
   } else if (plugins?.detail) {
     defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
+  }
+  const forwarding = record.steps.find(({ step }) => step === "forwarding");
+  if (forwarding?.status === "failed") {
+    defaultRuntime.error(forwarding.detail);
   }
   if (isPendingActivation(record)) {
     return;
@@ -423,8 +601,6 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
       record.reason === "already-current" ? "Already up to date." : `Skipped: ${record.reason}`,
     );
   } else {
-    const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
-    const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
-    defaultRuntime.error(`Update failed: ${detail ? `${detail}\n${message}` : message}`);
+    defaultRuntime.error(updateFailure(record));
   }
 }

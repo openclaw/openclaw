@@ -111,7 +111,6 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
           if (error) {
             throw new SessionMutationAuthorizationChangedError(error);
           }
-          capturedOperator?.authority.assertCurrent();
         };
         const title = await prepareDashboardSessionTitle({
           cfg,

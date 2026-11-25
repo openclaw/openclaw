@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ENV_SECRET_REF_ID_RE, type SecretRef } from "../../config/types.secrets.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
+import { QUESTION_COMPOSER_REPLACEMENT_GUIDANCE } from "../../shared/question-composer-replacement.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel-normalize.js";
 import { resolveAgentQuestionGatewayCall } from "../harness/gateway-question-dispatch.js";
 import { stringEnum } from "../schema/string-enum.js";
@@ -22,6 +23,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  wasQuestionReplacedByComposer,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
@@ -367,8 +369,12 @@ export function createSecretsTool(params: {
         ) {
           const status = questionResult.status;
           const details = { status: "no_answer" as const };
-          const note =
-            status === "cancelled"
+          const replacedByComposer =
+            status === "cancelled" &&
+            (await wasQuestionReplacedByComposer(questionGatewayCall, delivery.questionId));
+          const note = replacedByComposer
+            ? QUESTION_COMPOSER_REPLACEMENT_GUIDANCE
+            : status === "cancelled"
               ? "The credential request was cancelled; proceed with best judgment."
               : "No credential arrived; proceed with best judgment.";
           return textResult(`${note}\n\n${JSON.stringify(details)}`, details);

@@ -36,6 +36,7 @@ import { UpdatePreMutationError } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedGatewayServiceObservation,
+  ManagedServiceStopParams,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -306,6 +307,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
+  updateInstallKind?: ManagedServiceStopParams["updateInstallKind"];
   preManagedServiceStop?: ManagedGatewayServiceObservation;
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */

@@ -43,6 +43,7 @@ import {
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
 
 const submittedInput = vi.hoisted(() =>
   vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
@@ -295,7 +296,7 @@ it("stops admitted session work while preserving a detached producer", () =>
     }
   }));
 
-it("stops selected-agent work without cancelling the compatibility owner's run", () =>
+it.each([false, true])("scopes Stop by agent and optional session ID (%s)", (strict) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: {
@@ -311,13 +312,20 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     params.context.getRuntimeConfig = () => cfg;
-    params.request.stopCommand = true;
-    params.request.p = {
-      sessionKey: "global",
-      agentId: "research",
-      idempotencyKey: params.session.clientRunId,
-      message: "/stop",
-    };
+    const normalized = await normalizeChatSendRequest({
+      client: params.client,
+      params: {
+        sessionKey: "global",
+        agentId: "research",
+        idempotencyKey: params.session.clientRunId,
+        message: "/stop",
+        ...(strict ? { expectedSessionId: "selected-session" } : {}),
+      },
+    });
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
+    params.request = normalized.value;
     Object.assign(params.session, {
       cfg,
       sessionKey: "global",
@@ -329,7 +337,7 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
       requestedAgentId: "research",
       selectedAgent: { ok: true, agentId: "research" },
       backingSessionId: undefined,
-      entry: undefined,
+      entry: strict ? { sessionId: "selected-session", updatedAt: 100 } : undefined,
     });
     for (const [runId, agentId] of [
       ["selected", "research"],
@@ -344,6 +352,8 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
     const registrations = [
       ["selected", "research"],
       ["compatibility", "ops"],
+      // The same logical key has new active work after physical-target preparation.
+      ...(strict ? [["replacement", "research"] as const] : []),
     ] as const;
     const sourceRegistrations = registrations.map(([runId, agentId]) => {
       const sessionId = `${runId}-session`;
@@ -371,6 +381,10 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
       });
       expect(sourceRegistrations[0]?.entry?.input.abortSignal.aborted).toBe(true);
       expect(sourceRegistrations[1]?.entry?.input.abortSignal.aborted).toBe(false);
+      if (strict) {
+        expect(sourceRegistrations[2]?.entry?.input.abortSignal.aborted).toBe(false);
+        expect(rpcSourceTesting.has("replacement")).toBe(true);
+      }
       expect(rpcSourceTesting.has("selected")).toBe(false);
       expect(rpcSourceTesting.has("compatibility")).toBe(true);
       expect(params.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
@@ -381,7 +395,8 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
         registration.cleanup();
       }
     }
-  }));
+  }),
+);
 
 it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
   "requires accepted custody and rejects changed mention recipients for a %s retry",

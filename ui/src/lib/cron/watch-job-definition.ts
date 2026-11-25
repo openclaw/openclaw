@@ -114,11 +114,7 @@ export function watchCronJobDefinition(
     }
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (
-      client &&
-      state.saving === undefined &&
-      isCronInventoryInvalidation(event, gateway.snapshot)
-    ) {
+    if (client && state.saving === undefined && isCronInventoryInvalidation(event)) {
       void read(true);
     }
   });
