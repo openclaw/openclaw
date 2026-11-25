@@ -1,4 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
@@ -36,6 +37,11 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
   loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;

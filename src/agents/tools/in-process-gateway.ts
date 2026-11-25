@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   captureExternalSessionCommitGuard,
+  composePreparedOnlySessionSource,
   composeSessionSourceAssertion,
+  type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { createCronMutationCompletion } from "../../cron/mutation-completion.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
@@ -41,7 +43,6 @@ import { readQuestionDispatchCapability } from "../harness/host-private-capabili
 import type { ReplyExpectation } from "../reply-completion.js";
 import { requesterCreatorProfileId } from "../requester-origin.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
   withoutGatewayToolCallerIdentity,
@@ -223,7 +224,7 @@ async function callAgentToolGatewayRequestBound<T>(
   request: AgentToolGatewayRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
   runtimeIdentity: AgentRuntimeIdentity | undefined,
-  assertCallerCurrent: ReturnType<typeof captureGatewayToolCallerAssertion>,
+  callerSource: SessionSourceAssertion | undefined,
   forceTransport = false,
   forwardAbortSignal = true,
   positional?: {
@@ -238,12 +239,8 @@ async function callAgentToolGatewayRequestBound<T>(
   const sessionCreation = request.sessionCreation ?? positional?.sessionCreation;
   const assertDispatchCurrent = request.assertDispatchCurrent;
   const completion = positional ? undefined : createCronMutationCompletion(method);
-  const callerSource =
-    assertCallerCurrent && Object.assign(() => assertCallerCurrent(method), assertCallerCurrent);
   const assertCurrent =
-    assertCallerCurrent ||
-    assertDispatchCurrent ||
-    ((!forwardAbortSignal || completion) && request.signal)
+    callerSource || assertDispatchCurrent || ((!forwardAbortSignal || completion) && request.signal)
       ? composeSessionSourceAssertion([callerSource, assertDispatchCurrent], (assertSources) => {
           assertSources();
           if (!forwardAbortSignal || completion) {
@@ -429,7 +426,7 @@ export function bindAgentToolGatewayRequest(options?: {
     : admitted
       ? () => admitted
       : undefined;
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
   const runInCallerContext = AsyncLocalStorage.snapshot();
   return async <T>(request: AgentToolGatewayRequest): Promise<T> =>
     // Caller authority was captured when the tool was bound; durable delivery
@@ -460,8 +457,8 @@ async function callInProcessGatewayToolBound<T>(
     sessionCreation?: TrustedSessionCreation;
   },
 ): Promise<T> {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const caller = getGatewayToolCallerIdentity();
+  const assertCallerCurrent = composePreparedOnlySessionSource(caller);
   const agentToolCaller =
     options.sessionCreation?.via === "spawn" && caller && assertCallerCurrent
       ? {

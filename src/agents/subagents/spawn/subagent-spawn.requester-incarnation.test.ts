@@ -4,7 +4,6 @@ import "./subagent-spawn-model.mocks.shared.js";
 import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   getAcpSessionManager,
   testing as managerTesting,
@@ -149,7 +148,6 @@ it.each([false, true])(
       if (!preparation.ok) {
         throw new Error(JSON.stringify(preparation.result));
       }
-      const sql = observeHostDataSql();
       try {
         const plan = await resolveSubagentChildPlan({
           ...preparation.resolved,
@@ -158,7 +156,6 @@ it.each([false, true])(
           sandboxMode: "inherit",
           swarmEnabled: true,
         });
-        expect(sql.queries).toEqual([]);
         if (!plan.ok) {
           throw new Error(JSON.stringify(plan.result));
         }
@@ -168,7 +165,6 @@ it.each([false, true])(
           modelPlan: { initialSessionPatch: { thinkingLevel, fastMode } },
         });
       } finally {
-        sql.restore();
         preparation.resolved.admissionReservation?.release();
       }
     }

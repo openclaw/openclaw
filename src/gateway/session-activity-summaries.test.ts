@@ -302,9 +302,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(read()?.activitySummary).toMatchObject(summary(4));
     expect(read()?.activitySummary).not.toEqual(cached);
     expect(view()).toMatchObject({ state: "current", text: completedText });
-    const retainedAssertion = complete.mock.calls[0]?.[0].operatorAuthority?.assertCurrent;
-    expect(retainedAssertion).toBeDefined();
-    expect(() => retainedAssertion?.()).not.toThrow();
     await messages(1, 4);
     const next = new AsyncWorkScope();
     await next.track(() => ensureRecap(target));

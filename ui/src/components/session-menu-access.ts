@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionMenuPermissionsEnglish } from "../i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import {
   readSessionMethodAccess,
@@ -12,6 +13,7 @@ import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
 registerSessionOrganizationSharedEnglish();
+registerSessionMenuPermissionsEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
@@ -29,55 +31,70 @@ export function sessionMenuReasons(params: {
   requiredProfile?: string;
 }): Partial<Record<SessionMenuActionKind, string>> {
   const { snapshot, session, batchRows = null, cloudWorkerStopAction } = params;
-  const reason = (request: SessionMethodAccessRequest) => {
-    const access = readSessionMethodAccess(snapshot, request);
+  const reason = (missingScopeReasonKey: string, request: SessionMethodAccessRequest) => {
+    const access = readSessionMethodAccess(snapshot, { ...request, missingScopeReasonKey });
     return access.allowed ? undefined : access.reason;
   };
-  const involvementReason = reason({
+  const involvementReason = reason("sessionsView.involvementPermissionDenied", {
     method: "sessions.setInvolvement",
     requiredScope: "operator.read",
     sessionScope: true,
   });
-  const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
-    reason({
+  const patchReason = (key: string, patch: Record<string, unknown>, sessionScope = false) =>
+    reason(key, {
       method: "sessions.patch",
       params: { key: session.key, ...patch },
       sessionScope,
       session,
       allowDeferred: true,
     });
-  const renameReason = patchReason({ label: null }, true);
+  const renameReason = patchReason("sessionsView.renamePermissionDenied", { label: null }, true);
   const promotionReason = !session.sessionId?.trim()
     ? t("sessionsView.lifecycleIdentityRequired")
-    : patchReason({ sidebarRoot: true }, true);
-  const iconReason = patchReason({ icon: null }, true);
-  const colorReason = patchReason({ color: null }, true);
-  const communicationReason = patchReason({ communication: null });
+    : patchReason("sessionsView.promotePermissionDenied", { sidebarRoot: true }, true);
+  const iconReason = patchReason("sessionsView.iconPermissionDenied", { icon: null }, true);
+  const colorReason = patchReason("sessionsView.colorPermissionDenied", { color: null }, true);
+  const communicationReason = patchReason("sessionsView.communicationPermissionDenied", {
+    communication: null,
+  });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
-  const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
+  const batchPatchReason = (key: string, patch: Record<string, unknown>, sessionScope = false) => {
     if (!batchRows) {
-      return patchReason(patch, sessionScope);
+      return patchReason(key, patch, sessionScope);
     }
-    return reason({
+    return reason(key, {
       method: "sessions.patchMany",
       sessionScope,
       session: batchSession,
       params: { patch },
     });
   };
-  const unreadReason = batchPatchReason({ unread: true }, true);
-  const categoryReason = batchPatchReason({ category: null });
+  const unreadReason = batchPatchReason(
+    "sessionsView.readStatusPermissionDenied",
+    { unread: true },
+    true,
+  );
+  const categoryReason = batchPatchReason("sessionsView.moveGroupPermissionDenied", {
+    category: null,
+  });
   const lifecycleRows = batchRows ?? [session];
+  const archiveKey = batchRows
+    ? batchRows.every((row) => row.archived)
+      ? "sessionsView.restoreBatchPermissionDenied"
+      : "sessionsView.archiveBatchPermissionDenied"
+    : session.archived
+      ? "sessionsView.restorePermissionDenied"
+      : "sessionsView.archivePermissionDenied";
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? t("sessionsView.lifecycleIdentityRequired")
     : batchRows &&
         snapshot?.phase === "connected" &&
         !snapshot.deferredIntentCount &&
         !snapshot.deferredIntentDraining
-      ? batchPatchReason({ archived: true }, true)
+      ? batchPatchReason(archiveKey, { archived: true }, true)
       : lifecycleRows
           .map((row) =>
-            reason({
+            reason(archiveKey, {
               method: "sessions.patch",
               params: { key: row.key, archived: !row.archived },
               sessionScope: true,
@@ -86,41 +103,52 @@ export function sessionMenuReasons(params: {
             }),
           )
           .find((value) => value !== undefined);
-  const snoozeReason = !session.sessionId?.trim()
-    ? t("sessionsView.lifecycleIdentityRequired")
-    : patchReason({ snoozedUntil: null }, true);
-  const groupReason = reason({
+  const snoozeReason = (key: string) =>
+    !session.sessionId?.trim()
+      ? t("sessionsView.lifecycleIdentityRequired")
+      : patchReason(key, { snoozedUntil: null }, true);
+  const snooze = snoozeReason("sessionsView.snoozePermissionDenied");
+  const wake = snoozeReason("sessionsView.wakePermissionDenied");
+  const groupReason = reason("sessionsView.createGroupPermissionDenied", {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
   const deleteReason = (batchRows ?? [session])
     .map((row) =>
-      reason({
-        method: "sessions.delete",
-        allowDeferred: true,
-        params: {
-          key: row.key,
-          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
-          ...(row.archived ? { archivedOnly: true } : {}),
+      reason(
+        batchRows
+          ? "sessionsView.deleteBatchPermissionDenied"
+          : "sessionsView.deletePermissionDenied",
+        {
+          method: "sessions.delete",
+          allowDeferred: true,
+          params: {
+            key: row.key,
+            ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
+            ...(row.archived ? { archivedOnly: true } : {}),
+          },
         },
-      }),
+      ),
     )
     .find((value): value is string => Boolean(value));
   const forkReason = batchRows
     ? undefined
-    : reason({
+    : reason("sessionsView.forkPermissionDenied", {
         method: "sessions.create",
         params: { parentSessionKey: session.key, fork: true },
         sessionScope: true,
         session,
       });
-  const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
+  const cloudWorkerStopReason = cloudWorkerStopAction
+    ? reason("sessionsView.stopWorkerPermissionDenied", cloudWorkerStopAction)
+    : undefined;
   const placementReason = params.placementRow
     ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
     : undefined;
   return {
     ...(placementReason ? { "move-session": placementReason } : {}),
-    ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
+    ...(snooze ? { snooze } : {}),
+    ...(wake ? { wake } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),

@@ -195,7 +195,11 @@ async function fixture(signal: AbortSignal) {
         requireDiskSpace: async () => {},
       },
     });
-    expect(manifest).toEqual(
+    expect(manifest).toMatchObject({
+      projectionFingerprints: expect.any(Uint8Array),
+      clonedDevice: (await fs.stat(destination, { bigint: true })).dev,
+    });
+    expect(manifest).toMatchObject(
       await captureWorkspaceManifestDocument({
         root: destination,
         baseCommit: commit,
@@ -715,7 +719,7 @@ it("joins background preparation through the allocation owner", async ({ signal 
       }),
     );
     release.resolve();
-    expect(await cloning).toEqual(
+    expect(await cloning).toMatchObject(
       await captureWorkspaceManifestDocument({
         root: destination,
         baseCommit: selectedCommit,

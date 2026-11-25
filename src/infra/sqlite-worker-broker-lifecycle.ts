@@ -24,14 +24,12 @@ import {
   throwSqliteLifecycleErrors,
 } from "./sqlite-lifecycle-errors.js";
 import { SQLITE_WORKER_ADMISSION_TIMEOUT_MS } from "./sqlite-worker-broker-admission.js";
-import {
-  receiveSqliteWorkerReply,
-  type SqliteWorkerReplyOwner,
-} from "./sqlite-worker-broker-reply.js";
+import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
   EnqueueOptions,
   Slot,
+  SqliteWorkerReplyOwner,
   StoreClient,
   PreparedSqliteWorkerOpen,
 } from "./sqlite-worker-broker.types.js";

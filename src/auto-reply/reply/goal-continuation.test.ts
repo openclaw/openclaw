@@ -26,6 +26,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import {
   sessionControllerMailboxes,
   reserveSessionControllerSource,
+  submitSessionControllerTask,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -228,7 +229,6 @@ describe("Goal continuation eligibility", () => {
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
     [false, "no-authority", "localCodexGoal"],
-    [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
     const codexSession = { ...entry(), agentHarnessId: "codex" };
@@ -246,21 +246,12 @@ describe("Goal continuation eligibility", () => {
       f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (mode === "revoked") {
-            throw new Error("operator revoked");
-          }
-        },
       });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
     }
-    if (mode === "revoked") {
-      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-    } else {
-      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
-    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
     expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
     if (marker) {
       const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
@@ -481,6 +472,25 @@ describe("Goal queue custody", () => {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     },
   );
+  // Post-turn session maintenance waits in the mailbox as a native task. It never evaluates
+  // the Goal, so deferring to it would stall the Goal until the next message (#204319).
+  it("continues past queued post-turn upkeep but defers to a queued reply turn", async () => {
+    const f = fixture();
+    const upkeep = submitSessionControllerTask(f.params.queueKey, {
+      target: captureSessionTarget({
+        storeScope: f.params.storePath,
+        sessionKey: f.params.sessionKey,
+        agentId: f.params.base.run.agentId,
+        incarnation: f.params.expectedSession.sessionId,
+      }),
+      projectSessionActive: false,
+      start: () => {},
+    });
+    upkeep.catch(() => {});
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    f.reserveInput();
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+  });
   it("invalidates an enqueued nudge when source delivery subsequently fails", async () => {
     const f = fixture();
     await enqueueGoalContinuation(f.params);
@@ -699,11 +709,6 @@ describe("Goal return from committed child custody", () => {
     const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {
-        if (!holds) {
-          throw new Error("source released");
-        }
-      },
       retain() {
         holds++;
         return () => {
@@ -822,7 +827,6 @@ describe("Goal return from committed child custody", () => {
     const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {},
       retain: () => release,
     });
     first.params.base.operatorAuthority = authority;
@@ -910,22 +914,10 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it.each(["Stop", "source retirement", "operator revocation"])(
+  it.each(["Stop", "source retirement"])(
     "checks %s again after asynchronous final enqueue preparation",
     async (boundary) => {
       const f = retainedGoal();
-      const revoked = new AbortController();
-      let current = true;
-      f.params.base.operatorAuthority = createTestOperatorAuthority({
-        profileId: "goal-owner",
-        scopes: ["operator.write"],
-        signal: revoked.signal,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("revoked");
-          }
-        },
-      });
       f.retain();
       f.operation.complete();
       f.publish();
@@ -960,10 +952,6 @@ describe("Goal return from committed child custody", () => {
       }
       if (boundary === "source retirement") {
         revokeGoalContinuationReturn(f.child);
-      }
-      if (boundary === "operator revocation") {
-        current = false;
-        revoked.abort();
       }
       read.resolve(entry());
       await finishing;

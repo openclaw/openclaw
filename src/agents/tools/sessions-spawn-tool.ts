@@ -26,6 +26,7 @@ import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js"
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import type { SpawnSubagentParams } from "../subagents/spawn/subagent-spawn-contract.js";
+import { resolveParticipationSpawnError } from "../subagents/spawn/subagent-spawn-participation.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -191,20 +192,9 @@ export function createSessionsSpawnTool(
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        // A retained owner bit is rechecked per call: a requester who stopped being an
-        // owner spawns as a non-owner, and one revoked mid-call refuses the commit.
-        let senderIsOwner = opts?.senderIsOwner;
-        let assertSenderOwner: (() => void) | undefined;
-        if (senderIsOwner === true && opts?.assertSenderOwnerCurrent) {
-          try {
-            opts.assertSenderOwnerCurrent();
-            assertSenderOwner = opts.assertSenderOwnerCurrent;
-          } catch {
-            senderIsOwner = false;
-          }
-        }
+        const senderIsOwner = opts?.senderIsOwner;
         const assertSourceActive = composeSessionSourceAssertion(
-          [operatorSelection.assertCurrent, assertSenderOwner],
+          [operatorSelection.assertCurrent, opts?.assertActive],
           (assertSource) => {
             executionSignal?.throwIfAborted();
             assertSource();
@@ -230,6 +220,10 @@ export function createSessionsSpawnTool(
           ? captureCollectorSpawnGuard(tool, _toolCallId, assertSourceActive)
           : assertSourceActive;
         assertActive();
+        const participationError = resolveParticipationSpawnError(params, opts, requesterAgentId);
+        if (participationError) {
+          return jsonResult({ status: "forbidden", error: participationError });
+        }
         if (params.outputSchema !== undefined && !collect) {
           throw new ToolInputError('sessions_spawn "outputSchema" requires collect=true.');
         }

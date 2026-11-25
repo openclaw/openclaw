@@ -63,6 +63,38 @@ describe("distinct tool invocations", () => {
   const cardsFor = (messages: unknown[], toolMessages: unknown[] = []) =>
     cardsIn(messageGroups({ messages, toolMessages }));
 
+  it("joins a reopened native call to its live echo without merging identical sibling calls", () => {
+    const name = "swatches__read_cobalt";
+    const native = "mcp__openclaw__" + name;
+    const args = { swatch: "cobalt" };
+    const cards = cardsIn(
+      messageGroups({
+        runId: "run-a",
+        messages: [
+          user("Read twice", 1, { __openclaw: { idempotencyKey: "run-a:user" } }),
+          assistant(
+            [
+              toolCall("first", native, args),
+              { type: "tool_result", tool_use_id: "first", name: native, content: "first result" },
+            ],
+            10,
+          ),
+          assistant([toolCall("second", native, args)], 20),
+        ],
+        toolMessages: [
+          assistant([toolCall(undefined, name, args)], 20, {
+            runId: "run-a",
+            toolCallId: "second",
+            __openclawToolStreamLive: true,
+          }),
+        ],
+      }),
+    );
+    expect(cards.map((card) => card.callId)).toEqual(["first", "second"]);
+    expect(cards[0]).toMatchObject({ completed: true, outputText: "first result" });
+    expect(cards[1]).toMatchObject({ live: true, args });
+  });
+
   it("keeps a persisted empty terminal result over a partial snapshot", () => {
     const partial = snapshot("exec-1", false);
     expect(cardsFor([partial])[0]).toMatchObject({

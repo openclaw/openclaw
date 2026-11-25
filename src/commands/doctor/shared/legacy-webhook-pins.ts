@@ -6,6 +6,7 @@ import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/path
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import { withStateDatabaseColdAdmission } from "../../../infra/gateway-state-owner.js";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -20,9 +21,12 @@ import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
 import { readConfigMachineStateAsync } from "../../../state/config-machine-state-async.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../../state/config-machine-state.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../../state/openclaw-state-db.generated.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 
 export const HISTORICAL_WEBHOOK_CHANNELS = ["telegram", "feishu", "msteams", "nextcloud-talk"];
 
@@ -118,6 +122,42 @@ export function createHistoricalWebhookPinMigration(
   return applyHistoricalWebhookPins.bind(undefined, state);
 }
 
+function hasHistoricalInstallation(env: NodeJS.ProcessEnv): boolean {
+  const read = () =>
+    Boolean(
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => {
+          const query = getNodeSqliteKysely<DB>(db);
+          let evidence = query
+            .selectFrom("gateway_boot_lifecycle")
+            .select("boot_id as evidence")
+            .unionAll(query.selectFrom("channel_ingress_events").select("event_id as evidence"));
+          // The update ledger exists only after its first write.
+          if (tableExists(db, "update_runs")) {
+            evidence = evidence.unionAll(
+              query.selectFrom("update_runs").select("run_id as evidence"),
+            );
+          }
+          return executeSqliteQueryTakeFirstSync(db, evidence.limit(1));
+        },
+        { env },
+      ),
+    );
+  if (isStatePostgres()) {
+    return read();
+  }
+  // Another process may acquire a transient schema lease after startup's async
+  // preparation. Retry only this evidence read, never plugin migration effects.
+  // Explicit offline maintenance still refuses immediately.
+  return withStateDatabaseColdAdmission(
+    {
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    },
+    read,
+  );
+}
+
 /** Pins and completion travel together through Doctor's config backup and publication. */
 function applyHistoricalWebhookPins(
   state: HistoricalWebhookPinState,
@@ -162,25 +202,7 @@ function applyHistoricalWebhookPins(
     state.preserveConfiguredListeners ||
     marker !== undefined ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
-    (state.existingInstallation ??= Boolean(
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => {
-          const query = getNodeSqliteKysely<DB>(db);
-          let evidence = query
-            .selectFrom("gateway_boot_lifecycle")
-            .select("boot_id as evidence")
-            .unionAll(query.selectFrom("channel_ingress_events").select("event_id as evidence"));
-          // The update ledger exists only after its first write.
-          if (tableExists(db, "update_runs")) {
-            evidence = evidence.unionAll(
-              query.selectFrom("update_runs").select("run_id as evidence"),
-            );
-          }
-          return executeSqliteQueryTakeFirstSync(db, evidence.limit(1));
-        },
-        { env },
-      ),
-    ));
+    (state.existingInstallation ??= hasHistoricalInstallation(env));
   const completed = { ...marker };
   const channelId = declaration?.channelId;
   if (existing && (!channelId || !accountIds || Object.hasOwn(completed, channelId))) {

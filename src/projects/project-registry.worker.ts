@@ -11,6 +11,7 @@ import {
   insertProjectRegistryInDatabase,
   removeProjectCheckoutReferenceInDatabase,
   removeProjectRegistryInDatabase,
+  renameProjectRegistryInDatabase,
   resolveProjectCloneRefreshOwnerInDatabase,
   resolveRecordedProjectByRootInDatabase,
   resolveProjectRegistryInDatabase,
@@ -67,6 +68,10 @@ export const projectRegistryOperations = {
   "projects.remove": checkoutTransaction(
     "projects.registry.remove",
     removeProjectRegistryInDatabase,
+  ),
+  "projects.rename": checkoutTransaction(
+    "projects.registry.rename",
+    renameProjectRegistryInDatabase,
   ),
   "projects.resolveRefreshOwner": checkoutTransaction(
     "projects.registry.refresh-owner.resolve",

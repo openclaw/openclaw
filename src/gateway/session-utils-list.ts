@@ -58,7 +58,7 @@ import {
   type SelectionRow as SelectionTarget,
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { createSessionRowSelection } from "./session-row-selection.js";
+import { createSessionRowSelection, sessionRowSelectionScopes } from "./session-row-selection.js";
 import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -67,6 +67,7 @@ import type { GatewaySessionRow, SessionsListResult } from "./session-utils.type
 export function selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
+    invited?: boolean;
     partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
     retained?: Map<object, SessionListFilteredEntries>;
   },
@@ -88,7 +89,7 @@ export function selectSessionEntries(
     !params.opts.involvingProfileId;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    retainCurrentSessionListPartitions(params.retained!, params.partitions!);
+    retainCurrentSessionListPartitions(params.retained!, params.partitions!, params.invited);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
@@ -105,7 +106,8 @@ export function selectSessionEntries(
       if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
         continue;
       }
-      let part = params.retained!.get(partition.revision);
+      const revision = (params.invited && partition.invitedRevision) || partition.revision;
+      let part = params.retained!.get(revision);
       if (!part) {
         misses++;
         part = filterSessionEntries({
@@ -118,7 +120,7 @@ export function selectSessionEntries(
           ownerLimit,
           params.opts.sortBy,
         );
-        params.retained!.set(partition.revision, part);
+        params.retained!.set(revision, part);
       } else {
         hits++;
       }
@@ -246,12 +248,6 @@ function buildSessionsListResult(
 }
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<SessionRowProjection["state"]["scope"]>;
-// Topology retires scopes; accepted metadata updates only the affected orders.
-const sessionRowSelections = new WeakMap<
-  SessionRowProjection,
-  Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
->();
 
 /** Preserve federation before caller visibility and activity filters. */
 export function prepareSessionRowSelection(
@@ -281,23 +277,7 @@ export function prepareSessionRowSelection(
   const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
   const broad = !keyed && !parentSessionKey;
   const activeOnly = opts.activeOnly === true;
-  let scopes = sessionRowSelections.get(projection);
-  if (!scopes) {
-    scopes = new Map();
-    sessionRowSelections.set(projection, scopes);
-    const current = scopes;
-    projection.onSelectionChange((change) => {
-      if (change.kind === "reset") {
-        current.clear();
-      } else {
-        for (const variants of current.values()) {
-          for (const selection of variants.values()) {
-            selection.change(change);
-          }
-        }
-      }
-    });
-  }
+  const scopes = sessionRowSelectionScopes(projection);
   const retained = broad && selectedScope.paths.size > 0;
   let selection = retained ? scopes.get(selectedScope)?.get(activeOnly) : undefined;
   // Unordered readers keep the resident owner's order, including replacement and federation.
@@ -579,13 +559,14 @@ export async function listProjectedSessions(params: {
             metadataPrepared: true,
           });
         diagnostics?.mark("filterSetup");
-        const select = (retained?: Map<object, SessionListFilteredEntries>) =>
+        const select = (retained?: Map<object, SessionListFilteredEntries>, invited?: boolean) =>
           withAgentRosterFactsBatch(prepared.cfg, () =>
             selectSessionEntries({
               ...filters,
               defaultLimit: 100,
               partitions: prepared.partitions,
               retained,
+              invited,
             }),
           );
         const selection = exactKey === undefined ? presentation.select(opts, select) : select();

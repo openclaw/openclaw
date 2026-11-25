@@ -9,10 +9,14 @@ import {
   runHttpConnectionRequest,
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
-import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
+import {
+  GatewayRequestAuthorityExpiredError,
+  isOperatorAuthorityUnavailable,
+} from "../infra/operator-authority-error.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { sendUnauthorized } from "./http-common.js";
 import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
   getRemoteControlUiIngressContext,
@@ -108,6 +112,10 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
     if (!res.writableEnded && !res.destroyed) {
       res.destroy();
     }
+    return true;
+  }
+  if (error instanceof GatewayRequestAuthorityExpiredError) {
+    sendUnauthorized(res);
     return true;
   }
   if (error instanceof GatewayOperatorAccessDeniedError) {

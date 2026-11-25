@@ -444,9 +444,9 @@ it("updates composer text on a live locale change without disturbing an IME draf
     expect(view.query(".chat-controls__permission-menu")?.matches(":popover-open")).toBe(true),
   );
   const textarea = view.textarea();
-  const heading = view.query(".chat-controls__permission-heading")!;
+  const heading = view.query(".oc-menu-heading__label")!;
   const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
-  expect(learnMore()).toBe("Learn more");
+  await waitForSolid(() => expect(learnMore()).toBe("Learn more"));
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -461,7 +461,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
 
   expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
-  expect(view.query(".chat-controls__permission-heading")).toBe(heading);
+  expect(view.query(".oc-menu-heading__label")).toBe(heading);
   expect(view.textarea()).toBe(textarea);
   expect(document.activeElement).toBe(textarea);
   expect(textarea.value).toBe("Unfinished 日本語");
@@ -632,4 +632,36 @@ it("keeps a pending dictation send bound to the action that started it", async (
   await Promise.resolve();
   expect(firstSend).toHaveBeenCalledOnce();
   expect(laterSend).not.toHaveBeenCalled();
+});
+
+it("preserves keyboard input-history traversal with hydrated member evidence", () => {
+  const { state, view } = mountOwnedComposer({ draft: "Unsent draft" });
+  state.chatLocalInputHistoryBySession[state.sessionKey] = [
+    { text: "Recent input", ts: 2 },
+    { text: "Older input", ts: 1 },
+  ];
+  view.update({
+    mentionDirectory: {
+      client: state.client!,
+      ownerKey: "owner",
+      params: { sessionKey: state.sessionKey },
+      members: [],
+    },
+    onHistoryKeydown: state.handleChatInputHistoryKey,
+  });
+  const press = (key: string) => {
+    const textarea = view.textarea();
+    const caret = key === "ArrowUp" ? 0 : textarea.value.length;
+    textarea.setSelectionRange(caret, caret);
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    flush();
+  };
+  press("ArrowUp");
+  expect(state.chatMessage).toBe("Recent input");
+  press("ArrowUp");
+  expect(state.chatMessage).toBe("Older input");
+  press("ArrowDown");
+  expect(state.chatMessage).toBe("Recent input");
+  press("ArrowDown");
+  expect(state.chatMessage).toBe("Unsent draft");
 });

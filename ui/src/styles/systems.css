@@ -253,6 +253,23 @@ openclaw-systems-page {
   min-height: 0;
   overflow: hidden;
 }
+/* A customizable select sizes to its selected option. Reserve the widest translated
+   choice without moving the other controls when the operator changes modes. */
+.systems-desktop .desktop-toolbar select.desktop-sizing {
+  display: inline-block;
+  width: max-content;
+  min-width: 88px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.systems-desktop .desktop-sizing::after {
+  display: block;
+  height: 0;
+  visibility: hidden;
+  content: attr(data-sizing-labels);
+  white-space: pre;
+  letter-spacing: normal;
+}
 .systems-state {
   display: flex;
   flex: 1;

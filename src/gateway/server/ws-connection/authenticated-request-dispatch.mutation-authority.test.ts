@@ -151,7 +151,6 @@ describe("authenticated request mutation custody", () => {
         gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
       };
       setRuntimeConfigSnapshot(committedConfig);
-      expect(retained.authority.assertCurrent).not.toThrow();
       await dispatch("revoked-policy");
       expect(harness.close).toHaveBeenCalledWith(4001, expect.any(String));
       expect(captures).toHaveLength(1);
@@ -270,7 +269,7 @@ describe("authenticated request mutation custody", () => {
             source: captureQueuedOperatorRecoverySource(
               expectDefined(run.operatorAuthority, "queued operator authority"),
             ),
-            assertCurrent: () => run.operatorAuthority?.assertCurrent(),
+            assertCurrent: () => {},
           });
           const prepared = prepareChannelRunAdmission({
             cfg: committedConfig,

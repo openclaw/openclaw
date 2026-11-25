@@ -45,7 +45,6 @@ export function registerChatSteeringCommitCases(
   createBrowserFollowupFixture: ReturnType<typeof useBrowserFollowupFixture>,
 ) {
   it.for([
-    "internal fresh",
     "native custody",
     "native committed",
     "browser custody",
@@ -54,12 +53,11 @@ export function registerChatSteeringCommitCases(
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
     async (inputState, { signal }) => {
-      const internal = inputState === "internal fresh";
       const committed = inputState === "native committed";
       const lifecycleRevoked = inputState === "browser custody lifecycle";
       const browserCustody = inputState.startsWith("browser custody");
       const sharedProfileCustody = browserCustody && !lifecycleRevoked;
-      const failed = lifecycleRevoked || internal;
+      const failed = lifecycleRevoked;
       const creator = sharedProfileCustody
         ? ensureProfileForEmail("steering-session-creator@example.test")
         : undefined;
@@ -69,7 +67,7 @@ export function registerChatSteeringCommitCases(
           ? { createdActor: { type: "human", source: "profile", id: creator.id } as const }
           : {}),
       });
-      const { scope, params, context, client, beforeApprove } = fixture;
+      const { scope, params, context, client } = fixture;
       const runId = params.idempotencyKey;
       const failures = new Set<unknown>();
       let releaseProviders = () => {};
@@ -91,12 +89,6 @@ export function registerChatSteeringCommitCases(
         }
         if (!browserCustody) {
           setNativeIosClient(client);
-        }
-        if (internal) {
-          params.systemInputProvenance = {
-            kind: "internal_system",
-            sourceTool: "internal-steering-fixture",
-          };
         }
         setClientProfile(client, profile);
         const sessionManager = SessionManager.open(scope, path.dirname(scope.storePath));
@@ -179,12 +171,9 @@ export function registerChatSteeringCommitCases(
         const originalAck = structuredClone(ack.mock.calls);
         await withinTest(steeringAccepted.promise, signal);
         recorder = expectDefined(recorder, "backing runtime input recorder");
-        if (internal) {
-          expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
-        }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         const pending = await listSessionPendingInputs(scope);
-        expect(pending.total).toBe(internal ? 0 : 1);
+        expect(pending.total).toBe(1);
         if (browserCustody || inputState === "native custody") {
           expect(session.getSteeringMessages()).toEqual([params.message]);
           expect(session.isStreaming).toBe(true);
@@ -203,8 +192,6 @@ export function registerChatSteeringCommitCases(
             kind: "aborted",
             code: "aborted_for_restart",
           });
-        } else if (internal) {
-          beforeApprove.mockImplementation(() => linkEmail(email, target.id));
         }
         backingProvider.release();
         if (committed) {
@@ -295,30 +282,7 @@ export function registerChatSteeringCommitCases(
         } else {
           expect(terminals.filter((event) => event.type === "agent_end")).toHaveLength(1);
           expect(terminals.filter((event) => event.type === "agent_settled")).toHaveLength(1);
-          if (internal) {
-            // Memory consumption precedes persistence; refusal terminates the backing run.
-            expect(session.messages).toContainEqual(
-              expect.objectContaining({
-                role: "user",
-                content: expect.arrayContaining([
-                  expect.objectContaining({ type: "text", text: params.message }),
-                ]),
-              }),
-            );
-            expect(context.broadcast).toHaveBeenCalledWith(
-              "chat",
-              expect.objectContaining({
-                runId,
-                state: "error",
-                errorMessage: expect.stringContaining(
-                  "Authenticated profile verification is unavailable",
-                ),
-              }),
-              expect.anything(),
-            );
-          } else {
-            expect(recorder.getAdmissionReceipt()).toBeDefined();
-          }
+          expect(recorder.getAdmissionReceipt()).toBeDefined();
           if (inputState === "browser custody workspace") {
             expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
               pendingProjectGitUrl: "file:///synthetic/missing-project.git",

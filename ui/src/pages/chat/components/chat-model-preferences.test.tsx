@@ -441,46 +441,39 @@ it("retains the Access selection without borrowing entitlement from another runt
     requestedAccessProgram: "daybreak_red",
     onAccessProgramSelect: onSelect,
   });
-  const options = () => [
-    ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
-  ];
-  const unavailable = () =>
-    view.container.querySelector('.chat-controls__access-options [aria-disabled="true"]')
-      ?.textContent;
-  expect(options()).toHaveLength(0);
-  expect(unavailable()).toBeUndefined();
+  const caption = () => view.container.querySelector(".chat-controls__access-caption")?.textContent;
+  const readToggle = () =>
+    view.container.querySelector<HTMLInputElement>(".chat-controls__access-head input");
+  expect(readToggle()).toBeNull();
   view.update({ selectedAgentRuntime: "openclaw" });
-  expect(options().map((option) => option.textContent)).toEqual(["Blue"]);
-  expect(unavailable()).toContain("unavailable");
+  const toggle = expectDefined(readToggle(), "Daybreak toggle");
+  expect(toggle.checked).toBe(false);
+  expect(caption()).toBeUndefined();
   view.update({ requestedAccessProgram: undefined });
-  expect(options()[0]?.getAttribute("aria-pressed")).toBe("true");
-  const toggle = view.container.querySelector<HTMLInputElement>(
-    ".chat-controls__access-head input",
-  )!;
+  expect(toggle.checked).toBe(true);
+  expect(caption()).toBe("Blue");
   toggle.addEventListener("click", () => view.update({ stream: "New activity frame" }), {
     capture: true,
     once: true,
   });
   toggle.click();
-  expect(onSelect).toHaveBeenCalledExactlyOnceWith("standard", "main", "daybreak_blue");
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith("standard", "main");
   view.update({ requestedAccessProgram: "standard" });
   expect(toggle.checked).toBe(false);
+  expect(caption()).toBeUndefined();
   view.update({ requestedAccessProgram: undefined });
   expect(toggle.checked).toBe(true);
-  onSelect.mockClear();
-  options()[0]?.click();
-  expect(onSelect).not.toHaveBeenCalled();
   view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
-  expect(options()).toHaveLength(0);
+  expect(readToggle()).toBeNull();
   view.update({ requestedAccessProgram: "daybreak_red" });
-  expect(unavailable()).toBeUndefined();
-  expect(options()).toHaveLength(0);
+  expect(readToggle()).toBeNull();
   view.update({
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     modelCatalog: [{ ...model, available: false }],
   });
-  expect(options().every((option) => option.disabled)).toBe(true);
-  options()[0]?.click();
+  expect(readToggle()?.disabled).toBe(true);
+  onSelect.mockClear();
+  readToggle()?.click();
   expect(onSelect).not.toHaveBeenCalled();
 });
 

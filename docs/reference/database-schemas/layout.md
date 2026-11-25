@@ -82,8 +82,10 @@ state database for Linux Gateway execution with systemd 250 or newer. Each row c
 The typed record binds the systemd unit to
 an agent, session key, and exact session ID. It retains a generic command
 summary, working directory, log path, start and end times, terminal status, exit code,
-signal and reason, notification policy and settlement, cancellation intent, and the
-captured output and result-retention bounds. Environment values, command arguments,
+signal and reason, notification policy and settlement, cancellation intent, the
+captured output and result-retention bounds, and the requester's saved operator source
+(the same bounded value a queued message keeps), which the exit admits again against
+current access. Older rows have no source. Environment values, command arguments,
 output, credentials, requester continuations, and approval grants are never stored
 in this table. Process output is a separate named log artifact under the state directory.
 
@@ -98,8 +100,8 @@ rollback, or upgrade again to recover their handles. No automatic command replay
 
 On Gateway startup the registry consumes these facts through the shared read worker,
 reconciles each recorded unit, and records its real terminal or lost outcome before
-releasing unit metadata. Units use `ExitType=cgroup`, so a root exit with live
-descendants remains a running process. It never restores requester authority; completion is a new
+releasing unit metadata. The outcome is the root command's exit; a unit that still holds
+processes the command left running is released once they end. It never restores requester authority; completion is a new
 system input admitted under the owning session's current principal. Finished rows and
 their logs follow the registry's bounded result retention and explicit removal. A
 session reset invalidates completion eligibility through the recorded session ID.

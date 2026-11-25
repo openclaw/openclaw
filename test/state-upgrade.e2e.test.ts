@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
+import { readHistoricalStateCorpusManifest } from "../src/state/openclaw-historical-imports.test-support.js";
 import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
 import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
 import { ChainStepError } from "../src/state/state-upgrade-validate.js";
@@ -216,9 +217,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           expect(result.code, `${method}: ${result.stderr}`).toBe(0);
           return result.stdout;
         };
-        const manifest: Manifest = JSON.parse(
-          fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"),
-        );
+        const manifest: Manifest = JSON.parse(readHistoricalStateCorpusManifest(release));
         const values = (surface: string) =>
           (manifest.verification[surface] ?? []).map((entry) => entry.value);
         expect(await call("agents.list")).toContain('"ops"');

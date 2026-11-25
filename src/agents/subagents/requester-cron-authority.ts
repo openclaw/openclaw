@@ -111,15 +111,13 @@ function discard(authority: RequesterCronAuthority): void {
 function isCurrent(authority: RequesterCronAuthority): boolean {
   if (
     !authority.active ||
-    (authority.managementEntitlement?.source === "channel-owner" &&
-      !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
     !state.bySession.get(authority.requesterSessionKey)?.has(authority)
   ) {
     return false;
   }
   if (authority.kind === "followup") {
-    if (!authority.isFollowupCurrent() || authority.requesterOwner?.isCurrent() !== true) {
+    if (!authority.isFollowupCurrent()) {
       return false;
     }
     const binding = authority.binding;
@@ -237,7 +235,7 @@ export function prepareRequesterCronAuthority(params: {
         (boundAuthority &&
           current.entry.lifecycleRevision !== boundAuthority.sessionLifecycleRevision)
       ) {
-        throw new Error("Requester session authority changed before yield handoff");
+        throw new Error("Requester session was reset or archived; yield handoff stopped");
       }
     }
   };
@@ -528,7 +526,7 @@ async function runRequesterFollowupAuthority<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
-    throw new Error("Requester followup authority is no longer current");
+    throw new Error("Requester followup ended");
   }
   return await activeDispatch.run(
     { authority, runId, isCurrent: () => isCurrent(authority), consumed: false },
@@ -627,7 +625,7 @@ export function captureRequesterCronAuthorityAdmissionAssertion(params: Requeste
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
   return () => {
     if (!dispatch.consumed && !dispatch.isCurrent()) {
-      throw new Error("Requester authority is no longer current");
+      throw new Error("Requester continuation ended");
     }
   };
 }

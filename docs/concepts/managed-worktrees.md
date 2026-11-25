@@ -55,8 +55,10 @@ OpenClaw does not sweep arbitrary host temp entries based on their names.
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
-from a remote or scans checkout contents. Ref changes invalidate the suggestions,
-and session creation validates the selected base before changing a checkout.
+from a remote or scans checkout contents. Ref changes and Git initialization in
+the selected folder or an intermediate parent invalidate the suggestions, so a
+new nested repository supplies its own branches. Session creation validates the
+selected base before changing a checkout.
 Failed or non-Git discovery becomes eligible for another user-requested read after
 five seconds of elapsed time, even if the system wall clock moves backward.
 
@@ -140,7 +142,10 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation joins that build. Linux Git and native clone
+requests for the same new commit join that build. A startup send whose accepted
+base already has a ready generation uses that generation, even while a different
+commit is building. This applies to both managed and sandbox templates and keeps
+the session’s HEAD, index, and dependencies on its accepted base. Linux Git and native clone
 children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.

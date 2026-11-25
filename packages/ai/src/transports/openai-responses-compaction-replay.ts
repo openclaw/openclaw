@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
@@ -166,7 +166,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
   messages: Context["messages"],
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
-): (OpenAIResponsesCompactionSource & { owner: AssistantMessage }) | undefined {
+): (OpenAIResponsesCompactionSource & { owner: AssistantHistoryMessage }) | undefined {
   const read = createOpenAIResponsesCompactionSourceReader(model, options);
   const selected = resolveNewestCompactionReplaySource(messages, (message) =>
     message?.role === "assistant"
@@ -215,7 +215,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
     let replayMessages = messages;
     if (resolveFailedAssistantReplay(owner, { pairingAware: false }) === "drop") {
       // Keep a content-free boundary while normal transforms discard the failed output.
-      const boundary: AssistantMessage = {
+      const boundary: AssistantHistoryMessage = {
         role: "assistant",
         content: [],
         stopReason: "stop",
