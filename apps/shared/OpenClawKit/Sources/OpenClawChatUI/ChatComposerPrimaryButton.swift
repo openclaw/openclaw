@@ -364,10 +364,20 @@ struct ChatComposerPrimaryButton: View {
     }
 }
 
-/// No pressed dimming: the role change is the feedback, and a dim before it reads as a pulse.
+/// Press feedback like the app's interactive glass buttons: the disc swells under the finger.
+/// It animates in only and snaps back on release, so it never blends into the role cross-fade
+/// that the same release starts. Reduce Motion dims instead of scaling.
 private struct ChatComposerPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
         configuration.label
+            .animation(pressed ? .spring(duration: 0.18, bounce: 0.3) : nil) { content in
+                content
+                    .scaleEffect(pressed && !self.reduceMotion ? 1.08 : 1)
+                    .opacity(pressed && self.reduceMotion ? 0.7 : 1)
+            }
     }
 }
 #endif
