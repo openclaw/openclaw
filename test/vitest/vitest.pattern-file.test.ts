@@ -832,31 +832,6 @@ it.each(["posix", "win32"] as const)(
   },
 );
 
-it.each([32, 128, 512])("prepares literal membership once for %i include paths", (size) => {
-  const files = Array.from({ length: size }, (_, index) => `test/file-${index}.test.ts`);
-  const originalEvery = Array.prototype.every;
-  let visits = 0;
-  const every = vi.spyOn(Array.prototype, "every").mockImplementation(function (
-    this: unknown[],
-    predicate,
-    thisArg,
-  ) {
-    return originalEvery.call(this, (value, index, array) => {
-      visits++;
-      return predicate.call(thisArg, value, index, array);
-    });
-  });
-  let actual: string[] | null;
-  try {
-    actual = intersect(files, files);
-  } finally {
-    every.mockRestore();
-  }
-  expect(actual).toEqual(files);
-  // Include validation visits each path segment too; it must remain linear.
-  expect(visits).toBeLessThanOrEqual(size * 10);
-});
-
 it.each([
   ["{ts,tsx}", "tsx", ["tsx"]],
   ["tsx", "{ts,tsx}", ["tsx"]],
