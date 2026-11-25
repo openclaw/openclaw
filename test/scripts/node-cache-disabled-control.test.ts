@@ -470,11 +470,16 @@ it
         chmodSync(dir, 0o700);
         for (const name of readdirSync(dir)) {
           const file = path.join(dir, name);
-          if (lstatSync(file).isDirectory()) writable(file);
-          else chmodSync(file, 0o600);
+          if (lstatSync(file).isDirectory()) {
+            writable(file);
+          } else {
+            chmodSync(file, 0o600);
+          }
         }
       };
-      if (record.processTreeSettled && existsSync(seed)) writable(seed);
+      if (record.processTreeSettled && existsSync(seed)) {
+        writable(seed);
+      }
     }
   },
   50_000,
