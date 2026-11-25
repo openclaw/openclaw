@@ -6,9 +6,13 @@ import Foundation
 /// ui/src/app/assistant-media.ts:10-35); the iOS transport reads the same route.
 public enum OpenClawChatInboundMedia {
     private static let prefix = "media://inbound/"
-    /// The web's default preview rendition (src/shared/chat-image-renditions.ts:5).
-    static let thumbnailWidth = 960
-    /// A 960-wide rendition stays under 256 KB (chat-image-renditions.ts:7-10); allow headroom.
+    /// The largest rendition (src/shared/chat-image-renditions.ts:1). The Gateway meets each
+    /// rendition's byte budget only by halving the size (managed-image-thumbnail-cache.ts:18-46), so a
+    /// detailed photo asked at 960 comes back 240 wide: soft in a 360 px tile and in a single photo
+    /// about 1100 px wide at 3x. At 1920 it comes back 480 wide. The web asks for 960 inline because
+    /// it caps density at 2x (ui/src/pages/chat/components/chat-image-rendition.ts).
+    static let thumbnailWidth = 1920
+    /// A 1920-wide rendition stays under 512 KB (chat-image-renditions.ts:7-11); allow headroom.
     public static let maximumThumbnailBytes = 1024 * 1024
     /// The Gateway's own frame cap (src/gateway/payload-limits.ts:4); no upload is larger.
     public static let maximumOriginalBytes = 25 * 1024 * 1024
@@ -27,7 +31,7 @@ public enum OpenClawChatInboundMedia {
         return source
     }
 
-    /// `<origin><base>/__openclaw__/assistant-media?source=…&variant=thumbnail&width=960&v=4`, the
+    /// `<origin><base>/__openclaw__/assistant-media?source=…&variant=thumbnail&width=1920&v=4`, the
     /// URL the web builds for an inbound image (chat-message-local-media.ts:39-55).
     public static func thumbnailURL(
         source: String,

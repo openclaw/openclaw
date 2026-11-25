@@ -47,7 +47,7 @@ struct ChatMediaImageBoxTests {
             source: source, context: context, sessionKey: "agent:main:ios-1", agentID: "main"))
         #expect(url.absoluteString == "https://gateway.example:8443/control/__openclaw__/assistant-media"
             + "?source=media%3A%2F%2Finbound%2Fphoto-63DF6636---5553a37d.jpg"
-            + "&sessionKey=agent%3Amain%3Aios-1&agentId=main&variant=thumbnail&width=960&v=4")
+            + "&sessionKey=agent%3Amain%3Aios-1&agentId=main&variant=thumbnail&width=1920&v=4")
         // The viewer reads the upload as is: the same URL without the rendition.
         let original = try #require(OpenClawChatInboundMedia.originalURL(
             source: source, context: context, sessionKey: "agent:main:ios-1", agentID: "main"))
