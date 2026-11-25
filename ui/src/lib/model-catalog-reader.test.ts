@@ -23,7 +23,7 @@ const second = { models: [{ provider: "fixture", id: "second", name: "Second" }]
 const main = { agentId: "main" },
   other = { agentId: "other" };
 
-function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) {
+async function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) {
   const listModels = vi
     .fn<() => Promise<ModelCatalogResult>>()
     .mockRejectedValue(new Error("Unexpected models.list"));
@@ -42,6 +42,8 @@ function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) 
   });
   gateway.start();
   current().testOptions.onHello?.(gatewayHelloForMethods([]));
+  // Attaching the authenticated identity retires the anonymous catalog cache.
+  await gateway.loadSelfProfile();
   const client = gateway.snapshot.client;
   if (!client) {
     throw new Error("Expected connected fixture client");
@@ -83,7 +85,7 @@ function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) 
 }
 
 it("scopes warm publications and retires old bindings", async () => {
-  const { reader, publish, gateway, client, current, take } = fixture();
+  const { reader, publish, gateway, client, current, take } = await fixture();
   clearModelCatalogCache(client);
   take().toMatchObject({ retired: false, hasSnapshot: false, calls: 1 });
   publish(main).toMatchObject({ models: first.models, calls: 1 });
@@ -111,8 +113,8 @@ it("scopes warm publications and retires old bindings", async () => {
   publish(other).toMatchObject({ calls: 0 });
 });
 
-it("notifies cold readers only on admission and restricted policy transitions", () => {
-  const { client, publish, take, reader, gateway } = fixture();
+it("notifies cold readers only on admission and restricted policy transitions", async () => {
+  const { client, publish, take, reader, gateway } = await fixture();
   clearModelCatalogCache(client, { requireSnapshot: true });
   take().toMatchObject({ retired: true, calls: 1 });
   publish(other).toMatchObject({ retired: false, hasSnapshot: false, calls: 1 });
@@ -128,8 +130,8 @@ it("notifies cold readers only on admission and restricted policy transitions", 
   publish(other).toMatchObject({ retired: false, calls: 1 });
 });
 
-it("isolates failed refreshes and preserves refresh, eviction, and clear notifications", () => {
-  const { client, publish, take } = fixture();
+it("isolates failed refreshes and preserves refresh, eviction, and clear notifications", async () => {
+  const { client, publish, take } = await fixture();
   publish(main);
   publish(other);
   publish({ ...other, refresh: true }, { ...second, refreshFailed: true }).toMatchObject({
@@ -153,8 +155,8 @@ it("isolates failed refreshes and preserves refresh, eviction, and clear notific
   take().toMatchObject({ retired: true, hasSnapshot: false, models: [], calls: 1 });
 });
 
-it("follows subscription intent while keeping global observers global", () => {
-  const { client, publish, reader } = fixture();
+it("follows subscription intent while keeping global observers global", async () => {
+  const { client, publish, reader } = await fixture();
   publish(main);
   let scope = { agentId: " main " };
   const scoped = vi.fn(),
@@ -189,7 +191,7 @@ it("follows subscription intent while keeping global observers global", () => {
 
 it("observes each admitted read while preserving the non-throwing request contract", async () => {
   const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
-  const { reader, current, publish, client } = fixture({ onRead });
+  const { reader, current, publish, client } = await fixture({ onRead });
   const failure = new Error("Synthetic catalog failure");
   current().request.mockRejectedValueOnce(failure);
   const legacy = reader.read();
@@ -216,7 +218,7 @@ it.each([false, true])(
   "coalesces paired catalog notices across readers (reply still pending: %s)",
   async (stillPending) => {
     const received = vi.fn();
-    const { gateway, reader, client, listModels, notice } = fixture({ onResult: received });
+    const { gateway, reader, client, listModels, notice } = await fixture({ onResult: received });
     const sibling = new ModelCatalogReader(() => {}, { onResult: received });
     sibling.bind(gateway, main);
     onTestFinished(() => sibling.clear());
@@ -264,7 +266,7 @@ it.each(["pending", "failure"] as const)(
   async (outcome) => {
     const accepted = vi.fn(),
       rejected = vi.fn();
-    const { client, reader, listModels, notice } = fixture({
+    const { client, reader, listModels, notice } = await fixture({
       onResult: accepted,
       onError: rejected,
     });
@@ -302,7 +304,7 @@ it.each(["pending", "failure"] as const)(
 );
 
 it("keeps the outcome of explicit discovery when its status changes during the request", async () => {
-  const { client, listModels } = fixture();
+  const { client, listModels } = await fixture();
   const wire = createDeferred<ModelCatalogResult>();
   const result = { ...first, pendingProviders: ["fixture"] };
   listModels.mockReturnValueOnce(wire.promise);
@@ -322,7 +324,7 @@ it.each(["document", "presentation"] as const)(
       .mockImplementation(() => (hiddenBy === "document" && !visible ? "hidden" : "visible"));
     onTestFinished(() => visibility.mockRestore());
     const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
-    const { reader, client, current } = fixture({
+    const { reader, client, current } = await fixture({
       isPresented: () => hiddenBy !== "presentation" || visible,
       onRead,
     });
