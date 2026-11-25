@@ -5,6 +5,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
+import { showToast } from "../../lib/toast.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import type { ProjectChipProps } from "./project-chip.tsx";
 import { ProjectFolderIcon } from "./project-folder-icon.tsx";
@@ -38,7 +39,6 @@ function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
 export function createSavedProjectManagement(props: ProjectChipProps) {
   const [managing, setManaging] = createSignal(false);
   const [removing, setRemoving] = createSignal(false);
-  const [removeError, setRemoveError] = createSignal<string | undefined>(undefined);
   const canManage = () =>
     canCallGatewayMethod(
       props.params.context?.gateway.snapshot,
@@ -63,7 +63,6 @@ export function createSavedProjectManagement(props: ProjectChipProps) {
       props.params.place.browser === browser &&
       gateway.snapshot.client === client &&
       draftGateway.connectionEpoch === epoch;
-    setRemoveError(undefined);
     try {
       const confirmed = await showConfirmDialog({
         title: t("newSession.removeSavedProjectTitle", { name: project.displayName }),
@@ -81,24 +80,25 @@ export function createSavedProjectManagement(props: ProjectChipProps) {
       if (!isCurrent()) {
         return;
       }
+      if (browser.projectId === project.id) {
+        props.params.place.clearProjectSelection();
+      }
       await browser.refreshProjects(true);
     } catch (error) {
       if (isCurrent()) {
-        setRemoveError(formatUiError(error));
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     } finally {
       setRemoving(false);
     }
   };
   return {
-    managing,
+    managing: () => managing() && canManage(),
     removing,
-    removeError,
     canManage,
     removeSavedProject,
     toggle(this: void) {
       setManaging(!managing());
-      setRemoveError(undefined);
     },
   };
 }
@@ -112,10 +112,7 @@ export function SavedProjectRow(props: {
   const icon = (
     <ProjectRowIcon context={props.picker.params.context} projectId={props.project.id} />
   );
-  const remove = () =>
-    props.management.managing() &&
-    props.management.canManage() &&
-    props.project.source !== "workspace";
+  const remove = () => props.management.managing() && props.project.source !== "workspace";
   const sub = () =>
     [props.project.repositoryIdentity, props.suffix].filter(Boolean).join(" · ") ||
     (props.project.source === "workspace"

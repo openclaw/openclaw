@@ -345,11 +345,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           class="new-session-page__environment-layout new-session-page__picker-navigation"
           data-chat-autotype-exempt
         >
-          <Show when={management.removeError()}>
-            <div role="alert" class="new-session-page__project-error">
-              {management.removeError()}
-            </div>
-          </Show>
           <HeaderSearch
             class="new-session-page__project-search"
             label={t("newSession.projectSearchPlaceholder")}

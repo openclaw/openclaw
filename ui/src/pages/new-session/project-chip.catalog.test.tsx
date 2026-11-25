@@ -361,6 +361,20 @@ it("hides shared catalog management from write-only operators", async () => {
   expect(view.queryByRole("button", { name: /^Remove / })).toBeNull();
 });
 
+it("keeps saved projects selectable if management access ends while the picker is open", async () => {
+  const { view, browser, context, changed } = await removalFixture();
+  view.getByText("Manage projects").click();
+  flush();
+  Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
+  changed();
+  flush();
+  expect(view.queryByText("Done")).toBeNull();
+  const saved = view.container.querySelector<HTMLButtonElement>('[data-value="project:saved"]')!;
+  expect(saved.disabled).toBe(false);
+  saved.click();
+  expect(browser.projectId).toBe("saved");
+});
+
 it("uses native confirmation, cancels without RPC, and reconciles the selected project through its owner", async () => {
   const { browser, request, persistPreference, view, removal, openRemoval, confirmRemoval } =
     await removalFixture();
@@ -451,6 +465,40 @@ it.each(["connection epoch", "new selection"] as const)(
     }
   },
 );
+
+it("clears the selected project's preference on the removal receipt even if the next list fails", async () => {
+  const { browser, request, persistPreference, removal, openRemoval, confirmRemoval } =
+    await removalFixture();
+  browser.selectProject({ kind: "local", id: "saved" });
+  await openRemoval();
+  await confirmRemoval();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((method, params) =>
+    method === "projects.list"
+      ? Promise.reject(new Error("catalog unavailable"))
+      : original(method, params),
+  );
+  removal.resolve({ removed: true });
+  await waitForSolid(() => expect(browser.projectCatalogError).toBeInstanceOf(Error));
+  expect(browser.projectId).toBe("");
+  expect(persistPreference).toHaveBeenCalledWith(
+    "",
+    "/home/openclaw/.openclaw/workspace",
+    expect.objectContaining({ projectId: "" }),
+  );
+});
+
+it("reports a failed confirmed removal outside the dismissed picker", async () => {
+  const { openRemoval, confirmRemoval, removal } = await removalFixture();
+  const toast = vi.spyOn(await import("../../lib/toast.ts"), "showToast").mockReturnValue(true);
+  onTestFinished(() => toast.mockRestore());
+  await openRemoval();
+  await confirmRemoval();
+  removal.reject(new Error("Catalog unavailable"));
+  await waitForSolid(() =>
+    expect(toast).toHaveBeenCalledWith({ severity: "error", message: "Catalog unavailable" }),
+  );
+});
 
 it("re-reads the catalog after removal instead of adopting an in-flight pre-write list", async () => {
   const { browser, request, view, removal, openRemoval, confirmRemoval } = await removalFixture();
