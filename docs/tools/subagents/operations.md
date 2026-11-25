@@ -295,6 +295,13 @@ children, is not cancelled and needs its own Stop request.
 The cancellation result waits for pending child-session metadata writes before
 checking that the original session still owns the outcome.
 
+Stopped children never deliver their own completion, so an explicit Stop that
+cancels children (`/stop`, a session-wide `sessions.abort`, or an exact-run
+`chat.abort`) queues one system notice for the parent session. It names the
+cancelled children and which kind of Stop ended them. It doesn't start a turn;
+the parent's next turn reads it, so the agent can check those sessions or spawn
+replacements instead of waiting for results that won't come.
+
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
 reports actual stopped and failed child counts. A committed child cancellation
 remains in the stopped count if later cleanup fails or the parent is replaced.
