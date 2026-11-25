@@ -550,11 +550,11 @@ describe.runIf(browserMode)("Review layout", () => {
       ),
     );
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const bounds = surface.getBoundingClientRect();
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
-    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const menuBounds = surface.getBoundingClientRect();
+    expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.left).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(menuBounds.right).toBeLessThanOrEqual(window.innerWidth);
     const baseRef =
       "release/regional-calibration-and-extended-verification-for-portable-monitoring-stations";
     const headRef =
