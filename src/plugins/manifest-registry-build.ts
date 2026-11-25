@@ -132,9 +132,7 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
   const { record } = params;
   if (
     record.origin !== "config" ||
-    Object.values(record.activation ?? {}).some((v) =>
-      Array.isArray(v) ? v.length > 0 : v !== undefined,
-    ) ||
+    record.activation !== undefined ||
     !params.explicitConfiguredFileSources.has(path.resolve(record.source))
   ) {
     return;
