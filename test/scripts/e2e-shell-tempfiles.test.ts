@@ -325,7 +325,7 @@ openclaw_e2e_run_script_with_pty() {
 
 send_noop() { :; }
 
-run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
+run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop none
 `,
       "openclaw_test_state_create() { :; }",
     );

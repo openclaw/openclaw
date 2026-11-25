@@ -10,9 +10,11 @@ scenario:
       - cli.guided-onboarding
       - cli.remote-onboarding
       - cli.targeted-reconfiguration
-  objective: Verify guided and non-interactive CLI onboarding across Gateway storage, remote setup, reset, and section-scoped reconfiguration.
+  objective: Verify guided and non-interactive CLI onboarding across Gateway health outcomes, storage, remote setup, reset, and section-scoped reconfiguration.
   successCriteria:
-    - Guided onboarding runs under a real PTY, verifies the configured model, reaches completion, and performs no UI or terminal handoff.
+    - Default guided onboarding runs under a real PTY, selects the detected provider, verifies the configured model, reaches completion, and performs no UI or terminal handoff.
+    - Classic guided onboarding reports a healthy reachable Gateway without performing a UI or terminal handoff.
+    - A reachable Gateway health failure completes classic onboarding with health documentation and the openclaw health recovery command instead of plain success.
     - Gateway auth proves token SecretRef storage and password storage through executable non-interactive setup.
     - Remote onboarding persists the requested remote URL and token, and reset removes stale remote configuration.
     - Section-scoped skills configuration records configure metadata without selecting a Gateway run mode.
