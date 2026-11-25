@@ -91,6 +91,7 @@ const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/commands/doctor-session-sqlite.memory.test.ts",
   "src/commands/doctor-state-migrations.test.ts",
   "src/commands/doctor/shared/missing-configured-plugin-install.integration.test.ts",
+  "src/config/sessions/session-accessor.parent-fork-worker.test.ts",
   "src/config/sessions/session-cold-storage.test.ts",
   "src/flows/doctor-health.managed-admission.test.ts",
   "src/flows/doctor-health.managed-approvals.test.ts",
