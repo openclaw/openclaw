@@ -401,6 +401,35 @@ it.each<[string, AdmissionCase]>([
           expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
           delete after[wal];
         }
+        if (unavailablePlugin && repairable && process.platform !== "win32") {
+          // Read-only repair projection reports unavailable compatibility inputs without writes.
+          const added = Object.keys(after).filter((file) => !(file in before));
+          expect(added).toHaveLength(1);
+          const logFile = added[0]!;
+          expect(path.dirname(logFile)).toBe("logs");
+          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
+          const warning =
+            `Configured plugin load path is unavailable: ${path.join(root, "missing-plugin")}. ` +
+            "Uninspected plugin configuration is preserved. Restore access to the path, " +
+            "then run `openclaw doctor --fix`.";
+          expect(output).toContain(warning);
+          const records = fs
+            .readFileSync(path.join(stateDir, logFile), "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(records.length).toBeGreaterThan(0);
+          for (const record of records) {
+            expect(record).toEqual(
+              expect.objectContaining({
+                "0": '{"subsystem":"plugins/doctor-contracts"}',
+                message: warning,
+                _meta: expect.objectContaining({ logLevelName: "WARN" }),
+              }),
+            );
+          }
+          delete after[logFile];
+        }
         if ((workspace || selectedSession || identityFile) && process.platform !== "win32") {
           // Default diagnostics are state-local; only the verified new refusal log is exempt.
           const added = Object.keys(after).filter((file) => !(file in before));

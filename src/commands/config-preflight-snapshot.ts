@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getGatewayStartGuardErrors } from "../cli/gateway-cli/pre-bootstrap.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -11,7 +10,6 @@ import {
   type ConfigSnapshotReadMeasure,
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
-import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
@@ -148,18 +146,10 @@ async function readConfigPreflightSnapshot(
       async () => {
         if (params.includePluginMetadata && !params.skipPluginValidation) {
           let result = await readConfigFileSnapshotWithPluginMetadata(readOptions);
-          const authoredDefaults = asOptionalRecord(
-            asOptionalRecord(asOptionalRecord(result.snapshot.parsed)?.agents)?.defaults,
-          );
-          // Only heartbeat and include repairs need a projection before their owner writes.
-          const hasProjectedRepairSource =
-            Boolean(authoredDefaults && Object.hasOwn(authoredDefaults, "heartbeat")) ||
-            containsConfigIncludeDirective(result.snapshot.parsed);
           // Optional repair imports keep ordinary config reads outside Doctor's module graph.
           const automaticRepair =
             params.purpose === "startup" &&
             isStartupConfigStateRead() &&
-            hasProjectedRepairSource &&
             !isConfigReadFailure(result.snapshot)
               ? await import("./doctor/shared/automatic-config-repair.js")
               : undefined;
