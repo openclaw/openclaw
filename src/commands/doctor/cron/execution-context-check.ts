@@ -103,13 +103,12 @@ function creatorRoleSandbox(
 
 /**
  * The requester's current owner status, read without the Gateway. Profile and
- * configured channel owners can be read from state and config; linked channel
- * operators and operator snapshots need the running Gateway, so they are
- * reported as unverified and treated as non-owners.
+ * configured channel owners can be read from state and config; admin-role profiles,
+ * linked channel operators and operator snapshots need the running Gateway's
+ * admission, so they are reported as unverified and treated as non-owners.
  */
 function checkRequesterOwnerReadOnly(
   cfg: OpenClawConfig,
-  agentId: string,
   requester: ScheduledRequesterRef,
   profile: CreatorProfile | undefined,
 ): OwnerResult {
@@ -120,20 +119,21 @@ function checkRequesterOwnerReadOnly(
       if (typeof profile !== "object") {
         return { owner: false, check: profile === "unreadable" ? "unverified" : "checked" };
       }
-      // Admission's rule: an untiered install, the Gateway owner profile, or a named role
-      // that grants operator.admin for this agent.
+      if (
+        !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+        requester.profileId === GATEWAY_OWNER_PROFILE_ID
+      ) {
+        return { owner: true, check: "checked" };
+      }
       const role = resolveOperatorRolePolicyForAssignment(
         requester.profileId,
         profile.assignedRole,
         cfg,
         profile.githubLogin,
       );
-      const owner =
-        !isNamedOperatorRoleEnforcementEnabled(cfg) ||
-        requester.profileId === GATEWAY_OWNER_PROFILE_ID ||
-        (operatorScopeSatisfied("operator.admin", role?.scopes ?? []) &&
-          (role?.agents === "*" || role?.agents.includes(agentId) === true));
-      return { owner, check: "checked" };
+      // Only a role that grants operator.admin can be an owner; admission decides the rest.
+      const admin = operatorScopeSatisfied("operator.admin", role?.scopes ?? []);
+      return { owner: false, check: admin ? "unverified" : "checked" };
     }
     case "channel": {
       const { channel, accountId, senderId } = requester.requester;
@@ -233,7 +233,7 @@ async function reviewJob(
       requester.profileId !== (actor?.type === "human" ? actor.id : undefined)
         ? await readCreatorProfile(env, requester.profileId)
         : profile;
-    owner = checkRequesterOwnerReadOnly(cfg, agentId, requester, requesterProfile);
+    owner = checkRequesterOwnerReadOnly(cfg, requester, requesterProfile);
   }
   const runSessionKey =
     job.sessionTarget === "main"

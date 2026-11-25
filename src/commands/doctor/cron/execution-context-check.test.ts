@@ -87,7 +87,6 @@ const roleConfig: OpenClawConfig = {
         member,
         contractor: { ...member, sandbox: "required" },
         admin: { ...member, scopes: ["operator.admin"] },
-        "research-admin": { ...member, scopes: ["operator.admin"], agents: ["research"] },
       },
     },
   },
@@ -111,8 +110,6 @@ it.each([
     false,
   ],
   ["member", null, roleConfig, true],
-  ["admin-role", "admin", roleConfig, false],
-  ["other-agent admin-role", "research-admin", roleConfig, true],
   ["removed", undefined, {}, true],
   ["sandboxed", "contractor", roleConfig, true],
 ] as const)("checks a %s profile requester", async (_kind, role, cfg, losesAccess) => {
@@ -123,6 +120,13 @@ it.each([
   expect(text ?? "").not.toMatch(
     /Doctor could not verify it|could not be evaluated|unsandboxed execution/,
   );
+});
+
+it("leaves an admin-role profile requester to admission", async () => {
+  mocks.jobs = [jobRow("current", { createdActor: profileActor })];
+  mocks.profiles = new Map([["profile-1", "admin"]]);
+  // Its agents list and access policy decide ownership at run time.
+  expect(await noteText(roleConfig)).toContain("Doctor could not verify it");
 });
 
 it("checks a transferred job's requester by its own role, not its creator's", async () => {
