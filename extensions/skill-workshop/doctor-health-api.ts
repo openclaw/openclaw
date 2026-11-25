@@ -20,7 +20,9 @@ function createSkillWorkshopToolPolicyCheck(
     source: "skill-workshop",
     description: "Autonomous Skill Workshop capture has a callable review tool.",
     async detect(ctx) {
-      const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
+      const workshopEnabled =
+        ctx.cfg.plugins?.entries?.["skill-workshop"]?.enabled !== false &&
+        resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
       const listedAgentIds = listAgentIds(ctx.cfg);
       const diagnostics = (
         await Promise.all(

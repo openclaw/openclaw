@@ -75,6 +75,15 @@ describe("skill-workshop/tool-policy", () => {
     expect(result.findings).toEqual([warning("agents.entries.helper.", "helper")]);
   });
 
+  it("does not warn when the skill-workshop plugin entry is disabled", async () => {
+    await expect(
+      detect({
+        plugins: { entries: { "skill-workshop": { enabled: false } } },
+        tools: { allow: ["read"] },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("does not warn when autonomous capture is disabled", async () => {
     await expect(
       detect({
