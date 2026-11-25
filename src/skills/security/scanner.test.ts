@@ -161,6 +161,53 @@ describe("scanSource", () => {
     expect(findings).toHaveLength(2);
   });
 
+  it("follows bindings from child_process, eval, and Function to their calls", () => {
+    const cases: Array<[string, string]> = [
+      ["dangerous-exec", 'const { ["exec"]: r } = require("child_process");\nr("id");'],
+      ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod.exec;\nr("id");'],
+      ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod;\nr.exec("id");'],
+      ["dangerous-exec", 'const r = require(["child_process"][0]);\nr.exec("id");'],
+      ["dangerous-exec", 'import r = require("child_process");\nr.exec("id");'],
+      [
+        "dangerous-exec",
+        'import * as cp from "node:child_process";\nconst { exec } = cp;\nconst r = exec;\nr("id");',
+      ],
+      [
+        "dangerous-exec",
+        'const cp = await import("node:child_process");\nconst r = cp["exec"];\nr("id");',
+      ],
+      ["dangerous-exec", 'const run: Runner = require("child_process").execSync;\nrun("id");'],
+      ["dangerous-exec", 'require("child_process").exec("id");'],
+      ["dangerous-exec", 'const tasks = { run: require("child_process").exec };\ntasks.run("id");'],
+      ["dynamic-code-execution", 'const f = eval;\nf("1+1");'],
+      ["dynamic-code-execution", 'const f = globalThis.eval;\nf("1+1");'],
+      ["dynamic-code-execution", 'const { eval: g } = globalThis;\ng("1+1");'],
+      ["dynamic-code-execution", 'const o = { r: eval };\no.r("1+1");'],
+      ["dynamic-code-execution", 'const o = {};\no.r = eval;\no["r"]("1+1");'],
+      ["dynamic-code-execution", 'const F = Function;\nconst h = new F("return 1");'],
+      ["dynamic-code-execution", 'const F = globalThis.Function;\nconst h = new F("return 1");'],
+      ["dynamic-code-execution", 'let g;\ng = window;\ng["eval"]("1+1");'],
+    ];
+    for (const [ruleId, source] of cases) {
+      const findings = scanSource(source, "plugin.ts").filter((f) => f.ruleId === ruleId);
+      expect(findings, source).toEqual([
+        expect.objectContaining({ severity: "critical", line: source.split("\n").length }),
+      ]);
+    }
+  });
+
+  it("does not treat unrelated names or properties as capabilities", () => {
+    for (const source of [
+      'import { exec } from "child_process";\nconst r = /x/.exec;\nconst run = (cmd) => cmd;\nrun("id");',
+      'const tasks = { run: helper };\ntasks.run("id"); // child_process',
+      'const calc = { evaluate: (x) => x };\nconst f = calc.evaluate;\nf("1");',
+      'const { evaluate } = globalThis;\nconst F = MyFunction;\nnew F(evaluate("x"));',
+      'const proto = Function.prototype;\nif (x == eval) proto("x");',
+    ]) {
+      expect(scanSource(source, "plugin.ts"), source).toEqual([]);
+    }
+  });
+
   it("does not flag a computed exec-style call on a non-child_process object", () => {
     const source =
       '\nimport { exec } from "child_process";\nconst re = /pattern/;\nre["exec"](value);\n';
