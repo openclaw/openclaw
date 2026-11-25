@@ -152,9 +152,12 @@ export function capConnectionScopesByRole(
     return { scopes: effectiveScopes };
   }
   const scopes = intersectOperatorScopes(effectiveScopes, rolePolicy.scopes);
-  return scopes.length < effectiveScopes.length
-    ? { scopes, roleCappedScopes: Object.freeze([...effectiveScopes]) }
-    : { scopes };
+  // Capping can swap in narrower implied scopes, so compare grants rather than list lengths.
+  const capped = effectiveScopes.some(
+    (scope) =>
+      !roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: scopes }),
+  );
+  return capped ? { scopes, roleCappedScopes: Object.freeze([...effectiveScopes]) } : { scopes };
 }
 
 export function resolveEffectiveConnectionScopes(params: {
