@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSyntheticMissingToolResult } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  extractToolCallsFromAssistant,
+  isSyntheticMissingToolResult,
+} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -91,17 +94,16 @@ function compact(event: TranscriptEvent): TranscriptEvent {
       ]);
       // Only indexed messages enter reset pairing. Invalid messages still own
       // tree and last-completed semantics, but must never become indexed here.
-      message.content =
-        indexed && Array.isArray(event.message.content)
-          ? event.message.content.flatMap((block) =>
-              isRecord(block) &&
-              ["toolCall", "toolUse", "functionCall"].includes(String(block.type))
-                ? [pick(block, ["type", "id", "name"])]
-                : [],
-            )
-          : indexed
-            ? ""
-            : null;
+      if (indexed && event.type === "message" && event.message.role === "assistant") {
+        message.content = Array.isArray(event.message.content)
+          ? extractToolCallsFromAssistant(event.message).map((call) => ({
+              type: "toolCall",
+              ...call,
+            }))
+          : "";
+      } else {
+        message.content = indexed ? (Array.isArray(event.message.content) ? [] : "") : null;
+      }
       if (typeof message.command === "string") {
         message.command = "";
       }

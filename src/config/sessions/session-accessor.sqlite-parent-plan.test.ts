@@ -163,6 +163,12 @@ const fixtures = {
     { type: "reset", id: "reset", parentId: "real", reason: "new", firstKeptEntryId: "call" },
     assistant("last", "reset", { api: "cli", usage: { input: 100 } }),
   ],
+  opaqueToolResult: [
+    header,
+    call,
+    tool("result", "call", { content: [{ type: { toString: null } }] }),
+    assistant("last", "result"),
+  ],
   legacySyntheticReset: [
     header,
     call,
