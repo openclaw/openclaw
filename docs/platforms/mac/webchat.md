@@ -431,6 +431,11 @@ Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**.
 When more than one Gateway is configured, this menu also lists every Gateway;
 the checkmark follows the selected experience's frontmost Gateway window.
 
+In the Web experience, clicking the Dock icon or choosing **Open Dashboard**
+returns to the last focused Dashboard window when both it and the main Dashboard
+window remain open. This is separate from the startup Gateway selection. To open
+or focus a specific Gateway, choose it from the Dock menu's Gateway list.
+
 The menu checks health only while open, retaining cached facts between openings.
 Before the first result a card shows **checking…**; failed checks show
 **unreachable** and the last successful contact time when known. Closing the menu
