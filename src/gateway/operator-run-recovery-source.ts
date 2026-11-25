@@ -31,8 +31,11 @@ export function captureQueuedOperatorRecoverySource(
   }
   assertAdmittedRunOperatorAuthority(authority);
   let captured: QueuedOperatorRecoverySource;
-  if (authority.recoverySnapshot) {
-    const snapshot = authority.recoverySnapshot;
+  const snapshot = authority.recoverySnapshot;
+  if (authority.participationCeiling && !snapshot) {
+    return { kind: "unavailable", reason: "decode-failed" };
+  }
+  if (snapshot) {
     captured = {
       kind: "gateway",
       snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },

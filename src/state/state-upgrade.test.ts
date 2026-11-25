@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
 import { captureSqliteDatabaseDescriptorCustodyLocations } from "../infra/sqlite-database-admission.js";
-import { createTrialPending } from "../update/store.js";
+import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -68,6 +69,80 @@ it("releases admitted source and successor descriptors before replacing a databa
   expect(published.prepare("SELECT value FROM witness").get()).toEqual({ value: 1 });
   using previous = new DatabaseSync(`${live}.pre-custody-test`, { readOnly: true });
   expect(previous.prepare("SELECT value FROM witness").get()).toEqual({ value: 0 });
+});
+
+it("publishes immutable restore intent before the replayable swap plan, and reuses it on retry", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restore-before-plan-"));
+  dirs.push(stateDir);
+  const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(statePath));
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.writeFileSync(configPath, "{}");
+  {
+    using db = new DatabaseSync(statePath);
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+  }
+  const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
+  const target = path.join("releases", "plan-release", "openclaw");
+  fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
+  const trial = await createTrialPending(
+    {
+      runId: "before-plan",
+      target,
+      previous: stateDir,
+      version: VERSION,
+      buildId: resolveRuntimeServiceBuildId() ?? undefined,
+    },
+    resolvePrefix(env),
+  );
+  await writeTrial({ ...trial, phase: "trial" }, resolvePrefix(env));
+  const manifest = path.join(resolvePrefix(env), "releases", "plan-release", ".restore");
+  const rename = fs.renameSync;
+  const interrupted = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+    if (path.basename(String(destination)) === "plan.json") {
+      expect(fs.existsSync(manifest)).toBe(true);
+      throw new Error("stopped before swap plan publication");
+    }
+    return rename(source, destination);
+  });
+  const runChain = async ({ stateDir: shadow }: { stateDir: string }) => {
+    using db = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    return { warnings: [] };
+  };
+  await expect(
+    upgradeStateDirectory({
+      env,
+      log: { info() {}, warn() {} },
+      runChain,
+    }),
+  ).rejects.toThrow("stopped before swap plan publication");
+  interrupted.mockRestore();
+  const image = `${statePath}.pre-restore-before-plan`;
+  const inode = fs.statSync(image).ino;
+  {
+    using original = new DatabaseSync(image, { readOnly: true });
+    using live = new DatabaseSync(statePath, { readOnly: true });
+    expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION - 1,
+    );
+    expect(live.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION - 1,
+    );
+  }
+  await expect(
+    upgradeStateDirectory({
+      env,
+      log: { info() {}, warn() {} },
+      runChain,
+    }),
+  ).resolves.toMatchObject({ status: "upgraded" });
+  expect(fs.statSync(image).ino).toBe(inode);
+  using original = new DatabaseSync(image, { readOnly: true });
+  expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
+    OPENCLAW_STATE_SCHEMA_VERSION - 1,
+  );
 });
 
 describe("startup reader replacement", () => {

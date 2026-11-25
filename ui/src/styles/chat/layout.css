@@ -9,68 +9,96 @@ openclaw-pending-session-create {
   width: 100%;
   max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
-}
 
-/* Persistent errors keep their recovery action beside the title in every
- * state: expanding details must not move it, and narrow panes must not strand
- * it on its own row. Details span the full width below. */
-.chat-error .app-toast__content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 2px 12px;
-}
+  .app-toast__content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 2px 12px;
+  }
 
-.chat-error .app-toast__body {
-  display: contents;
-}
+  .app-toast__body {
+    display: contents;
+  }
 
-.chat-error .app-toast__message,
-.chat-error .app-toast__description {
-  grid-column: 1;
-}
+  .app-toast__message,
+  .app-toast__description {
+    grid-column: 1;
+  }
 
-.chat-error .app-toast__body > .lazy-view-error__details {
-  grid-column: 1 / -1;
-}
-
-.chat-error .chat-error__actions {
-  grid-template-rows: subgrid;
-  grid-row: 1 / span 2;
-  gap: 2px;
-  grid-column: 2;
-  margin-block-start: -4px;
-}
-
-/* The long discard label would squeeze the message into a sliver on phones. */
-@media (max-width: 560px) {
-  .chat-error__actions:has(> .chat-error__discard) {
-    grid-template-rows: none;
-    grid-row: auto;
-    gap: 12px;
+  .lazy-view-error__details {
     grid-column: 1 / -1;
-    justify-self: start;
-    margin-block-start: 6px;
+  }
+
+  .chat-error__actions {
+    grid-template-rows: subgrid;
+    grid-row: 1 / span 2;
+    gap: 2px;
+    grid-column: 2;
+    margin-block-start: -4px;
+  }
+
+  > .app-toast__dismiss {
+    position: static;
+    flex: none;
+    margin: -1px -6px 0 -4px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    opacity: 1;
+    scale: 1;
   }
 }
 
-/* Persistent errors do not time out, so their dismiss control stays visible
- * and sits inside the card: a corner badge would be clipped by scrolling
- * composer containers on phones. */
-.chat-error > .app-toast__dismiss {
-  position: static;
-  flex: none;
-  margin: -1px -6px 0 -4px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-  opacity: 1;
-  scale: 1;
+.chat-error--reply.chat-composer-neighbor-card {
+  column-gap: 8px;
+  min-height: 0;
+  padding-block: 7px;
+
+  .app-toast__message {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    font-weight: 400;
+    line-height: calc(18px * var(--control-ui-text-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-error__actions {
+    grid-row: 1;
+    grid-column: 3;
+    gap: 4px;
+    height: 30px;
+    margin: 0;
+  }
+
+  .chat-error__refresh {
+    white-space: nowrap;
+  }
+
+  .chat-error__dismiss {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    scale: 1;
+    box-shadow: none;
+  }
 }
 
+/* Keep long discard labels below the message on phones. */
 @media (max-width: 560px) {
-  .chat-error__discard,
-  .chat-error__refresh {
+  .chat-error__actions:has(> .chat-error__discard) {
+    grid-template-rows: none;
+    grid-area: auto / 1 / auto / -1;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+
+  .chat-error__discard {
     white-space: normal;
     text-align: start;
   }
