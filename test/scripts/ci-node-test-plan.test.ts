@@ -16,8 +16,6 @@ import {
   createNodeTestShardBundles as bundleTests,
   createNodeTestShards as planTests,
   createSelectedNodeTestShardBundles as selectTests,
-  createUiRealGatewayTestShards,
-  createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
   packCompactNodeTestJobsToCapacity,
@@ -31,13 +29,17 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
-import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
+import * as testTierPolicy from "../../scripts/lib/ci-test-tier-policy.mts";
 import {
   createNativeSoloTimingKey,
   type CiTimingProfile,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import {
+  createUiRealGatewayTestShards,
+  createUiTestShardGroups,
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -1629,7 +1631,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (runnerBackend !== "github") {
         const fullFiles = groups.flatMap(optionalPatterns);
         const excluded = required(fullFiles[0]);
-        vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+        vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
           (file) => file === excluded,
         );
         vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -2282,8 +2284,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps reduced Gateway coverage under distinct complete timing parts", () => {
-    const isReleaseOnlyRuntime = proofTestInventory.isReleaseOnlyRuntimeTestFile;
-    vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+    const isReleaseOnlyRuntime = testTierPolicy.isReleaseOnlyRuntimeTestFile;
+    vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
       (file) => file === "src/gateway/server.chat-cli-auth.test.ts" || isReleaseOnlyRuntime(file),
     );
     const options = {

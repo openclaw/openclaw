@@ -65,7 +65,6 @@ async function approvedBuildOnly(f: ReturnType<typeof candidatePublicationFixtur
     reference: {
       releaseTag: "v2026.8.27",
       targetSha: "a".repeat(40),
-      validationEvidenceDigest: `sha256:${"a".repeat(64)}`,
     },
     delta: { commits: 30, added: 16000, deleted: 2 },
     artifacts: [

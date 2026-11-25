@@ -68,3 +68,11 @@
     background-color: var(--scrollbar-thumb-hover);
   }
 }
+
+/* styles/components.css stops closing and hidden surfaces from trying position fallbacks,
+   but document rules never reach shadow roots. A shadow-hosted tooltip that left the top
+   layer with its fallbacks froze WebKit's style resolution (openclaw/openclaw#196820). */
+[data-phase="closing"],
+[data-phase="hidden"] {
+  position-try-fallbacks: none !important;
+}

@@ -2,12 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
-import JSON5 from "json5";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
-import { resolveConfigIncludes } from "../config/includes.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,19 +30,12 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { readStateSchemaContentVersionRow } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
+import { readUpgradeConfig } from "./state-upgrade-config.js";
 import {
   APPLIED_UPGRADE_PREFIX as APPLIED_PREFIX,
   UPGRADE_WORK_PREFIX as WORK_PREFIX,
 } from "./state-upgrade-receipts.js";
-import { isSqliteFile, skipEntry, withRecoveredSource } from "./state-upgrade-tree.js";
-
-const UNRESTORABLE_DIRECTORIES: Record<string, true> = {
-  "git-install": true,
-  npm: true,
-  node_modules: true,
-  tmp: true,
-  logs: true,
-};
+import { isSqliteFile, isUpgradeRestorePath, withRecoveredSource } from "./state-upgrade-tree.js";
 
 export type DatabaseTarget = {
   kind: "state" | "agent";
@@ -279,19 +269,8 @@ export async function isStateUpgradePending(env: NodeJS.ProcessEnv): Promise<boo
   if (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX))) {
     return true;
   }
-  const config = readUpgradeConfig(resolveConfigPath(env, stateDir));
+  const { config } = readUpgradeConfig(resolveConfigPath(env, stateDir));
   return outdatedDatabases((await discoverDatabases(stateDir, config, env)).targets).length > 0;
-}
-
-export function readUpgradeConfig(configPath: string): OpenClawConfig {
-  try {
-    // Doctor owns validation and migration; path resolvers tolerate legacy shapes.
-    return coerceConfig(
-      resolveConfigIncludes(JSON5.parse(fs.readFileSync(configPath, "utf8")), configPath),
-    );
-  } catch {
-    return {};
-  }
 }
 
 /** Admission uses the same inventory and exclusions as the private copy. */
@@ -306,17 +285,9 @@ export function stateUpgradeRefusal(
   const device = fs.statSync(stateDir).dev;
   for (const target of targets) {
     const relative = path.relative(stateDir, target.path);
-    const parts = relative.split(path.sep);
     const stat = fs.statSync(target.path, { throwIfNoEntry: false });
     if (
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative) ||
-      parts.length > 5 ||
-      parts.some(
-        (part, index) =>
-          skipEntry(part) ||
-          (index < parts.length - 1 && Object.hasOwn(UNRESTORABLE_DIRECTORIES, part)),
-      ) ||
+      !isUpgradeRestorePath(stateDir, target.path) ||
       path.relative(realStateDir, resolvePathViaExistingAncestorSync(target.path)) !== relative ||
       (stat !== undefined && stat.dev !== device) ||
       skip(target.path)
