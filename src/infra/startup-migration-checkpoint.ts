@@ -198,6 +198,7 @@ function acquireStartupMigrationLease(
         owner,
         assertOwned: () =>
           assertStartupMigrationLeaseOwned(
+            // Publication needs the synchronous read half of this boot lease primitive.
             withEngineStoreAdmission(() =>
               withExistingOpenClawStateDatabaseCurrentReadOnly(
                 ({ db }) => readOpenClawStateLeaseExpiry(db, identity),

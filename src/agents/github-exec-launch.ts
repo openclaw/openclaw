@@ -84,6 +84,7 @@ export function buildGitHubExecLaunchArgv(
   profileDir: string,
   options?: {
     githubHost?: string;
+    privateCredential?: boolean;
     externalCommandShell?: { shell: string; args: readonly string[] };
   },
 ): string[] {
@@ -94,7 +95,7 @@ export function buildGitHubExecLaunchArgv(
     process.execPath,
     ...(nativeRedirect ? ["--import", nativeRedirect.preload] : []),
     ...resolveRuntimeWorkerArgv(workerUrl),
-    profileDir,
+    options?.privateCredential ? "--private-fd" : profileDir,
     host,
   ];
   // GH_HOST is a default, not an authentication boundary. Do not expose a public
@@ -152,6 +153,37 @@ export function buildGitHubExecLaunchArgv(
   // Resolve source-mode tsx beside application code; only the substitution changes cwd.
   const resolverDir = quoteCliArg(fileURLToPath(new URL(".", workerUrl)));
   const enterResolverDir = `cd ${resolverDir} 2>/dev/null || { printf '%s\\n' 'GitHub Identity launcher is unavailable. Restart OpenClaw, then retry.' >&2; exit 1; }`;
-  const bootstrap = `set +x; GH_TOKEN="$(${enterResolverDir}; exec ${launcher.map(quoteCliArg).join(" ")})" || exit $?; GH_HOST=${quoteCliArg(host)}; ${publicToken ? "GH_ENTERPRISE_TOKEN=;" : "GH_ENTERPRISE_TOKEN=$GH_TOKEN; GH_TOKEN=;"} GITHUB_TOKEN=; GITHUB_ENTERPRISE_TOKEN=; export GH_HOST GH_TOKEN GH_ENTERPRISE_TOKEN GITHUB_TOKEN GITHUB_ENTERPRISE_TOKEN; exec "$@"`;
+  const bootstrap = `set +x; GH_TOKEN="$(${enterResolverDir}; exec ${launcher.map(quoteCliArg).join(" ")})" || exit $?; GH_HOST=${quoteCliArg(host)}; ${publicToken ? "GH_ENTERPRISE_TOKEN=;" : "GH_ENTERPRISE_TOKEN=$GH_TOKEN; GH_TOKEN=;"} GITHUB_TOKEN=; GITHUB_ENTERPRISE_TOKEN=; export GH_HOST GH_TOKEN GH_ENTERPRISE_TOKEN GITHUB_TOKEN GITHUB_ENTERPRISE_TOKEN; ${options?.privateCredential ? "exec 4<&-; " : ""}exec "$@"`;
   return ["/bin/sh", "-c", bootstrap, "openclaw-github-exec", ...argv];
+}
+
+/** Resolve the current grant only at the selected native transport's private delivery boundary. */
+export function prepareGitHubExecCredentialTransport(
+  readGrant: () =>
+    | { binding: { token: string; host?: string }; assertCurrent: () => void }
+    | undefined,
+) {
+  const readCredential = () => {
+    const grant = readGrant();
+    if (!grant) {
+      throw new Error("GitHub App execution authority closed");
+    }
+    grant.assertCurrent();
+    return grant.binding;
+  };
+  return {
+    privateEnv: () => {
+      const credential = readCredential();
+      const host = credential.host ?? GITHUB_PUBLIC_HOST;
+      const publicToken = host === GITHUB_PUBLIC_HOST || host.endsWith(".ghe.com");
+      return {
+        GH_HOST: host,
+        GH_TOKEN: publicToken ? credential.token : "",
+        GH_ENTERPRISE_TOKEN: publicToken ? "" : credential.token,
+        GITHUB_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+      };
+    },
+    secretInput: { fd: 4, createData: () => Buffer.from(readCredential().token) },
+  };
 }

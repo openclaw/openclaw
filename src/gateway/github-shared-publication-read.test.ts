@@ -1,3 +1,19 @@
+// Install the synthetic identity before requester imports load repository integration.
+// oxfmt-ignore
+import {
+  BRANCH,
+  createSystemGitHubPublicationRequesterFixture,
+  NEW_HEAD,
+  OLD_HEAD,
+  SESSION_KEY,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+  publicationRequest,
+  publicationWorktree,
+  registryPublicationWorktree,
+  root,
+} from "./github-publication.test-support.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -37,20 +53,6 @@ import {
   readRepositoryGitHubPublicationFixture,
 } from "./github-publication-store.test-support.js";
 import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
-import {
-  BRANCH,
-  createSystemGitHubPublicationRequesterFixture,
-  NEW_HEAD,
-  OLD_HEAD,
-  SESSION_KEY,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-  publicationRequest,
-  publicationWorktree,
-  registryPublicationWorktree,
-  root,
-} from "./github-publication.test-support.js";
 import {
   insertSharedWorktreeReceipt,
   repositoryReceipt,

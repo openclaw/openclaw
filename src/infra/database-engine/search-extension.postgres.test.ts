@@ -166,12 +166,16 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
           .all(),
       ).toEqual([{ id: "one" }]);
       expectDefinitions("keywords-search", "keywords-archive-search");
+      fixture.invalidate();
       const reader = openPostgresEngineTestStore({
         anchor: db.anchor,
         schema,
         input: { connection: connection!, schemaPrefix: "search_extension_test", readOnly: true },
       });
       try {
+        expect(
+          admitStoreSearch(reader, selected, { extension: "keywords-search" }).fullText,
+        ).not.toBeNull();
         expect(reader.prepare("SELECT id FROM keywords").all()).toEqual([{ id: "one" }]);
       } finally {
         reader.close();

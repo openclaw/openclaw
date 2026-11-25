@@ -110,7 +110,7 @@ export function openEngineStore(ref: {
       `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
     );
   }
-  const readOnly = ref.input?.readOnly === true;
+  const readOnly = ref.input?.readOnly === true || ref.input?.readOnlySchema === true;
   if (!readOnly) {
     ref.prepareAnchor();
   }
@@ -191,7 +191,8 @@ export function openEngineStore(ref: {
         )
       : undefined;
     if (readOnly) {
-      // Standby reads verify the current schema without creating or migrating either store.
+      // Exact current schema admission reads the existing seal/catalog only. The
+      // PostgreSQL session also enforces READ ONLY, including accidental writes.
       db.runTransaction(() => admit(false), undefined, true);
     } else if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
@@ -284,7 +285,7 @@ export function openEngineStore(ref: {
     } else {
       admit(false);
     }
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (readOnly || !known || (known.engine === "postgres" && known.version !== schema.version)) {
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,

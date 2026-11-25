@@ -36,12 +36,14 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
 import { prepareAgentExecScratch } from "./exec-scratch.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import type { LocalGitHubAppExecution } from "./github-tool-identity.types.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 import {
   isSubagentEnvelopeSession,
   isVisibleSpawnedSession,
 } from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -619,4 +621,45 @@ export function resolvePreparedExecEnvironment(params: {
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
       : { requestedEnv: forwardedEnv }),
   };
+}
+
+/** Both local process and host approval paths use the same credential envelope. */
+export function prepareLocalExecGitHubIdentity(
+  defaults: ExecToolDefaults | undefined,
+  host: ExecHost,
+  environment: ReturnType<typeof resolveExecPreparedRunEnvironment>,
+) {
+  const gateway = host === "gateway";
+  return {
+    githubProfileDir:
+      gateway && environment.managedLocalIdentity
+        ? environment.localIdentityEnv.GH_CONFIG_DIR
+        : undefined,
+    githubApp: gateway
+      ? prepareLocalGitHubAppExecution(defaults, environment.appInstallationProfileId)
+      : undefined,
+  };
+}
+
+/** Preserve the execution owner when approval policy comes from another agent. */
+function prepareLocalGitHubAppExecution(
+  defaults: ExecToolDefaults | undefined,
+  profileId: string | undefined,
+): LocalGitHubAppExecution | undefined {
+  if (!profileId) {
+    return undefined;
+  }
+  const agentId = defaults?.executionAgentId ?? defaults?.agentId ?? "main";
+  const sessionKey = defaults?.runSessionKey ?? defaults?.sessionKey;
+  const sessionId = defaults?.sessionId;
+  const caller = getGatewayToolCallerIdentity();
+  if (
+    !sessionKey ||
+    !sessionId ||
+    caller?.agentId !== agentId ||
+    caller.sessionKey !== sessionKey
+  ) {
+    throw new Error("GitHub App execution requires the current agent and session.");
+  }
+  return { profileId, agentId, sessionKey, sessionId, operatorAuthority: caller.operatorAuthority };
 }

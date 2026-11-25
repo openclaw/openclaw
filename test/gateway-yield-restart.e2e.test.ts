@@ -58,6 +58,7 @@ it
         : "agent:main:main:thread:yield-restart";
     const rootPrompt = "YIELD_RESTART_REQUESTER";
     const childPrompt = "YIELD_RESTART_CHILD";
+    const readSavedChildPrompt = "READ_SAVED_CHILD_RESULT";
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
     let childKey: string | undefined;
@@ -168,6 +169,14 @@ it
             return;
           }
           assert(text.includes(rootPrompt), "Unexpected synthetic requester input");
+          if (action === "policy-unavailable") {
+            if (text.includes(readSavedChildPrompt)) {
+              expect(text.split("PARKED_CHILD_COMPLETED")).toHaveLength(2);
+              reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
+              return;
+            }
+            expect(text).not.toContain("PARKED_CHILD_COMPLETED");
+          }
           const spawned = input.find(
             (item) => isRecord(item) && item.type === "function_call_output",
           );
@@ -713,65 +722,62 @@ it
             // Completion admission waits behind this turn; release it before injecting failure.
             assert(yieldRequester);
             yieldRequester();
+            assert(childRunId, "Requester has not received its child run ID");
+            const agentDir = instance.state.agentDir("main");
             await vi.waitFor(
               () => {
                 expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
                 expect(instance.logs()).toContain(
                   "Gateway access policy is unavailable; retry the operation.",
                 );
+                // The refused wake settles once, correlated to the original child receipt.
+                const session = readRestartSession(agentDir, rootKey);
+                assert(typeof session?.sessionId === "string");
+                const transcript = readTranscriptExportSnapshotReadOnlySync({
+                  agentId: "main",
+                  sessionKey: rootKey,
+                  sessionId: session.sessionId,
+                  storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+                  env: { ...process.env, OPENCLAW_STATE_DIR: instance.stateDir },
+                });
+                const statuses = transcript?.events.filter(
+                  (event) =>
+                    isRecord(event) &&
+                    event.type === "custom_message" &&
+                    event.customType === "subagent-completion",
+                );
+                expect(statuses).toEqual([
+                  expect.objectContaining({
+                    display: false,
+                    content: expect.stringContaining(
+                      `session ${childKey}, run ${childRunId}): completed\n\nPARKED_CHILD_COMPLETED`,
+                    ),
+                  }),
+                ]);
               },
               { timeout: 15_000 },
             );
+            phase = "requester reads saved child result";
+            await client.request("chat.send", {
+              sessionKey: rootKey,
+              message: readSavedChildPrompt,
+              idempotencyKey: randomUUID(),
+              deliver: false,
+            });
           }
         }
-        if (action === "policy-unavailable") {
-          // The outage refuses the wake. Since #204178 the child's end state is delivered as
-          // model-visible requester history, once, with no retried wake turn.
-          await vi.waitFor(
-            () => {
-              const agentDir = instance.state.agentDir("main");
-              const sessionId = readRestartSession(agentDir, rootKey)?.sessionId;
-              assert(typeof sessionId === "string");
-              const statuses = (
-                readTranscriptExportSnapshotReadOnlySync({
-                  agentId: "main",
-                  sessionKey: rootKey,
-                  sessionId,
-                  storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-                })?.events ?? []
-              ).filter(
-                (event) =>
-                  isRecord(event) &&
-                  event.type === "custom_message" &&
-                  event.customType === "subagent-completion",
-              );
-              expect(statuses).toEqual([
-                expect.objectContaining({
-                  display: false,
-                  content: expect.stringMatching(
-                    new RegExp(
-                      `session ${childKey}, run [^)]+\\): completed[\\s\\S]*PARKED_CHILD_COMPLETED`,
-                      "u",
-                    ),
-                  ),
-                }),
-              ]);
-            },
-            { timeout: 30_000 },
-          );
-        } else {
-          await vi.waitFor(
-            async () => {
-              const history = await client!.request<{ messages: unknown[] }>("chat.history", {
-                sessionKey: rootKey,
-              });
-              expect(JSON.stringify(history.messages)).toContain(
-                "REQUESTER_RECEIVED_CHILD_COMPLETION",
-              );
-            },
-            { timeout: 30_000 },
-          );
-        }
+        await vi.waitFor(
+          async () => {
+            await Promise.race([failed.promise, Promise.resolve()]);
+            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+              sessionKey: rootKey,
+            });
+            expect(JSON.stringify(history.messages)).toContain(
+              "REQUESTER_RECEIVED_CHILD_COMPLETION",
+            );
+          },
+          { timeout: 30_000 },
+        );
         if (action === "completed-before") {
           expect(childCalls).toBe(callsBeforeRestart);
         }

@@ -408,6 +408,21 @@ export function authorizeCurrentOperatorRoleScopes(
   return undefined;
 }
 
+/** Reauthorize a worker deletion only when its queued attempt reaches an owner. */
+export function canStartQueuedWorkerDeletion(
+  client: GatewayClient | null,
+  hasCurrentClientAuthority: (() => boolean) | undefined,
+  getConfig: () => OpenClawConfig,
+): boolean {
+  return (
+    hasCurrentClientAuthority?.() !== false &&
+    !client?.invalidated &&
+    (!client || client.connect.scopes?.includes(ADMIN_SCOPE) === true) &&
+    (resolveGatewayOperatorRoleActor(client)?.kind !== "operator" ||
+      !authorizeCurrentOperatorRoleScopes(client, getConfig()))
+  );
+}
+
 export function operatorSessionCap(
   client: GatewayClient | null,
   cfg: OpenClawConfig,

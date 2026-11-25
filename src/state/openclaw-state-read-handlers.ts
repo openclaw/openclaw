@@ -412,6 +412,7 @@ export async function prepareOpenClawStateRead(
   }
   if (
     command.type === "userProfiles.catalogIdentity" ||
+    command.type === "userProfiles.authenticationIdentity" ||
     command.type === "userProfiles.identity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||

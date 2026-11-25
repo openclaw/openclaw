@@ -453,3 +453,143 @@ it.runIf(process.platform !== "win32")(
     expect(await replacement.store.get(successor.workspaceId)).toEqual(successor);
   },
 );
+
+it("resets a lost repository workspace to its saved branch with revision and live-authority guards", async () => {
+  const { store } = await fixture();
+  const initial = await store.create({ ...source, branch: "saved/session-branch" });
+  const pinned = await store.bindBase({
+    workspaceId: initial.workspaceId,
+    expectedRevision: initial.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent,
+  });
+  const accepted = await store.acceptCheckpoint({
+    workspaceId: pinned.workspaceId,
+    expectedRevision: pinned.revision,
+    checkpointRef: "refs/openclaw/worker-results/accepted",
+    manifestHash: baseManifestHash,
+    assertCurrent,
+  });
+  await expect(
+    store.resetToBranch({
+      sourceCommit: baseCommit,
+      workspaceId: accepted.workspaceId,
+      expectedRevision: accepted.revision,
+      assertCurrent: () => {
+        throw new Error("issuer revoked");
+      },
+    }),
+  ).rejects.toThrow("issuer revoked");
+  expect(await store.get(accepted.workspaceId)).toEqual(accepted);
+  const reset = await store.resetToBranch({
+    sourceCommit: baseCommit,
+    workspaceId: accepted.workspaceId,
+    expectedRevision: accepted.revision,
+    assertCurrent,
+  });
+  expect(reset).toMatchObject({
+    workspaceId: initial.workspaceId,
+    agentId: source.agentId,
+    sessionKey: source.sessionKey,
+    branch: "saved/session-branch",
+    requestedRef: baseCommit,
+    baseCommit: null,
+    baseManifestHash: null,
+    checkpointRef: null,
+    manifestHash: null,
+    revision: accepted.revision + 1,
+  });
+  await expect(
+    store.resetToBranch({
+      sourceCommit: baseCommit,
+      workspaceId: accepted.workspaceId,
+      expectedRevision: accepted.revision,
+      assertCurrent,
+    }),
+  ).rejects.toThrow("revision changed");
+});
+
+it("retains original loss provenance through replacement checkpoints and database reopen", async () => {
+  const { database, store } = await fixture();
+  const initial = await store.create(source);
+  const base = await store.bindBase({
+    workspaceId: initial.workspaceId,
+    expectedRevision: initial.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent,
+  });
+  const accepted = await store.acceptCheckpoint({
+    workspaceId: initial.workspaceId,
+    expectedRevision: base.revision,
+    checkpointRef: "refs/openclaw/worker-results/unavailable",
+    manifestHash: `sha256:${"c".repeat(64)}`,
+    assertCurrent,
+  });
+  const recovery = {
+    reason: "missing-checkpoint-artifact" as const,
+    source: "recorded-base" as const,
+  };
+  await expect(
+    store.resetToBranch({
+      workspaceId: initial.workspaceId,
+      expectedRevision: base.revision,
+      sourceCommit: baseCommit,
+      recovery,
+      assertCurrent,
+    }),
+  ).rejects.toThrow("revision changed");
+  await expect(
+    store.resetToBranch({
+      workspaceId: initial.workspaceId,
+      expectedRevision: accepted.revision,
+      sourceCommit: baseCommit,
+      recovery,
+      assertCurrent: () => {
+        throw new Error("owner revoked");
+      },
+    }),
+  ).rejects.toThrow("owner revoked");
+  expect(await store.get(initial.workspaceId)).toEqual(accepted);
+  const replacement = await store.resetToBranch({
+    workspaceId: initial.workspaceId,
+    expectedRevision: accepted.revision,
+    sourceCommit: baseCommit,
+    recovery,
+    assertCurrent,
+  });
+  const expected = {
+    ...recovery,
+    atMs: expect.any(Number),
+    sourceCommit: baseCommit,
+    unrecoverablePrivateContent: true,
+    original: {
+      revision: accepted.revision,
+      baseCommit,
+      baseManifestHash,
+      checkpointRef: "refs/openclaw/worker-results/unavailable",
+      manifestHash: `sha256:${"c".repeat(64)}`,
+    },
+  };
+  expect(replacement.recovery).toEqual(expected);
+  const rebound = await store.bindBase({
+    workspaceId: initial.workspaceId,
+    expectedRevision: replacement.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent,
+  });
+  const current = await store.acceptCheckpoint({
+    workspaceId: initial.workspaceId,
+    expectedRevision: rebound.revision,
+    checkpointRef: "refs/openclaw/worker-results/replacement",
+    manifestHash: baseManifestHash,
+    assertCurrent,
+  });
+  expect(current.recovery).toEqual(expected);
+  expect(current.sessionKey).toBe(source.sessionKey);
+  await closeOpenClawStateDatabaseByPathAsync(database.path);
+  const reopened = createSessionRepositoryWorkspaceStore({ path: database.path });
+  expect(await reopened.get(initial.workspaceId)).toEqual(current);
+});

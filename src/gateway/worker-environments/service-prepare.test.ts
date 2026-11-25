@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -10,12 +9,14 @@ import { createCoreGatewayMethodDescriptors } from "../methods/core-method-polic
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
+import { invokeEnvironment, mockContext } from "../server-methods/environments.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
+import { nodeArtifacts, repository } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -23,18 +24,10 @@ describe("on-demand prepared worker admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   async function fixture() {
-    const projectPath = path.join(support.testState.root, "project");
-    await fs.mkdir(projectPath);
-    await requireGit(projectPath, ["init", "--quiet"]);
-    await requireGit(projectPath, ["config", "user.name", "Project Test"]);
-    await requireGit(projectPath, ["config", "user.email", "project@example.invalid"]);
-    await requireGit(projectPath, ["config", "commit.gpgsign", "false"]);
-    await fs.mkdir(path.join(projectPath, ".openclaw"));
-    await fs.writeFile(path.join(projectPath, ".openclaw/worktree-setup.sh"), "#!/bin/sh\ntrue\n", {
-      mode: 0o755,
+    const { root: projectPath } = await repository("project", {
+      setup: true,
+      disableSigning: true,
     });
-    await requireGit(projectPath, ["add", "."]);
-    await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
     const provision = vi.fn<WorkerProvider["provision"]>(async () => {
       throw new Error("Synthetic provider unavailable");
     });
@@ -52,17 +45,7 @@ describe("on-demand prepared worker admission", () => {
       prepareNodeEnrollment: async () => {
         throw new Error("Synthetic provider must not enroll");
       },
-      prepareNodeArtifacts: async () => ({
-        artifacts: {
-          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-          enabledPluginIds: ["runtime-plugin"],
-          workerBundleHash: support.BUNDLE_HASH,
-          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-          protocolFeatures: [],
-        },
-        assertCurrent: () => {},
-      }),
+      prepareNodeArtifacts: async () => nodeArtifacts(),
     });
     return {
       service,
@@ -71,6 +54,27 @@ describe("on-demand prepared worker admission", () => {
       provision,
       request: { profileId: "development", projectPath },
     };
+  }
+
+  async function seedReserve(f: Awaited<ReturnType<typeof fixture>>, environmentId: string) {
+    const intent = await f.service.prepareProjectIntent("development", {
+      projectPath: f.projectPath,
+      executionMode: "worker-turn",
+      setupAuthorized: true,
+    });
+    return support.testState.store.createIntent({
+      environmentId,
+      provisionOperationId: `${environmentId}-operation`,
+      providerId: intent.providerId,
+      profileId: "development",
+      profileSnapshot: intent.profileSnapshot,
+      preparation: {
+        purpose: "reserve",
+        key: intent.profileSnapshot.project!.preparation!.key,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+      },
+    });
   }
 
   it("admits HEAD without a session, authorizes setup, and starts background preparation", async () => {
@@ -157,6 +161,38 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
+  it("requires fresh deletion admission if prepared cancellation commits nothing", async () => {
+    const f = await fixture();
+    const { store } = support.testState;
+    const { environmentId } = await seedReserve(f, "unretired-reserve");
+    let current = true;
+    const authorize = vi.fn(() => current);
+    const requestPreparedDestroy = store.requestPreparedDestroy.bind(store);
+    vi.spyOn(store, "requestPreparedDestroy").mockImplementationOnce(async (input) => {
+      // The store checks authority but declines a stale reservation without a write.
+      const result = await requestPreparedDestroy({
+        ...input,
+        preparationKey: "stale-reservation",
+      });
+      expect(result).toBeUndefined();
+      current = false;
+      return result;
+    });
+    const result = await invokeEnvironment(
+      "environments.destroy",
+      { environmentId },
+      mockContext(f.service),
+      null,
+      authorize,
+    );
+    expect(result[0]).toBe(false);
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(store.get(environmentId)).toMatchObject({
+      state: "requested",
+      destroyRequestedAtMs: null,
+    });
+  });
+
   it.each(["current", "removed before acceptance", "removed after acceptance"])(
     "cancels an in-flight reserve with requester %s while retaining cleanup ownership",
     async (requester) => {
@@ -179,24 +215,7 @@ describe("on-demand prepared worker admission", () => {
         expect(provisionSettled).toBe(true);
       });
       f.provider.destroy = destroyProvider;
-      const intent = await f.service.prepareProjectIntent("development", {
-        projectPath: f.projectPath,
-        executionMode: "worker-turn",
-        setupAuthorized: true,
-      });
-      const { environmentId } = await support.testState.store.createIntent({
-        environmentId: "automatic-reserve",
-        provisionOperationId: "automatic-reserve-operation",
-        providerId: intent.providerId,
-        profileId: "development",
-        profileSnapshot: intent.profileSnapshot,
-        preparation: {
-          purpose: "reserve",
-          key: intent.profileSnapshot.project!.preparation!.key,
-          demandAtMs: 1_000,
-          expiresAtMs: 11_000,
-        },
-      });
+      const { environmentId } = await seedReserve(f, "automatic-reserve");
       f.service.schedulePreparedRefill();
       const signal = await entered.promise;
       const cancelled = new Promise<void>((resolve) => {
@@ -215,7 +234,7 @@ describe("on-demand prepared worker admission", () => {
           return requestPreparedDestroy(input);
         });
       let current = true;
-      const destroyed = f.service.destroyUnattached(environmentId, () => {
+      const destroyed = f.service.destroyUnattached(environmentId, () => () => {
         if (!current) {
           throw new Error("Deletion requester removed");
         }

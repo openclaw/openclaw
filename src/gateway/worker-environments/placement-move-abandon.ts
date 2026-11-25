@@ -1,6 +1,5 @@
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
   isUnavailableEnvironment,
   type WorkerDispatchPlacement,
@@ -66,11 +65,14 @@ export function createWorkerPlacementMoveAbandonment(
         sessionId
           ? { sessionId, ownerEpoch: environment.ownerEpoch }
           : undefined;
+      let cleanupOwned = !authorize;
       try {
         return await environments.destroy(
           environmentId,
           abandonment,
           async () => {
+            // The provider owner only hands off discard after its intent is durable.
+            cleanupOwned = true;
             await forceAbandonWorkerEnvironment({
               placements,
               environmentId,
@@ -82,10 +84,7 @@ export function createWorkerPlacementMoveAbandonment(
         );
       } catch (error) {
         const current = environments.get(environmentId);
-        if (!current || !hasForcedWorkerEnvironmentAbandonment(current)) {
-          authorize?.();
-        }
-        if (!current || !isUnavailableEnvironment(current)) {
+        if (!cleanupOwned || !current || !isUnavailableEnvironment(current)) {
           throw error;
         }
         reportWorkerAbandonmentCleanupError(onCleanupError, error);

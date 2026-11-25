@@ -3,7 +3,7 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
-import { transferGatewayOperatorSourceIdentity } from "../operator-run-authority.js";
+import { transferGatewayOperatorSourceIdentity } from "../operator-run-source-retention.js";
 import type { GatewayClient, GatewayRequestContext } from "../server-methods/shared-types.js";
 import type { AgentTurnPrincipal } from "./types.js";
 
@@ -15,6 +15,8 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
   const principal: AgentTurnPrincipal = {
     authenticatedUserId: client.authenticatedUserId,
     authenticatedUserProfile: client.authenticatedUserProfile,
+    authenticatedGitHubAccountId: client.authenticatedGitHubAccountId,
+    authenticatedRepositoryCredentialSource: client.authenticatedRepositoryCredentialSource,
     authPolicy: client.authPolicy,
     connId: client.connId,
     connect: client.connect,

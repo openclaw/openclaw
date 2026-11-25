@@ -197,9 +197,10 @@ export type WorkerEnvironmentServiceContract = {
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   /** Stop session work and return after provider acceptance; physical cleanup remains owned. */
   reclaim(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
+  /** A no-op prepared cancellation must not admit the fallback lifecycle request. */
   destroyUnattached(
     environmentId: string,
-    authorize?: () => void,
+    createAuthorization?: () => () => void,
   ): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
     environmentId: string;

@@ -26,6 +26,7 @@ import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v1
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
 import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
 import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -140,11 +141,23 @@ export function migrateWorkerPlacementExecutionModeSchema(
   ]) {
     ensureColumn(db, "worker_session_placements", definition);
   }
-  const placementSchema = extractSqliteTableSchema(
+  const currentColumns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0)
+    .map((column) => column.name);
+  const canonicalPlacementSchema = extractSqliteTableSchema(
     OPENCLAW_STATE_SCHEMA_SQL,
     "worker_session_placements",
     { errorMessage: "Canonical worker placement schema block is missing" },
   );
+  // Old catalogs do not have a loss receipt yet; leave its addition to v42.
+  const placementSchema = currentColumns.includes("confirmed_loss_recovery_json")
+    ? canonicalPlacementSchema
+    : withLegacyWorkerLossRecovery(canonicalPlacementSchema);
   const canonical = openNodeSqliteDatabase(":memory:");
   let canonicalColumns: string[];
   try {
@@ -160,14 +173,6 @@ export function migrateWorkerPlacementExecutionModeSchema(
   } finally {
     canonical.close();
   }
-  const currentColumns = (
-    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
-      hidden: number;
-      name: string;
-    }>
-  )
-    .filter((column) => column.hidden === 0)
-    .map((column) => column.name);
   const expected = new Set(canonicalColumns);
   if (
     currentColumns.length !== canonicalColumns.length ||

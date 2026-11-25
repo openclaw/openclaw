@@ -13,6 +13,7 @@ export function selectVerifiedEnterpriseGitHubIdentities(
   db: EngineConnection,
   profileIds?: readonly string[],
   host?: string,
+  selectedAccountId?: number,
 ): Map<string, EnterpriseGitHubIdentity[]> {
   if (
     profileIds?.length === 0 ||
@@ -29,6 +30,9 @@ export function selectVerifiedEnterpriseGitHubIdentities(
   }
   if (profileIds) {
     query = query.where("profile_id", "in", [...profileIds]);
+  }
+  if (selectedAccountId !== undefined) {
+    query = query.where("subject", "=", String(selectedAccountId));
   }
   const rows = executeSqliteQuerySync(db, query).rows;
   if (!rows.length) {

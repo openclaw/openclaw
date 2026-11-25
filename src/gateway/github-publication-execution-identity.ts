@@ -1,15 +1,23 @@
 import {
   onManagedGitHubProfileChanged,
   GitHubIdentityError,
+  resolveConfiguredGitHubToolIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
+import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
 import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
+  currentGitHubPublicationConfig,
 } from "./github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
+import type { RepositoryCredentialSource } from "./github-user-identity.types.js";
 
 export class GitHubPublicationAuthorityLostError extends Error {}
 
@@ -137,25 +145,169 @@ export function createGitHubPublicationExecutionIdentity(params: {
   validateAuthority: () => boolean;
   assertWorkspace: () => void;
 }) {
-  const assertCurrent = () => {
-    if (!params.validateAuthority()) {
+  let active: PreparedGitHubPublicationIdentity | undefined;
+  let closed = false;
+  const assertAuthority = () => {
+    if (closed || !params.validateAuthority()) {
       throw new GitHubPublicationAuthorityLostError(
         "GitHub publication execution ended. Retry the publication.",
       );
     }
     params.assertWorkspace();
   };
+  const assertCurrent = () => {
+    assertAuthority();
+    if (active?.accessExpiresAtMs !== undefined && active.accessExpiresAtMs <= Date.now()) {
+      throw new Error(
+        "GitHub publication credential expired; refresh the identity before retrying.",
+      );
+    }
+  };
   return {
     assertCurrent,
+    async [Symbol.asyncDispose]() {
+      closed = true;
+      const previous = active;
+      active = undefined;
+      await revokePublicationIdentity(previous, "execution");
+    },
     refreshIdentity: async (): Promise<PreparedGitHubPublicationIdentity> => {
-      assertCurrent();
+      assertAuthority();
       const identity = await (params.identity?.prepare() ??
         prepareCurrentGitHubPublicationIdentity(params.row.agent_id));
-      assertCurrent();
-      if (!matchesGitHubPublicationIdentityRow(params.row, identity)) {
-        throw new Error("GitHub publication identity changed.");
+      let admitted = false;
+      try {
+        assertAuthority();
+        if (
+          !matchesGitHubPublicationIdentityRow(params.row, identity) ||
+          (params.identity && !params.identity.isCurrent(identity))
+        ) {
+          throw new Error("GitHub publication identity changed.");
+        }
+        const previous = active;
+        if (identity.accessExpiresAtMs !== undefined && identity.accessExpiresAtMs <= Date.now()) {
+          throw new Error("GitHub publication credential expired.");
+        }
+        active = identity;
+        admitted = true;
+        if (previous !== identity) {
+          await revokePublicationIdentity(previous, "execution");
+        }
+        assertCurrent();
+        return identity;
+      } finally {
+        if (!admitted) {
+          if (active === identity) {
+            active = undefined;
+          }
+          await revokePublicationIdentity(identity, "execution");
+        }
       }
-      return identity;
     },
+  };
+}
+
+async function revokePublicationIdentity(
+  identity: PreparedGitHubPublicationIdentity | undefined,
+  phase: "preflight" | "execution",
+) {
+  try {
+    await identity?.revoke?.();
+  } catch {
+    try {
+      createSubsystemLogger("gateway/github-publication").warn(
+        phase === "execution"
+          ? "Failed to revoke GitHub publication execution credential"
+          : "Failed to revoke GitHub publication preflight credential",
+      );
+    } catch {
+      // Diagnostic failures must not replace the outcome either.
+    }
+  }
+}
+
+/** Revoke the preflight credential without replacing an accepted receipt or admission error. */
+export function gitHubPublicationPreflightLifetime(identity: PreparedGitHubPublicationIdentity) {
+  return {
+    identity,
+    [Symbol.asyncDispose]: () => revokePublicationIdentity(identity, "preflight"),
+  };
+}
+
+/** Original actor and accepted receipt facts accompany every fresh execution grant. */
+type GitHubPublicationExecutionIdentityParams = {
+  row: Pick<
+    GitHubPublicationExecutionRow,
+    "agent_id" | "session_key" | "session_id" | "request_id" | "request_digest"
+  >;
+  actor: GitHubPublicationRequesterSnapshot["actor"] | undefined;
+  credentialSource?: RepositoryCredentialSource;
+  lifecycleRevision: string | null;
+  executionKind: "worktree" | "repository";
+  ownerId: string;
+  assertCurrent: () => void;
+};
+
+export async function prepareGitHubPublicationExecutionIdentity(
+  params: GitHubPublicationExecutionIdentityParams,
+) {
+  const { row, actor, assertCurrent } = params;
+  const config = currentGitHubPublicationConfig();
+  const selected =
+    resolveConfiguredGitHubToolIdentity({ config, agentId: row.agent_id, scope: "agent" }) ??
+    resolveConfiguredGitHubToolIdentity({ config, agentId: row.agent_id, scope: "system" });
+  try {
+    return await prepareCurrentGitHubPublicationIdentity(
+      row.agent_id,
+      actor?.kind === "operator"
+        ? {
+            profileId: actor.profileId,
+            credentialSource: params.credentialSource,
+            sessionKey: row.session_key,
+            assertCurrent,
+          }
+        : undefined,
+      {
+        claim: {
+          purpose: "publication-execution",
+          binding: {
+            kind: "publication",
+            agentId: row.agent_id,
+            sessionKey: row.session_key,
+            sessionId: row.session_id,
+            lifecycleRevision: params.lifecycleRevision,
+            executionKind: params.executionKind,
+            requestId: row.request_id,
+            ownerId: params.ownerId,
+            requestDigest: row.request_digest,
+          },
+        },
+        assertCurrent,
+      },
+    );
+  } catch (error) {
+    assertCurrent();
+    if (selected?.kind === "app-installation" && getRepositoryIntegration(config)) {
+      // Accepted work waits for its original policy owner; auth failure never authorizes replay.
+      throw new GitHubPublicationRecoveryPendingError(
+        "Repository integration identity is unavailable. Retry from the original signed-in account; accepted work is retained.",
+      );
+    }
+    throw error;
+  }
+}
+
+/** Credential selection and currency use the same accepted publication agent. */
+export function createGitHubPublicationExecutionIdentityOwner(
+  row: GitHubPublicationExecutionIdentityParams["row"],
+  readParams: () =>
+    | Omit<GitHubPublicationExecutionIdentityParams, "row">
+    | Promise<Omit<GitHubPublicationExecutionIdentityParams, "row">>,
+): GitHubPublicationIdentityOwner {
+  return {
+    prepare: async () =>
+      prepareGitHubPublicationExecutionIdentity({ row, ...(await readParams()) }),
+    isCurrent: (identity) =>
+      matchesCurrentGitHubPublicationIdentity({ agentId: row.agent_id, identity }),
   };
 }

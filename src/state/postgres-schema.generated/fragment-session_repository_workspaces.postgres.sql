@@ -16,6 +16,7 @@ CREATE TABLE "session_repository_workspaces" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "disk_authority_json" text COLLATE "C",
+  "recovery_json" text COLLATE "C",
   PRIMARY KEY ("workspace_id"),
   CHECK ((char_length("workspace_id") = 36)),
   CHECK ((char_length("agent_id") BETWEEN 1 AND 128)),

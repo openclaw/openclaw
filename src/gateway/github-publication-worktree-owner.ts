@@ -40,9 +40,28 @@ export function requirePublicationSessionOwner(
   return { ...loaded, entry };
 }
 
+function requireSessionWorktreeOwner(
+  loaded: PublicationSessionOwner,
+  worktree: ManagedWorktreeRecord,
+) {
+  const entry = loaded.entry;
+  if (
+    !entry.worktree?.id ||
+    worktree.removedAt !== undefined ||
+    worktree.id !== entry.worktree.id ||
+    worktree.ownerKind !== "session" ||
+    worktree.ownerId !== loaded.canonicalKey ||
+    worktree.branch !== entry.worktree.branch ||
+    worktree.repoRoot !== entry.worktree.repoRoot
+  ) {
+    throw new GitHubPublicationSessionChangedError();
+  }
+  return { loaded, worktree };
+}
+
 function requirePublicationWorktreeOwner(
   loaded: PublicationSessionOwner,
-  worktree: ManagedWorktreeRecord | undefined,
+  worktree: ManagedWorktreeRecord,
   expected?: ExpectedWorktree,
   allowExistingPullRequest = false,
 ) {
@@ -60,29 +79,19 @@ function requirePublicationWorktreeOwner(
         : "This publication path cannot update an imported PR; use shared publication after preparation.",
     );
   }
-  if (
-    !entry.worktree?.id ||
-    !worktree ||
-    worktree.removedAt !== undefined ||
-    worktree.id !== entry.worktree.id ||
-    worktree.ownerKind !== "session" ||
-    worktree.ownerId !== loaded.canonicalKey ||
-    worktree.branch !== entry.worktree.branch ||
-    worktree.repoRoot !== entry.worktree.repoRoot
-  ) {
-    throw new GitHubPublicationSessionChangedError();
-  }
+  const owner = requireSessionWorktreeOwner(loaded, worktree);
+  const publicationBranch = pullRequest?.head.branch ?? worktree.branch;
   if (
     expected &&
     (worktree.id !== expected.worktreeId ||
       worktree.repoFingerprint !== expected.repositoryFingerprint ||
-      (pullRequest?.head.branch ?? worktree.branch) !== expected.branch)
+      publicationBranch !== expected.branch)
   ) {
     throw new GitHubPublicationWorkspaceChangedError(
       "GitHub publication workspace moved. Retry the publication.",
     );
   }
-  return { loaded, worktree, publicationBranch: pullRequest?.head.branch ?? worktree.branch };
+  return { ...owner, publicationBranch };
 }
 
 function rejectChangedPublicationWorktree(error: unknown): never {
@@ -92,12 +101,16 @@ function rejectChangedPublicationWorktree(error: unknown): never {
   throw error;
 }
 
-export function preparePublicationWorktreeRead(
+function prepareOwnedWorktreeRead<T>(
   loaded: PublicationSessionOwner,
   context: OpenClawStateWorkerContext,
   readSession: () => PublicationSessionRead,
+  requireOwner: (
+    current: PublicationSessionOwner,
+    worktree: ManagedWorktreeRecord,
+    expected?: ExpectedWorktree,
+  ) => T,
   expected?: ExpectedWorktree,
-  allowExistingPullRequest = false,
 ) {
   const identity = {
     sessionId: loaded.entry.sessionId,
@@ -140,12 +153,37 @@ export function preparePublicationWorktreeRead(
       } catch (error) {
         rejectChangedPublicationWorktree(error);
       }
-      return requirePublicationWorktreeOwner(latest, worktree, selection, allowExistingPullRequest);
+      return requireOwner(latest, worktree, selection);
     };
     return {
-      ...requirePublicationWorktreeOwner(current, worktree, selection, allowExistingPullRequest),
+      ...requireOwner(current, worktree, selection),
       assertCurrent,
       assertRegistryCurrent: assertRow,
     };
   };
+}
+
+export function prepareSessionWorktreeRead(
+  loaded: PublicationSessionOwner,
+  context: OpenClawStateWorkerContext,
+  readSession: () => PublicationSessionRead,
+) {
+  return prepareOwnedWorktreeRead(loaded, context, readSession, requireSessionWorktreeOwner);
+}
+
+export function preparePublicationWorktreeRead(
+  loaded: PublicationSessionOwner,
+  context: OpenClawStateWorkerContext,
+  readSession: () => PublicationSessionRead,
+  expected?: ExpectedWorktree,
+  allowExistingPullRequest = false,
+) {
+  return prepareOwnedWorktreeRead(
+    loaded,
+    context,
+    readSession,
+    (current, worktree, selection) =>
+      requirePublicationWorktreeOwner(current, worktree, selection, allowExistingPullRequest),
+    expected,
+  );
 }

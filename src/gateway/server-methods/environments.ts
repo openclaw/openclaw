@@ -40,6 +40,7 @@ import {
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { canStartQueuedWorkerDeletion } from "../operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
@@ -612,8 +613,22 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     "destroy",
     validateEnvironmentsDestroyParams,
     async (options, service) => {
-      const { params, context } = options;
+      const { params, context, client, hasCurrentClientAuthority } = options;
       const { assertCurrent } = readGatewayRequestMutationAuthority(options);
+      const createAuthorization = () => {
+        let requesterAdmitted: boolean | undefined;
+        return () => {
+          assertCurrent();
+          requesterAdmitted ??= canStartQueuedWorkerDeletion(
+            client,
+            hasCurrentClientAuthority,
+            context.getCommittedRuntimeConfig ?? context.getRuntimeConfig,
+          );
+          if (!requesterAdmitted) {
+            throw new Error("The requester no longer has access to delete this worker");
+          }
+        };
+      };
       const placementService = context.workerPlacementDispatchService;
       if (params.force && !placementService?.forceDestroyEnvironment) {
         throw new Error("cloud worker placement control is unavailable");
@@ -625,9 +640,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
               context.logGateway.warn(
                 `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
               ),
-            assertCurrent,
+            createAuthorization(),
           )
-        : await service.destroyUnattached(params.environmentId, assertCurrent);
+        : await service.destroyUnattached(params.environmentId, createAuthorization);
       // Destruction is authoritative. Project the dead worker into its owning
       // placement before returning, or immediate session deletion stays fenced.
       try {

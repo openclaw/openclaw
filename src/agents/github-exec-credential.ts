@@ -9,6 +9,15 @@ import { resolveConfiguredGitHubHost } from "./github-host.js";
 export const GITHUB_EXEC_CREDENTIAL_UNAVAILABLE =
   "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.";
 
+/** Both private launch transports accept only a single bounded credential. */
+export function normalizeGitHubExecToken(value: string): string {
+  const token = value.trim();
+  if (!token || token.length > 2048 || /[\s\p{Cc}]/u.test(token)) {
+    throw new Error(GITHUB_EXEC_CREDENTIAL_UNAVAILABLE);
+  }
+  return token;
+}
+
 async function privateProfileStat(profileDir: string) {
   const stat = await fs.lstat(profileDir);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
@@ -72,10 +81,7 @@ export async function readGitHubExecToken(profileDir: string, host?: string): Pr
         isRecord(hostEntry) && typeof hostEntry.oauth_token === "string"
           ? hostEntry.oauth_token.trim()
           : "";
-      if (!token || /[\r\n\0]/u.test(token)) {
-        throw new Error(GITHUB_EXEC_CREDENTIAL_UNAVAILABLE);
-      }
-      return token;
+      return normalizeGitHubExecToken(token);
     } finally {
       snapshot.buffer.fill(0);
     }

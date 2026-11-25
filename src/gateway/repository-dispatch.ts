@@ -10,9 +10,10 @@ import type {
 import { readAcceptedGatewayDeviceSourceAuthority } from "./device-revocation.js";
 import { withRepositoryIdentity } from "./repository-integration-identity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+export type { RepositoryOperation } from "../plugins/repository-integration.types.js";
 
 /** Capture host-authenticated operator authority; no wire metadata can create this handle. */
-function captureRepositoryClientActor(input: {
+export function captureRepositoryClientActor(input: {
   client: GatewayClient | null | undefined;
   claim: RepositoryOperation;
   assertCurrent: () => void;
@@ -72,7 +73,10 @@ function captureRepositoryClientActor(input: {
       directPerson,
       principal: userId,
     }),
-    sessionKey: input.claim.binding.sessionKey,
+    sessionKey:
+      input.claim.binding.kind === "connection"
+        ? input.claim.binding.connectionId
+        : input.claim.binding.sessionKey,
     assertCurrent,
   });
 }
@@ -169,6 +173,24 @@ export function repositoryDispatchCredentialReader(params: {
         agentId: params.agentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        requestDigest: params.requestDigest,
+      },
+    },
+  });
+}
+
+export function repositoryProjectCredentialReader(params: {
+  client: GatewayClient | null | undefined;
+  requestDigest: string;
+  assertCurrent: () => void;
+}): GitHubCredentialReader | undefined {
+  return repositoryCredentialReader({
+    ...params,
+    claim: {
+      purpose: "project-add",
+      binding: {
+        kind: "connection",
+        connectionId: params.client?.connId ?? "",
         requestDigest: params.requestDigest,
       },
     },

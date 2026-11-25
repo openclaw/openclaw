@@ -485,18 +485,16 @@ export function createWorkerProviderOwnerLifecycle(
       const abandonment = destroyOptions.abandonment;
       abandonment?.authorize?.();
       let record = store.get(environmentId);
-      // Accepted cleanup keeps its custody. Forced discard is a separate decision
-      // that needs current authority until its own intent is recorded.
-      const assertRequestCurrent = (current: WorkerEnvironmentRecord | undefined) => {
+      // A new requester starts here, even if maintenance already owns accepted cleanup.
+      destroyOptions.authorize?.();
+      const assertRequestCurrent = (current: WorkerEnvironmentRecord) => {
         if (
-          !current ||
           current.destroyRequestedAtMs === null ||
           (destroyOptions.forceAbandon && !hasForcedWorkerEnvironmentAbandonment(current))
         ) {
           destroyOptions.authorize?.();
         }
       };
-      assertRequestCurrent(record);
       if (!record) {
         // Only internal maintenance can clean dangling placements without an environment
         // in which to accept a requester's forced-discard decision.

@@ -106,16 +106,21 @@ export async function prepareGitHubPublicationOptionsRead(
   purpose: "options" | "shared-observation" = "options",
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
+  const client = options.client;
+  const credentialSource = client?.authenticatedRepositoryCredentialSource;
   const requestSignal = options.signal;
-  const runSignal = options.client?.internal?.operatorRunAuthority?.signal;
+  const runSignal = client?.internal?.operatorRunAuthority?.signal;
   const assertCurrent = () => {
     signal?.throwIfAborted();
     requestSignal?.throwIfAborted();
     runSignal?.throwIfAborted();
+    if (client?.authenticatedRepositoryCredentialSource !== credentialSource) {
+      throw new Error("GitHub credential source changed; retry publication options.");
+    }
   };
   assertCurrent();
   authority.assertCurrent();
-  const profileReference = options.client?.authenticatedUserProfile?.profileId;
+  const profileReference = client?.authenticatedUserProfile?.profileId;
   const profileAccess = profileReference
     ? captureResidentUserProfileAccess(profileReference)
     : undefined;

@@ -8,10 +8,7 @@ import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-con
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
-import {
-  assertExpectedSharedGitHubPublisher,
-  currentGitHubPublicationConfig,
-} from "./github-publication-availability.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
   githubPublicationApiArgs,
@@ -19,6 +16,7 @@ import {
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
+import { assertExpectedSharedGitHubPublisher } from "./github-publication-receipt.js";
 import {
   captureGitHubPublicationActionAuthority,
   prepareGitHubPublicationRequesterV2,
@@ -183,7 +181,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     (binding
       ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
       : publication!);
-  const nativeReader = await prepareSelectedGitHubPullRequestReader({
+  await using nativeReader = await prepareSelectedGitHubPullRequestReader({
     session,
     pullRequest,
     binding,

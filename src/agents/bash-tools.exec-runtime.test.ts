@@ -60,6 +60,13 @@ vi.mock("../sessions/owed.js", () => ({
   withhold: async () => {},
 }));
 
+// mock-isolation: Owed-result storage has its own owner suite; these destinations have no store.
+vi.mock("../sessions/owed.js", () => ({
+  owe: async () => {},
+  readPendingOwed: async () => undefined,
+  withhold: async () => {},
+}));
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));

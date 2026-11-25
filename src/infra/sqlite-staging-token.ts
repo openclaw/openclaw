@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "./database-engine/context.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission-record.js";
@@ -102,12 +106,18 @@ function acquireStagingToken(
     }
     assertDatabaseFileIdentity(existingIdentity, options.expectedIdentity);
   }
-  const db = withSqliteNativeOpen(() =>
+  const openToken = () =>
     openNodeSqliteDatabase(
       tokenExists ? resolveExistingSqliteFileUri(location) : location,
       { timeout: 0 },
       existingIdentity && readSqliteDatabaseAdmissionIdentity(existingIdentity),
-    ),
+    );
+  const selection = getDatabaseEngineSelection();
+  // Private inode-checked lifetime tokens retain settlement while domain stores are fenced.
+  const db = withSqliteNativeOpen(() =>
+    selection
+      ? withDatabaseEngineSelection({ ...selection, access: "read-write" }, openToken)
+      : openToken(),
   );
   let tokenIdentity: fs.BigIntStats;
   // This lock primitive needs fixed SQLite commands, not the query-builder graph.

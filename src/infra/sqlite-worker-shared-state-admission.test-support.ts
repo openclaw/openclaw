@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
@@ -24,13 +25,21 @@ import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
 } from "./sqlite-audit-record.kernel.js";
-import type { SqliteWorkerCommand, SqliteWorkerRequest } from "./sqlite-worker-contract.js";
+import type {
+  SqliteWorkerAdmissionRequest,
+  SqliteWorkerCommand,
+  SqliteWorkerRequest,
+} from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "./sqlite-worker-owner-probe.test-support.js";
 import {
   openSharedStateSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "./sqlite-worker-store.js";
+
+// Capture before per-test transport interception; call supplies the worker receiver.
+// oxlint-disable-next-line typescript/unbound-method -- call supplies the worker receiver.
+const nativePost = Worker.prototype.postMessage;
 
 async function preparedStore(captured: OpenClawStateWorkerContext) {
   captured.gatewayServiceInstallation = {
@@ -105,6 +114,77 @@ function checkedAdmission(captured: OpenClawStateWorkerContext) {
 export function registerSharedStateWorkerAdmissionTests(
   createContext: () => OpenClawStateWorkerContext,
 ): void {
+  it.each(["accepted", "unadmitted", "foreign-path", "foreign-pid"] as const)(
+    "requires this broker operation's maintenance grant without a namespace: %s",
+    async (scenario) => {
+      const captured = createContext();
+      const { store, run } = await preparedStore(captured);
+      const createOwner = (databasePath: string) =>
+        acquireGatewayStateOwner({
+          databasePath,
+          payload: {
+            pid: scenario === "foreign-pid" ? process.pid + 1_000_000 : process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: path.join(captured.environment.OPENCLAW_STATE_DIR, "openclaw.json"),
+            role: "sqlite-maintenance",
+            processNamespace: null,
+          },
+        });
+      let owner: ReturnType<typeof createOwner> | undefined;
+      let restorePosts: (() => void) | undefined;
+      if (scenario === "unadmitted") {
+        // The ordinary request is already accepted when unrelated maintenance starts.
+        // Its live command metadata alone must not lend that maintenance's authority.
+        const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+          this: Worker,
+          request: SqliteWorkerRequest,
+          transfers,
+        ) {
+          if (request.type === "execute" && !owner) {
+            owner = createOwner(captured.admission.databasePath);
+          }
+          nativePost.call(this, request, transfers);
+        });
+        restorePosts = () => posts.mockRestore();
+      } else {
+        owner = createOwner(captured.admission.databasePath);
+      }
+      const other =
+        scenario === "foreign-path" ? createOwner(createContext().admission.databasePath) : owner;
+      const maintenance =
+        other &&
+        createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: other.assertCurrent,
+          assertDatabaseAccess: other.assertDatabaseAccess,
+        });
+      const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) =>
+        grant(),
+      );
+      const write = () => run(relayWrite(17), admit);
+      try {
+        const operation = maintenance ? maintenance.run(write) : write();
+        if (scenario === "accepted") {
+          await expect(operation).resolves.toBeUndefined();
+        } else {
+          await expect(operation).rejects.toThrow();
+          expect(admit).not.toHaveBeenCalled();
+        }
+      } finally {
+        restorePosts?.();
+        owner?.release();
+        if (other !== owner) {
+          other?.release();
+        }
+        await maintenance?.close();
+        await store.close();
+      }
+      expect(await readRelay(captured)).toEqual(
+        scenario === "accepted" ? relayRecord(17) : undefined,
+      );
+    },
+  );
+
   it("admits before taking the writer lock and requires the live owner through commit", async () => {
     const captured = createContext();
     const { store, run } = await preparedStore(captured);
@@ -394,8 +474,6 @@ export function registerSharedStateWorkerAdmissionTests(
     const stopped = new Error("synthetic queued write canceled");
     const dispatched: number[] = [];
     // Read before postMessage transfers and detaches the serialized input.
-    // oxlint-disable-next-line typescript/unbound-method -- call supplies the worker receiver.
-    const nativePost = Worker.prototype.postMessage;
     const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
       this: Worker,
       request: SqliteWorkerRequest,

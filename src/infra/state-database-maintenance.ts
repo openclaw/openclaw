@@ -11,7 +11,7 @@ import {
   runWithSqliteCleanup,
   SqliteCoordinatorError,
 } from "./sqlite-lifecycle-errors.js";
-import { requestSqliteWorkerSchemaMaintenance } from "./sqlite-worker-operation-admission.js";
+import { requestSqliteWorkerSchemaMaintenance } from "./sqlite-writer-admission-client.js";
 
 export const StateSchemaMutationConflictError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateSchemaMutationConflictError"),

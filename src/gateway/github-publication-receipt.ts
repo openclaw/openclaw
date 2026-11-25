@@ -2,12 +2,36 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   SessionGitHubPublicationFailedSchema,
   type SessionGitHubPublicationResult,
+  type GitHubPublicationPublisher,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import {
+  rejectGitHubPublicationSelection,
+  type GitHubPublicationPreparation,
+} from "./github-publication-failure.js";
+
+export function assertExpectedSharedGitHubPublisher(
+  expected: GitHubPublicationPublisher | undefined,
+  actual: GitHubPublicationPublisher,
+  preparation?: GitHubPublicationPreparation,
+): void {
+  if (
+    actual.source === "personal" ||
+    (expected &&
+      (expected.source !== actual.source ||
+        expected.accountId !== actual.accountId ||
+        expected.login.toLowerCase() !== actual.login.toLowerCase()))
+  ) {
+    rejectGitHubPublicationSelection(
+      "GitHub publication identity changed; review the current shared account and try again.",
+      preparation,
+    );
+  }
+}
 
 type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
 

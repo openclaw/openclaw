@@ -25,8 +25,9 @@ import {
   type PreparedRepositoryPublicationStatus,
 } from "./github-personal-publication.js";
 import {
-  assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
+  repositoryPublicationPreflightCredential,
+  repositoryPublicationPreflightActor,
   sameGitHubPublicationWorkspace,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
@@ -35,7 +36,9 @@ import {
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
+import { gitHubPublicationPreflightLifetime } from "./github-publication-execution-identity.js";
 import {
+  assertExpectedSharedGitHubPublisher,
   matchesGitHubPublicationIdentityRow,
   projectGitHubPublicationResult as projectReceipt,
 } from "./github-publication-receipt.js";
@@ -315,11 +318,22 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication idempotency key was reused by a different requester.");
       }
     }
-    const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      input.agentId,
+      repositoryPublicationPreflightActor(requester, session.sessionKey, assertCurrent),
+      repositoryPublicationPreflightCredential({
+        agentId: input.agentId,
+        sessionKey: session.sessionKey,
+        sessionId: session.sessionId,
+        lifecycleRevision: session.lifecycleRevision ?? null,
+        assertCurrent,
+      }),
+    );
+    await using identityLifetime = gitHubPublicationPreflightLifetime(identity);
     assertCurrent();
     assertExpectedSharedGitHubPublisher(
       expected,
-      { source: identity.source, ...identity.account },
+      { source: identityLifetime.identity.source, ...identityLifetime.identity.account },
       existing
         ? undefined
         : { idempotencyKey: input.idempotencyKey, hasRequest: () => Boolean(existing) },

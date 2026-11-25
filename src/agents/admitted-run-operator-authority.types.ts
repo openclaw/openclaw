@@ -28,6 +28,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   clientId?: import("../../packages/gateway-protocol/src/client-info.js").GatewayClientId;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+  /** Original broker-attested credential lease; never selected again by profile. */
+  repositoryCredentialSource?: import("../gateway/github-user-identity.types.js").RepositoryCredentialSource;
   /** Plain source evidence for another same-process start; never a lifetime check. */
   device?: Readonly<{ deviceId: string; key: string }>;
   deviceScopeCeiling?: readonly string[];

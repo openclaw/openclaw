@@ -4,7 +4,6 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import {
-  assertExpectedSharedGitHubPublisher,
   prepareGitHubPublicationRepositoryIdentity,
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
@@ -25,7 +24,10 @@ import {
   readPublishedGitHubPullRequest,
   type PublishedGitHubPullRequest,
 } from "./github-publication-pull-requests.js";
-import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import {
+  assertExpectedSharedGitHubPublisher,
+  projectGitHubPublicationResult,
+} from "./github-publication-receipt.js";
 import {
   gitHubBranchPresence,
   resolveRecordedPublicationBaseBranch,
@@ -338,6 +340,7 @@ export async function prepareBoundGitHubPublication(params: {
       pullRequestUrl: binding.url,
       session: { agentId: row.agent_id, sessionKey: row.session_key, sessionId: row.session_id },
       requester: params.requester,
+      identity: await params.refreshIdentity(),
       assertCurrent: params.assertCurrent,
     }).catch(() => {
       throw new GitHubPublicationRequesterUnavailableError();

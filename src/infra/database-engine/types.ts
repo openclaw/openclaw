@@ -6,6 +6,8 @@ export type DatabaseEngineInput =
       connectionEnvKey?: string;
       /** Existing sealed stores only; the connection never admits writes or migration. */
       readOnly?: true;
+      /** Compatible schema admission with future writer handles, before mutable activation. */
+      readOnlySchema?: true;
       /** Opt-in: rollback captures keep their rows on the server instead of a SQLite image. */
       serverRecoveryCaptures?: true;
       /** database.postgres.ownership installation: Gateway state ownership is held in PostgreSQL. */
@@ -27,6 +29,8 @@ export type DatabaseEngineFamily =
   | "package-activation";
 
 export type DatabaseEngineSelection = Readonly<{
+  /** Runtime-owned per-operation access; never persisted as database configuration. */
+  access?: "read-only" | "writer-preparation" | "read-write";
   effectiveEngines: Readonly<Record<DatabaseEngineFamily, DatabaseEngineId>>;
   postgres?: Exclude<DatabaseEngineInput, undefined>;
 }>;

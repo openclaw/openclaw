@@ -156,6 +156,24 @@ describe("worker launch descriptor", () => {
     }
   });
 
+  it("admits host-bound App bot credentials without a checkout and rejects a mismatched repository host", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.github = {
+      token: "synthetic-installation",
+      login: "factory[bot]",
+      host: "ghe.example.test",
+    };
+    expect(parseWorkerLaunchDescriptor(descriptor).assignment.github).toEqual(
+      descriptor.assignment.github,
+    );
+    descriptor.assignment.github = {
+      ...descriptor.assignment.github,
+      branch: "session/worker",
+      remoteUrl: "https://other.example.test/example/repository.git",
+    };
+    expect(() => parseWorkerLaunchDescriptor(descriptor)).toThrow();
+  });
+
   it("rejects malformed or open GitHub launch bindings", () => {
     const github: WorkerGitHubLaunchBinding = {
       token: "worker-github-token",
@@ -169,7 +187,6 @@ describe("worker launch descriptor", () => {
       withBinding({ unexpected: true }),
       { login: github.login, branch: github.branch },
       { token: github.token, branch: github.branch },
-      { token: github.token, login: github.login },
       ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
         withBinding({ token }),
       ),

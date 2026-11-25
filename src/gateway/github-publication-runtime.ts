@@ -130,6 +130,10 @@ export function createGitHubPublicationRuntime(params: {
       return false;
     }
   };
+  const needsAcceptedWorkspacePublication = async (claim: WorkerSessionTurnClaim) => {
+    await ready;
+    return coordinator.needsClaimWorkspaceCapture(claim);
+  };
   const prepareAcceptedWorkspacePublication = async (claim: WorkerSessionTurnClaim) => {
     await ready;
     try {
@@ -206,6 +210,7 @@ export function createGitHubPublicationRuntime(params: {
       return scope.close();
     },
     coordinator,
+    needsAcceptedWorkspacePublication,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
     reconcilePublications,

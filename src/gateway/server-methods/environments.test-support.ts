@@ -84,6 +84,7 @@ export async function invokeEnvironment(
   context: object,
   client: GatewayClient | { connect: { scopes: string[] } } | null = null,
   hasCurrentClientAuthority?: () => boolean,
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
@@ -92,6 +93,7 @@ export async function invokeEnvironment(
     context,
     client,
     hasCurrentClientAuthority,
+    signal,
   } as never);
   return expectDefined(respond.mock.calls.at(0), "expected environments handler to respond");
 }

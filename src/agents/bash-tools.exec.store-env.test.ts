@@ -356,7 +356,11 @@ it("ignores protected store entries without replacing inherited network settings
     HTTPS_PROXY: "http://inherited-proxy.test:8080",
     NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
   });
-  expect(mocks.gatewayParams[0]?.requestedEnv).toBeUndefined();
+  expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+    GITHUB_APP_PRIVATE_KEY: "",
+    OPENCLAW_GITHUB_APP_PRIVATE_KEY: "",
+    OPENCLAW_GITHUB_EXECUTION_KIND: "",
+  });
   expect(result.content[0]).toMatchObject({
     type: "text",
     text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),

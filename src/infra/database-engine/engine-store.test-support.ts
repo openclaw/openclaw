@@ -37,12 +37,22 @@ export function createPostgresEngineTestFixture(params: {
   const anchor = openNodeSqliteDatabase(path.join(params.directory, "anchor.sqlite"));
   const opened: PostgresSyncConnection[] = [];
   return {
-    open(this: void, schema = params.schema, existingVersion = false) {
+    open(
+      this: void,
+      schema = params.schema,
+      existingVersion = false,
+      access?: "read-only" | "writer-preparation",
+    ) {
       const db = openPostgresEngineTestStore({
         anchor,
         schema,
         existingVersion,
-        input: { connection: params.connection, schemaPrefix: params.schemaPrefix },
+        input: {
+          connection: params.connection,
+          schemaPrefix: params.schemaPrefix,
+          ...(access === "read-only" ? { readOnly: true as const } : {}),
+          ...(access === "writer-preparation" ? { readOnlySchema: true as const } : {}),
+        },
       });
       if (!(db instanceof PostgresSyncConnection)) {
         throw new Error("Expected PostgreSQL connection");

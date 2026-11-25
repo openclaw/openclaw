@@ -14,7 +14,10 @@ import type { RepositoryConnectionIdentity } from "../plugins/repository-integra
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import { normalizeVerifiedEmail } from "../shared/verified-email.js";
-import { resolveCanonicalCachedGitHubIdentity } from "../state/user-profile-reads.js";
+import {
+  type ExistingUserProfileAuthentication,
+  resolveCanonicalCachedGitHubIdentity,
+} from "../state/user-profile-reads.js";
 import {
   ensureCanonicalEnterpriseGitHubProfile,
   ensureCanonicalUserProfileForEmail,
@@ -409,6 +412,18 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   if (params.authResult.delegation) {
     return undefined;
   }
+  const withExistingAuthentication = (
+    sync: AuthenticatedGitHubIdentitySync,
+    resolve: () => Promise<ExistingUserProfileAuthentication>,
+  ): AuthenticatedGitHubIdentitySync =>
+    Object.assign(sync, {
+      existingAuthentication: async () => {
+        params.assertCurrent?.();
+        const selector = await resolve();
+        params.assertCurrent?.();
+        return selector;
+      },
+    });
   const options = { assertCurrent: params.assertCurrent };
   const measure = <T>(phase: GitHubIdentityPreparationTiming, run: () => Promise<T>) => {
     if (!params.recordTiming) {
@@ -433,25 +448,33 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   const enterprise = params.authResult.ok ? params.repositoryIdentity?.profile : undefined;
   if (enterprise && params.repositoryIdentity) {
     const accountId = params.repositoryIdentity.accountId;
-    return createLazyPromise(async () => {
-      params.assertCurrent?.();
-      const profile = await ensureCanonicalEnterpriseGitHubProfile(
-        enterprise.principal,
-        enterprise.name ?? enterprise.login,
-        options,
-        { login: enterprise.login, email: enterprise.email },
-      );
-      params.assertCurrent?.();
-      return {
-        profileId: profile.id,
-        updatedAt: profile.updatedAt,
-        enterprise: {
-          accountId,
-          login: enterprise.login,
-          ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
-        },
-      };
-    });
+    return withExistingAuthentication(
+      createLazyPromise(async () => {
+        params.assertCurrent?.();
+        const profile = await ensureCanonicalEnterpriseGitHubProfile(
+          enterprise.principal,
+          enterprise.name ?? enterprise.login,
+          options,
+          { login: enterprise.login, email: enterprise.email },
+        );
+        params.assertCurrent?.();
+        return {
+          profileId: profile.id,
+          updatedAt: profile.updatedAt,
+          enterprise: {
+            accountId,
+            login: enterprise.login,
+            ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
+          },
+        };
+      }),
+      async () => ({
+        kind: "enterprise-github",
+        principal: enterprise.principal,
+        login: enterprise.login,
+        email: enterprise.email,
+      }),
+    );
   }
   // Preserve the native trusted-proxy contract only when no integration was selected.
   const accountId = getRepositoryIntegration(params.config)
@@ -485,59 +508,75 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       }
     }
     if (login) {
-      return createLazyPromise(async () => {
-        params.assertCurrent?.();
-        const profile = await measure("profileWriteMs", () =>
-          ensureCanonicalEnterpriseGitHubProfile(params.authResult.user!, name || login, options, {
-            login,
-            email,
-          }),
-        );
-        params.assertCurrent?.();
-        return {
-          profileId: profile.id,
-          updatedAt: profile.updatedAt,
-          enterprise: {
-            accountId,
-            login,
-            ...(avatarUrl ? { avatarUrl } : {}),
-          },
-        };
-      });
+      return withExistingAuthentication(
+        createLazyPromise(async () => {
+          params.assertCurrent?.();
+          const profile = await measure("profileWriteMs", () =>
+            ensureCanonicalEnterpriseGitHubProfile(
+              params.authResult.user!,
+              name || login,
+              options,
+              {
+                login,
+                email,
+              },
+            ),
+          );
+          params.assertCurrent?.();
+          return {
+            profileId: profile.id,
+            updatedAt: profile.updatedAt,
+            enterprise: {
+              accountId,
+              login,
+              ...(avatarUrl ? { avatarUrl } : {}),
+            },
+          };
+        }),
+        async () => ({
+          kind: "enterprise-github",
+          principal: params.authResult.user!,
+          login,
+          email,
+        }),
+      );
     }
   }
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
-    return createLazyPromise(async () => {
-      params.assertCurrent?.();
-      let identity: ResolvedGitHubUserIdentity;
-      try {
-        identity = await measure("profileGitHubMetadataMs", () =>
-          resolveGitHubUserIdentityByLogin(tailscaleLogin.subject),
-        );
-      } catch (error) {
-        const cached = await reuseVerifiedBinding(error, { login: tailscaleLogin.subject });
-        if (cached) {
-          return cached;
+    return withExistingAuthentication(
+      createLazyPromise(async () => {
+        params.assertCurrent?.();
+        let identity: ResolvedGitHubUserIdentity;
+        try {
+          identity = await measure("profileGitHubMetadataMs", () =>
+            resolveGitHubUserIdentityByLogin(tailscaleLogin.subject),
+          );
+        } catch (error) {
+          const cached = await reuseVerifiedBinding(error, { login: tailscaleLogin.subject });
+          if (cached) {
+            return cached;
+          }
+          throw error;
         }
-        throw error;
-      }
-      params.assertCurrent?.();
-      const profile = await measure("profileWriteMs", () =>
-        syncCanonicalGitHubIdentity(
-          {
-            identity,
-            authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
-            initialDisplayName: params.authResult.tailscaleIdentity?.name,
-          },
-          options,
-        ),
-      );
-      params.assertCurrent?.();
-      return { profileId: profile.id, updatedAt: profile.updatedAt };
-    });
+        params.assertCurrent?.();
+        const profile = await measure("profileWriteMs", () =>
+          syncCanonicalGitHubIdentity(
+            {
+              identity,
+              authenticationAlias: { kind: "github-login", login: tailscaleLogin.subject },
+              initialDisplayName: params.authResult.tailscaleIdentity?.name,
+            },
+            options,
+          ),
+        );
+        params.assertCurrent?.();
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      }),
+      async () => ({ kind: "github", binding: { login: tailscaleLogin.subject } }),
+    );
   }
 
   const trustedProxy = params.authConfig?.trustedProxy;
@@ -559,79 +598,89 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   if (!principal || !assertion) {
     return undefined;
   }
-  return createLazyPromise(async () => {
-    params.assertCurrent?.();
-    const accessIdentity = await measure("profileAccessIdentityMs", () =>
-      resolveCloudflareAccessIdentity(
-        assertion,
-        principal,
-        params.authConfig?.trustedProxy?.cloudflareAccessOidc,
-      ),
-    );
-    params.assertCurrent?.();
-    const accessAccountId = accessIdentity.accountId;
-    if (accessAccountId === undefined) {
-      const profile = await measure("profileWriteMs", () =>
-        ensureCanonicalUserProfileForEmail(principal, options),
-      );
+  return withExistingAuthentication(
+    createLazyPromise(async () => {
       params.assertCurrent?.();
-      return { profileId: profile.id, updatedAt: profile.updatedAt };
-    }
-    const identityBinding = { accountId: accessAccountId, email: principal };
-    // Service auth raises public-data quota; Access still owns the signed-in account id.
-    const token = githubApiToken(process.env, undefined, "github.com");
-    let lookup: GitHubIdentityLookup;
-    try {
-      lookup = await measure("profileGitHubMetadataMs", () =>
-        gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
-          resolveGitHubUserIdentityById(accessAccountId, requestToken, fetch),
+      const accessIdentity = await measure("profileAccessIdentityMs", () =>
+        resolveCloudflareAccessIdentity(
+          assertion,
+          principal,
+          params.authConfig?.trustedProxy?.cloudflareAccessOidc,
         ),
       );
-    } catch (error) {
-      const cached = await reuseVerifiedBinding(error, identityBinding);
-      if (cached) {
-        return cached;
-      }
-      if (accessIdentity.provider === "oidc") {
-        params.assertCurrent?.();
+      params.assertCurrent?.();
+      const accessAccountId = accessIdentity.accountId;
+      if (accessAccountId === undefined) {
         const profile = await measure("profileWriteMs", () =>
-          ensureCanonicalUserProfileForEmail(principal, {
-            ...options,
-            expectedGitHubAccountId: accessAccountId,
-          }),
+          ensureCanonicalUserProfileForEmail(principal, options),
         );
         params.assertCurrent?.();
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       }
-      throw error instanceof gitHubPublicApi.ControlUiGitHubError
-        ? error
-        : new gitHubPublicApi.ControlUiGitHubError(502, "GitHub request failed");
-    }
-    params.assertCurrent?.();
-    if (!lookup.refreshed) {
-      // Re-read the exact current binding: unchanged metadata must not write profiles
-      // and broadcast roster changes on each authenticated HTTP request.
-      const cached = await measure("profileBindingReadMs", () =>
-        resolveCanonicalCachedGitHubIdentity(identityBinding),
+      const identityBinding = { accountId: accessAccountId, email: principal };
+      // Service auth raises public-data quota; Access still owns the signed-in account id.
+      const token = githubApiToken(process.env, undefined, "github.com");
+      let lookup: GitHubIdentityLookup;
+      try {
+        lookup = await measure("profileGitHubMetadataMs", () =>
+          gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
+            resolveGitHubUserIdentityById(accessAccountId, requestToken, fetch),
+          ),
+        );
+      } catch (error) {
+        const cached = await reuseVerifiedBinding(error, identityBinding);
+        if (cached) {
+          return cached;
+        }
+        if (accessIdentity.provider === "oidc") {
+          params.assertCurrent?.();
+          const profile = await measure("profileWriteMs", () =>
+            ensureCanonicalUserProfileForEmail(principal, {
+              ...options,
+              expectedGitHubAccountId: accessAccountId,
+            }),
+          );
+          params.assertCurrent?.();
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        }
+        throw error instanceof gitHubPublicApi.ControlUiGitHubError
+          ? error
+          : new gitHubPublicApi.ControlUiGitHubError(502, "GitHub request failed");
+      }
+      params.assertCurrent?.();
+      if (!lookup.refreshed) {
+        // Re-read the exact current binding: unchanged metadata must not write profiles
+        // and broadcast roster changes on each authenticated HTTP request.
+        const cached = await measure("profileBindingReadMs", () =>
+          resolveCanonicalCachedGitHubIdentity(identityBinding),
+        );
+        params.assertCurrent?.();
+        if (cached) {
+          return cached;
+        }
+      }
+      const profile = await measure("profileWriteMs", () =>
+        syncCanonicalGitHubIdentity(
+          {
+            identity: lookup.identity,
+            authenticationAlias: { kind: "email", email: principal },
+            initialDisplayName:
+              accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
+            preserveEmailProfile: accessIdentity.provider === "oidc",
+          },
+          options,
+        ),
       );
       params.assertCurrent?.();
-      if (cached) {
-        return cached;
-      }
-    }
-    const profile = await measure("profileWriteMs", () =>
-      syncCanonicalGitHubIdentity(
-        {
-          identity: lookup.identity,
-          authenticationAlias: { kind: "email", email: principal },
-          initialDisplayName:
-            accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
-          preserveEmailProfile: accessIdentity.provider === "oidc",
-        },
-        options,
-      ),
-    );
-    params.assertCurrent?.();
-    return { profileId: profile.id, updatedAt: profile.updatedAt };
-  });
+      return { profileId: profile.id, updatedAt: profile.updatedAt };
+    }),
+    async () => {
+      const identity = await measure("profileAccessIdentityMs", () =>
+        resolveCloudflareAccessIdentity(assertion, principal, trustedProxy.cloudflareAccessOidc),
+      );
+      return identity.accountId === undefined
+        ? { kind: "email", email: principal }
+        : { kind: "github", binding: { accountId: identity.accountId, email: principal } };
+    },
+  );
 }

@@ -24,6 +24,7 @@ import {
   prepareGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
+import type { RepositoryCredentialSource } from "./github-user-identity.types.js";
 import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
@@ -106,6 +107,8 @@ export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolic
       requestDigest: string;
       assertCurrent: () => void;
     }): GitHubCredentialReader | undefined;
+    /** Live invocation source; deliberately absent from durable requester snapshots. */
+    repositoryCredentialSource?: RepositoryCredentialSource;
     signal: AbortSignal;
     prepareSource(
       selector: GitHubPublicationSourceSelector,
@@ -467,6 +470,7 @@ export async function prepareGitHubPublicationRequesterV2(
             input.assertCurrent();
           },
         }),
+      repositoryCredentialSource: source?.authority.repositoryCredentialSource,
       signal,
       snapshot: policy.snapshot,
       assertInvocationCurrent,

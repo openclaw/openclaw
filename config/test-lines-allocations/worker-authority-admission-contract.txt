@@ -1,0 +1,3 @@
+# Authority fixture repairs preserve admitted requests, explicit cancellation, and stale-target refusal.
+# Includes queued deletion after a no-op, retry, and force escalation without losing accepted cleanup.
+98

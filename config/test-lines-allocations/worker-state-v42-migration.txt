@@ -1,0 +1,4 @@
+# Exact v41→v42 SQLite/PostgreSQL predecessor, rollback and preservation coverage.
+# This allocation covers only the excess after removing the unreferenced Goal adapter fixture.
+# Includes historical SQLite scope and cold PostgreSQL read-only admission regressions.
+103

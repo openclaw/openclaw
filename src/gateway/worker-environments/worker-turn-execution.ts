@@ -31,7 +31,6 @@ import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js"
 import { prepareWorkerExecApproval } from "./worker-exec-approval.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
-import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
@@ -39,6 +38,7 @@ import {
   WorkerTurnExecutionError,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
+import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {

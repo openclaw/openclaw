@@ -5,6 +5,10 @@ export const teamReportsPortProvider: DatabasePortProvider = {
   id: "team-reports",
   minimumPostgresVersion: 16,
   requiresPluginOwner: true,
+  async loadIdentity() {
+    const { readTeamReportsPortIdentity } = await import("./team-reports-port-descriptor.js");
+    return readTeamReportsPortIdentity();
+  },
   async loadDescriptor(owner, version) {
     const { loadTeamReportsPortDescriptor } = await import("./team-reports-port-descriptor.js");
     return loadTeamReportsPortDescriptor(owner, version);

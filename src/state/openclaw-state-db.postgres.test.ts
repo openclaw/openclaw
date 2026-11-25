@@ -128,10 +128,11 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
   );
   const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
   // DROP COLUMN retains an attnum hole, including at the tail. Recreate the empty
-  // receipt, setup and approval tables, retaining incoming foreign keys from optional fragments too.
+  // worker, setup and approval tables, retaining incoming foreign keys from optional fragments too.
   for (const table of [
     "operator_approvals",
     "worker_environments",
+    "worker_session_placements",
     "worker_workspace_pending_results",
     "workspace_setup_state",
   ]) {

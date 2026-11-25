@@ -231,7 +231,7 @@ function setRemoteFixtures(fixtures: Fixture[]) {
 }
 
 it.for(["skill", "plugin", "clawhub-plugin"] as const)(
-  "fences %s publication for read-only operators and finishes an Add admitted before revocation",
+  "finishes admitted %s publication but refuses new work from read-only or revoked operators",
   async (kind, { signal }) => {
     const state = await createOpenClawTestState({
       label: `bundled-${kind}-authority`,
@@ -725,11 +725,12 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       if (!issued.ok) {
         throw new Error("Could not issue synthetic device token");
       }
-      const device = await connect({
+      const deviceOptions = {
         scopes: ["operator.read", "operator.admin"],
         deviceIdentity: identity,
         deviceToken: issued.entry.token,
-      });
+      };
+      const device = await connect(deviceOptions);
       armed = true;
       const reply = device.client.request("templates.add.apply", params(revoked, revokedPlan)).then(
         (result) => ({ result }),
@@ -751,12 +752,15 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         role: "operator",
       });
       await withinTest(device.closed, signal);
+      expect(await withinTest(reply, signal)).toMatchObject({
+        error: { message: expect.stringContaining("gateway closed (4001)") },
+      });
+      // The revoked credential cannot enter a new request, even while its admitted Add runs.
+      await expect(connect(deviceOptions)).rejects.toThrow("device token mismatch");
       release.resolve();
       await withinTest(policyReturned.promise, signal);
-      await reply;
-      // Authority is checked once, when Add starts: revoking the device while installation is in
-      // flight applies to the next request, so the admitted Add finishes its publication. Join the
-      // allocation owner so the check sees the finished installation, not work still in flight.
+      // Add checks authority at admission. Revocation ends delivery and blocks new work,
+      // but the admitted Add finishes. Join its allocation owner before reading durable effects.
       await withOpenClawStateLeaseAsync(
         {
           scope: "core:template-add-allocation",
@@ -769,7 +773,14 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
           expect(await effects(revoked, revokedWorkspace)).toMatchObject({
             agent: expect.objectContaining({}),
             published: true,
+            ...(kind === "skill"
+              ? { plugin: undefined, activation: undefined }
+              : {
+                  plugin: { source: kind === "clawhub-plugin" ? "clawhub" : "archive" },
+                  activation: { enabled: true },
+                }),
           });
+          expect(await fs.stat(finalSource).catch(() => null)).toBeNull();
         },
       );
       expect(finalPolicySources).toHaveLength(1);

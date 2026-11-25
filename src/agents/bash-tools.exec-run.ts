@@ -44,6 +44,7 @@ import {
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
+  prepareLocalExecGitHubIdentity,
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
@@ -53,13 +54,13 @@ import {
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
   normalizePathPrepend,
-  resolveApprovalRunningNoticeMs,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
+  resolveApprovalRunningNoticeMs,
 } from "./bash-tools.exec-support.js";
 import {
   canInterruptExec,
@@ -486,11 +487,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
-        const githubProfileDir =
-          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
-            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
-            : undefined;
-
         const subagentSession =
           notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         const timeoutSec =
@@ -505,13 +501,15 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           },
         ]);
 
+        const github = prepareLocalExecGitHubIdentity(defaults, host, preparedRunEnvironment);
+
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
             workdir,
             secretEgressBindings,
             durable: params.durable ? durableNotifications : undefined,
-            githubProfileDir,
+            ...github,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
             safeBins,
@@ -558,7 +556,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           secretEgressBindings,
           durable: params.durable ? durableNotifications : undefined,
           sessionId: defaults?.sessionId,
-          githubProfileDir,
+          ...github,
           pathPrepend: defaultPathPrepend,
           sandbox,
           workerMemoryBoundary: defaults?.workerMemoryBoundary,

@@ -2,13 +2,20 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 import {
   isUserProfileCatalogReady,
   prepareUserProfileCatalog,
   readUserProfileSnapshot,
+  readResidentGatewayOwnerProfile,
+  readResidentUserProfileForEmail,
 } from "./user-profile-list.js";
-import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
+import type {
+  CachedGitHubIdentity,
+  CachedGitHubIdentityBinding,
+  ExistingUserProfileAuthentication,
+} from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 
@@ -107,3 +114,52 @@ export async function readUserProfileDirectory(limit: number, options: ProfileRe
     input: { limit },
   });
 }
+
+/** Read-only connect admission retains the existing profile writer's identity and role facts. */
+export async function prepareExistingUserProfileAuthentication(
+  selector: ExistingUserProfileAuthentication,
+  options: ProfileReadOptions = {},
+) {
+  const context = captureOpenClawStateWorkerContext(options);
+  const authority = await captureUserProfileAuthorityRead(context.admission);
+  const captured = { path: context.admission.databasePath, env: context.environment };
+  let profile: CachedGitHubIdentity | undefined;
+  let profileIds: string[] = [];
+  if (selector.kind === "github") {
+    profile = await resolveCanonicalCachedGitHubIdentity(selector.binding, captured);
+  } else if (selector.kind === "owner" || selector.kind === "email") {
+    const catalog = await prepareUserProfileCatalog(captured);
+    try {
+      const existing =
+        selector.kind === "owner"
+          ? readResidentGatewayOwnerProfile(captured.path)
+          : readResidentUserProfileForEmail(normalizeProfileEmail(selector.email), captured.path);
+      profile = existing && { profileId: existing.id, updatedAt: existing.updatedAt };
+    } finally {
+      catalog.release();
+    }
+  } else {
+    const reply = await executeExistingOpenClawStateRead(
+      captured,
+      {
+        type: "userProfiles.authenticationIdentity",
+        selector,
+      },
+      { context, current: true },
+    );
+    profile = reply?.result?.profile;
+    profileIds = reply?.result?.profileIds ?? [];
+  }
+  const isCurrent = authority.bind(profile ? [...profileIds, profile.profileId] : []);
+  const assertCurrent = () => {
+    if (!isCurrent?.()) {
+      throw new UserProfileDisclosureChangedError(
+        "Profile authentication binding changed. Retry the connection.",
+      );
+    }
+  };
+  assertCurrent();
+  return { profile, assertCurrent };
+}
+
+export type { ExistingUserProfileAuthentication } from "./user-profiles.types.js";

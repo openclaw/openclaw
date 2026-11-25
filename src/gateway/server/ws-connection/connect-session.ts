@@ -184,42 +184,32 @@ export async function attachAuthenticatedGatewayConnect(
   // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
-  const instanceId = connectParams.client.instanceId;
   // Nodes retain device-owned presence. User clients need one row per connection
   // so two tabs watching different sessions cannot overwrite each other.
   const presenceKey = shouldTrackPresence
     ? role === "node"
-      ? (device?.id ?? instanceId ?? connId)
+      ? (device?.id ?? connectParams.client.instanceId ?? connId)
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
-  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId({
-    authResult,
-    authConfig: context.configSnapshot.gateway?.auth,
-    config: context.configSnapshot,
-  });
-  const tailscaleLogin = authResult.tailscaleIdentity
-    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
-    : undefined;
-  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const authenticatedUserIsTailscaleProvider = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)?.kind === "provider"
+    : false;
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
-  const repositoryIdentity = resolveRepositoryConnectionIdentity({
+  const githubAuth = {
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
-  });
+  };
+  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId(githubAuth);
+  const repositoryIdentity = resolveRepositoryConnectionIdentity(githubAuth);
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    ...githubAuth,
     repositoryIdentity,
-    authResult,
-    authConfig: context.configSnapshot.gateway?.auth,
-    config: context.configSnapshot,
-    requestHeaders: context.handler.upgradeReq.headers,
-    assertCurrent: profileLifecycle.assertCurrent,
     recordTiming: context.recordAttachTiming,
   });
-  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles?.default);
   // Only an owner-bound ingress grant receives the shared owner role bypass;
   // an OpenClaw ID owner device is the Gateway owner.
   const openclawIdPrincipal =
@@ -249,20 +239,21 @@ export async function attachAuthenticatedGatewayConnect(
       role,
       authenticatedUserId,
       authMethod,
-      rolesConfigured,
+      rolesConfigured: Boolean(context.configSnapshot.gateway?.roles?.default),
       openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
     });
-  const effectiveScopes = remoteIngressPrincipal
+  const resolveConnectionScopes = (verifiedIdentityWrite?: boolean) =>
+    resolveEffectiveConnectionScopes({
+      role,
+      deviceScopes,
+      verifiedIdentity: state.authPolicy.verifiedIdentity,
+      identityScopes: githubAuth.authConfig?.identityScopes,
+      upgradeReq: context.handler.upgradeReq,
+      verifiedIdentityWrite,
+    });
+  const initialScopes = remoteIngressPrincipal
     ? deviceScopes
-    : authResult.delegation
-      ? [...authResult.delegation.scopes]
-      : resolveEffectiveConnectionScopes({
-          role,
-          deviceScopes,
-          verifiedIdentity: state.authPolicy.verifiedIdentity,
-          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-          upgradeReq: context.handler.upgradeReq,
-        });
+    : (authResult.delegation?.scopes.slice() ?? resolveConnectionScopes());
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
     ? { ok: true as const, prepared: undefined }
@@ -270,7 +261,7 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
-        connectionScopes: effectiveScopes,
+        connectionScopes: initialScopes,
         linkedOwnerProfile,
         authenticatedUserId,
         requestHeaders: context.handler.upgradeReq.headers,
@@ -302,6 +293,13 @@ export async function attachAuthenticatedGatewayConnect(
           ),
         )
       : undefined;
+  const effectiveScopes =
+    !authResult.delegation &&
+    preparedProfile &&
+    rolePolicy?.verifiedIdentityWrite &&
+    (authResult.method === "trusted-proxy" || authResult.method === "tailscale")
+      ? resolveConnectionScopes(true)
+      : initialScopes;
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;

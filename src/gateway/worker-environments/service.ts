@@ -690,10 +690,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
-    destroyUnattached: async (environmentId: string, authorize?: () => void) => {
-      await preparedPool.cancelPreparation(environmentId, authorize);
+    destroyUnattached: async (id: string, createAuthorization?: () => () => void) => {
+      const cancelled = await preparedPool.cancelPreparation(id, createAuthorization?.());
+      const authorize = cancelled ? undefined : createAuthorization?.();
       return environmentAccess.project(
-        await providerLifecycle.destroy(environmentId, { requireUnattached: true, authorize }),
+        await providerLifecycle.destroy(id, { requireUnattached: true, authorize }),
       );
     },
     observeDesktop: environmentAccess.observeDesktop,

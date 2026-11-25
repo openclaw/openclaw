@@ -33,10 +33,7 @@ import {
   resolveWorkerPlacementDestination,
 } from "../worker-environments/placement-destination.js";
 import { canRetryDeviceDispatch } from "../worker-environments/placement-dispatch-failure.js";
-import {
-  projectWorkerSessionPlacement,
-  readWorkerPlacementIdentity,
-} from "../worker-environments/placement-projector.js";
+import { readWorkerPlacementIdentity } from "../worker-environments/placement-projector.js";
 import {
   isForceAbandonedWorkerPlacement,
   type WorkerSessionPlacementRecord,
@@ -52,7 +49,11 @@ import type { WorkerSessionWorkspace } from "../worker-environments/session-work
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { withWorkerPlacementAuthorization } from "./session-placement-authorization.js";
-import { isWorkerDispatchInputError, requireSessionKey } from "./sessions-shared.js";
+import {
+  respondWorkerDispatchError,
+  respondWorkerPlacement,
+} from "./sessions-dispatch-response.js";
+import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -163,46 +164,6 @@ async function resolveSessionWorkspace(params: {
     respondInvalidWorkerSession(params.respond, formatErrorMessage(error));
     return undefined;
   }
-}
-
-function respondWorkerPlacement(params: {
-  respond: RespondFn;
-  key: string;
-  sessionId: string;
-  context: GatewayRequestContext;
-  placement: Parameters<typeof projectWorkerSessionPlacement>[0];
-}): void {
-  params.respond(
-    true,
-    {
-      ok: true,
-      key: params.key,
-      sessionId: params.sessionId,
-      placement: projectWorkerSessionPlacement(
-        params.placement,
-        params.context.workerPlacementDiskSpaceReader?.read(params.placement),
-        // Canonical fenced runner reader; a node lost after durable provision
-        // must project offline here exactly as sessions.list would.
-        params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
-        readWorkerPlacementIdentity(params.placement, params.context.workerEnvironmentService),
-      ),
-    },
-    undefined,
-  );
-}
-
-function respondWorkerDispatchError(error: unknown, respond: RespondFn): void {
-  if (error instanceof SessionMutationAuthorizationChangedError) {
-    throw error;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(
-      isWorkerDispatchInputError(error) ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-      formatErrorMessage(error),
-    ),
-  );
 }
 
 export const sessionDispatchHandlers: GatewayRequestHandlers = {

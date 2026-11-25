@@ -1036,6 +1036,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
               sessionKey: run.requesterSessionKey,
               status: run.execution.status,
               deliveryStatus: run.delivery?.status,
+              requesterDelivery: run.delivery?.requesterDelivery?.state,
+              requesterVisibleFinal: Boolean(run.delivery?.requesterVisibleFinal),
             }
           : undefined;
         return (
@@ -1045,9 +1047,13 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }, `settled ${caseName} task`);
       tasks.push(terminalTask!);
       // Child-result settlement is not evidence of a visible channel send.
-      expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe("delivered");
+      expect(terminalTask).toMatchObject({
+        deliveryStatus: "delivered",
+        requesterDelivery: "consumed",
+      });
       if (caseName === "visible") {
         await waitForFact(() => gateway.logs().includes(suppressionLog), "Slack suppression hook");
+        expect(terminalTask?.requesterVisibleFinal).toBe(false);
       }
       // Delivery settlement does not join the final observer digest. Wait before
       // admitting another turn on this session so its failure cannot be dropped.
@@ -1200,7 +1206,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     });
     let task: ReturnType<typeof readQaSubagentRuns>[number] | undefined;
     let taskRuns: ReturnType<typeof readQaSubagentRuns> = [];
-    let sawUnidentifiedSendInQueue = false;
+    let unknownSend: ReturnType<typeof projectOutboundDelivery> | undefined;
     let delivery: NonNullable<typeof task>["delivery"];
     const settlementHistory: Array<{ at: number; state: object }> = [];
     let lastSettlementState: string | undefined;
@@ -1244,7 +1250,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
           entry.lastError === "platform send returned no delivery identity",
       );
       // Transport recovery can reconcile the queue row independently of child settlement.
-      sawUnidentifiedSendInQueue ||= pending?.recoveryState === "unknown_after_send";
+      if (pending?.recoveryState === "unknown_after_send") {
+        unknownSend ??= pending;
+      }
       // Keep IDs from before the send becomes ambiguous, so a later
       // compacted receipt can still be matched after it loses its session key.
       for (const row of pendingRows) {
@@ -1288,7 +1296,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         task?.execution.status === "terminal" &&
         delivery?.status === "delivered" &&
         delivery.requesterDelivery?.state === "consumed" &&
-        sawUnidentifiedSendInQueue
+        Boolean(unknownSend)
       );
     }, "child settlement and unidentified Discord send").catch((error: unknown) =>
       rethrowWithDeliveryDiagnostics(error, () => {
@@ -1304,7 +1312,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           parentAcknowledged,
           completions,
           unidentifiedSends: writes.filter((write) => write.identityOmitted).length,
-          sawUnidentifiedSendInQueue,
+          sawUnidentifiedSendInQueue: Boolean(unknownSend),
           settlementHistory,
           requests: requests.snapshot(),
           ...deliveryQueueDiagnostics(
@@ -1318,7 +1326,13 @@ describe("channel progress presentation through an isolated Gateway", () => {
     expect(requesterSettledBeforeWorker).toBe(true);
     expect(parentAcknowledged).toBe(true);
     expect(taskRuns).toHaveLength(1);
-    expect(writes.filter((write) => write.identityOmitted)).toHaveLength(1);
+    expect(delivery?.requesterVisibleFinal).toBeUndefined();
+    expect(unknownSend && resolveDeliveryQueueAttemptCount(unknownSend)).toBe(1);
+    expect(
+      writes.filter(
+        ({ method, body }) => method === "POST" && readStringValue(body.content)?.includes(marker),
+      ),
+    ).toEqual([expect.objectContaining({ identityOmitted: true })]);
     expect(
       [...api.messages.values()].filter((message) =>
         (readStringValue(message.content) ?? "").includes(marker),

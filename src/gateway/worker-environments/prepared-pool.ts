@@ -183,14 +183,21 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
     await store.ready();
     const record = store.get(environmentId);
     const controller = preparations.get(environmentId);
+    let admitted = false;
     if (
       record?.preparation &&
-      (await pool.retirePoolRecord(options, record, "invalidated", authorize))
+      (await pool.retirePoolRecord(options, record, "invalidated", () => {
+        authorize?.();
+        admitted = true;
+      }))
     ) {
       // The durable cancellation fences readiness; the lifecycle retains provider
       // custody until its aborted operation and physical cleanup actually settle.
       controller?.abort();
+      // An already-pending cancellation can return the record without admitting this request.
+      return admitted;
     }
+    return false;
   };
   return {
     schedule,

@@ -14,14 +14,17 @@ import { deriveGitHubPublicationTaskId } from "../state/github-publication-reque
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
-  assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
+  repositoryPublicationPreflightCredential,
+  repositoryPublicationPreflightActor,
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { gitHubPublicationPreflightLifetime } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
+  assertExpectedSharedGitHubPublisher,
   digestGitHubPublicationRequest as digestRequest,
   projectGitHubPublicationResult,
 } from "./github-publication-receipt.js";
@@ -338,11 +341,22 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       }
     }
     assertRequester();
-    const identity = await prepareCurrentGitHubPublicationIdentity(input.agentId);
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      input.agentId,
+      repositoryPublicationPreflightActor(input.requester, input.sessionKey, assertRequester),
+      repositoryPublicationPreflightCredential({
+        agentId: input.agentId,
+        sessionKey: input.sessionKey,
+        sessionId,
+        lifecycleRevision,
+        assertCurrent: assertRequester,
+      }),
+    );
+    await using identityLifetime = gitHubPublicationPreflightLifetime(identity);
     assertRequester();
     assertExpectedSharedGitHubPublisher(
       expected,
-      { source: identity.source, ...identity.account },
+      { source: identityLifetime.identity.source, ...identityLifetime.identity.account },
       existing
         ? undefined
         : {
