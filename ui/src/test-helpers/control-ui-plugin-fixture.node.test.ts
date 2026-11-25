@@ -81,7 +81,7 @@ it.each([false, true])(
         declaration: {
           entry,
           activation: "settings-only",
-          settingsViews: [{ section: "memory", panel: "overview" }],
+          settingsViews: [{ section: "memory", panel: "overview", settings: {} }],
         },
       },
       { ...active, declaration: { entry } },
