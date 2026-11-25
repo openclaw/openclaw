@@ -77,6 +77,43 @@ describe("Slack edits", () => {
     expect(client.chat.update).toHaveBeenCalledExactlyOnceWith(update(text));
   }
 
+  it("clears rejected generated list blocks while keeping the complete edit text", async () => {
+    client.chat.update.mockImplementationOnce(({ blocks }) => {
+      if (blocks?.length) {
+        throw Object.assign(new Error("Slack rejected blocks"), {
+          data: { error: "invalid_blocks" },
+        });
+      }
+      return { ok: true };
+    });
+    await edit("1. **First**\n2. Second");
+    const text = "1. *First*\n2. Second";
+    expect(client.chat.update).toHaveBeenCalledTimes(2);
+    expect(client.chat.update).toHaveBeenNthCalledWith(
+      1,
+      update(text, [
+        {
+          type: "rich_text",
+          elements: [
+            {
+              type: "rich_text_list",
+              style: "ordered",
+              indent: 0,
+              elements: [
+                {
+                  type: "rich_text_section",
+                  elements: [{ type: "text", text: "First", style: { bold: true } }],
+                },
+                { type: "rich_text_section", elements: [{ type: "text", text: "Second" }] },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+    expect(client.chat.update).toHaveBeenNthCalledWith(2, update(text, []));
+  });
+
   it.each<{ mode?: MarkdownTableMode; expected: string }>([
     { expected: "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```" },
     { mode: "bullets", expected: "*Beta*\n• Value: 2" },

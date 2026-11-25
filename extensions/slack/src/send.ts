@@ -13,19 +13,13 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -48,7 +42,7 @@ import {
 } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { enrichSlackWebApiError } from "./errors.js";
-import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
+import { prepareSlackSendTextChunks, type SlackMarkdownMessage } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import { isSlackInvalidBlocksError } from "./native-data-blocks.js";
@@ -911,8 +905,9 @@ export async function sendMessageSlack(
           Parameters<typeof postSlackMessageBestEffort>[0],
           "text" | "blocks" | "metadata" | "replyBroadcast" | "mrkdwn"
         >,
+        generatedList = false,
       ) => {
-        const posted = await postSlackMessageBestEffort({
+        const post = {
           client,
           channelId,
           threadTs: opts.threadTs,
@@ -920,6 +915,12 @@ export async function sendMessageSlack(
           unfurl,
           ...part,
           ...(opts.literalText ? { literalText: true } : {}),
+        };
+        const posted = await postSlackMessageBestEffort(post).catch((error: unknown) => {
+          if (!generatedList || !isSlackInvalidBlocksError(error)) {
+            throw error;
+          }
+          return postSlackMessageBestEffort({ ...post, blocks: undefined });
         });
         const { response } = posted;
         sendIdentity = posted.identity;
@@ -934,10 +935,10 @@ export async function sendMessageSlack(
           createSlackSendResult(
             response.ts,
             deliveredChannelId,
-            part.blocks ? "card" : "text",
+            part.blocks && !generatedList ? "card" : "text",
             responseThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs),
           ),
-          part.blocks,
+          generatedList ? undefined : part.blocks,
         );
       };
       if (blocks && opts.mediaUrl) {
@@ -992,39 +993,23 @@ export async function sendMessageSlack(
       if (pendingBlockFallback) {
         messages = pendingBlockFallback.fallbackMessages;
       } else {
-        let resolvedChunks: string[];
-        if (opts.textIsSlackPlainText || opts.literalText) {
-          resolvedChunks = trimmedMessage
-            ? chunkTextForOutbound(trimmedMessage, textChunkLimit, { preserveWhitespace: true })
-            : [];
-        } else if (opts.textIsSlackMrkdwn) {
-          resolvedChunks = resolveTextChunksWithFallback(
-            trimmedMessage,
-            chunkSlackMrkdwnText(trimmedMessage, textChunkLimit),
-          );
-        } else {
-          const tableMode = resolveMarkdownTableMode({
+        const resolvedChunks = prepareSlackSendTextChunks(trimmedMessage, textChunkLimit, {
+          literal: opts.textIsSlackPlainText || opts.literalText,
+          mrkdwn: opts.textIsSlackMrkdwn,
+          tableMode: resolveMarkdownTableMode({
             cfg,
             channel: "slack",
-            ...(account.accountId ? { accountId: account.accountId } : {}),
-          });
-          const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
-          const markdownChunks =
-            chunkMode === "newline"
-              ? chunkMarkdownTextWithMode(trimmedMessage, textChunkLimit, chunkMode)
-              : [trimmedMessage];
-          const chunks = markdownChunks.flatMap((markdown) =>
-            markdownToSlackMrkdwnChunks(markdown, textChunkLimit, { tableMode }),
-          );
-          resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
-        }
+            accountId: account.accountId,
+          }),
+          chunkMode: resolveChunkMode(cfg, "slack", account.accountId),
+        });
         const mediaMaxBytes =
           opts.mediaMaxBytes ??
           (typeof account.config.mediaMaxMb === "number"
             ? account.config.mediaMaxMb * 1024 * 1024
             : undefined);
 
-        let chunksToPost: string[];
+        let chunksToPost: SlackMarkdownMessage[];
         if (opts.mediaUrl) {
           const [firstChunk, ...rest] = resolvedChunks;
           lastMessageId = await uploadSlackFile({
@@ -1037,7 +1022,7 @@ export async function sendMessageSlack(
             uploadTitle: opts.uploadTitle,
             mediaLocalRoots: opts.mediaLocalRoots,
             mediaReadFile: opts.mediaReadFile,
-            caption: firstChunk,
+            caption: firstChunk?.text,
             threadTs: opts.threadTs,
             maxBytes: mediaMaxBytes,
             ...(opts.forceDocument ? { optimizeImages: false } : {}),
@@ -1055,11 +1040,11 @@ export async function sendMessageSlack(
           );
           chunksToPost = rest;
         } else {
-          chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
+          chunksToPost = resolvedChunks.length ? resolvedChunks : [{ text: "" }];
         }
-        messages = chunksToPost.map((text) =>
-          opts.textIsSlackPlainText ? { text, mrkdwn: false } : { text },
-        );
+        messages = opts.textIsSlackPlainText
+          ? chunksToPost.map(({ text }) => ({ text, mrkdwn: false }))
+          : chunksToPost;
       }
 
       let questionDelivery: SlackSendResult | undefined;
@@ -1080,11 +1065,14 @@ export async function sendMessageSlack(
         if (partIndex === 0 && !opts.mediaUrl) {
           await dispatchOnce();
         }
-        const partDelivery = await postPart({
-          ...part,
-          replyBroadcast: carriesPrimaryMessageOptions ? opts.replyBroadcast : undefined,
-          metadata,
-        });
+        const partDelivery = await postPart(
+          {
+            ...part,
+            replyBroadcast: carriesPrimaryMessageOptions ? opts.replyBroadcast : undefined,
+            metadata,
+          },
+          !pendingBlockFallback && Boolean(part.blocks),
+        );
         if (pendingBlockFallback && partDelivery.meta?.slackQuestionActionIds.length) {
           questionDelivery = partDelivery;
         }

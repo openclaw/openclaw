@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackRenderedMessage } from "../../actions.js";
@@ -8,7 +9,11 @@ import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { buildSlackNativeDataDeliveryPlan } from "../../native-data-fallback.js";
 import { truncateSlackTextByUtf8Bytes } from "../../truncate.js";
 
-function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {
+function blocksMatch(
+  expected?: (Block | KnownBlock)[],
+  actual?: unknown[],
+  generated = false,
+): boolean {
   if (!expected?.length) {
     return !actual?.length;
   }
@@ -20,6 +25,14 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
       blocks: expected,
     });
     return fallbackPlan.fallbackMessages.every((message) => !message.blocks?.length);
+  }
+  if (generated) {
+    // Slack assigns block IDs and returns the serialized Block Kit payload.
+    const wireBlocks = (blocks: unknown[]): unknown =>
+      JSON.parse(
+        JSON.stringify(blocks, (key, value: unknown) => (key === "block_id" ? undefined : value)),
+      );
+    return isDeepStrictEqual(wireBlocks(expected), wireBlocks(actual));
   }
   if (JSON.stringify(expected) === JSON.stringify(actual)) {
     return true;
@@ -54,6 +67,7 @@ export async function finalizeSlackPreviewEdit(params: {
   messageId: string;
   text: string;
   blocks?: (Block | KnownBlock)[];
+  nativeListBlocks?: (Block | KnownBlock)[];
   threadTs?: string;
 }): Promise<void> {
   try {
@@ -62,6 +76,7 @@ export async function finalizeSlackPreviewEdit(params: {
       accountId: params.accountId,
       client: params.client,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+      ...(params.nativeListBlocks ? { nativeListBlocks: params.nativeListBlocks } : {}),
     });
   } catch (err) {
     try {
@@ -106,7 +121,10 @@ export async function finalizeSlackPreviewEdit(params: {
         const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
         const applied = params.blocks?.length
           ? acceptedTexts.has(actualText) && blocksMatch(params.blocks, readback.blocks)
-          : actualText === expectedText;
+          : actualText === expectedText &&
+            (!params.nativeListBlocks ||
+              !readback.blocks?.length ||
+              blocksMatch(params.nativeListBlocks, readback.blocks, true));
         if (applied) {
           logVerbose(
             `slack: preview final edit response failed but readback matched message ${params.channelId}/${params.messageId}; suppressing duplicate fallback send`,
