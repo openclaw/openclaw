@@ -34,7 +34,6 @@ import {
 } from "./sessions-patch-archive.js";
 import {
   createSessionPatchCatalogPreparation,
-  projectSessionPatchRoute,
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
@@ -432,10 +431,10 @@ export async function executeSessionPatchMutations(params: {
                         });
                         continue;
                       }
-                      const projected = await projectSessionPatchRoute({
-                        catalogs,
+                      const projection = await catalogs.project({
                         agentId: target.targetAgentId,
-                        // Detached preparation cannot replay earlier targets when a later one needs the catalog.
+                        // Detached preparation must not replay earlier restoration or
+                        // permission owners when a later target needs the catalog.
                         mode:
                           admission === "admitted" || group.length === 1 ? "prepare" : "ordered",
                         catalog: catalogPreparation,
@@ -451,18 +450,36 @@ export async function executeSessionPatchMutations(params: {
                           personalModelSelection,
                           operatorAuthority,
                         },
-                        context: params.context,
-                        callerCanConsent: callerIsAdmin,
-                        timing: groupTiming,
                       });
-                      if ("kind" in projected) {
-                        return { result: projected };
+                      if (projection.kind === "model-catalog") {
+                        // Nothing has committed. Release provisional permission handles
+                        // with this writer snapshot, then project again from fresh rows.
+                        return { result: projection };
                       }
+                      const projected = projection.result;
                       if (!projected.ok) {
-                        projectedOutcomes.push({ ok: false, error: projected.error });
+                        projectedOutcomes.push(projected);
                         continue;
                       }
-                      const runtimeSelection = projected.runtime;
+                      groupTiming?.mark("runtimeSelection");
+                      const runtimeSelection =
+                        await modelSelection.prepareSessionPatchRuntimeSelection({
+                          cfg,
+                          agentId: target.targetAgentId,
+                          patch: target.fullPatch,
+                          entry: projected.entry,
+                          expectedEntry: existingEntry,
+                          callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
+                          catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                          validateModelSelection: projected.validateModelSelection,
+                          placement: { context: params.context, sessionKey: primaryKey },
+                        });
+                      groupTiming?.mark("projection");
+                      if (!runtimeSelection.ok) {
+                        projectedOutcomes.push(runtimeSelection);
+                        continue;
+                      }
                       runtimeSelections.push(runtimeSelection);
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;

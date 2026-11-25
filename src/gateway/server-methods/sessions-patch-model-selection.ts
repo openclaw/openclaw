@@ -18,7 +18,6 @@ import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
-  buildModelAliasIndex,
   getModelRefStatus,
   NO_MODEL_CONFIGURED_MESSAGE,
   resolveAllowedModelRef,
@@ -41,10 +40,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  isAgentSessionModelPatchOrigin,
-  isSessionStatusModelPatchOrigin,
-} from "../session-model-patch-origin.js";
+import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
@@ -167,18 +163,6 @@ export function refreshSessionPatchQueuedSelection(params: {
   });
 }
 
-// A display name, revision suffix or variant is not sufficient to identify the same model.
-function uniqueUpstreamProvider(
-  catalog: readonly ModelCatalogEntry[],
-  literal: string,
-): string | undefined {
-  if (literal.includes("/")) {
-    return undefined;
-  }
-  const providers = new Set(catalog.filter((row) => row.id === literal).map((row) => row.provider));
-  return providers.size === 1 ? providers.values().next().value : undefined;
-}
-
 export function resolveSessionPatchModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -193,12 +177,8 @@ export function resolveSessionPatchModelSelection(params: {
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
   const { cfg, agentId } = params;
-  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
-  const literalProvider =
-    !profile && (isAgentSessionModelPatchOrigin() || isSessionStatusModelPatchOrigin())
-      ? uniqueUpstreamProvider(params.catalog, modelWithoutProfile)
-      : undefined;
   const defaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
+  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const configuredDefault = resolveDefaultModelForAgent({ cfg, agentId });
   const isDefault = (ref: ModelRef) =>
     ref.provider === configuredDefault?.provider && ref.model === configuredDefault.model;
@@ -226,7 +206,6 @@ export function resolveSessionPatchModelSelection(params: {
   }
   const resolved = resolveAllowedModelRef({
     ...policy,
-    ...(literalProvider ? { defaultProvider: literalProvider } : {}),
     raw: modelWithoutProfile,
   });
   if ("error" in resolved) {
@@ -239,44 +218,6 @@ export function resolveSessionPatchModelSelection(params: {
     ...(profile ? { profile } : {}),
     isDefault: isDefault(resolved.ref),
   };
-}
-
-/** Only an unqualified literal can move between an upstream model and its exact relay routes. */
-export function alternateSessionModelRoutes(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry?: SessionEntry;
-  catalog: readonly ModelCatalogEntry[];
-  raw: string;
-}): string[] {
-  const { model, profile } = splitTrailingAuthProfile(params.raw);
-  if (
-    model.includes("/") ||
-    profile ||
-    resolveCollapsedSessionAuthPinSource(params.entry) === "user"
-  ) {
-    return [];
-  }
-  const defaultProvider = resolveDefaultModelForAgent(params)?.provider ?? DEFAULT_PROVIDER;
-  const aliases = buildModelAliasIndex({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider,
-  });
-  if (aliases.byAlias.has(model.toLowerCase())) {
-    return [];
-  }
-  const provider = uniqueUpstreamProvider(params.catalog, model);
-  if (!provider) {
-    return [];
-  }
-  return [
-    ...new Set(
-      params.catalog
-        .filter((row) => row.id === `${provider}/${model}`)
-        .map((row) => row.provider + "/" + row.id),
-    ),
-  ];
 }
 
 /** Bind a canonical selection to the original operator through preparation and commit. */
@@ -393,12 +334,11 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   validateInheritedRuntime?: boolean;
   expectedEntry?: SessionEntry;
   hydrateThinkingCatalog?: boolean;
-  checkAgentModelRoute?: boolean;
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
   | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
-  | { ok: false; error: ErrorShape; unavailableRoute?: true }
+  | { ok: false; error: ErrorShape }
 > {
   const invalid = (message: string) => ({
     ok: false as const,
@@ -449,7 +389,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       previousModel?.provider === model.provider &&
       previousModel.model === model.model &&
       params.expectedEntry?.authProfileOverride === params.entry.authProfileOverride;
-    if (!preparesRuntimeSelection || (preservesRuntimeSelection && !params.checkAgentModelRoute)) {
+    if (!preparesRuntimeSelection || preservesRuntimeSelection) {
       // Resets and inherited choices still admit a runtime; recheck its current registry at commit.
       readSelectedHarness = () =>
         getRegisteredAgentHarness(
@@ -463,22 +403,6 @@ export async function prepareSessionPatchRuntimeSelection(params: {
           }),
         )?.harness;
     } else {
-      const executionRuntime = (ref: ModelRef, sessionEntry?: SessionEntry) =>
-        resolveEffectiveAgentRuntime({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          sessionKey: params.patch.key,
-          sessionEntry,
-          provider: ref.provider,
-          modelId: ref.model,
-          mode: "execution",
-        });
-      const rawRuntime =
-        typeof params.patch.agentRuntime === "string"
-          ? params.patch.agentRuntime
-          : params.checkAgentModelRoute
-            ? executionRuntime(previousModel ?? model, params.expectedEntry)
-            : undefined;
       const choice = await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -487,14 +411,15 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         catalog: params.catalog ?? [],
         hydrateThinkingCatalog: params.hydrateThinkingCatalog,
         prepareNativeCatalog: params.prepareNativeCatalog,
-        rawRuntime,
+        rawRuntime:
+          typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {
           ...params.entry,
           authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
         },
       });
       if (choice.status === "rejected") {
-        return { ...invalid(choice.message), unavailableRoute: true };
+        return invalid(choice.message);
       }
       selectedHarness = choice.harness;
       const policyError = resolveAgentHarnessOperatorPolicyError(
@@ -504,16 +429,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       if (policyError) {
         return invalid(policyError);
       }
-      // Checking an inherited runtime must not turn it into a lasting session pin.
-      const inheritedRuntime =
-        params.checkAgentModelRoute &&
-        params.patch.agentRuntime === undefined &&
-        !params.entry.agentRuntimeOverride &&
-        choice.runtime.kind === "set" &&
-        executionRuntime(model, params.entry) === choice.runtime.runtime;
-      if (!inheritedRuntime) {
-        applyModelRuntimeDirective(params.entry, choice.runtime);
-      }
+      applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
       const harness = choice.harness;
       if (
