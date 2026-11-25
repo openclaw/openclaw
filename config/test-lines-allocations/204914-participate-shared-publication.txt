@@ -1,7 +1,7 @@
-508
+507
 # Participate split, part 5 of 6 (participant publication through the shared
 # GitHub account): measured with check-test-lines-ratchet against the P4 branch
-# tip; 908 net lines minus the ordinary 400-line allowance. Reuses the existing
+# tip; 907 net lines minus the ordinary 400-line allowance. Reuses the existing
 # native handoff outcome table, attribution/action cases and child authority
 # fixtures, parameterizing linked/unlinked and local/repository cases rather
 # than duplicating fixtures. The remaining proofs cover distinct boundaries:
