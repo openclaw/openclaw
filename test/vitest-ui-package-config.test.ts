@@ -115,7 +115,7 @@ describe("ui package vitest config", () => {
       },
       config,
     );
-    expect(test.browser.instances.find((instance) => instance.name === custom.name)).toMatchObject(
+    expect(test.browser.instances?.find((instance) => instance.name === custom.name)).toMatchObject(
       custom,
     );
     expect(provider.prewarm).toBe(prewarm);
@@ -134,7 +134,7 @@ describe("ui package vitest config", () => {
       createUiBrowserVitestConfig({}),
     );
     expect(
-      overriddenEmpty.browser.instances.find((instance) => instance.name === custom.name),
+      overriddenEmpty.browser.instances?.find((instance) => instance.name === custom.name),
     ).toMatchObject(custom);
     const dir = tempDirs.make("ui-moved-discovery-");
     const isolated = path.resolve("ui/src/pages/chat/chat-pane-inline-output.browser.test.tsx");
