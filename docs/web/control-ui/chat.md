@@ -566,7 +566,7 @@ In Chat and New session, the model picker reopens on **Favorites** if that was t
 
 Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
 
-Model search in Chat, New session, and the command palette composer puts available recommended models first when the search text matches equally well. Searching for a specific model still finds it even if it is not recommended.
+In Chat, New session, and the command palette composer, an exact model name, ID, or `provider/model` reference beats a partial match. When the text matches equally well, selectable favorites come first, followed by selectable catalog recommendations. A dated snapshot follows ordinary matches when its provider also offers the undated ID. Other ties keep the existing catalog order.
 
 On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model. To reorder models in **Favorites**, drag a model row, or focus the row and press **Alt+Up Arrow** or **Alt+Down Arrow**. The new order is saved with your favorites for that agent.
 

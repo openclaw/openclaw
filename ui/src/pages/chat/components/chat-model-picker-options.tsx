@@ -160,7 +160,10 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
 }
 
 export function modelOptionSearchRow(
-  options: ModelPresentationProps,
+  options: ModelPresentationProps & {
+    starred: ReadonlySet<string>;
+    modelRefs: ReadonlySet<string>;
+  },
   defaultLabel: string,
 ): ChatModelSearchRow {
   const selected = isModelPickerOptionSelected(
@@ -171,6 +174,10 @@ export function modelOptionSearchRow(
   const runtimeLabel =
     formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const ref = options.entry.value;
+  // A date alone does not make a model obsolete. Only defer a pinned build
+  // when the same provider also offers its undated ID.
+  const alias = ref.replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/u, "");
   return {
     key: modelPickerOptionKey(options.entry),
     name: formatModelLabel(options.entry).toLocaleLowerCase(),
@@ -185,8 +192,15 @@ export function modelOptionSearchRow(
       options.entry.provider,
       options.entry.presentation,
     ).toLocaleLowerCase(),
-    reference: options.entry.value,
-    recommended: options.entry.recommended,
+    reference: ref,
+    modelId: ref.slice(ref.indexOf("/") + 1),
+    preference: options.starred.has(ref)
+      ? "favorite"
+      : options.entry.recommended
+        ? "recommended"
+        : alias !== ref && options.modelRefs.has(alias)
+          ? "snapshot"
+          : undefined,
     selected,
     hasShortcut: !selected,
     disabled:

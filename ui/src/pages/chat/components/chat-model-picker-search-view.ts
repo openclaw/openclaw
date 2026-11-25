@@ -12,27 +12,38 @@ import {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 
+// An unavailable favorite or recommendation does not outrank a selectable match.
+const preferenceRanks = { favorite: 0, recommended: 1, ordinary: 2, snapshot: 3 } as const;
+const preferenceCount = Object.keys(preferenceRanks).length;
 const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 
 function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
   const name = normalizeSearch(row.name);
-  if (name.startsWith(query)) {
+  const reference = normalizeSearch(row.reference);
+  if (
+    name === query ||
+    reference === query ||
+    (row.modelId && normalizeSearch(row.modelId) === query)
+  ) {
     return 0;
   }
-  if (name.includes(query)) {
+  if (name.startsWith(query)) {
     return 1;
   }
-  if (row.keywords && normalizeSearch(row.keywords).includes(query)) {
+  if (name.includes(query)) {
     return 2;
+  }
+  if (row.keywords && normalizeSearch(row.keywords).includes(query)) {
+    return 3;
   }
   const providerLabel = normalizeSearch(row.providerLabel);
   if (providerLabel.startsWith(query)) {
-    return 3;
-  }
-  if (providerLabel.includes(query)) {
     return 4;
   }
-  return normalizeSearch(row.reference).includes(query) ? 5 : null;
+  if (providerLabel.includes(query)) {
+    return 5;
+  }
+  return reference.includes(query) ? 6 : null;
 }
 
 /** The retained lazy panel owns ranking, disclosure, row focus, and shortcuts. */
@@ -74,9 +85,7 @@ export function createChatModelSearchView(
   const matches = createMemo(
     () => {
       const term = normalizeSearch(query().trim());
-      // Keep text relevance primary; split each tier so recommended matches win
-      // ties across providers without changing the unfiltered browsing order.
-      const buckets = Array.from({ length: term ? 12 : 1 }, (): ChatModelSearchRow[] => []);
+      const buckets: ChatModelSearchRow[][] = [];
       for (const row of read().rows) {
         const score = term
           ? modelMatchRank(row, term)
@@ -89,13 +98,18 @@ export function createChatModelSearchView(
             ? 0
             : null;
         if (score !== null) {
-          const rank = term ? score * 2 + (row.recommended && !row.disabled ? 0 : 1) : 0;
-          buckets[rank]!.push(row);
+          // Stable buckets retain provider/catalog order within each tier, without
+          // sorting the entire catalog on every keystroke.
+          const bucket = term
+            ? score * preferenceCount +
+              preferenceRanks[row.disabled ? "ordinary" : (row.preference ?? "ordinary")]
+            : 0;
+          (buckets[bucket] ??= []).push(row);
         }
       }
       const ranked: SearchMatch[] = [];
       for (const bucket of buckets) {
-        for (const row of bucket) {
+        for (const row of bucket ?? []) {
           ranked.push({ row, rank: ranked.length });
         }
       }
