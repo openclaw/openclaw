@@ -8,6 +8,8 @@ import {
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
@@ -22,7 +24,6 @@ import type {
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
-import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -111,22 +112,8 @@ function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) 
         <Show
           when={section().id.startsWith("catalog:")}
           fallback={
-            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-            <Show
-              when={
-                !(section().id === "work" && section().totalRowCount === 0) &&
-                !(
-                  section().id === "ungrouped" &&
-                  section().totalRowCount === 0 &&
-                  !params.nativeSessionsHaveMore &&
-                  !host().sessionOwnershipVisibility.filters &&
-                  host().sessionsStatusFilter === "active" &&
-                  host().sessionOrganizer.draggingSessionKey === null
-                )
-              }
-            >
-              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
-            </Show>
+            // The projection decides which empty sections render.
+            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
           }
         >
           <Show when={catalogsBySectionId().get(section().id)}>
@@ -185,7 +172,13 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
     const host = params.host;
     const zone = host.reconciledSidebarZone();
     const sessions = host.sessionDataContext?.sessions;
-    const rows = sidebarPinnedSessionRows(zone, (key) => sessions?.archiveVisibility(key));
+    const now = Date.now();
+    const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const rows = sidebarPinnedSessionRows(
+      zone,
+      (key) => sessions?.archiveVisibility(key),
+      hasSnoozedPins ? readVisibleTime(1_000) : now,
+    );
     if (rows.length === 0) {
       return undefined;
     }
@@ -260,7 +253,6 @@ export function renderSessionListFrame(
       {renderSessionListError(host())}
       {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
-      <PersonalSessionGroups host={host()} />
       {bodyFirst ? undefined : body}
     </section>
   );

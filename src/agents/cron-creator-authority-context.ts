@@ -5,14 +5,17 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
-  hasCronChannelRequester,
+  hasCronAuthenticatedRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
-  type CronCreatorAuthorityRunScope,
-  type CronManagementEntitlement,
 } from "../gateway/cron-creator-authority-grant.js";
-import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
+import type {
+  CronAuthenticatedChannelRequester,
+  CronCreatorAuthorityCapability,
+  CronCreatorAuthorityRunScope,
+  CronManagementEntitlement,
+} from "../gateway/cron-creator-authority-grant.types.js";
 import {
   getAgentRunContext,
   validateAgentRunDelegatedAuthority,
@@ -35,9 +38,6 @@ type CronCreatorAuthorityResolverScope = {
   resolve: CronCreatorAuthorityMaterializer;
   runId: string;
 };
-
-/** Opaque in-process capability minted only by an admitted exact run. */
-export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
 
 export function createCronCreatorAuthorityCapability(
   runId: string,
@@ -69,14 +69,6 @@ const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthority
   Symbol("cronCreatorAuthorityResolver"),
 );
 
-/** Retain the Cron-only fence when tools materialize outside their creator scope. */
-export function bindActiveCronAuthorityCurrentness(
-  runId: string | undefined,
-): (() => boolean) | undefined {
-  const scope = activeCronCreatorAuthority.getStore();
-  return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
-}
-
 /** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
 export function bindCronManagementToolConstruction(
   runId: string | undefined,
@@ -86,13 +78,7 @@ export function bindCronManagementToolConstruction(
     return undefined;
   }
   return <T>(run: () => T): T => {
-    if (
-      !scope.active ||
-      scope.signal.aborted ||
-      scope.isCurrent?.() === false ||
-      (scope.managementEntitlement?.source === "channel-owner" &&
-        !scope.managementEntitlement.isCurrent())
-    ) {
+    if (!scope.active || scope.signal.aborted || scope.isCurrent?.() === false) {
       return activeCronCreatorAuthority.exit(run);
     }
     return activeCronCreatorAuthority.run(scope, run);
@@ -161,14 +147,12 @@ export function captureActiveCronManagementAuthority(params: {
   }
   const isActive = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() !== false &&
-        (scope.managementEntitlement?.source !== "channel-owner" ||
-          scope.managementEntitlement.isCurrent()) &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(params.runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );
@@ -230,13 +214,12 @@ export function bindRequesterOwnerIdentity(params: {
   const runId = params.runId;
   const isCurrent = () => {
     try {
+      caller.receiptAuthority?.();
       return (
         scope.active &&
         !scope.signal.aborted &&
         scope.isCurrent?.() === true &&
-        owner.isCurrent() &&
         !caller.approvalSignals?.some((signal) => signal.aborted) &&
-        caller.approvalAuthorityCheck?.() !== false &&
         getAgentRunContext(runId) === context &&
         validateAgentRunDelegatedAuthority(authority)
       );
@@ -269,8 +252,6 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
     !scope.active ||
     scope.signal.aborted ||
     scope.isCurrent?.() === false ||
-    (scope.managementEntitlement.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== runId ||
     !authority ||
     authority.operationalRunInstance.runId !== runId ||
@@ -301,13 +282,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
     getGatewayToolCallerIdentity()?.requesterOrigin,
   );
   const scope = activeCronCreatorAuthority.getStore();
-  if (
-    !scope ||
-    (scope.callerOrigin.kind !== "local" &&
-      !hasCronChannelRequester(scope) &&
-      !scope.callerScopedCreation) ||
-    scope.runId !== runId
-  ) {
+  if (!scope || !hasCronAuthenticatedRequester(scope) || scope.runId !== runId) {
     return undefined;
   }
   return (
@@ -450,7 +425,7 @@ export function bindActiveCronCreatorAuthorityResolver(
     authority.signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     if (authority.isCurrent?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
     const signal = operationSignal
       ? AbortSignal.any([authority.signal, operationSignal])
@@ -502,12 +477,10 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
       if (
         !authority.active ||
         authority.runId !== normalizedRunId ||
-        authority.isCurrent?.() === false ||
-        (authority.managementEntitlement?.source === "channel-owner" &&
-          !authority.managementEntitlement.isCurrent())
+        authority.isCurrent?.() === false
       ) {
         authority.signal.throwIfAborted();
-        throw new Error("operator turn authority is no longer active");
+        throw new Error("The message turn has ended. Start a new turn to retry.");
       }
     },
   };

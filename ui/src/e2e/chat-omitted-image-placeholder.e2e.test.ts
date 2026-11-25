@@ -120,7 +120,24 @@ suite.define(() => {
             if (delivery === "receipt-first") {
               await result();
             }
+            await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
           }
+          // The expanded result repeats its call as a nested row; target the result summary.
+          const screenshotSummary = page.locator(
+            "button.chat-tool-msg-summary:not(.chat-tool-row)",
+            {
+              hasText: /^Computer\s*screenshot$/,
+            },
+          );
+          await expect.poll(() => screenshotSummary.count()).toBe(1);
+          await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("false");
+          const screenshotBody = page
+            .locator(".chat-tool-msg-collapse", { has: screenshotSummary })
+            .locator(".chat-tool-msg-body");
+          expect(await screenshotBody.count()).toBe(0);
+          await screenshotSummary.click();
+          await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("true");
+          await screenshotBody.waitFor({ state: "attached" });
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
           expect(
@@ -139,6 +156,12 @@ suite.define(() => {
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
+            await expect.poll(() => screenshotSummary.count()).toBe(1);
+            await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("false");
+            expect(await screenshotBody.count()).toBe(0);
+            await screenshotSummary.click();
+            await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("true");
+            await screenshotBody.waitFor({ state: "attached" });
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
           }

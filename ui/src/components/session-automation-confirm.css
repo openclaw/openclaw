@@ -1,0 +1,26 @@
+.bound-automation-cards__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bound-automation-cards__row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  min-height: 56px;
+  overflow-wrap: anywhere;
+}
+
+.bound-automation-cards__row + .bound-automation-cards__row,
+.bound-automation-cards__more {
+  border-block-start: 1px solid var(--border);
+}
+
+.bound-automation-cards__more {
+  margin: 0;
+  padding: 8px 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}

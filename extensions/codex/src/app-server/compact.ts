@@ -532,7 +532,7 @@ export async function maybeCompactCodexAppServerSession(
                     assertCurrent: assertAdmissionCurrent,
                     retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
                     retainParentThread: (threadId) =>
-                      protectCodexAppServerLiveThread(client, threadId, "compaction"),
+                      protectCodexAppServerLiveThread(client, threadId),
                   });
                   modelSourceTransferred = true;
                   assertAdmissionCurrent();

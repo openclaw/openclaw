@@ -1,7 +1,12 @@
+import { isIrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
+import { setOpenClawIdOwnerAccountResolver } from "./owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdNodeDescriptionLookup,
+  setOpenClawIdTunnelActivityRecorder,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./tunnel-principal.js";
 
@@ -17,6 +22,11 @@ export function createTunnelPrincipalPublisher(params: {
       if (!params.enabled()) {
         return;
       }
+      setOpenClawIdMemberAccountLookup(
+        (accountId) =>
+          params.enabled() &&
+          Object.hasOwn(params.current()?.current()?.authority?.members ?? {}, accountId),
+      );
       setOpenClawIdTunnelPrincipalResolver(async (peerKey) => {
         const owner = await params.authority();
         if (!params.enabled()) {
@@ -40,14 +50,38 @@ export function createTunnelPrincipalPublisher(params: {
           }
         },
       );
+      setOpenClawIdNodeDescriptionLookup((peerKey) =>
+        params.enabled() && isIrohEndpointKey(peerKey)
+          ? params.current()?.current()?.authority?.nodes[peerKey]?.description
+          : undefined,
+      );
+      setOpenClawIdTunnelActivityRecorder((peerKey) => {
+        if (params.enabled()) {
+          void params
+            .current()
+            ?.recordSeen(peerKey)
+            .catch((error: unknown) =>
+              params.warn(`openclaw-id: could not record device activity: ${String(error)}`),
+            );
+        }
+      });
       setOpenClawIdClawOriginResolver(() =>
         params.enabled() ? clawOriginOfRecord(params.current()?.current()) : undefined,
       );
+      setOpenClawIdOwnerAccountResolver(() =>
+        params.enabled()
+          ? (params.current()?.current()?.discovery.owner_account_id ?? undefined)
+          : undefined,
+      );
     },
     stop(): void {
+      setOpenClawIdMemberAccountLookup(undefined);
+      setOpenClawIdNodeDescriptionLookup(undefined);
+      setOpenClawIdTunnelActivityRecorder(undefined);
       setOpenClawIdTunnelPrincipalResolver(undefined);
       setOpenClawIdTunnelPrincipalLookup(undefined);
       setOpenClawIdClawOriginResolver(undefined);
+      setOpenClawIdOwnerAccountResolver(undefined);
     },
   };
 }

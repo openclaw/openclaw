@@ -76,7 +76,9 @@ export type ChannelMessageToolSchemaContribution = {
   /**
    * Actions whose validation depends on this schema fragment. Cross-channel
    * discovery can hide only these actions when the fragment is current-channel
-   * scoped. Omit to keep the legacy conservative behavior.
+   * scoped. A non-empty list also omits the fragment when none of these actions
+   * is advertised in the final tool schema. Omit to keep the legacy
+   * conservative behavior.
    */
   actions?: readonly ChannelMessageActionName[] | null;
   visibility?: "current-channel" | "all-configured";
@@ -319,6 +321,8 @@ export type ChannelThreadingAdapter = {
    * target lookup.
    */
   threadAddressing?: "address" | "message";
+  /** True only if omitting this thread id sends to the exact same transport destination. */
+  isThreadAddressedByTarget?: (params: { to: string; threadId: string | number }) => boolean;
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;
@@ -474,7 +478,10 @@ export type ChannelMessagingAdapter = {
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
   targetIdComparison?: "case-sensitive" | "lowercase";
-  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  /**
+   * Bare numeric `<chat>:<topic>` shorthand is valid for this channel.
+   * @deprecated Implement `resolveSessionConversation`; core honors this only when that hook is absent.
+   */
   numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;

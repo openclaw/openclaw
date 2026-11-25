@@ -68,6 +68,34 @@ it.each([
   },
 );
 
+it("offers retry after rollback without telling the user to diagnose before retrying", () => {
+  const onUpdateNow = vi.fn(async () => {});
+  const run = createUpdateRunFixture({
+    status: "failed",
+    phase: "finished",
+    reason: "The new version did not finish starting; v2026.9.1 is still running",
+    verification: {
+      serviceRunning: true,
+      runningVersion: "2026.9.1",
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "startup timed out" },
+    },
+  });
+  renderUpdates({
+    onUpdateNow,
+    gatewayVersion: "2026.9.1",
+    update: { updateRun: run, reportableUpdateFailureId: run.runId },
+  });
+  const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Retry update",
+  )!;
+  expect(retry.disabled).toBe(false);
+  expect(container.textContent).not.toContain("Diagnose the cause before retrying");
+  expect(container.textContent).toContain("Report update failure");
+  retry.click();
+  expect(onUpdateNow).toHaveBeenCalledOnce();
+});
+
 it("shows a failed confirmation load and retries the command", async () => {
   const onUpdateNow = vi
     .fn<() => Promise<void>>()

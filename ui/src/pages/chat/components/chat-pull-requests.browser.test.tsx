@@ -5,8 +5,7 @@ import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
@@ -168,51 +167,46 @@ it.each([
             data-instant
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
-            <ChatDetailsDesktopBody presented>
-              {() => (
-                <>
-                  <ChatDetailsEnvironment
-                    presented
-                    details={{
-                      sessionKey: "agent:main:branch",
-                      currentAgentId: "main",
-                      messages: [],
-                      selectedSession: undefined,
-                      detailsWorkspace: {
-                        root: "/synthetic/project",
-                        label: "project",
-                        branch: branch.branch,
-                      },
-                    }}
-                    work={{
-                      pullRequests: [],
-                      branch,
-                      status: "ready",
-                      onDismiss: () => {},
-                      onDismissBranch,
-                      publication: publication({
-                        onPublish,
-                        onSelect,
-                        options: {
-                          shared,
-                          personal: {
-                            state: "connected",
-                            generation: "personal",
-                            account: { accountId: 2, login: "alice-tools" },
-                            accessExpiresAtMs: null,
-                            refreshState: "available",
-                            pending: null,
-                          },
-                          pendingPersonal: null,
-                          latestShared: null,
-                        },
-                        selection: { source: "shared", expected: shared },
-                      }),
-                    }}
-                  />
-                </>
-              )}
-            </ChatDetailsDesktopBody>
+            <ChatDetailsDesktopContent
+              presented
+              dismissed={false}
+              cachedReady={false}
+              progressMenuRef={() => {}}
+              onHideProgress={() => {}}
+              chat={{
+                sessionKey: "agent:main:branch",
+                currentAgentId: "main",
+                messages: [],
+                selectedSession: undefined,
+                detailsWorkspace: {
+                  root: "/synthetic/project",
+                  label: "project",
+                  branch: branch.branch,
+                },
+                pullRequests: [],
+                pullRequestsBranch: branch,
+                pullRequestsStatus: "ready",
+                onDismissPullRequestsBranch: onDismissBranch,
+                githubPublication: publication({
+                  onPublish,
+                  onSelect,
+                  options: {
+                    shared,
+                    personal: {
+                      state: "connected",
+                      generation: "personal",
+                      account: { accountId: 2, login: "alice-tools" },
+                      accessExpiresAtMs: null,
+                      refreshState: "available",
+                      pending: null,
+                    },
+                    pendingPersonal: null,
+                    latestShared: null,
+                  },
+                  selection: { source: "shared", expected: shared },
+                }),
+              }}
+            />
           </section>
         </>
       ),
@@ -235,22 +229,20 @@ it.each([
     await expect.element(page.elementLocator(trigger)).toBeVisible();
     expect(publishButton.getBoundingClientRect().height).toBe(26);
     expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
+    const actions = row.querySelector<HTMLElement>(".chat-pr__publication-actions")!;
+    expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
+      actions.getBoundingClientRect().right,
+    );
     expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
     expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
     expect(branchLabel.textContent).toBe(branch.branch);
     expect(row.querySelector(".chat-pr__repo")).toBeNull();
-    expect(
-      Math.abs(branchLabel.getBoundingClientRect().left - diff.getBoundingClientRect().left),
-    ).toBeLessThanOrEqual(1);
-    expect(diff.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      branchLabel.getBoundingClientRect().bottom,
-    );
-    expect(
-      diff.getBoundingClientRect().top - branchLabel.getBoundingClientRect().bottom,
-    ).toBeLessThanOrEqual(12);
-    expect(diff.getBoundingClientRect().right).toBeLessThanOrEqual(
-      publishButton.getBoundingClientRect().left,
-    );
+    const labelBounds = branchLabel.getBoundingClientRect();
+    const diffBounds = diff.getBoundingClientRect();
+    expect(Math.abs(labelBounds.left - diffBounds.left)).toBeLessThanOrEqual(1);
+    expect(diffBounds.top).toBeGreaterThanOrEqual(labelBounds.bottom);
+    expect(diffBounds.top - labelBounds.bottom).toBeLessThanOrEqual(12);
+    expect(diffBounds.right).toBeLessThanOrEqual(publishButton.getBoundingClientRect().left);
     expect(publishButton.getBoundingClientRect().right).toBeLessThanOrEqual(
       trigger.getBoundingClientRect().left,
     );
@@ -258,8 +250,8 @@ it.each([
     expect(diff.textContent).toContain("−205");
     expect(getComputedStyle(diff).fontWeight).toBe("500");
     expect(getComputedStyle(diff).fontVariantNumeric).toBe("tabular-nums");
-    expect(branchLabel.getBoundingClientRect().width).toBeGreaterThan(40);
-    expect(branchLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+    expect(labelBounds.width).toBeGreaterThan(40);
+    expect(labelBounds.height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");

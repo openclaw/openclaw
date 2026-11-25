@@ -19,10 +19,6 @@ import {
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import {
-  ensureSandboxWorkspaceForSession,
-  resolveSandboxContext,
-} from "../../agents/sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -204,23 +200,26 @@ export function createReplyMediaSourcePreparer(
   const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
 
   const resolveSandboxWorkspace = async () => {
-    sandboxWorkspacePromise ??= ensureSandboxWorkspaceForSession(
-      {
-        config: params.cfg,
-        agentId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
+    sandboxWorkspacePromise ??= import("../../agents/sandbox/context.js").then(
+      async ({ ensureSandboxWorkspaceForSession }) => {
+        const sandbox = await ensureSandboxWorkspaceForSession(
+          {
+            config: params.cfg,
+            agentId,
+            sessionKey: params.sessionKey,
+            workspaceDir: params.workspaceDir,
+          },
+          readSource,
+        );
+        return sandbox
+          ? {
+              root: sandbox.workspaceDir,
+              containerWorkdir: sandbox.containerWorkdir,
+              // Fail closed when access metadata is absent: treat as unmounted.
+              workspaceAccess: sandbox.workspaceAccess ?? "none",
+            }
+          : undefined;
       },
-      readSource,
-    ).then((sandbox) =>
-      sandbox
-        ? {
-            root: sandbox.workspaceDir,
-            containerWorkdir: sandbox.containerWorkdir,
-            // Fail closed when access metadata is absent: treat as unmounted.
-            workspaceAccess: sandbox.workspaceAccess ?? "none",
-          }
-        : undefined,
     );
     return await sandboxWorkspacePromise;
   };
@@ -475,14 +474,18 @@ export function createReplyMediaSourcePreparer(
       async (preparedRuntimeStatus) => {
         let sandbox: SandboxContext | null = null;
         try {
-          sandbox = await resolveSandboxContext({
-            config: params.cfg,
-            agentId,
-            sessionKey: params.sessionKey,
-            workspaceDir: params.workspaceDir,
-            preparedRuntimeStatus,
-            assertCurrent,
-          });
+          if (preparedRuntimeStatus.sandboxed) {
+            const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
+            assertCurrent();
+            sandbox = await resolveSandboxContext({
+              config: params.cfg,
+              agentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: params.workspaceDir,
+              preparedRuntimeStatus,
+              assertCurrent,
+            });
+          }
           if (sandbox && !sandbox.fsBridge) {
             throw new Error("SSH sandbox has no filesystem bridge for reply media");
           }

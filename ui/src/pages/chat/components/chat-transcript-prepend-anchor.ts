@@ -9,11 +9,14 @@ export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
   committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
-  private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
+  private pending:
+    | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
+    | null = null;
 
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
+    private readonly measurePrependedRows: () => boolean,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -53,39 +56,58 @@ export class TranscriptPrependAnchor {
     if (commanded) {
       this.pending = null;
     }
+    if (!commanded && (this.hasPrepend || readingProjectionChanged)) {
+      this.retainReader(element);
+    }
+    this.firstMessageKey = this.messageKeys.keys().next().value;
+  }
+
+  /** Retain current geometry without admitting a candidate message projection. */
+  retainReader(element: HTMLDivElement | null): boolean {
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
-      !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ??
-          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
-        : null;
+      retained ??
+      captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values());
     if (anchor) {
-      this.pending = { ...anchor, measured: false };
+      this.pending = {
+        ...anchor,
+        measured: false,
+        prepended: this.hasPrepend || retained?.prepended === true,
+      };
+      return true;
     }
-    this.firstMessageKey = this.messageKeys.keys().next().value;
+    return false;
   }
 
-  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
+  /** Prefix insertion must land before paint; warm replacement joins the native batch. */
   update(
-    element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => boolean,
+    rowsMeasured: () => boolean,
+    committed = false,
   ): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
-    const changed = measureRows();
+    const ready = anchor.prepended || rowsMeasured();
+    if (!ready && !committed) {
+      return false;
+    }
+    const changed = anchor.prepended && this.measurePrependedRows();
     const moved = restoreTranscriptPrependAnchor(
       anchor,
-      element,
+      virtualizer.scrollElement,
       virtualizer,
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
+    // Committed geometry can move before all row receipts arrive; retain its target meanwhile.
+    if (!ready) {
+      return moved;
+    }
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }

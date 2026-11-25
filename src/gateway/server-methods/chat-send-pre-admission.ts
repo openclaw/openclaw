@@ -9,7 +9,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
+import { chatAbortMarkerTimestampMs, chatAbortPendingInputEndCause } from "../server-chat-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
@@ -23,7 +23,6 @@ import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import { assertExpectedLeafActiveAsync } from "./chat-send-active-leaf.js";
 import {
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
@@ -44,7 +43,14 @@ type ChatSendRetryParams = Pick<
 > & {
   request: Pick<
     ChatSendPreAdmissionParams["request"],
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
+    | "goalOperation"
+    | "requestIdentity"
+    | "rawMessage"
+    | "mentions"
+    | "workContext"
+    | "appContext"
+    | "activeSteer"
+    | "p"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
@@ -89,13 +95,6 @@ export function resolveChatSendRequestConflict(
       entry: entries[1],
     })?.payload.attemptId === ownPendingAttemptId;
   const retryEntries = ownPendingAttempt ? entries.slice(0, 1) : entries;
-  if (
-    !comparison &&
-    request.requestIdentity !== undefined &&
-    retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
-  ) {
-    return undefined;
-  }
   const knownRetry =
     comparison?.submitted !== undefined ||
     retryEntries.some(Boolean) ||
@@ -105,8 +104,19 @@ export function resolveChatSendRequestConflict(
   if (!knownRetry) {
     return undefined;
   }
+  if (
+    !request.activeSteer &&
+    comparison &&
+    !comparison.submitted &&
+    request.requestIdentity !== undefined &&
+    retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
+  ) {
+    return undefined;
+  }
   const mismatch = compareChatSendSubmittedInput(request, session, comparison);
-  return mismatch ? chatSendRequestConflictError(mismatch === "unverifiable") : undefined;
+  return mismatch
+    ? chatSendRequestConflictError(mismatch === "unverifiable", request.activeSteer !== undefined)
+    : undefined;
 }
 
 export function prepareChatSendRetryComparison(
@@ -120,7 +130,7 @@ export function prepareChatSendRetryComparison(
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
     }
-    return readChatSendRetryComparison(params.session);
+    return readChatSendRetryComparison(params.session, params.request.activeSteer !== undefined);
   }
 }
 
@@ -149,7 +159,9 @@ async function respondPreparedChatSendRetry(
   try {
     const pending =
       prepareChatSendRetryComparison(params) ??
-      (readRecordedInput ? readChatSendRetryComparison(params.session) : undefined);
+      (readRecordedInput
+        ? readChatSendRetryComparison(params.session, params.request.activeSteer !== undefined)
+        : undefined);
     const comparison = pending ? await pending : undefined;
     return await consumeChatSendCurrent(params, () => respondChatSendRetry(params, comparison));
   } catch (error) {
@@ -174,13 +186,52 @@ export function respondChatSendRetry(
     respond(false, undefined, conflict);
     return true;
   }
-  const cached = readChatSendDedupeResponse(context.dedupe, clientRunId);
-  if (cached) {
-    respond(cached.ok, cached.payload, cached.error, { cached: true });
+  // A staged active-only input is never re-admitted, even after restart or a lost native reply.
+  if (params.request.activeSteer && comparison?.submitted) {
+    const receipt = comparison.completion?.activeSteer;
+    const live = getRpcSourceForGateway(clientRunId, context.resolveGatewayContext);
+    respond(
+      true,
+      {
+        inputId: clientRunId,
+        runId: params.request.activeSteer.runId,
+        status: receipt?.status ?? (live ? "in_flight" : "indeterminate"),
+        ...(receipt?.reason ? { reason: receipt.reason } : {}),
+        ...(comparison.messageSeq ? { messageSeq: comparison.messageSeq } : {}),
+        receiptPersisted: receipt !== undefined,
+      },
+      undefined,
+      { cached: true, runId: clientRunId },
+    );
     return true;
   }
   const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
-  if (abortMarker !== undefined) {
+  const endCause =
+    comparison?.state === "cancelled"
+      ? (comparison.endCause ?? "unknown (legacy cancellation)")
+      : comparison?.source === "transcript"
+        ? undefined
+        : chatAbortPendingInputEndCause(abortMarker, session);
+  if (endCause) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Chat input was cancelled: ${endCause}. Use a new message ID to send again.`,
+        {
+          details: { reason: "chat-input-cancelled", endCause },
+        },
+      ),
+    );
+    return true;
+  }
+  const cached = readChatSendDedupeResponse(context.dedupe, clientRunId);
+  if (cached && comparison?.state !== "queued") {
+    respond(cached.ok, cached.payload, cached.error, { cached: true });
+    return true;
+  }
+  if (abortMarker !== undefined && comparison?.state !== "queued") {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });
     setGatewayDedupeEntry({
@@ -232,7 +283,7 @@ export function respondChatSendRetry(
     // A crash before either record leaves the original key available for retry.
     const payload = {
       runId: clientRunId,
-      status: "ok" as const,
+      status: comparison.state === "queued" ? ("in_flight" as const) : ("ok" as const),
       ...(comparison.messageSeq !== undefined ? { messageSeq: comparison.messageSeq } : {}),
     };
     respond(true, payload, undefined, { cached: true, runId: clientRunId });
@@ -348,26 +399,6 @@ export async function runChatSendPreAdmission(
         throw error;
       }
     };
-    const beforeAbort = async () => {
-      try {
-        if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-          await assertExpectedLeafActiveAsync(
-            {
-              canonicalKey: sessionKey,
-              storePath: stopStorePath,
-              entry,
-            },
-            session.agentId,
-            session.expectedLeafEntryId,
-            session.requestedSessionId,
-          );
-        }
-        assertCurrent();
-      } catch (error) {
-        guard.failure = { error };
-        throw error;
-      }
-    };
     let res: Awaited<ReturnType<typeof abortChatRunsForSessionKeyWithPartials>>;
     try {
       if (await respondPreparedChatSendRetry(params, true)) {
@@ -385,6 +416,7 @@ export async function runChatSendPreAdmission(
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: selectedAgent.agentId,
         sessionId: entry?.sessionId,
+        requiredSessionId: request.targetPrecondition?.requiredSessionId,
         session: {
           ok: true,
           value: {
@@ -418,21 +450,12 @@ export async function runChatSendPreAdmission(
           senderId: stopRequester.deviceId ?? stopRequester.connId,
         },
         assertCurrent,
-        beforeAbort,
         cascadeDescendants: true,
         // A Gateway chat.send "/stop" is an explicit user Stop.
         announceRunStopped: true,
       });
-      // A stale child refusal can precede beforeAbort; the request's leaf error wins.
-      if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {
-        try {
-          await beforeAbort();
-        } catch (error) {
-          throw abortedPartialPersistenceError(error, res.warning);
-        }
-      }
       try {
-        // Descendant cancellation can aggregate a later authority or leaf failure.
+        // Descendant cancellation can aggregate a later authority failure.
         assertCurrent();
       } catch (error) {
         throw abortedPartialPersistenceError(error, res.warning);

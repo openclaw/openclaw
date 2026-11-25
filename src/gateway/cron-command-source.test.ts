@@ -21,7 +21,7 @@ const device: OpenClawIdTunnelPrincipal = {
 const silent = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 /** Real durable cron owner and real OS commands; only the original device's listing changes. */
-it("runs a stored command only while its original OCID device stays admitted", async () => {
+it("preserves an admitted command but rejects fresh runs after OCID device removal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const peers = new Map([[device.peerKey, device]]);
     const publish = () => setOpenClawIdTunnelPrincipalLookup((key) => peers.get(key));
@@ -46,6 +46,8 @@ it("runs a stored command only while its original OCID device stays admitted", a
     context.resolveGatewayContext = () => context;
     const ran = path.join(stateDir, "command-ran");
     const started = path.join(stateDir, "command-started");
+    const release = path.join(stateDir, "command-release");
+    fs.writeFileSync(release, "");
     const add = (source: string) =>
       cron.add(
         {
@@ -73,25 +75,28 @@ it("runs a stored command only while its original OCID device stays admitted", a
       expect(cron.getJob(once.id)?.state.lastRunStatus).toBe("ok");
 
       const held = await add(
-        `require("node:fs").writeFileSync(${JSON.stringify(started)}, "");setInterval(()=>{},1000)`,
+        `const fs = require("node:fs");
+         const watcher = fs.watch(${JSON.stringify(release)});
+         watcher.once("change", () => { watcher.close(); fs.appendFileSync(${JSON.stringify(ran)}, "y"); });
+         fs.writeFileSync(${JSON.stringify(started)}, "");`,
       );
       const running = cron.run(held.id, "force");
       await vi.waitFor(() => expect(fs.existsSync(started)).toBe(true), { timeout: 15_000 });
-      const before = Date.now();
       peers.delete(device.peerKey);
       publish();
+      fs.writeFileSync(release, "go");
       await running;
-      // Revocation ended the process tree instead of letting it run to its 60s limit.
-      expect(Date.now() - before).toBeLessThan(20_000);
-      expect(cron.getJob(held.id)?.state.lastRunStatus).not.toBe("ok");
+      expect(cron.getJob(held.id)?.state.lastRunStatus).toBe("ok");
+      expect(fs.readFileSync(ran, "utf8")).toBe("xy");
 
       await cron.run(once.id, "force");
-      expect(fs.readFileSync(ran, "utf8")).toBe("x");
+      expect(fs.readFileSync(ran, "utf8")).toBe("xy");
       expect(cron.getJob(once.id)?.state).toMatchObject({
         lastRunStatus: "error",
         lastError: expect.stringContaining("operator authority"),
       });
     } finally {
+      fs.writeFileSync(release, "go");
       cron.stop();
       setOpenClawIdTunnelPrincipalLookup(undefined);
     }

@@ -150,7 +150,6 @@ export function PhoneSheet(props: {
             type="button"
             class="oc-sheet__close"
             aria-label={t("common.close")}
-            title={t("common.close")}
             onClick={slideOutAndDismiss}
           >
             <Icon name="x" />

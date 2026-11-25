@@ -4,6 +4,7 @@ import { t } from "../i18n/index.ts";
 import { registerCronScheduleEnglish } from "../i18n/locales/en-cron-schedule.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
+  formatCompactMs,
   formatDateMs,
   formatRelativeTimestamp,
   formatUnit,
@@ -47,8 +48,8 @@ export function formatEventPayload(payload: unknown): string {
 
 export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
-  const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
-  const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
+  const next = state.nextRunAtMs ? formatCompactMs(state.nextRunAtMs) : t("common.na");
+  const last = state.lastRunAtMs ? formatCompactMs(state.lastRunAtMs) : t("common.na");
   const status = resolveCronJobLastRunStatus(job);
   return t("cron.job.state", { status, next, last });
 }
@@ -57,7 +58,9 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return t("cron.scheduleLabel.at", { time: Number.isFinite(atMs) ? formatMs(atMs) : s.at });
+    return t("cron.scheduleLabel.at", {
+      time: Number.isFinite(atMs) ? formatCompactMs(atMs) : s.at,
+    });
   }
   if (s.kind === "every") {
     const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");
@@ -77,6 +80,81 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   }
   const value = t("cron.scheduleLabel.cron", { expr: s.expr });
   return s.tz ? t("cron.scheduleLabel.withTimeZone", { value, timeZone: s.tz }) : value;
+}
+
+/**
+ * A short cadence for compact rows: common cron shapes read as words ("Weekly", "Every 6h"),
+ * other expressions stay as written, without their time zone.
+ */
+export function formatCronCadence(job: Pick<CronJob, "schedule">) {
+  const s = job.schedule;
+  if (s.kind === "at") {
+    return t("cron.scheduleLabel.once");
+  }
+  // Intervals read in long units ("Every 20 minutes"), like the rest of the cadence words.
+  const every = (value: number | bigint, unit: "minute" | "hour") =>
+    t("cron.scheduleLabel.every", { duration: formatUnit({ value, unit, unitDisplay: "long" }) });
+  if (s.kind === "every") {
+    // One whole hour, day or week reads as its word, like the matching cron shapes.
+    if (s.everyMs === 3_600_000) {
+      return t("cron.scheduleLabel.hourly");
+    }
+    if (s.everyMs === 86_400_000) {
+      return t("cron.scheduleLabel.daily");
+    }
+    if (s.everyMs === 604_800_000) {
+      return t("cron.scheduleLabel.weekly");
+    }
+    const parts = resolveExactDurationParts(s.everyMs);
+    return parts
+      ? t("cron.scheduleLabel.every", {
+          duration: parts.map((part) => formatUnit({ ...part, unitDisplay: "long" })).join(" "),
+        })
+      : formatCronSchedule(job);
+  }
+  if (s.kind !== "cron") {
+    return formatCronSchedule(job);
+  }
+  const [minute = "", hour = "", day = "", month = "", weekday = "", ...rest] = s.expr
+    .trim()
+    .split(/\s+/u);
+  const fixed = (field: string) => /^\d+$/u.test(field);
+  const step = (field: string) => /^\*\/(\d+)$/u.exec(field)?.[1];
+  if (rest.length > 0 || month !== "*") {
+    return s.expr;
+  }
+  const minuteStep = step(minute);
+  if (
+    minuteStep &&
+    60 % Number(minuteStep) === 0 &&
+    hour === "*" &&
+    day === "*" &&
+    weekday === "*"
+  ) {
+    return every(Number(minuteStep), "minute");
+  }
+  const hourStep = step(hour);
+  if (fixed(minute) && hourStep && 24 % Number(hourStep) === 0 && day === "*" && weekday === "*") {
+    return every(Number(hourStep), "hour");
+  }
+  if (fixed(minute) && hour === "*" && day === "*" && weekday === "*") {
+    return t("cron.scheduleLabel.hourly");
+  }
+  if (fixed(minute) && fixed(hour)) {
+    if (day === "*" && weekday === "*") {
+      return t("cron.scheduleLabel.daily");
+    }
+    if (day === "*" && weekday === "1-5") {
+      return t("cron.scheduleLabel.weekdays");
+    }
+    if (day === "*" && /^[0-7]$/u.test(weekday)) {
+      return t("cron.scheduleLabel.weekly");
+    }
+    if (fixed(day) && weekday === "*") {
+      return t("cron.scheduleLabel.monthly");
+    }
+  }
+  return s.expr;
 }
 
 function withCwd(value: string, cwd: string | undefined) {

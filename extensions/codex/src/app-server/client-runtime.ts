@@ -11,10 +11,9 @@ import {
 import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
-  acquireThreadProtection,
-  type CodexThreadProtectionOwner,
   isThreadBackgroundOnly,
   waitForThreadBackgroundCleanup,
+  releaseThreadProtection,
   forgetThreadOwnership,
   hasSiblingThreadWork,
   hasThreadOwnership,
@@ -29,11 +28,10 @@ import {
 } from "./client-thread-owner.js";
 import {
   prepareCodexWorkspaceReferenceState,
-  readCodexWorkspaceSessionMeta,
   type CodexClientWorkspaceState,
 } from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexServiceTier } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
 import { withTimeout } from "./timeout.js";
 
@@ -102,21 +100,12 @@ export function prepareCodexWorkspaceReferences(
   return prepareCodexWorkspaceReferenceState(configuredClients.get(client), threadId, reference);
 }
 
-/** Immutable declarations are data owned by this physical client, never retained executors. */
-export async function readCodexClientSessionMeta(
+/** Native rollout records are data owned by this physical client, never retained executors. */
+export function withCodexClientWorkspace<T>(
   client: CodexAppServerClient,
-  sessionsRoot: string,
-  boundRolloutPath: string | undefined,
-  threadId: string,
-): Promise<JsonObject> {
-  return readCodexWorkspaceSessionMeta(
-    client,
-    configuredClients.get(client),
-    sessionsRoot,
-    boundRolloutPath,
-    threadId,
-    CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE,
-  );
+  read: (state: CodexClientWorkspaceState | undefined, maxCachedSessions: number) => Promise<T>,
+): Promise<T> {
+  return read(configuredClients.get(client), CODEX_APP_SERVER_LIVE_THREAD_MAX_IDLE);
 }
 
 /** Installs one auth-refresh handler and one rate-limit observer per physical client. */
@@ -144,6 +133,7 @@ export function ensureCodexAppServerClientRuntime(
     releasingThreads: new Map(),
     protectedThreads: new Map(),
     sessionMetadata: new Map(),
+    modelContextScans: new Map(),
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
@@ -164,6 +154,7 @@ export function ensureCodexAppServerClientRuntime(
     }
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
+    runtime.modelContextScans.clear();
     runtime.workspaceReferences.clear();
     forgetCodexClientForkSettings(client);
     updateThreadOwnership(client, runtime);
@@ -754,24 +745,27 @@ export async function releaseCodexAppServerLiveThread(
     : false;
 }
 
-/** Service-owned work pins its subscription until its exact owner releases it. */
+/** Native child work pins its parent's subscription even after the foreground parent turn ends. */
 export function protectCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
-  owner: CodexThreadProtectionOwner = "unspecified",
 ): () => void {
   const runtime = configuredClients.get(client);
   if (!runtime || runtime.closed) {
     return () => undefined;
   }
-  const unprotect = acquireThreadProtection(runtime, threadId, client.getInstanceId(), owner);
+  runtime.protectedThreads.set(threadId, (runtime.protectedThreads.get(threadId) ?? 0) + 1);
   updateThreadOwnership(client, runtime);
+  let protectedThread = true;
   return () => {
-    const released = unprotect();
-    if (released === undefined) {
+    if (!protectedThread) {
       return;
     }
-    if (released) {
+    protectedThread = false;
+    if (runtime.closed) {
+      return;
+    }
+    if (releaseThreadProtection(runtime, threadId)) {
       const retained = runtime.retainedThreads.get(threadId);
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal

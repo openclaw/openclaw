@@ -1,9 +1,13 @@
+import { writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createClosedChunkStream,
@@ -68,37 +72,69 @@ describe("elevenlabs tts diagnostics", () => {
     );
   });
 
-  it("uses the streaming endpoint without buffering the audio body", async () => {
-    const chunk = new Uint8Array([1, 2, 3]);
-    const audioStream = createClosedChunkStream([chunk]);
-    const fetchMock = mockFetch(new Response(audioStream));
-    const result = await streamSynthesize({
-      ...request,
-      providerOverrides: { outputFormat: "mp3_44100_128", latencyTier: 2 },
-    });
-    const release = expectDefined(result.release, "ElevenLabs stream release");
-    try {
-      const [requestUrl, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
-      const url = new URL(resolveRequestUrl(requestUrl));
-      expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
-      expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
-      expect(init?.method).toBe("POST");
-      expect(init?.body).toBe(
-        '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+  it.each([
+    ["configured key", "  test-key  ", "env-key", true, "test-key", 0],
+    ["blank configured key", " \t ", "env-key", true, "env-key", 1],
+    ["profile key", undefined, undefined, true, "profile-key", 1],
+    ["XI key", undefined, undefined, false, "xi-key", 1],
+  ] as const)(
+    "uses the streaming endpoint without buffering the audio body with %s",
+    async (_name, apiKey, envKey, profile, expectedKey, profileLookups) => {
+      await withOpenClawTestState(
+        { layout: "home", env: { ELEVENLABS_API_KEY: envKey, XI_API_KEY: "xi-key" } },
+        async (state) => {
+          const home = vi.spyOn(os, "homedir").mockReturnValue(state.home);
+          vi.mocked(configApi.resolveElevenLabsApiKeyWithProfileFallback).mockRestore();
+          const profileLookup = vi.spyOn(configApi, "resolveElevenLabsApiKeyWithProfileFallback");
+          try {
+            if (profile) {
+              await writeFile(
+                path.join(state.home, ".profile"),
+                "export ELEVENLABS_API_KEY=profile-key\n",
+              );
+            }
+            const chunk = new Uint8Array([1, 2, 3]);
+            const audioStream = createClosedChunkStream([chunk]);
+            const fetchMock = mockFetch(new Response(audioStream));
+            const result = await streamSynthesize({
+              ...request,
+              providerConfig: apiKey === undefined ? {} : { apiKey },
+              providerOverrides: { outputFormat: "mp3_44100_128", latencyTier: 2 },
+            });
+            const release = expectDefined(result.release, "ElevenLabs stream release");
+            try {
+              const [requestUrl, init] = expectDefined(
+                fetchMock.mock.calls[0],
+                "ElevenLabs fetch call",
+              );
+              const url = new URL(resolveRequestUrl(requestUrl));
+              expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
+              expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+              expect(init?.method).toBe("POST");
+              expect(init?.body).toBe(
+                '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+              );
+              expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+                accept: "audio/mpeg",
+                "content-type": "application/json",
+                "xi-api-key": expectedKey,
+              });
+              const reader = result.audioStream.getReader();
+              await expect(reader.read()).resolves.toEqual({ done: false, value: chunk });
+              await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+              expect(audioStream.locked).toBe(false);
+            } finally {
+              await release();
+            }
+            expect(profileLookup).toHaveBeenCalledTimes(profileLookups);
+          } finally {
+            profileLookup.mockRestore();
+            home.mockRestore();
+          }
+        },
       );
-      expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
-        accept: "audio/mpeg",
-        "content-type": "application/json",
-        "xi-api-key": "test-key",
-      });
-      const reader = result.audioStream.getReader();
-      await expect(reader.read()).resolves.toEqual({ done: false, value: chunk });
-      await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
-      expect(audioStream.locked).toBe(false);
-    } finally {
-      await release();
-    }
-  });
+    },
+  );
 
   it("cancels streamed audio before delivering bytes beyond the audio limit", async () => {
     const { cancel, response } = openAudioResponse(

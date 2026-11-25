@@ -14,7 +14,8 @@ afterEach(() => {
 it("lists approvals without loading chat or config redaction", async () => {
   // Collection-only cache warming skips this body, so it must not install
   // throwing mocks that can poison the next file's real imports.
-  vi.doMock("./approval-record-lookup.js", () => ({
+  vi.doMock("./approval-record-lookup.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./approval-record-lookup.js")>()),
     listVisiblePendingApprovalRequests: listApprovals,
   }));
   vi.doMock("../../system-agent/config-redaction.js", () => {
@@ -43,7 +44,7 @@ it("lists approvals without loading chat or config redaction", async () => {
     req: { type: "req", id: "list", method: "openclaw.approval.list" },
     params: {},
     respond,
-    context: { systemAgentApprovalManager: {} } as never,
+    context: { systemAgentApprovalManager: {}, getRuntimeConfig: () => ({}) } as never,
     client: null,
     isWebchatConnect: () => false,
   });

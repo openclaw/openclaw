@@ -33,7 +33,7 @@ const bundle = {
   providers: { anthropic: { models: [{ id: "new" }] } },
   pricing: { "openai/gpt-external": { input: 2.5, output: 10 } },
 };
-const defaultUrl = "https://catalog.openclaw.ai/models/v2/catalog.json";
+const defaultUrl = "https://catalog.openclaw.ai/models/v3/catalog.json";
 const mirrorConfig = {
   models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
 };
@@ -100,6 +100,34 @@ describe("remote model catalog overlay", () => {
     expect(activeCatalog({})?.pricing).toEqual({});
     expect(activeCatalog({})?.upstreamPricing).toEqual({});
     expect(createModelPickerRecommendationRank(disabledConfig)(current)).toBeUndefined();
+  });
+
+  it("carries hosted recommendations to matching ClawRouter model IDs", async () => {
+    stageBundle({
+      schemaVersion: 2,
+      generatedAt: 200,
+      sourceCommit: "routed-recommendation-test",
+      providers: { anthropic: { recommendedModels: ["claude-opus-5-5"] } },
+      models: [
+        {
+          provider: "anthropic",
+          id: "claude-opus-5-5",
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 9,
+            output: 18,
+          },
+        },
+      ],
+    });
+    await prepareStartup();
+    const rank = createModelPickerRecommendationRank({});
+    expect(rank({ provider: "anthropic", id: "claude-opus-5-5" })).toBe(0);
+    expect(rank({ provider: "clawrouter", id: "anthropic/claude-opus-5-5" })).toBe(0);
+    expect(rank({ provider: "clawrouter", id: "openai/gpt-5.5" })).toBeUndefined();
+    expect(rank({ provider: "other", id: "anthropic/claude-opus-5-5" })).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -202,23 +230,40 @@ describe("remote model catalog overlay", () => {
     expectPrice({ input: 5, output: 20 });
   });
 
-  it("serves a released default install's v1 download until its v2 download is active", async () => {
-    const v1Default = "https://catalog.openclaw.ai/models/v1/catalog.json";
-    stageBundle(bundle, v1Default);
-    const previous = await prepareStartup();
-    expectPair();
-    expectPrice();
-    expect(activeCatalog(mirrorConfig)?.pricing).toBeUndefined();
-    expect(overlay(disabledConfig)).toBeUndefined();
-    expect(overlay(mirrorConfig)).toBeUndefined();
-    expect(captureStartup()).toBe(previous);
-    expect(read).toHaveBeenCalledOnce();
-    stageBundle();
-    const next = expectDefined(await readUpdate({}), "v2 catalog");
-    expect(captureStartup()?.sourceUrl).toBe(v1Default);
-    expect(publishSnapshot(next, previous)).toBe(true);
-    expect(captureStartup()?.sourceUrl).toBe(defaultUrl);
-  });
+  // 2026.11.3 stores v2 bytes (2026.11.5-beta.1 in the `.v3` slot); readers dispatch on schemaVersion.
+  const v2Bundle = {
+    ...bundle,
+    schemaVersion: 2,
+    providers: { anthropic: {} },
+    models: [{ id: "new", provider: "anthropic", pricing: { status: "unknown" } }],
+    pricing: undefined,
+    providerPricing: {
+      "openai/gpt-external": { ...bundle.pricing["openai/gpt-external"], source: "x" },
+    },
+  };
+  it.each([
+    ["v1", bundle],
+    ["v2", v2Bundle],
+  ])(
+    "serves a released default install's %s download until its v3 download is active",
+    async (version, stored) => {
+      const retiredDefault = `https://catalog.openclaw.ai/models/${version}/catalog.json`;
+      stageBundle(stored, retiredDefault);
+      const previous = await prepareStartup();
+      expectPair();
+      expectPrice();
+      expect(activeCatalog(mirrorConfig)?.pricing).toBeUndefined();
+      expect(overlay(disabledConfig)).toBeUndefined();
+      expect(overlay(mirrorConfig)).toBeUndefined();
+      expect(captureStartup()).toBe(previous);
+      expect(read).toHaveBeenCalledOnce();
+      stageBundle();
+      const next = expectDefined(await readUpdate({}), "v3 catalog");
+      expect(captureStartup()?.sourceUrl).toBe(retiredDefault);
+      expect(publishSnapshot(next, previous)).toBe(true);
+      expect(captureStartup()?.sourceUrl).toBe(defaultUrl);
+    },
+  );
 
   it("keeps invalid startup metadata absent after a successful download", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-optional-catalog-") };

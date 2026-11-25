@@ -2,17 +2,44 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile as readFileCallback, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
+import { parseNodeReleaseVersion } from "../../node-version.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
+import { readCgroupV2MemoryLimits } from "../infra/host-memory.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
 
-// Avoid fs/promises' extra promise layers for every tiny procfs read.
-const readFile = promisify(readFileCallback);
+// Reuse the buffer API where available; Node 26.8+'s native one-shot reader is
+// faster and exposes only the final file size to V8. Leave Bun's reader intact.
+const nodeVersion = parseNodeReleaseVersion(process.versions.node);
+const reuseReadBuffer =
+  !process.versions.bun &&
+  nodeVersion &&
+  ((nodeVersion.major === 24 && nodeVersion.minor >= 19) ||
+    (nodeVersion.major === 26 && nodeVersion.minor >= 4 && nodeVersion.minor < 8));
+const nativeReadFile: (file: string) => Promise<Buffer> = promisify(readFileCallback);
+const readKernelFile: (file: string, scratch?: Buffer<ArrayBuffer>) => Promise<Buffer> =
+  reuseReadBuffer ? readSmallKernelFile : nativeReadFile;
+
+// procfs reports size zero: readFile allocates 64 KiB even for empty children.
+// Each traversal owns its scratch buffer; independent watches never share it.
+function readSmallKernelFile(file: string, buffer = Buffer.allocUnsafe(4096)): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    readFileCallback(file, { buffer }, (error, content) => {
+      if (hasErrnoCode(error, "ERR_INVALID_ARG_VALUE")) {
+        // A large thread child list must remain complete; Node already closed it.
+        nativeReadFile(file).then(resolve, reject);
+      } else if (error) {
+        reject(error);
+      } else {
+        resolve(content);
+      }
+    });
+  });
+}
 
 function readStatusNumber(buffer: Buffer, field: Buffer): number {
   // status starts with Name, so these fields always follow a newline.
@@ -38,39 +65,10 @@ export type HostExecMemoryBudget = { memoryBytes: number; swapBytes: number };
 export type HostExecMemoryUsage = HostExecMemoryBudget;
 
 function constrainToCgroupAncestors(capacity: HostExecMemoryBudget): void {
-  let relative: string | undefined;
-  try {
-    relative = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
-  } catch {
-    return;
-  }
-  if (!relative) {
-    return;
-  }
-  const mount = "/sys/fs/cgroup";
-  let directory = path.resolve(mount, `.${relative}`);
-  if (directory !== mount && !directory.startsWith(`${mount}/`)) {
-    return;
-  }
-  // Node only reads the current cgroup. Delegated Gateway leaves can have no
-  // memory files even though a service or slice above them limits RAM and swap.
-  for (;;) {
-    for (const file of ["memory.max", "memory.high", "memory.swap.max"]) {
-      try {
-        const value = readFileSync(path.join(directory, file), "utf8").trim();
-        if (/^\d+$/u.test(value)) {
-          const dimension = file === "memory.swap.max" ? "swapBytes" : "memoryBytes";
-          capacity[dimension] = Math.min(capacity[dimension], Number(value));
-        }
-      } catch {
-        // Missing controllers and inaccessible ancestors retain known limits.
-      }
-    }
-    // A cgroup namespace can expose a constrained container at the mount root.
-    if (directory === mount) {
-      break;
-    }
-    directory = path.dirname(directory);
+  const limits = readCgroupV2MemoryLimits(["memory.max", "memory.high", "memory.swap.max"]);
+  for (const [file, value] of Object.entries(limits)) {
+    const dimension = file === "memory.swap.max" ? "swapBytes" : "memoryBytes";
+    capacity[dimension] = Math.min(capacity[dimension], value);
   }
 }
 
@@ -165,7 +163,7 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 }
 
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
-  const status = await readFile(`/proc/${pid}/status`);
+  const status = await readKernelFile(`/proc/${pid}/status`);
   return {
     memoryBytes: readStatusNumber(status, rssField) * 1024,
     swapBytes: readStatusNumber(status, swapField) * 1024,
@@ -175,8 +173,8 @@ async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
 /** Durable units retain descendants even after their MainPID exits. */
 export async function readCgroupMemoryUsage(directory: string): Promise<HostExecMemoryUsage> {
   const [memory, swap] = await Promise.all([
-    readFile(`${directory}/memory.current`),
-    readFile(`${directory}/memory.swap.current`),
+    readKernelFile(`${directory}/memory.current`),
+    readKernelFile(`${directory}/memory.swap.current`),
   ]);
   const memoryBytes = Number(memory.toString().trim());
   const swapBytes = Number(swap.toString().trim());
@@ -193,10 +191,11 @@ export async function readCgroupMemoryUsage(directory: string): Promise<HostExec
 
 async function readChildren(pid: number): Promise<number[]> {
   const pids: number[] = [];
+  const buffer = reuseReadBuffer ? Buffer.allocUnsafe(4096) : undefined;
   // Complete one PID's shared discovery even if a consumer stops.
   for (const tid of await readdir(`/proc/${pid}/task`)) {
     try {
-      const children = await readFile(`/proc/${pid}/task/${tid}/children`);
+      const children = await readKernelFile(`/proc/${pid}/task/${tid}/children`, buffer);
       let childPid = 0;
       for (let offset = 0; offset <= children.length; offset++) {
         const digit = children[offset];

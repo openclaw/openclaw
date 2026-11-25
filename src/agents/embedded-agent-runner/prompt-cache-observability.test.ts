@@ -4,12 +4,20 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
+import { expectCollected } from "../../test-utils/retention.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { normalizeUsage } from "../usage.js";
+import { log } from "./logger.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
   collectPromptCacheTools,
   completePromptCacheObservation,
+  declarePromptSystemPromptRebuild,
   recordAggregateTruncation,
+  recordRuntimeContextProjection,
 } from "./prompt-cache-observability.js";
 import {
   beginAnthropicObservation,
@@ -21,6 +29,15 @@ import {
   prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
+
+// These tests change the prefix on purpose to exercise the production drop diagnostics and
+// warnings; the suite-wide prefix assertion stays on only where a test opts in.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 let testScope = 0;
 
@@ -77,6 +94,43 @@ describe("prompt cache observability", () => {
       });
       expect(JSON.stringify(observer.getObservation())).not.toContain("selected-human");
     }
+  });
+
+  it("attributes the request after a provider compaction checkpoint to compaction", async () => {
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("provider-compaction"), streamStrategy: "test" },
+      () => {},
+    );
+    const model = { provider: "openai", id: "gpt-5.4", api: "openai-responses" as const };
+    const user = makeAgentUserMessage({ content: "run the probe" });
+    const checkpoint = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "compacted" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_1",
+        data: "encrypted",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.4",
+      },
+    });
+    const next = makeAgentUserMessage({ content: "continue", timestamp: 1 });
+    const later = makeAgentUserMessage({ content: "again", timestamp: 2 });
+    const requests = [[user], [user, checkpoint, next], [user, checkpoint, next, later]];
+    const causes = [];
+    for (const [index, messages] of requests.entries()) {
+      await observer.onModelRequest(model, { systemPrompt: "stable", messages });
+      observer.onModelUsage({ cacheRead: [40_000, 2_000, 0][index]!, input: 10 });
+      const { dropCause, changes } = observer.getObservation()!;
+      causes.push([dropCause, changes?.map(({ code }) => code) ?? null]);
+    }
+    // The checkpoint request is a compaction rebuild; a later drop is not attributed to it.
+    expect(causes).toEqual([
+      [undefined, null],
+      ["tracked-input-change", ["compaction"]],
+      ["unattributed:provider-prompt-unavailable", null],
+    ]);
   });
 
   it("bounds field details while detecting later item and tail changes", () => {
@@ -403,6 +457,48 @@ describe("prompt cache observability", () => {
     expect(detail.length).toBeLessThan(500);
   });
 
+  it("isolates removal baselines across affinities, retirement and eviction without retaining payloads", async () => {
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    const primary = { sessionId: scopedKey("removal-owner"), promptCacheKey: "primary" };
+    const identities = [
+      primary,
+      { ...primary, promptCacheKey: "secondary" },
+      { sessionId: scopedKey("other-removal-owner"), promptCacheKey: "primary" },
+    ];
+    const project = (text: string, removedAt: number) => {
+      const message = makeAgentUserMessage({ content: text, timestamp: 1 });
+      const messages = [message];
+      recordRuntimeContextProjection(
+        [makeAgentUserMessage({ content: "removed carrier", timestamp: removedAt })],
+        messages,
+      );
+      return { message, messages };
+    };
+    const observe = (identity: (typeof identities)[number], text: string, removedAt: number) =>
+      beginOpenAIObservation({ ...identity, messages: project(text, removedAt).messages });
+    for (const [index, identity] of identities.entries()) {
+      expect(observe(identity, "original", index).changes).toBeNull();
+    }
+    for (const [index, identity] of identities.entries()) {
+      expect(observe(identity, "original", index).changes).toBeNull();
+      expect(() => observe(identity, "unrelated edit", index)).toThrow("historyRewrite");
+    }
+    cleanupSessionResources(primary.sessionId);
+    expect(observe(primary, "reset baseline", 10).changes).toBeNull();
+    expect(() => observe(primary, "edit after reset", 10)).toThrow("historyRewrite");
+    for (let index = 0; index < 513; index++) {
+      beginOpenAIObservation({ sessionId: scopedKey(`removal-pressure-${index}`) });
+    }
+    expect(observe(primary, "evicted baseline", 20).changes).toBeNull();
+    expect(() => observe(primary, "edit after eviction", 20)).toThrow("historyRewrite");
+    const refs = (() => {
+      const { message, messages } = project("disposable request payload".repeat(1024), 30);
+      beginOpenAIObservation({ sessionId: scopedKey("removal-retention"), messages });
+      return [new WeakRef(message), new WeakRef(messages)];
+    })();
+    await expectCollected(...refs);
+  });
+
   it("clears every retired session affinity while preserving other sessions until global cleanup", () => {
     const retiredSessionId = scopedKey("retired-session");
     const retired = ["primary", "secondary"].map((affinity) => ({
@@ -443,6 +539,19 @@ describe("prompt cache observability", () => {
       previousCacheRead: null,
       changes: null,
     });
+  });
+
+  it("enforces only the immediate prefix change after an unmeasured rebuild", () => {
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    const identity = { sessionId: scopedKey("rebuild-unmeasured") };
+    const begin = (systemPrompt: string) =>
+      beginAnthropicObservation({ ...identity, systemPrompt });
+    begin("prompt A");
+    declarePromptSystemPromptRebuild(identity);
+    begin("prompt B");
+    completePromptCacheObservation(identity);
+    expect(() => begin("prompt B")).not.toThrow();
+    expect(() => begin("prompt C")).toThrow("systemPrompt(");
   });
 
   it.each([
@@ -505,4 +614,42 @@ describe("prompt cache observability", () => {
       });
     },
   );
+});
+
+it("names added, changed, and removed extension keys without exposing values", () => {
+  const sessionId = scopedKey("reasoning-fields");
+  const block = {
+    type: "thinking" as const,
+    thinking: "private reasoning",
+    thinkingSignature: "private original signature",
+    changedBlock: "private original block value",
+    removedBlock: "private removed block value",
+  };
+  const message = {
+    ...makeAgentAssistantMessage({ content: [block] }),
+    changedEnvelope: "private original envelope value",
+    removedEnvelope: "private removed envelope value",
+  };
+  using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  beginOpenAIObservation({ sessionId, messages: [message] });
+  block.thinkingSignature = "private rewritten signature";
+  block.changedBlock = "private rewritten block value";
+  Reflect.deleteProperty(block, "removedBlock");
+  Object.assign(block, { addedBlock: "private added block value" });
+  message.changedEnvelope = "private rewritten envelope value";
+  Reflect.deleteProperty(message, "removedEnvelope");
+  Object.assign(message, { addedEnvelope: "private added envelope value" });
+  const changes = beginOpenAIObservation({ sessionId, messages: [message] }).changes;
+  expect(changes).toEqual([
+    {
+      code: "historyRewrite",
+      detail:
+        'message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other["changedBlock"], content[0].other["removedBlock"], content[0].other["addedBlock"], envelope.other["changedEnvelope"], envelope.other["removedEnvelope"], envelope.other["addedEnvelope"]',
+    },
+  ]);
+  expect(JSON.stringify(changes)).not.toContain("private");
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining('content[0].other["removedBlock"]'),
+  );
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("private");
 });

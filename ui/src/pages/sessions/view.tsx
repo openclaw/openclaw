@@ -136,15 +136,15 @@ export function SessionsView(props: SessionsProps) {
                   type="search"
                   class="settings-input"
                   value={props.searchQuery}
-                  aria-label={t("sessionsView.personalGroupSearch")}
-                  placeholder={t("sessionsView.personalGroupSearch")}
+                  aria-label={t("sessionsView.searchPlaceholder")}
+                  placeholder={t("sessionsView.searchPlaceholder")}
                   onInput={(event) => props.onSearchChange(event.currentTarget.value)}
                 />
               </div>
             </Show>
             <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
             <RefreshButton
-              class="btn--xs sessions-toolbar__icon sessions-toolbar__refresh"
+              class="sessions-toolbar__icon sessions-toolbar__refresh"
               label={t("common.refresh")}
               busy={props.refreshing}
               disabled={props.refreshDisabled}
@@ -293,12 +293,12 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
     });
   });
   function StatusRows() {
+    // Only cold loads consult pending; accepted empty rows use the deferred outcome.
     return (
       <>
-        {isPending(props.readRoster) && !props.result ? (
+        {!props.result && isPending(props.readRoster) ? (
           <SkeletonRows columnCount={sessionsTableColumnCount(props)} />
-        ) : isPending(props.readRoster) ||
-          !props.readRoster().ok ||
+        ) : !props.readRoster().ok ||
           props.error ||
           !props.result ||
           paginated().length > 0 ? undefined : (

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecutionSkillWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { projectRequesterForClient } from "../project-access.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildCommandsListResult } from "./commands-list-result.js";
@@ -53,6 +54,7 @@ async function prepareProjectSkillScope(
       cfg,
       projectId: params.projectId,
       targetAgentId: agentId,
+      requester: projectRequesterForClient(client, cfg),
       resolveSandboxRequired: () =>
         resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
       assertCurrent,
@@ -136,7 +138,6 @@ export const commandsHandlers: GatewayRequestHandlers = {
           context,
           respond,
           signal,
-          hasCurrentClientAuthority,
           sessionKey: params.sessionKey,
           agentId: resolved.agentId,
           changedError: errorShape(

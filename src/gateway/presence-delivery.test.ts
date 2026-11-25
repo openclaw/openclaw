@@ -23,6 +23,7 @@ describe("presence wire size", () => {
       return String(delivery.fragment);
     };
     const stringify = vi.spyOn(JSON, "stringify");
+    const bufferFrom = vi.spyOn(Buffer, "from");
     try {
       const firstReset = encode(first, visible, 1);
       const hiddenReset = encode(restricted, hidden, 1);
@@ -31,6 +32,7 @@ describe("presence wire size", () => {
       expect(stringify).toHaveBeenCalledTimes(2);
 
       stringify.mockClear();
+      bufferFrom.mockClear();
       const hiddenDelta = encode(first, hidden, 2);
       const visibleDelta = encode(restricted, visible, 2);
       expect(encode(second, hidden, 2)).toBe(hiddenDelta);
@@ -48,11 +50,18 @@ describe("presence wire size", () => {
         ([value]) => value && typeof value === "object" && ("reset" in value || "upsert" in value),
       );
       expect(encoded).toHaveLength(4);
+      // Only delivered payloads need UTF-8 buffers; reset size comparisons use text.
+      expect(bufferFrom.mock.calls.map(([value]) => value)).toEqual([hiddenDelta, visibleDelta]);
 
       // A dropped recipient must reset even when its audience already has a delta.
       second.presenceSnapshot = undefined;
       const reset = encode(second, hidden, 2);
       expect(JSON.parse(`{${reset.slice(1)}}`).payload).toMatchObject({ reset: true, version: 2 });
+      expect(bufferFrom.mock.calls.map(([value]) => value)).toEqual([
+        hiddenDelta,
+        visibleDelta,
+        reset,
+      ]);
       // Reusing the view with a new source must not retain the old wire keys.
       upsertPresence("replacement-delivery", { text: "replacement" });
       const replacement = listSystemPresence().filter((row) => row.text === "replacement");
@@ -61,6 +70,7 @@ describe("presence wire size", () => {
         replacement.map(getSystemPresenceKey),
       );
     } finally {
+      bufferFrom.mockRestore();
       stringify.mockRestore();
     }
   });

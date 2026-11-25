@@ -1,7 +1,7 @@
 // Archive fixture helpers create compressed plugin archives for install and loader tests.
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 
 /** Packs a test package directory into a gzipped tar archive. */
 export async function packToArchive(params: {

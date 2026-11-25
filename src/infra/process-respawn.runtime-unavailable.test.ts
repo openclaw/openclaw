@@ -1,12 +1,30 @@
+import type {
+  ExecException,
+  ExecFileOptionsWithStringEncoding,
+  SpawnSyncReturns,
+} from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { GatewayServiceState } from "../daemon/service-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 
+type ProbeResult = Pick<
+  SpawnSyncReturns<string>,
+  "stdout" | "stderr" | "status" | "signal" | "error"
+>;
+
 const io = vi.hoisted(() => ({
   systemdSupported: vi.fn<typeof import("@openclaw/proc-safe/systemd").isSupported>(),
-  probe: vi.fn<typeof import("node:child_process").spawnSync>(),
+  probe:
+    vi.fn<
+      (
+        file: string,
+        args: readonly string[],
+        options: ExecFileOptionsWithStringEncoding,
+      ) => ProbeResult | Promise<ProbeResult>
+    >(),
   history: vi.fn<typeof import("./gateway-boot-lifecycle.js").readGatewayLastShutdownAsync>(),
   service: vi.fn<typeof import("../daemon/service-state.js").readGatewayServiceState>(),
   loadedJob: vi.fn<typeof import("../daemon/launchd-runtime.js").readLoadedLaunchAgentState>(),
@@ -19,10 +37,46 @@ const io = vi.hoisted(() => ({
 
 // mock-isolation: Observe capability preparation without loading the host's native helper.
 vi.mock("@openclaw/proc-safe/systemd", () => ({ isSupported: io.systemdSupported }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: io.probe,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      file: string,
+      args: readonly string[],
+      options: ExecFileOptionsWithStringEncoding,
+      callback: (error: ExecException | null, stdout: string, stderr: string) => void,
+    ) => {
+      void Promise.resolve()
+        .then(() => io.probe(file, args, options))
+        .then(
+          (result) =>
+            callback(
+              result.error
+                ? Object.assign(result.error, { cmd: file })
+                : result.status === 0
+                  ? null
+                  : Object.assign(new Error(result.stderr), {
+                      cmd: file,
+                      code: result.status ?? undefined,
+                      signal: result.signal ?? undefined,
+                    }),
+              result.stdout,
+              result.stderr,
+            ),
+          (error: unknown) =>
+            callback(
+              Object.assign(error instanceof Error ? error : new Error(String(error)), {
+                cmd: file,
+              }),
+              "",
+              "",
+            ),
+        );
+      return new actual.ChildProcess();
+    },
+  };
+});
 // mock-isolation: Keep state database readers and their child processes outside this fixture.
 vi.mock("./gateway-boot-lifecycle.js", () => ({ readGatewayLastShutdownAsync: io.history }));
 // mock-isolation: Native service discovery is the external observation under test.
@@ -260,6 +314,37 @@ it("does not request restart after its lifecycle retires during preflight", asyn
   });
   await recover(systemd, true, () => current);
   expectReported(/already stopping/);
+});
+
+it("does not request restart after its lifecycle retires during the runtime probe", async ({
+  signal,
+}) => {
+  const entered = createDeferredCore();
+  const probe = createDeferredCore<ProbeResult>();
+  let current = true;
+  io.probe.mockImplementationOnce(() => {
+    entered.resolve();
+    return probe.promise;
+  });
+  const pending = recover(systemd, true, () => current);
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Recovery skipped the native runtime probe",
+      ),
+      signal,
+    );
+    expect(io.restart).not.toHaveBeenCalled();
+    current = false;
+    probe.resolve(probeResult("v24.20.0\n"));
+    await withinTest(pending, signal);
+    expectReported(/already stopping/);
+  } finally {
+    probe.resolve(probeResult("v24.20.0\n"));
+    await pending;
+  }
 });
 
 it("keeps a rewritten launchd plist report-only when it does not match the loaded job", async () => {

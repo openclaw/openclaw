@@ -6,6 +6,7 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { resolveFreshSessionTotalTokens } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
 
@@ -49,6 +50,7 @@ it("commits the initial assistant with the new session before publication and pr
     });
     expect(created).toMatchObject({ ok: true, postCommit: { status: "completed" } });
     assert(created.ok);
+    expect(resolveFreshSessionTotalTokens(created.entry)).toBeUndefined();
     const events = await publishedTranscript;
     expect(events).toEqual([
       expect.objectContaining({ type: "session", id: created.entry.sessionId }),
@@ -74,6 +76,10 @@ it("commits the initial assistant with the new session before publication and pr
     expect(
       await loadTranscriptEvents({ sessionKey: key, sessionId: created.entry.sessionId }),
     ).toEqual(events);
+    const reused = await create({ key });
+    assert(reused.ok);
+    expect(reused.entry.sessionId).toBe(created.entry.sessionId);
+    expect(resolveFreshSessionTotalTokens(reused.entry)).toBeUndefined();
   });
 });
 
@@ -109,6 +115,10 @@ it("creates a seeded child instead of taking the legacy main-session reset short
     const cfg = { session: { dmScope: "main" as const } };
     const parent = await create({ cfg, key: "agent:main:main" });
     assert(parent.ok);
+    expect(resolveFreshSessionTotalTokens(parent.entry)).toBe(0);
+    expect(
+      resolveFreshSessionTotalTokens(loadSessionEntryReadOnly({ sessionKey: parent.key })),
+    ).toBe(0);
     const child = await create({
       cfg,
       parentSessionKey: parent.key,
@@ -118,6 +128,7 @@ it("creates a seeded child instead of taking the legacy main-session reset short
     });
     expect(child).toMatchObject({ ok: true, resetExisting: false });
     assert(child.ok);
+    expect(resolveFreshSessionTotalTokens(child.entry)).toBeUndefined();
     expect(child.key).not.toBe(parent.key);
     expect(loadSessionEntryReadOnly({ sessionKey: parent.key })?.sessionId).toBe(
       parent.entry.sessionId,

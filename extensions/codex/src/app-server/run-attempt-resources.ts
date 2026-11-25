@@ -340,7 +340,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           isTurnYielded: () => attemptTools.toolState.yieldDetected,
           retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
           retainParentThread: (protectedThreadId) =>
-            protectCodexAppServerLiveThread(client, protectedThreadId, "native-continuation"),
+            protectCodexAppServerLiveThread(client, protectedThreadId),
           claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
           rejectPendingDirectChild: (childThreadId, reason) =>
             nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
@@ -636,7 +636,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
-      loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
       nativeProcessAuthority: requiresProcessAdmission

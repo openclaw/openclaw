@@ -3,31 +3,19 @@ import { en } from "./en.ts";
 
 const enSessionOrganizationShared = {
   sessionsView: {
-    personalGroupAdd: "Add to section",
-    personalGroupReferenceAdded: "Added to section. Sessions stay in their groups.",
-    personalGroups: "Sections",
-    personalGroupNew: "New section",
-    personalGroupEmpty: "Drag sessions here or choose Edit section to add them.",
-    personalGroupOptions: "Options for section {group}",
-    personalGroupEditMenu: "Edit section",
-    personalGroupMoveUp: "Move up",
-    personalGroupMoveDown: "Move down",
-    personalGroupRemove: "Remove section",
-    personalGroupRemoved: "Section removed. Sessions are unchanged.",
-    personalGroupUnavailable: "Connection changed. Reopen the section to edit it.",
-    personalGroupChanged: "This section changed. Reopen it before saving your edits.",
-    personalGroupCapacity:
-      "Sections are full. Remove a section or remove some sessions from sections before adding more.",
+    renameSession: "Rename session",
+    verbose: "Verbose",
+    reasoning: "Reasoning",
     title: "Sessions",
     subtitle: "Browse sessions and manage per-session overrides.",
     archivedOnlyTooltip: "Show only archived sessions.",
     transcriptSearchArchivedExcluded:
-      "{count} archived transcripts excluded; open a session to restore its searchable history.",
+      "{count} archived chats excluded; open a session to restore its searchable history.",
     archiveReasonManual: "Archived manually",
     archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
       "Automatically archived because the active-session limit was reached",
-    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
+    archiveReasonStaleDashboard: "Automatically archived after inactivity",
     archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     goal: "Goal",
     pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",

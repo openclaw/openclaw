@@ -38,7 +38,10 @@ describe("update run ledger compaction", () => {
     })) {
       write(entry);
     }
-    const widening = "Retirement-only Doctor widened: config.preflight-config-changed";
+    const widenings = [
+      "Retirement-only Doctor widened: config.model-retirement",
+      "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes",
+    ];
     const evidence = [
       "candidate-admission",
       "warning:update-admission-fallback",
@@ -51,8 +54,13 @@ describe("update run ledger compaction", () => {
       "service-start",
       "service-running",
       "update-driver-handoff",
-      "diagnostic:post-plugin doctor:2",
-    ].map((step) => timedStep(step, step === "global update" ? "failed" : "completed"));
+      ...widenings.map((_, index) => `diagnostic:post-plugin doctor:${index}`),
+    ].map((step) =>
+      Object.assign(
+        timedStep(step, step === "global update" ? "failed" : "completed"),
+        step.startsWith("diagnostic:") ? { detail: widenings[Number(step.split(":").at(-1))] } : {},
+      ),
+    );
     const refusal = {
       reason: "refused",
       message: "Repair is pending.",
@@ -61,7 +69,7 @@ describe("update run ledger compaction", () => {
     for (const step of evidence) {
       write({
         ...step,
-        detail: step.step === "diagnostic:post-plugin doctor:2" ? widening : detail,
+        detail: step.detail ?? detail,
         ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
       });
     }
@@ -105,11 +113,32 @@ describe("update run ledger compaction", () => {
     for (const key of ["warning:post-plugin doctor", "warning:post-stop-checks"]) {
       expect(persisted.steps.find((step) => step.step === key)?.detail).toBe(detail);
     }
-    expect(
-      persisted.steps.find((step) => step.step === "diagnostic:post-plugin doctor:2")?.detail,
-    ).toBe(widening);
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it.each([
+    { name: "byte", count: 40, detail: "diagnostic ".repeat(100) },
+    { name: "step", count: 140, detail: "diagnostic" },
+  ])("keeps warning rows ahead of plain steps across the $name bound", ({ count, detail }) => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "chat" }, options);
+    const write = (step: string) =>
+      ledger.recordUpdateRunStep(run.runId, { step, status: "completed", detail: step }, options);
+    write("warning:finalize:plugins:skipped");
+    write("warning:update-channel-note");
+    for (let index = 0; index < count; index++) {
+      ledger.recordUpdateRunStep(
+        run.runId,
+        { step: `plugin-check-${index}`, status: "completed", detail },
+        options,
+      );
+    }
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const report = renderUpdateRunReport(
+      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
+    );
+    expect(report.headline).toContain("2 warnings need attention");
   });
 
   it("reads and compacts pre-timing rows without adding timing steps", () => {

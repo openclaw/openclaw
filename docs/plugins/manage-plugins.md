@@ -87,9 +87,9 @@ pauses new plugin calls, and waits up to 60 seconds for in-flight work while the
 previous generation stays active. If the work does not finish, the reload fails
 once, resumes calls, and leaves services and channels running. Otherwise, it stops
 services and channels, drains remaining work, and completes shutdown and disposal
-before registering the replacement. Other plugin instances remain active. If
-registration or pre-publication activation fails, the Gateway attempts
-a fresh registration using the captured previous code and config automatically.
+before registering the replacement. Other plugin instances remain active.
+Once services and channels begin stopping, a failure before publication can trigger
+an automatic attempt to register the captured previous code with its previous config.
 Recovery restores the active runtime; it does not rewrite externally edited config files.
 If cleanup or recovery also fails, the error reports that recovery could not
 complete. Failures after publication remain visible on the accepted generation.
@@ -204,7 +204,14 @@ Doctor uses the same source checks and review before installing or adopting a re
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
 
-Chat installs and enablement use the same capability consent. When consent is
+You can also ask your regular agent to install a plugin in Telegram or another
+messaging channel. The `openclaw` setup tool keeps non-ClawHub source review and
+any required capability approval in that chat, then uses the Gateway's plugin
+lifecycle to install and apply the change. This does not require enabling the
+`/plugins` command. Conversation-access grants are separate config changes;
+accepting declared capabilities does not grant conversation access.
+
+The optional `/plugins` chat commands use the same capability consent. When consent is
 required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 
@@ -449,6 +456,11 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
+When a provider plugin serves your selected default model, the Control UI warns
+before uninstalling it. Choose **Choose another model** to keep the plugin installed
+and open **Models**, or confirm **Remove** to uninstall it without changing your
+saved model selection. No replacement provider is chosen automatically.
+
 Template Add installs plugins as shared dependencies. Deleting an agent created by
 Add does not uninstall its plugins. Before uninstalling a plugin, check which
 agents use it; uninstall may break those agents.
@@ -521,6 +533,20 @@ page as the publishing reference:
 Package specs use ClawHub by default, with bare plugin-id shortcuts
 described in [Install plugins](/cli/plugins/install). Use `npm:`
 to install from npm, or `clawhub:` to select ClawHub explicitly.
+
+## OpenClaw ID Access page
+
+The bundled `openclaw-id-access` plugin is enabled by default when OpenClaw ID is
+on, subject to plugin policy. Activating OpenClaw ID through Labs, the config CLI,
+or setup adds only this plugin to a nonempty `plugins.allow`; an empty or absent
+allowlist needs no change. Disabling OpenClaw ID leaves the allowlist untouched.
+
+An explicit deny entry, disabled plugin entry, or `plugins.enabled: false` wins
+over activation and produces a warning instead of changing that policy. If you
+enable OpenClaw ID by editing the config file and the allowlist blocks Access,
+the Gateway warns without repairing the file. Run `openclaw doctor` to approve
+adding the plugin to the allowlist. Doctor never removes denies or enables
+explicitly disabled entries. Read-only files require their owner's write access.
 
 ## Related
 

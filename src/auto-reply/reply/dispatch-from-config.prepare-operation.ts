@@ -15,8 +15,11 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import { waitForReplyBarrierSettlement } from "../../sessions/session-controller.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isNativeCommandTurn } from "../command-turn-context.js";
+import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -35,7 +38,7 @@ import {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
-import { extractShortModelName } from "./response-prefix-template.js";
+import { resolveModelResponsePrefixContext } from "./response-prefix-template.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -67,11 +70,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   const input = readReplySourceInput(params.replyOptions);
   const assertRequestCurrent = () => {
     params.replyOptions?.assertChannelAuthority?.();
-    const sourceAuthority = input?.sourceAdapter?.authority;
-    sourceAuthority?.assertCurrent();
-    if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
-      params.replyOptions?.operatorAuthority?.assertCurrent();
-    }
+    input?.sourceAdapter?.authority?.assertCurrent?.();
     params.replyOptions?.internalEventExecution?.assertCurrent?.();
     if (isPreDispatchOperationAborted() || input?.retirementRequested) {
       throw new DispatchReplyOperationAbortedError();
@@ -141,16 +140,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     let routedFinalCount = 0;
     if (!suppressDelivery && fast.payload) {
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
-      const modelSelection = {
+      const modelSelection = selectedModel && {
         ...selectedModel,
         thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
       };
       const responsePrefixContext = {
         identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
-        provider: selectedModel.provider,
-        model: extractShortModelName(selectedModel.model),
-        modelFull: `${selectedModel.provider}/${selectedModel.model}`,
-        thinkingLevel: modelSelection.thinkLevel ?? "off",
+        // A model-less session has no model facts for the prefix.
+        ...(modelSelection &&
+          resolveModelResponsePrefixContext({
+            ...modelSelection,
+            thinkLevel: modelSelection.thinkLevel ?? "off",
+          })),
       };
       const commandId = scopeCommandTranscriptId(
         normalizeOptionalString(state.messageIdForHook),
@@ -188,7 +189,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         }
       } else {
         state.markInboundDedupeReplayUnsafe();
-        params.replyOptions?.onModelSelected?.(modelSelection);
+        if (modelSelection) {
+          params.replyOptions?.onModelSelected?.(modelSelection);
+        }
         const sent = sendReplyWithTranscriptMirror({
           dispatcher,
           cfg,
@@ -214,10 +217,16 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
   };
+  // Stop retains its own source until its exchange is recorded, so later input persists after it.
+  const stopReplySettled = createDeferredCore<unknown>();
   const fastAbort = await fastAbortResolver({
     ctx,
     cfg,
     isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+    onAbortRequest: () => state.trackDispatchLifecycleWork(stopReplySettled.promise, "delivery"),
+  }).catch((error: unknown) => {
+    stopReplySettled.resolve(undefined);
+    throw error;
   });
   if (fastAbort.handled) {
     if (fastAbort.aborted || (fastAbort.stoppedSubagents ?? 0) > 0) {
@@ -234,8 +243,16 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       },
       reason: "fast_abort",
       logKind: "fast_abort",
+    }).finally(() => {
+      stopReplySettled.resolve(
+        waitForReplyBarrierSettlement(
+          waitForReplyDispatcherSettlement(dispatcher),
+          dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.(),
+        ),
+      );
     });
   }
+  stopReplySettled.resolve(undefined);
   if (/^\s*\/approve(?:@[^\s]+)?(?:\s|$)/i.test(ctx.commandText)) {
     const fastApprove = await (
       await loadFastApproveRuntime()

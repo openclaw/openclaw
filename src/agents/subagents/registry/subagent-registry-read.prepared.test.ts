@@ -9,6 +9,7 @@ import {
   createSubagentRunRecord,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import * as delivery from "./subagent-delivery-state.js";
+import * as memory from "./subagent-registry-memory.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -100,6 +101,23 @@ aroundEach((runTest) =>
 );
 
 describe("prepared subagent publication ownership", () => {
+  it("hydrates the final live row once after merging retained payloads", async () => {
+    const full = run();
+    full.execution = { status: "terminal", endedAt: 200 };
+    full.cleanupCompletedAt = 201;
+    full.task = "retained task ".repeat(100);
+    persistRegistryFixture(runMap(full));
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    subagentRuns.set(
+      full.runId,
+      memory.compactSubagentRunForMemory({ ...full, label: "current live label" }),
+    );
+    const hydrate = vi.spyOn(memory, "restoreSubagentRunPayload");
+    const result = await readLatest();
+    expect(result).toMatchObject({ task: full.task, label: "current live label" });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["run", "session"] as const)(
     "reuses the selected %s projection from 5,000 retained records",
     async (kind) => {

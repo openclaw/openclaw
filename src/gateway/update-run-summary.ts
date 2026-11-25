@@ -15,6 +15,7 @@ export function summarizeUpdateRunResponse(response: unknown) {
   const ok = raw.ok === true && (handoff.status === "started" || status === "ok");
   const acknowledgementOwned = raw.ackDelivered === true || raw.ackQueued === true;
   const acknowledgement = readStringField(raw, "acknowledgement");
+  const noticeInApp = raw.noticeInApp === true;
   const before = text(asRecord(result.before).version, 100);
   const after = text(asRecord(result.after).version, 100);
   const failedSteps = (Array.isArray(result.steps) ? result.steps : [])
@@ -54,18 +55,20 @@ export function summarizeUpdateRunResponse(response: unknown) {
     ...(typeof raw.ackDelivered === "boolean" ? { ackDelivered: raw.ackDelivered } : {}),
     ...(typeof raw.ackQueued === "boolean" ? { ackQueued: raw.ackQueued } : {}),
     acknowledgement,
+    ...(noticeInApp ? { noticeInApp } : {}),
     failedSteps,
-    next:
-      readStringField(raw, "message") ??
-      (ok
-        ? `${acknowledgementOwned ? "The gateway owns the acknowledgement; do not send another acknowledgement." : `Reply with the update acknowledgement${acknowledgement ? `: ${acknowledgement}` : "."}`} Wait for the automatic restart, verification, and final notices; do not run shell commands or restart anything.`
-        : "Tell the user the update did not start and why; relay any exact manual instructions."),
+    next: noticeInApp
+      ? "The app shows this update’s status and outcome outside chat. Do not send an update status message or retry the update."
+      : (readStringField(raw, "message") ??
+        (ok
+          ? `${acknowledgementOwned ? "The gateway owns the acknowledgement; do not send another acknowledgement." : `Reply with the update acknowledgement${acknowledgement ? `: ${acknowledgement}` : "."}`} Wait for the automatic restart, verification, and final notices; do not run shell commands or restart anything.`
+          : "Tell the user the update did not start and why; relay any exact manual instructions.")),
   };
-  if (JSON.stringify(summary, null, 2).length >= 4000) {
+  if (JSON.stringify(summary).length >= 4000) {
     for (const step of failedSteps) {
       step.stderrTail = "";
     }
-    if (JSON.stringify(summary, null, 2).length >= 4000) {
+    if (JSON.stringify(summary).length >= 4000) {
       failedSteps.length = 0;
     }
   }

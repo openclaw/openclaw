@@ -1,2 +1,0 @@
-# Recover native setup on the same provider object after a failed Swift-asset read.
-12

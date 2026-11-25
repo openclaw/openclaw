@@ -15,6 +15,8 @@ describe("bytesToBase64", () => {
 
     const view = bytes.subarray(1, 4);
     expect(bytesToBase64(view)).toBe("APv/");
+    expect(view.toBase64({ alphabet: "base64url", omitPadding: true })).toBe("APv_");
+    expect(view.toHex()).toBe("00fbff");
   });
 });
 

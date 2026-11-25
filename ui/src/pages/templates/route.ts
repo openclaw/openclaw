@@ -18,7 +18,9 @@ export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRo
       return `${restored.pathname}${restored.search}:${isTemplatesAvailable(context.runtimeConfig.state)}`;
     },
     loader: async (context, { location }) => {
-      await context.runtimeConfig.ensureLoaded();
+      if (isTemplatesAvailable(context.runtimeConfig.state) === null) {
+        await context.runtimeConfig.ensureDisplayLoaded();
+      }
       if (isTemplatesAvailable(context.runtimeConfig.state) === false) {
         return notFound();
       }

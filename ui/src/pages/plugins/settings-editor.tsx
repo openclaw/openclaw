@@ -17,16 +17,21 @@ import {
   schemaType,
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsRow,
+} from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
-import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
-import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
+import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./settings-editor.css";
+import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
@@ -53,7 +58,8 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
 
 export type PluginSettingsEditorProps = {
   model?: PluginSettingsEditorModel;
-  permissions?: { fields: PluginSettingsField[]; loading?: boolean };
+  onConnectProvider?: () => void;
+  permissions?: { fields: PluginSettingsField[]; loading?: boolean; known?: boolean };
   onAskSetting?: (field: PluginSettingsField) => void;
   resolveCredential?: (field: PluginSettingsField) => PluginCredentialEditorProps | undefined;
 };
@@ -104,7 +110,7 @@ function PluginSettingsRow(props: FieldProps) {
           id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
           label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          triggerClass="btn btn--icon btn--ghost"
+          triggerClass="oc-icon-button oc-icon-button--28"
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {
@@ -210,6 +216,7 @@ function EditorSection(props: {
 type GroupsProps = Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCredential"> & {
   params: ConfigNodeRenderParams;
   permissions: PluginSettingsEditorProps["permissions"];
+  permissionsKnown: boolean;
   query: string;
 };
 function PluginSettingsGroups(props: GroupsProps) {
@@ -228,7 +235,7 @@ function PluginSettingsGroups(props: GroupsProps) {
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
   );
-  const query = () => props.query.trim().toLocaleLowerCase();
+  const query = () => props.query.trim().toLocaleLowerCase().normalize("NFC");
   const fields = createMemo(() =>
     object()
       .fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
@@ -244,6 +251,7 @@ function PluginSettingsGroups(props: GroupsProps) {
           ]
             .join(" ")
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(query()),
       ),
   );
@@ -334,7 +342,7 @@ function PluginSettingsGroups(props: GroupsProps) {
             />
           </EditorSection>
         ) : null}
-        {!fields().length && !additional() && !props.permissions ? (
+        {!fields().length && !additional() && !props.permissions && props.permissionsKnown ? (
           <SettingsEmpty
             message={t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
           />
@@ -363,11 +371,12 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
   const permissionFields = createMemo(
     () =>
       props.permissions?.fields.filter((field) => {
-        const search = query().trim().toLocaleLowerCase();
+        const search = query().trim().toLocaleLowerCase().normalize("NFC");
         return (
           !search ||
           `${t("pluginsPage.editor.permissions")} ${field.label} ${field.help ?? ""}`
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(search) ||
           matchesNodeSearch({ ...field, criteria: { text: search, tags: [] } })
         );
@@ -397,6 +406,25 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
               onBack: props.model.onBack,
             })}
           </header>
+          <Show when={props.onConnectProvider}>
+            {(onConnect) => (
+              <EditorSection title={t("pluginsPage.auth.accounts")}>
+                <SettingsRow
+                  title={t("routeTitles.modelProviders")}
+                  control={
+                    <button
+                      type="button"
+                      class="btn oc-action oc-action-secondary"
+                      onClick={() => onConnect()()}
+                    >
+                      {t("pluginsPage.auth.connect")}
+                    </button>
+                  }
+                  carapace
+                />
+              </EditorSection>
+            )}
+          </Show>
           <label class="plugin-editor__search">
             <Icon name="search" />
             <input
@@ -410,21 +438,25 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
           </label>
           <PluginSettingsReadStatus
             model={props.model}
-            loading={props.model.configSchemaLoading || !props.model.configValue}
+            loading={
+              props.model.configSchemaLoading ||
+              (!props.model.configValue && props.model.configBusy)
+            }
             rows={2}
             renderError={(error, retry) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {error}
                 <button class="btn btn--sm" onClick={() => retry()}>
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             )}
           />
           {!props.model.configSchemaLoading && props.model.configValue && params() ? (
             <PluginSettingsDraft
               params={params()!}
               permissions={permissions()}
+              permissionsKnown={props.permissions?.known !== false}
               query={query()}
               onAskSetting={props.onAskSetting}
               resolveCredential={props.resolveCredential}

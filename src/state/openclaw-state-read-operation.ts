@@ -2,7 +2,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
-import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import {
+  getStateDatabaseSchemaLease,
+  prepareStateDatabaseReadAccess,
+} from "../infra/gateway-state-owner.js";
 import { statIfExists } from "../infra/path-existence.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
@@ -17,6 +20,7 @@ import type {
 import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
   captureReusableSqliteSource,
+  isSqliteSnapshotReuseActive,
   leaseReusableSqliteSnapshot,
   publishReusableSqliteSnapshot,
 } from "../infra/sqlite-snapshot-reuse.js";
@@ -32,6 +36,7 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
@@ -118,7 +123,7 @@ type Selection = {
   mapError: OpenClawStateReadOptions["mapError"];
 };
 
-/** One async owner joins the query and native cleanup before releasing its snapshot. */
+/** Adopts the producer's command and joins the query and cleanup before releasing its snapshot. */
 export function startOpenClawStateReadOperation(
   command: OpenClawStateReadCommand,
   selection: Selection,
@@ -139,6 +144,7 @@ export function startOpenClawStateReadOperation(
   let startSnapshotCleanup: (() => RetainedOperation<boolean>) | undefined;
   let releasePreparedSource: (() => void) | undefined;
   let closing: Promise<void> | undefined;
+  let stateAccess: Awaited<ReturnType<typeof prepareStateDatabaseReadAccess>>;
   let cleaned = false;
   const authority: OpenClawStateReadAuthority = {
     signal,
@@ -146,7 +152,11 @@ export function startOpenClawStateReadOperation(
       signal.throwIfAborted();
       context.maintenanceScope?.assertAdmission();
       context.admission.assertCurrent();
-      openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(
+        pathname,
+        "cached-read",
+        stateAccess,
+      );
     },
   };
 
@@ -289,17 +299,21 @@ export function startOpenClawStateReadOperation(
     );
     transport = selectedTransport;
     unregisterSource = source.own(() => resource.close());
+    stateAccess = await prepareStateDatabaseReadAccess(context.admission);
+    signal.throwIfAborted();
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
     if (command.type === "admit") {
       return query(selectedTransport);
     }
     const native =
       !snapshot && preserveArtifacts
-        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read", stateAccess)
         : undefined;
     borrowed =
       native ??
       (!snapshot && !preserveArtifacts
-        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read", stateAccess)
         : undefined);
     const independentWarmSource =
       native &&
@@ -313,8 +327,9 @@ export function startOpenClawStateReadOperation(
       authority.assertCurrent();
       return undefined;
     }
-    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+    if (!snapshot && !independentWarmSource) {
       const currentMetadata =
+        !isStatePostgres() &&
         (command.type === "plugins.metadata.read" ||
           command.type === "config.health.read" ||
           isUpdateRunAdmissionReadCommand(command)) &&
@@ -329,7 +344,7 @@ export function startOpenClawStateReadOperation(
               context.admission.identity.key,
             ))) &&
         (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
-      if (!native || currentMetadata) {
+      if (preserveArtifacts && (!native || currentMetadata)) {
         await selectedTransport.startValidateFresh(context, authority);
       }
       if (currentMetadata) {
@@ -387,12 +402,13 @@ export function startOpenClawStateReadOperation(
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       const sourceIdentity = { key: context.admission.identity.key };
-      if (selection.snapshotPreparation === "awaited") {
+      if (selection.snapshotPreparation === "awaited" || isSqliteSnapshotReuseActive()) {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,
           expectedSourceIdentity: sourceIdentity,
           reuse: true,
           allowLiveOwner:
+            selection.snapshotPreparation === "awaited" &&
             command.type === "plugins.metadata.read" &&
             context.maintenanceScope?.ownsSchemaMaintenance !== true &&
             !getStateDatabaseSchemaLease(pathname),

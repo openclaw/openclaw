@@ -1,7 +1,8 @@
 import { createMemo, For } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
+  SettingsLoadingSkeleton,
   SettingsSection,
   SettingsRow,
   SettingsStatus,
@@ -142,6 +143,8 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     error: input.execApprovalsError,
     savedNotice: input.execApprovalsSavedNotice,
     loading: input.execApprovalsLoading,
+    // DevicesProps.loading is the node inventory read; until it lands, "no devices" is unknown.
+    nodesPending: input.loading && input.nodes.length === 0,
     saving: input.execApprovalsSaving,
     nativePolicy,
     form,
@@ -179,7 +182,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
           ) : props.error ? (
             <LoadFailure {...props} />
           ) : props.loading ? (
-            <PolicyActionRow description={t("common.loading")} />
+            <SettingsLoadingSkeleton rows={1} />
           ) : targetReady() ? (
             <PolicyActionRow description={t("devices.execApprovals.loadHint")}>
               <button class="btn" disabled={!props.connected} onClick={() => props.onLoad()}>
@@ -260,7 +263,11 @@ function HostRow(props: ExecApprovalsState) {
   return (
     <SettingsRow
       title={t("devices.execApprovals.host")}
-      description={props.targetNodes.length > 0 ? undefined : t("devices.execApprovals.noNodes")}
+      description={
+        props.targetNodes.length > 0 || props.nodesPending
+          ? undefined
+          : t("devices.execApprovals.noNodes")
+      }
       control={
         canChoose() ? (
           <SettingsSelect
@@ -565,18 +572,15 @@ function Allowlist(props: {
                   )
                 }
               />
-              <button
-                class="btn btn--icon btn--ghost"
-                type="button"
-                aria-label={t("devices.execApprovals.remove")}
-                title={t("devices.execApprovals.remove")}
+              <IconButton
+                icon="x"
+                label={t("devices.execApprovals.remove")}
+                tooltip={false}
                 disabled={props.state.disabled}
                 onClick={() =>
                   props.state.onRemove(props.entries.length <= 1 ? path() : [...path(), index])
                 }
-              >
-                <Icon name="x" />
-              </button>
+              />
             </div>
             <MetaLine parts={allowlistEntryMeta(entry())} />
           </div>

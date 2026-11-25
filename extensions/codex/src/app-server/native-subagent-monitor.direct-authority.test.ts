@@ -103,7 +103,7 @@ describe("CodexNativeSubagentMonitor", () => {
         }),
       );
       await second.unregister();
-      await expect(releaseForResume()).rejects.toThrow("background work or live resources");
+      await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
       if (status === "interrupted") {
         resumed.cancel();
         expect(() => resumed.assertCurrent()).toThrow("execution was cancelled");
@@ -414,7 +414,6 @@ describe("CodexNativeSubagentMonitor", () => {
       attemptTimeoutMs: 30_000,
       startupTimeoutMs: 1_000,
       turnStartTimeoutMs: 1_000,
-      loopDetectionPreToolUseRelay: false,
       signal: new AbortController().signal,
       hostCapabilities: host.hostCapabilities,
       onPreToolUseFailure: () => {},

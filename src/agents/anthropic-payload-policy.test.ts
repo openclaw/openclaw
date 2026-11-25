@@ -68,10 +68,10 @@ function expectShortEphemeralTextPayload(payload: TestPayload) {
 describe("anthropic payload policy", () => {
   it.each([
     {
-      name: "uses 70 percent of the context window by default",
+      name: "uses 85 percent of the context window by default",
       contextWindow: 200_000,
       extraParams: { anthropicServerCompaction: true },
-      expectedThreshold: 140_000,
+      expectedThreshold: 170_000,
     },
     {
       name: "uses an explicit threshold",

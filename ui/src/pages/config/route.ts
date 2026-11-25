@@ -5,30 +5,58 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
 import { CONFIG_PAGE_IDS, normalizeConfigSelection, type ConfigPageId } from "./config-sections.ts";
-import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+import { canonicalGeneralSettingsLocation, configRouteData } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
-const MOVED_SECTION_ROUTES: Record<
-  string,
-  { routeId: RouteId; keepSection: boolean; search?: string; advanced?: boolean }
-> = {
-  "communications:__notifications__": { routeId: "notifications", keepSection: false },
-  "communications:channels": { routeId: "channels", keepSection: false },
-  "communications:broadcast": { routeId: "advanced", keepSection: true },
-  "communications:talk": { routeId: "talk", keepSection: true },
-  "appearance:wizard": { routeId: "advanced", keepSection: true },
-  "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
-  "automation:approvals": { routeId: "security", keepSection: true },
-  "automation:plugins": {
-    routeId: "plugin-settings",
-    keepSection: false,
-    search: "?tab=advanced",
-  },
-  "ai-agents:memory": { routeId: "memory", keepSection: true },
-  "ai-agents:models": { routeId: "model-providers", keepSection: false },
+// An omitted query preserves the section; an empty query removes it.
+const MOVED_SECTION_ROUTES: Record<string, readonly [routeId: RouteId, search?: string]> = {
+  "communications:__notifications__": ["notifications", ""],
+  "communications:channels": ["channels", ""],
+  "communications:broadcast": ["advanced"],
+  "communications:talk": ["talk"],
+  "appearance:wizard": ["advanced"],
+  "advanced:transcripts": ["communications", "?section=transcripts&advanced=1"],
+  "automation:approvals": ["security"],
+  "automation:plugins": ["plugin-settings", "?tab=advanced"],
+  "ai-agents:memory": ["memory"],
+  "ai-agents:models": ["model-providers", ""],
 };
+
+function movedSectionLocation(
+  id: RouteId,
+  route: Pick<ReturnType<typeof configRouteData>, "section" | "hash">,
+  basePath: string,
+): RouteLocation | undefined {
+  const moved = MOVED_SECTION_ROUTES[`${id}:${route.section}`];
+  return (
+    moved && {
+      pathname: pathForRoute(moved[0], basePath),
+      search: moved[1] ?? `?section=${route.section}`,
+      hash: route.hash,
+    }
+  );
+}
+
+/** Shared by app navigation and raw-router loader fallbacks. */
+export function canonicalSettingsLocation(
+  id: RouteId | null,
+  location: RouteLocation,
+  basePath: string,
+): RouteLocation | undefined {
+  if (id === "config") {
+    return canonicalGeneralSettingsLocation(location, basePath);
+  }
+  if (id === "settings") {
+    return isNativeEmbedHost()
+      ? undefined
+      : { ...location, pathname: pathForRoute("chat", basePath) };
+  }
+  return id && CONFIG_PAGE_IDS.some((pageId) => pageId === id)
+    ? movedSectionLocation(id, configRouteData(location), basePath)
+    : undefined;
+}
 
 function configPage(id: ConfigPageId) {
   return definePage({
@@ -41,24 +69,13 @@ function configPage(id: ConfigPageId) {
         : locationKey;
     },
     loader: (context: ApplicationContext, { location }) => {
-      const pageId = id;
       const route = configRouteData(location);
-      const movedRoute = route.section
-        ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`]
-        : undefined;
-      if (route.section && movedRoute) {
-        return redirect({
-          pathname: pathForRoute(movedRoute.routeId, context.basePath),
-          search:
-            movedRoute.search ??
-            (movedRoute.keepSection
-              ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
-              : ""),
-          hash: route.hash,
-        });
+      const moved = movedSectionLocation(id, route, context.basePath);
+      if (moved) {
+        return redirect(moved);
       }
       const agentSelectionIntent =
-        pageId === "memory"
+        id === "memory"
           ? {
               owner: context.settingsAgentSelection,
               revision: context.settingsAgentSelection.intentRevision,
@@ -67,18 +84,18 @@ function configPage(id: ConfigPageId) {
       const appearanceDisplay =
         hasConfigPageDisplay(
           context.runtimeConfig,
-          pageId,
-          normalizeConfigSelection(pageId, route.section, null).activeSection,
+          id,
+          normalizeConfigSelection(id, route.section, null).activeSection,
         ) && !isAppearanceDataTarget(route.targetBlockId);
       if (!appearanceDisplay) {
         void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-        if (pageId !== "updates") {
+        if (id !== "updates") {
           void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
         }
       }
       return {
         ...route,
-        pageId,
+        pageId: id,
         ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
       };
     },
@@ -100,17 +117,8 @@ const removedGeneralRedirectPage = definePage({
   ...routePageSpec("config"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
     `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
-  loader: (context: ApplicationContext, { location }) => {
-    const target =
-      configTargetIdFromHash(location.hash) === "settings-general-model"
-        ? SETTINGS_ROUTE_TARGETS.modelBehavior
-        : SETTINGS_ROUTE_TARGETS.appearanceLanguage;
-    return redirect({
-      pathname: pathForRoute(target.routeId, context.basePath),
-      search: "search" in target ? target.search : "",
-      hash: target.hash,
-    });
-  },
+  loader: (context: ApplicationContext, { location }) =>
+    redirect(canonicalGeneralSettingsLocation(location, context.basePath)),
   // Redirect routes still require a module by contract, but never render page content.
   component: async () => ({ renderSolid: () => null }),
 });
@@ -118,10 +126,10 @@ const removedGeneralRedirectPage = definePage({
 export const pages = [
   definePage({
     ...routePageSpec("settings"),
-    loader: (context: ApplicationContext, { location }) =>
-      isNativeEmbedHost()
-        ? undefined
-        : redirect({ ...location, pathname: pathForRoute("chat", context.basePath) }),
+    loader: (context: ApplicationContext, { location }) => {
+      const canonical = canonicalSettingsLocation("settings", location, context.basePath);
+      return canonical && redirect(canonical);
+    },
     // The shell reuses its lazy settings navigation as the embedded list page.
     component: async () => ({ renderSolid: () => null }),
   }),

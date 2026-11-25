@@ -339,7 +339,7 @@ describe("DraftSubmissionFlow", () => {
           });
         });
       flow.setMessage("  @Alex keep the accepted prompt  ", [
-        { profileId: "profile-alex", start: 2, end: 7 },
+        { profileId: "profile-alex", start: 2, end: 7, access: "suggest" },
       ]);
       stubObjectUrls("blob:accepted-note");
       const attachment = registerTextPayload("accepted-note");
@@ -377,7 +377,7 @@ describe("DraftSubmissionFlow", () => {
         },
       });
       expect(retained?.message?.["__openclaw"]).toMatchObject({
-        humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+        humanMentions: [{ profileId: "profile-alex", start: 0, end: 5, access: "suggest" }],
       });
       expect(getChatAttachmentDataUrl(attachment)).toBeNull();
       if (next === "reconnect") {
@@ -431,9 +431,10 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.submitting).toBe(true);
 
     flow.synchronizeSubmission();
-    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
-      { profileId: "profile-original", start: 0, end: 5 },
-    ]);
+    expect(flow.pendingMessage).toBeNull();
+    expect(
+      context.chatSubmissions.readCreateMessage(originalParams!.key!)?.["__openclaw"].humanMentions,
+    ).toEqual([{ profileId: "profile-original", start: 0, end: 5 }]);
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[1]?.[0]).toEqual(originalParams);
     expect(flow.pendingPlacement.sessionKey).toBe("");
@@ -684,8 +685,13 @@ describe("DraftSubmissionFlow", () => {
       const recovery = start.mock.calls[0]![0].recovery;
       expect(recovery).toMatchObject({ message, mentions, attachments, phase: "dispatching" });
       expect(flow.pendingPlacement.capture()).toBeNull();
-      expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
-      expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
+      if (background) {
+        expect(flow.completedSubmission).toBeNull();
+        expect(flow.pendingMessage).toBeNull();
+      } else {
+        expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
+        expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
+      }
       expect(composerState(flow)).toEqual(["", [], []]);
       expect(flow).toMatchObject({ submitting: false, error });
       if (background) {

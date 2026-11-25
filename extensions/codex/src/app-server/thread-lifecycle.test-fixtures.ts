@@ -96,6 +96,16 @@ type NativeFixtureThread = {
   subscribed: boolean;
 };
 
+export function readEmptyNativeConfig(method: string) {
+  if (method === "config/read") {
+    return { config: {}, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
@@ -490,10 +500,6 @@ function stubEmptyCodexSkillCatalog(client: CodexAppServerClient): void {
     const instanceId = randomUUID();
     client.getInstanceId = () => instanceId;
   }
-  // Minimal lifecycle doubles represent an open transport unless they supply a close receipt.
-  if (typeof client.getCloseError !== "function") {
-    client.getCloseError = () => undefined;
-  }
   clientsWithEmptySkillCatalog.add(client);
 }
 
@@ -569,7 +575,6 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
       headers: {},
     },
     codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",

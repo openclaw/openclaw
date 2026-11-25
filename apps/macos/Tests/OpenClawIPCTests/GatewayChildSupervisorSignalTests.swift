@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct GatewayChildSupervisorSignalTests {
-    @Test func `illegal instruction stops automatic restarts and preserves the crash log`() async throws {
+    @Test func `illegal instruction retries within the crash limit and preserves the crash log`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("gateway-child-sigill-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -13,9 +13,10 @@ struct GatewayChildSupervisorSignalTests {
         ulimit -c 0
         printf 'fixture illegal instruction\\n' >&2
         kill -ILL $$
-        """.write(to: directory.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
+        """.write(to: directory.appendingPathComponent("openclaw.mjs"), atomically: false, encoding: .utf8)
         let log = directory.appendingPathComponent("gateway.log")
-        let supervisor = GatewayChildSupervisor()
+        let clock = ManualTestClock()
+        let supervisor = GatewayChildSupervisor(clock: clock)
         let (events, continuation) = AsyncStream<GatewayChildSupervisor.Event>.makeStream()
         defer { continuation.finish() }
         var iterator = events.makeAsyncIterator()
@@ -26,19 +27,34 @@ struct GatewayChildSupervisorSignalTests {
             logPath: log.path,
             port: 19487,
             allowUnconfigured: false)) { continuation.yield($0) }
+        for seconds in [1, 2, 4, 8] {
+            guard await iterator.next() == .restarting(delay: .seconds(seconds)) else {
+                Issue.record("SIGILL must use bounded crash recovery")
+                await supervisor.stop()
+                return
+            }
+            await clock.waitForSleep(until: clock.now + .seconds(seconds))
+            clock.advance(by: .seconds(seconds))
+            guard case .started = await iterator.next() else {
+                Issue.record("expected a replacement Gateway")
+                await supervisor.stop()
+                return
+            }
+        }
         let event = await iterator.next()
         let isActive = supervisor.isActive
         let pid = supervisor.processIdentifier
         await supervisor.stop()
         guard case let .failed(message) = event else {
-            Issue.record("SIGILL must stop immediately, received \(String(describing: event))")
+            Issue.record("expected terminal failure after five SIGILL exits")
             return
         }
-        #expect(message.contains("SIGILL"))
-        #expect(message.contains("Node Gateway"))
+        #expect(message.contains("five failed starts"))
         #expect(message.contains("fixture illegal instruction"))
         #expect(!isActive)
         #expect(pid == nil)
-        #expect(try String(contentsOf: log, encoding: .utf8) == "fixture illegal instruction\n")
+        #expect(try String(contentsOf: log, encoding: .utf8) == String(
+            repeating: "fixture illegal instruction\n",
+            count: 5))
     }
 }

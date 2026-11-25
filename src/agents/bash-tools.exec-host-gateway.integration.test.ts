@@ -6,7 +6,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { pathLooksMutableForShellPayloadSync } from "../infra/system-run-mutable-file-policy.js";
+import { pathLooksMutableForShellPayload } from "../infra/system-run-mutable-file-policy.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -88,7 +88,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
           useCache: false,
         });
         expect(resolved).toBeDefined();
-        expect(pathLooksMutableForShellPayloadSync(resolved ?? "")).toBe(false);
+        expect(await pathLooksMutableForShellPayload(resolved ?? "")).toBe(false);
       }
       const replacement = path.join(binDir, executable);
       let approved = false;

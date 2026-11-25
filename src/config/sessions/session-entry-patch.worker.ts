@@ -32,7 +32,7 @@ import {
 import {
   boundSessionEntryReplacementPublication,
   prepareSessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-replacement-state.js";
+} from "./session-accessor.sqlite-replacement-publication.js";
 import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
@@ -194,7 +194,7 @@ export function commitSessionEntryPatch(
       const options = {
         consumePendingReset: input.consumePendingReset,
         providerReviewMutation: input.providerReviewMutation,
-        workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
+        workerGuard: { conversation: input.conversation },
         assertCommitAllowed: () => {
           const validation = readSessionSourceValidation(database, input.sources);
           const { refusedSource } = validation;

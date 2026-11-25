@@ -37,7 +37,12 @@ const publications = new WeakMap<
     keys: string[];
     audiences: WeakMap<
       SystemPresence[],
-      { reset: PresenceDelivery; deltas: WeakMap<PresenceDeliverySnapshot, PresenceDelivery> }
+      {
+        reset: string | PresenceDelivery;
+        resetBytes: number;
+        snapshot: PresenceDeliverySnapshot;
+        deltas: WeakMap<PresenceDeliverySnapshot, PresenceDelivery>;
+      }
     >;
   }
 >();
@@ -60,69 +65,77 @@ export function preparePresenceDelivery(
   if (!audience) {
     const rows = new Map<string, SystemPresence>();
     keys.forEach((key, index) => rows.set(key, presence[index]!));
+    const reset = `${PAYLOAD_PREFIX}${JSON.stringify({ reset: true, version, presence, keys })}`;
     audience = {
-      reset: {
-        fragment: Buffer.from(
-          `${PAYLOAD_PREFIX}${JSON.stringify({ reset: true, version, presence, keys })}`,
-        ),
-        snapshot: { version, rows },
-        mode: "reset",
-      },
+      reset,
+      resetBytes: Buffer.byteLength(reset),
+      snapshot: { version, rows },
       deltas: new WeakMap(),
     };
     audiences.set(presence, audience);
   }
   const previous = client.presenceSnapshot;
-  if (!previous) {
-    return audience.reset;
+  let delivery = previous ? audience.deltas.get(previous) : undefined;
+  if (delivery) {
+    return delivery;
   }
-  const cached = audience.deltas.get(previous);
-  if (cached) {
-    return cached;
-  }
-  const { snapshot } = audience.reset;
-  const { rows } = snapshot;
-  const delta: PresenceDelta = {
-    base: previous.version,
-    version,
-    upsert: [],
-    remove: [...previous.rows.keys()].filter((key) => !rows.has(key)),
-    order: keys,
-  };
-  for (const [key, row] of rows) {
-    const before = previous.rows.get(key);
-    if (!before) {
-      delta.upsert.push({ key, presence: row });
-    } else if (before !== row) {
-      // Compare the projected wire fields; undefined is omitted by JSON.
-      const previousFields: Record<string, unknown> = before;
-      const currentFields: Record<string, unknown> = row;
-      const set: Partial<SystemPresence> = {};
-      const unset: string[] = [];
-      for (const [field, value] of Object.entries(currentFields)) {
-        if (
-          value !== undefined &&
-          value !== previousFields[field] &&
-          JSON.stringify(value) !== JSON.stringify(previousFields[field])
-        ) {
-          Object.defineProperty(set, field, { value, enumerable: true });
+  const { snapshot } = audience;
+  if (previous) {
+    const { rows } = snapshot;
+    const delta: PresenceDelta = {
+      base: previous.version,
+      version,
+      upsert: [],
+      remove: [...previous.rows.keys()].filter((key) => !rows.has(key)),
+      order: keys,
+    };
+    for (const [key, row] of rows) {
+      const before = previous.rows.get(key);
+      if (!before) {
+        delta.upsert.push({ key, presence: row });
+      } else if (before !== row) {
+        // Compare the projected wire fields; undefined is omitted by JSON.
+        const previousFields: Record<string, unknown> = before;
+        const currentFields: Record<string, unknown> = row;
+        const set: Partial<SystemPresence> = {};
+        const unset: string[] = [];
+        for (const [field, value] of Object.entries(currentFields)) {
+          if (
+            value !== undefined &&
+            value !== previousFields[field] &&
+            JSON.stringify(value) !== JSON.stringify(previousFields[field])
+          ) {
+            Object.defineProperty(set, field, { value, enumerable: true });
+          }
         }
-      }
-      for (const [field, value] of Object.entries(previousFields)) {
-        if (value !== undefined && currentFields[field] === undefined) {
-          unset.push(field);
+        for (const [field, value] of Object.entries(previousFields)) {
+          if (value !== undefined && currentFields[field] === undefined) {
+            unset.push(field);
+          }
         }
-      }
-      if (Object.keys(set).length > 0 || unset.length > 0) {
-        delta.upsert.push({ key, set, unset });
+        if (Object.keys(set).length > 0 || unset.length > 0) {
+          delta.upsert.push({ key, set, unset });
+        }
       }
     }
+    const deltaJSON = JSON.stringify(delta);
+    if (Buffer.byteLength(deltaJSON) < audience.resetBytes - PAYLOAD_PREFIX.length) {
+      delivery = {
+        fragment: Buffer.from(`${PAYLOAD_PREFIX}${deltaJSON}`),
+        snapshot,
+        mode: "delta",
+      };
+    }
   }
-  const deltaJSON = JSON.stringify(delta);
-  const delivery: PresenceDelivery =
-    Buffer.byteLength(deltaJSON) < audience.reset.fragment.length - PAYLOAD_PREFIX.length
-      ? { fragment: Buffer.from(`${PAYLOAD_PREFIX}${deltaJSON}`), snapshot, mode: "delta" }
-      : audience.reset;
-  audience.deltas.set(previous, delivery);
+  if (!delivery) {
+    // A delta-only publication needs the reset's wire size, but never its encoded bytes.
+    if (typeof audience.reset === "string") {
+      audience.reset = { fragment: Buffer.from(audience.reset), snapshot, mode: "reset" };
+    }
+    delivery = audience.reset;
+  }
+  if (previous) {
+    audience.deltas.set(previous, delivery);
+  }
   return delivery;
 }

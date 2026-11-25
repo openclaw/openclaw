@@ -94,11 +94,11 @@ function createPausedCardStore(delegate: WorkboardCardStore) {
         write(key, value, () => delegate.registerIfAbsent(key, value), Boolean),
       registerIfUpdatedAt: (key, value, revision) =>
         write(key, value, () => delegate.registerIfUpdatedAt(key, value, revision), Boolean),
-      claimIfOwnerAvailable: (key, value, revision, ownerId, now) =>
+      claimIfOwnerAvailable: (key, value, revision, ownerSlot) =>
         write(
           key,
           value,
-          () => delegate.claimIfOwnerAvailable(key, value, revision, ownerId, now),
+          () => delegate.claimIfOwnerAvailable(key, value, revision, ownerSlot),
           (result) => result === "updated",
         ),
       deleteIfUpdatedAt: (key, revision) =>
@@ -993,7 +993,7 @@ describe("WorkboardStore", () => {
         { ownerId: "dispatcher" },
         { expectedAuthority, adoptWorkspaceAccess: { unrestricted: true } },
       ),
-      "card workspace authority changed before claim",
+      "card workspace or placement changed. Retry the claim.",
     );
     await expectStored(store, card.id, {
       status: "ready",

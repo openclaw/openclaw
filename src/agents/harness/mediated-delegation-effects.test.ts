@@ -272,11 +272,6 @@ async function prepareEffect(route: Route, suffix: string, senderRestricted = fa
   await fs.writeFile(target, "original");
   return { caller, basename, target };
 }
-async function expectRejected(receipt: Receipt, target: string) {
-  expect(receipt.isError, receipt.text).toBe(true);
-  expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
-  expect(await fs.readFile(target, "utf8")).toBe("original");
-}
 async function revokeAtGate(
   entered: Promise<void>,
   running: Promise<Receipt>,
@@ -349,7 +344,7 @@ describe.each([
     });
 
     it.for(["exec", "write"] as const)(
-      "rejects revocation at the final %s boundary",
+      "finishes an admitted %s after delegation is revoked",
       async (tool, { signal }) => {
         const { caller, basename, target } = await prepareEffect(route, `-revoked-${tool}.txt`);
         const launches = tool === "exec" ? observeLaunches() : undefined;
@@ -379,8 +374,8 @@ describe.each([
         }
         const args =
           tool === "exec"
-            ? { command: "printf forbidden > " + basename, yieldMs: 10_000 }
-            : { path: target, content: "forbidden" };
+            ? { command: "printf admitted-effect > " + basename, yieldMs: 10_000 }
+            : { path: target, content: "admitted-effect" };
         const running = caller.call(tool, args);
         await revokeAtGate(
           entered.promise,
@@ -389,9 +384,11 @@ describe.each([
           "tool did not reach its final boundary",
           release.resolve,
         );
-        await expectRejected(await running, target);
+        const receipt = await running;
+        expect(receipt.isError, receipt.text).toBe(false);
+        expect(await fs.readFile(target, "utf8")).toBe("admitted-effect");
         if (launches) {
-          expect(launches()).toBe(0);
+          expect(launches()).toBe(1);
         }
       },
     );

@@ -3,6 +3,7 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
+  PluginDiscoveryEntry,
   PluginListResult,
   PluginInstallRequest,
   PluginsInspectResult,
@@ -25,7 +26,17 @@ export type PluginsPageDetail = {
 
 export type PluginsPageCatalogDetail = {
   id: string;
+  preview?: PluginCatalogIdentity;
   result: PluginDiscoveryDetailResult | null;
+  error?: string;
+};
+
+export type PluginCatalogIdentity = {
+  id: string;
+  catalog: Pick<
+    PluginDiscoveryEntry["catalog"],
+    "name" | "summary" | "author" | "official" | "imageUrl"
+  >;
 };
 
 export function createPluginsPageState(): {

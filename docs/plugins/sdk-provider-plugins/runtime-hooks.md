@@ -343,6 +343,11 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
 
+Replay sanitation and validation hooks receive writable message copies. In-place
+edits remain part of replay when a hook returns `null` or `undefined`; validation
+then continues through the built-in validators. Return a replacement message
+array to replace history. These edits do not mutate the stored transcript.
+
 `reconcileLocalService` is called only for a configured local service,
 including a healthy process reused by a restarted Gateway. Honor its
 abort signal and reject when reconciliation fails; OpenClaw blocks the

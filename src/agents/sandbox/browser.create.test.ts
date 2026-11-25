@@ -710,7 +710,7 @@ describe("sandbox browser lifecycle", () => {
         }
       };
       const server = createServer();
-      const assertCurrent = await captureSandboxStateOwner();
+      const { assertCurrent } = await captureSandboxStateOwner();
       const retry = vi.fn();
       const quotaRecovery = phase.startsWith("quota");
       let preparation: Promise<unknown> | undefined;

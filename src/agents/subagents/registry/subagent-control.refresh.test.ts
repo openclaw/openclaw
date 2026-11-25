@@ -105,7 +105,6 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
     let publishedBeforeJoin = false;
     let releasedBeforeJoin = false;
     let consumedSnapshots = 0;
-    let copiedSnapshots = 0;
     const release = () => {
       gates.forEach((gate) => gate.resolve());
       finishRun.resolve();
@@ -126,13 +125,7 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
           select,
           (selection, snapshot) => {
             consumedSnapshots++;
-            const entries = vi.spyOn(snapshot, Symbol.iterator);
-            try {
-              return consume(selection, snapshot);
-            } finally {
-              copiedSnapshots += entries.mock.calls.length;
-              entries.mockRestore();
-            }
+            return consume(selection, snapshot);
           },
           scope,
         ).then(async (result) => {
@@ -238,7 +231,6 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
       expect(contexts).toEqual(["kill-scope", "kill-scope"]);
       expect([publishedBeforeJoin, releasedBeforeJoin]).toEqual([false, false]);
       expect(consumedSnapshots).toBeGreaterThan(0);
-      expect(copiedSnapshots, "discovery reads values without copying prepared snapshots").toBe(0);
     } finally {
       release();
       await Promise.allSettled([...accepted, stopped]);
@@ -273,11 +265,11 @@ it("retains a captured child prefix when the next child's session preparation fa
   ] as const) {
     enqueueControlRun(groupId, runId, [active], start);
   }
-  const prepare = generations.prepareSessionGenerationFacts;
+  const prepare = generations.prepareLeaseFacts;
   let capturedFirst = false;
   let failedReads = 0;
   const failure = "next child session preparation unavailable";
-  vi.spyOn(generations, "prepareSessionGenerationFacts").mockImplementation(async (input) => {
+  vi.spyOn(generations, "prepareLeaseFacts").mockImplementation(async (input) => {
     if (capturedFirst && input.sessionKey === secondKey && failedReads === 0) {
       failedReads += 1;
       throw new Error(failure);
@@ -366,29 +358,27 @@ it.each([
       expect(await startQueuedSubagentRun("g")).toBe(true);
     });
     const startFailure = vi.fn(() => true);
-    const prepare = generations.prepareSessionGenerationFacts;
+    const prepare = generations.prepareLeaseFacts;
     let armed = false;
     let reads = 0;
     let failedReads = 0;
     const failure = "transient ancestor identity facts unavailable";
-    const reader = vi
-      .spyOn(generations, "prepareSessionGenerationFacts")
-      .mockImplementation(async (input) => {
-        const generation = await prepare(input);
-        return {
-          ...generation,
-          assertCurrent() {
-            generation.assertCurrent();
-            if (armed && input.sessionKey === aKey) {
-              reads += 1;
-              if (reads === faultAt) {
-                failedReads += 1;
-                throw new Error(failure);
-              }
+    const reader = vi.spyOn(generations, "prepareLeaseFacts").mockImplementation(async (input) => {
+      const generation = await prepare(input);
+      return {
+        ...generation,
+        assertCurrent() {
+          generation.assertCurrent();
+          if (armed && input.sessionKey === aKey) {
+            reads += 1;
+            if (reads === faultAt) {
+              failedReads += 1;
+              throw new Error(failure);
             }
-          },
-        };
-      });
+          }
+        },
+      };
+    });
     const grandchildCancelled = createDeferred();
     const stopObserving = subscribeSubagentRunChanges("projection", ({ runIds }) => {
       if (

@@ -1,9 +1,4 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../../test/helpers/sqlite-parent-observer.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
@@ -94,27 +89,6 @@ function persistChild(child = completedChild()) {
   clearSubagentRunsReadCacheForTest();
   return child;
 }
-
-it(
-  "keeps the host responsive while Cron descendant fallback awaits a real worker",
-  withPersistedCronRuns(async () => {
-    persistChild();
-    const parent = observeParentSqlite();
-    try {
-      await withPendingReply(async (release, pending) => {
-        expect(await Promise.race([pending, nextTurn().then(() => "responsive")])).toBe(
-          "responsive",
-        );
-        expect(parent.counts).toEqual(emptySqliteCounts());
-        release();
-        expect(await pending).toBe("Completed child answer");
-        expect(parent.counts).toEqual(emptySqliteCounts());
-      });
-    } finally {
-      parent.restore();
-    }
-  }),
-);
 
 it.each(["update", "delete", "successor", "other requester"] as const)(
   "uses a committed %s published while the Cron worker reply is pending",

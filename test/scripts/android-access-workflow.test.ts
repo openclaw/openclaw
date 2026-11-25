@@ -27,6 +27,60 @@ const invalidReports = [
 ];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
+it.skipIf(process.platform === "win32").each([4096, 16384])(
+  "builds native APKs before starting the %i-byte-page emulator",
+  (pageSize) => {
+    const root = tempDirs.make("openclaw-android-build-order-");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const commands: Record<string, string> = {
+      sdkmanager: "exit 0",
+      avdmanager: 'read -r answer; test "$answer" = no',
+      timeout: 'shift 3; exec "$@"',
+      node: 'printf "%s\\n" "$@" > "$RUNNER_TEMP/build-args"',
+      emulator: `if [ "$1" = -accel-check ]; then
+  echo 'KVM is available'
+else
+  test -f "$RUNNER_TEMP/build-args" || exit 49
+  case " $* " in *" -memory 4096 "*) ;; *) exit 50 ;; esac
+fi`,
+    };
+    for (const [name, body] of Object.entries(commands)) {
+      writeFileSync(path.join(bin, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
+    }
+    const setup = step.run.slice(
+      step.run.indexOf("sdkmanager "),
+      step.run.indexOf("emulator_pid=$!") + "emulator_pid=$!".length,
+    );
+    const result = spawnSync(
+      workflowBash,
+      [
+        "-c",
+        `set -euo pipefail\n${setup.replaceAll("/usr/bin/timeout", "timeout")}\nwait "$emulator_pid"`,
+      ],
+      {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          RUNNER_TEMP: root,
+          ANDROID_SDK_ROOT: root,
+          SYSTEM_IMAGE: "fixture",
+          EXPECTED_PAGE_SIZE: String(pageSize),
+        },
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(path.join(root, "build-args"), "utf8").split("\n");
+    expect(args).toContain(":app:assemblePlayDebug");
+    expect(args).toContain(":app:assemblePlayDebugAndroidTest");
+    expect(args).toContain(
+      `-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=${pageSize}`,
+    );
+  },
+);
+
 it.skipIf(process.platform === "win32").each(["offline", "responsive"])(
   "disposes the owned emulator after boot failure with %s ADB",
   (mode) => {

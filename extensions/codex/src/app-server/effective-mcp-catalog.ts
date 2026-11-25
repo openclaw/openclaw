@@ -229,11 +229,7 @@ export async function acquireCodexMcpAppRuntime(
       return catalog;
     };
     runtime.peekCatalog = () => catalog;
-    const unprotect = protectCodexAppServerLiveThread(
-      acquired.client,
-      admittedBinding.threadId,
-      "mcp-discovery",
-    );
+    const unprotect = protectCodexAppServerLiveThread(acquired.client, admittedBinding.threadId);
     let cleanup: Promise<unknown> | undefined;
     runtime.joinCleanup = async () => {
       await cleanup;

@@ -197,11 +197,7 @@ export class CodexNativeProcessClient {
       processes: new Set(),
       assertActive,
       releaseClient: retainSharedCodexAppServerClientIfCurrent(this.client),
-      releaseThread: protectCodexAppServerLiveThread(
-        this.client,
-        receipt.threadId,
-        "native-command",
-      ),
+      releaseThread: protectCodexAppServerLiveThread(this.client, receipt.threadId),
     };
     commands.set(receipt.itemId, command);
     owner.commands.add(command);

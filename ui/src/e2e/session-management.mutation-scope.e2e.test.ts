@@ -162,6 +162,7 @@ suite.define(() => {
             await rowFor(original.key).click({ button: "right" });
             await ui.visible(ui.menuItem(page.locator("openclaw-session-menu"), "Archive 2"));
             await page.keyboard.press("A");
+            await ui.closeArchiveUndoToast(page);
             const request = await gateway.waitForRequest(method);
             expect(request.params).toMatchObject({
               patch: { archived: true },
@@ -204,10 +205,6 @@ suite.define(() => {
               .waitFor({ state: "hidden" });
             expect(await gateway.getRequests("connect")).toHaveLength(researchHistory.connections);
           }
-          if (operation === "batch archive") {
-            await ui.expectText(page.locator(".app-toast"), "Archived 2 sessions");
-          }
-
           if (filter === "All") {
             expect(await gateway.getRequests("sessions.list", filteredMatch)).toHaveLength(
               filteredReadsBefore,

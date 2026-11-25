@@ -3,7 +3,9 @@ import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import type { RememberInput } from "./remember-contract.js";
+import { claimPayload } from "./remember.js";
 import { createKnowledgeService } from "./service.js";
+import { canonical } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
   accessFor,
@@ -12,6 +14,7 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+import { digest } from "./vault.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -38,7 +41,7 @@ async function fixture() {
       owner,
     );
   const record = (id: string) =>
-    service.record({ id, includeMetadata: true, includeEvidence: true }, owner);
+    service.record_detail({ id, includeMetadata: true, includeEvidence: true }, owner);
   return { ...f, service, owner, page, remember, record };
 }
 
@@ -58,8 +61,11 @@ it("remember links a claim to a uniquely matching page and cites the retained ex
   expect(read.record!.metadata!.claim_kind).toBe("decision");
   expect(read.record!.metadata!.assertion_origin).toBe("source");
   expect(read.evidence![0]!.verified).toBe(true);
-  const claims = await f.service.connections({ id: project.id, direction: "claims" }, f.owner);
-  expect(claims.connections[0]!.record.id).toBe(out.items[0]!.id);
+  const claims = await f.service.connections_detail(
+    { id: project.id, direction: "claims" },
+    f.owner,
+  );
+  expect(claims.connections[0]).toMatchObject({ id: out.items[0]!.id });
 });
 
 it("remember replays an accepted request once and rejects changed payloads", async () => {
@@ -96,13 +102,28 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   const { evidence } = await f.record(replay.items[0]!.id);
   expect(evidence!.map((e) => e.verified)).toStrictEqual([true]);
   expect((await f.service.remember(input, f.owner)).items).toStrictEqual(replay.items);
+  for (const change of [
+    { excerpt: "A different supporting excerpt." },
+    { attribution: "Another synthetic speaker" },
+    { items: [{ ...items[0]!, text: "  PREFERS short replies. " }] },
+    { items: [{ ...items[0]!, origin: "user_belief" as const }] },
+    { items: [{ ...items[0]!, occurred_at: "2026-10-18" }] },
+    { items: [{ ...items[0]!, about: "Different context" }] },
+  ]) {
+    await expect(f.service.remember({ ...input, ...change }, f.owner)).rejects.toThrow(
+      /different payload/,
+    );
+  }
+  expect(
+    (await f.service.mutation({ requestId, includeFiles: false }, f.owner)).receipt,
+  ).toStrictEqual(replay.receipt);
   await expect(
     f.service.remember(
       { ...input, items: [...items, { text: "Ships Friday.", kind: "commitment" }] },
       f.owner,
     ),
   ).rejects.toThrow(/different payload/);
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(1);
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
   await expect(changed()).rejects.toThrow(/different payload/);
   const again = await f.remember([
     { text: "  prefers SHORT   replies. ", kind: "preference", subject: "garden pilot" },
@@ -112,10 +133,56 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   expect(again.items.map((i) => i.status)).toStrictEqual(["duplicate", "inserted", "duplicate"]);
   expect(again.items[0]!.id).toBe(replay.items[0]!.id);
   expect(again.items[2]!.id).toBe(again.items[1]!.id);
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(2);
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(2);
   const none = await f.remember(items);
   expect(none.receipt).toBe(null);
   expect(none.items[0]!.status).toBe("duplicate");
+});
+
+it("remember preserves different assertion dates and origins within calls and against saved claims", async () => {
+  const f = await fixture();
+  const pairs: [
+    string,
+    Partial<RememberInput["items"][number]>,
+    Partial<RememberInput["items"][number]>,
+  ][] = [
+    ["occurrence", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-02" }],
+    ["due", { due_at: "2026-11-02" }, { due_at: "2026-11-04T09:00:00+11:00" }],
+    ["validity", { valid_from: "2020-01-01T00:00:00Z" }, { valid_from: "2021-01-01T00:00:00Z" }],
+    ["expiry", { expires_at: "2098-01-01T00:00:00Z" }, { expires_at: "2099-01-01T00:00:00Z" }],
+    ["origin", { origin: "source" }, { origin: "user_belief" }],
+    ["precision", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-01T00:00:00Z" }],
+    ["unknown occurrence", {}, { occurred_at: "2026-11-01" }],
+    ["unknown due", {}, { due_at: "2026-11-02" }],
+  ];
+  const items: RememberInput["items"] = pairs.flatMap(([name, left, right]) =>
+    [left, right].map((fields) =>
+      Object.assign({ text: "Historical " + name + ".", kind: "commitment" as const }, fields),
+    ),
+  );
+  items.push(
+    { text: "Default source origin.", kind: "fact" },
+    { text: "default SOURCE origin.", kind: "fact", origin: "source" },
+  );
+  const saved = await f.remember(items);
+  for (let n = 0; n < pairs.length * 2; n++) {
+    expect(saved.items[n]!.status).toBe("inserted");
+    const metadata = (await f.record(saved.items[n]!.id)).record!.metadata!;
+    const { origin, ...dates } = items[n]!;
+    for (const field of ["occurred_at", "due_at", "valid_from", "expires_at"] as const) {
+      expect(metadata[field]).toBe(dates[field]);
+    }
+    expect(metadata.assertion_origin).toBe(origin ?? "source");
+    if (n % 2 === 1) {
+      expect(saved.items[n]!.id).not.toBe(saved.items[n - 1]!.id);
+    }
+  }
+  expect(saved.items.at(-1)!.status).toBe("duplicate");
+  expect(saved.items.at(-1)!.id).toBe(saved.items.at(-2)!.id);
+  const repeated = await f.remember(items);
+  expect(repeated.receipt).toBe(null);
+  expect(repeated.items.map((i) => i.status)).toStrictEqual(items.map(() => "duplicate"));
+  expect(repeated.items.map((i) => i.id)).toStrictEqual(saved.items.map((i) => i.id));
 });
 
 it("remember rejects agent inference, oversized excerpts and missing request IDs outside a flush", async () => {
@@ -148,7 +215,7 @@ it("named and omitted subjects never guess competing names or create pages", asy
   await f.page("Weekly Sync", { type: "meeting" });
   const a = await f.page("Atlas"),
     b = await f.page("Atlas", { type: "person" });
-  const pages = (await f.service.records({ kind: "page" }, f.owner)).total;
+  const pages = (await f.service.records_detail({ kind: "page" }, f.owner)).total;
   const out = await f.remember([
     { text: "Atlas launched.", kind: "event", subject: "Atlas", occurred_at: "2026-10-18" },
     { text: "Nimbus is paused.", kind: "fact", subject: "Nimbus" },
@@ -174,7 +241,7 @@ it("named and omitted subjects never guess competing names or create pages", asy
   expect(out.items[0]!.candidates!.map((c) => c.id).toSorted(defaultOrder)).toStrictEqual(
     [a.id, b.id].toSorted(defaultOrder),
   );
-  expect((await f.service.records({ kind: "page" }, f.owner)).total).toBe(pages);
+  expect((await f.service.records_detail({ kind: "page" }, f.owner)).total).toBe(pages);
   expect((await f.record(out.items[1]!.id)).record!.metadata!.entities).toBe(undefined);
   expect((await f.record(out.items[0]!.id)).record!.metadata!.occurred_at).toBe("2026-10-18");
   expect(out.message).toMatch(/2 unlinked/);
@@ -182,4 +249,119 @@ it("named and omitted subjects never guess competing names or create pages", asy
   expect(read!.entities).toStrictEqual([pilot.id]);
   expect((await f.record(out.items[6]!.id)).record!.metadata!.entities).toBe(undefined);
   expect(out.message).toMatch(/4 linked by inference/);
+});
+
+it("replays a legacy collapsed date batch without publishing the suppressed assertion", async () => {
+  const f = await fixture();
+  const input: RememberInput & { requestId: string } = {
+    requestId: randomUUID(),
+    attribution: "Synthetic legacy user",
+    excerpt: "Ships Friday, first on November 1 then on November 2.",
+    items: [
+      { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01" },
+      { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-02" },
+    ],
+  };
+  // The original writer collapsed equal text/kind/subjects before attach + batch.
+  const receipt = await retainedRememberBatch(f, input);
+  const restarted = createKnowledgeService(f.api);
+  const replay = await restarted.remember(input, f.owner);
+  expect(replay.receipt).toStrictEqual(receipt);
+  expect(replay.items.map(({ status, id }) => [status, id])).toStrictEqual([
+    ["inserted", receipt.items![0]!.id],
+    ["duplicate", receipt.items![0]!.id],
+  ]);
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
+  expect((await f.record(receipt.items![0]!.id)).record!.metadata!.occurred_at).toBe("2026-11-01");
+  await expect(
+    restarted.remember(
+      {
+        ...input,
+        items: [...input.items, { text: "Unrelated new claim.", kind: "fact" }],
+      },
+      f.owner,
+    ),
+  ).rejects.toThrow(/different payload/);
+  const fresh = await restarted.remember({ ...input, requestId: randomUUID() }, f.owner);
+  expect(fresh.items.map((item) => item.status)).toStrictEqual(["duplicate", "inserted"]);
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(2);
+  expect((await restarted.remember(input, f.owner)).items).toStrictEqual(replay.items);
+});
+
+async function retainedRememberBatch(
+  f: Awaited<ReturnType<typeof fixture>>,
+  input: RememberInput & { requestId: string },
+  intent?: string,
+) {
+  const storage = new KnowledgeStorage(f.config);
+  const access = accessFor(f.owner, true);
+  const upload = await storage.attach(
+    {
+      requestId: input.requestId,
+      expectedVaultId: f.config.vaultId,
+      filename: "excerpt.txt",
+      mediaType: "text/plain",
+      attribution: input.attribution,
+      offset: 0,
+      data: Buffer.from(input.excerpt).toString("base64"),
+      final: true,
+    },
+    access,
+  );
+  const vaultStatus = await f.service.status({}, f.owner);
+  return storage.batch(
+    {
+      requestId: input.requestId,
+      expectedVaultId: f.config.vaultId,
+      expectedOntologyFingerprint: vaultStatus.ontologyFingerprint,
+      items: [
+        {
+          key: "i0",
+          kind: "claim",
+          input: claimPayload(
+            input.items[0]!,
+            { subject: "none" },
+            {
+              ...upload.evidence!,
+              start_line: 1,
+              end_line: 1,
+            },
+            input.attribution,
+          ),
+        },
+      ],
+    },
+    access,
+    "agent",
+    intent,
+  );
+}
+
+it("replays shipped prefixed remember receipts without relaxing changed retries", async () => {
+  const f = await fixture();
+  const input: RememberInput & { requestId: string } = {
+    requestId: randomUUID(),
+    attribution: "Synthetic released user",
+    excerpt: "Ships Friday.",
+    items: [{ text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01" }],
+  };
+  const receipt = await retainedRememberBatch(
+    f,
+    input,
+    "remember:" + digest(canonical({ operation: "remember", input })),
+  );
+  const restarted = createKnowledgeService(f.api);
+  const replay = await restarted.remember(input, f.owner);
+  expect(replay.receipt).toStrictEqual(receipt);
+  expect(replay.items[0]!.id).toBe(receipt.items![0]!.id);
+  for (const change of [
+    { excerpt: "A different excerpt." },
+    { attribution: "A different speaker" },
+    { items: [{ ...input.items[0]!, occurred_at: "2026-11-02" }] },
+  ]) {
+    await expect(restarted.remember({ ...input, ...change }, f.owner)).rejects.toThrow(
+      /different payload/,
+    );
+  }
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
 });

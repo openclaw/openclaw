@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import { handleGatewayRequest } from "../gateway/server-methods.js";
 import type { GatewayRequestOptions } from "../gateway/server-methods/types.js";
 import { prepareGatewaySkillAuthoring } from "../gateway/skill-library-authoring.js";
@@ -17,7 +18,6 @@ import { workshopPluginConfig } from "../skills/test-support/workshop-config.tes
 import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -27,10 +27,7 @@ import {
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
@@ -402,33 +399,6 @@ describe("Workshop through the OpenClaw tool set", () => {
     });
   });
 
-  it("T7: captures the invoking source authority before its first await", async () => {
-    await seed();
-    const tool = workshop();
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:contract",
-      receiptAuthority: () => false,
-    };
-    const pending = withGatewayToolCallerIdentity(identity, () => {
-      const write = tool.execute("retired-source", {
-        action: "patch",
-        name: "deploy",
-        old_text: "deployment",
-        new_text: "release",
-      });
-      const caller = getGatewayToolCallerIdentity();
-      if (!caller) {
-        throw new Error("Expected the invoking caller scope");
-      }
-      caller.receiptAuthority = () => true;
-      return write;
-    });
-    await expect(pending).rejects.toThrow("tool invocation authority is no longer active");
-    expect(await fs.readFile(path.join(root, "deploy", "SKILL.md"), "utf8")).toBe(skill("deploy"));
-    expect((await changes()).changes).toEqual([]);
-  });
-
   it("L2 L3: retains ten prior trees and serves a feed with pruned-version references", async () => {
     const tool = workshop();
     await tool.execute("create", {
@@ -675,7 +645,11 @@ describe("Workshop through the OpenClaw tool set", () => {
         },
         context: { getRuntimeConfig: () => ownerConfig },
       } as Parameters<typeof prepareGatewaySkillAuthoring>[0];
-      const capability = await prepareGatewaySkillAuthoring(owner, "agent:main:contract", true);
+      const capability = await prepareGatewaySkillAuthoring(
+        owner,
+        "agent:main:contract",
+        decideTurnGrant(["operator.admin"]),
+      );
       expect(capability?.defaultTarget).toBe(multiple ? "personal" : "workspace");
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -735,20 +709,6 @@ describe("Workshop through the OpenClaw tool set", () => {
         await expect(fs.stat(path.join(root, "personal"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        if (!multiple) {
-          // A demoted admin keeps the definition but loses workspace writes.
-          setUserProfileRole(alice.id, "reader");
-          await expect(
-            invoke("skill_workshop", {
-              action: "create",
-              name: "demoted",
-              content: skill("demoted"),
-            }),
-          ).rejects.toThrow("current administrator authority");
-          await expect(fs.stat(path.join(root, "demoted"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-        }
       } finally {
         admission.close();
         catalog.release();

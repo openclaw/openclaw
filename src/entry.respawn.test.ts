@@ -40,10 +40,23 @@ const voltaShim = "/home/alice/.volta/bin/volta-shim";
 
 const originalExitCode = process.exitCode;
 afterEach(() => {
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
   vi.restoreAllMocks();
   vi.mocked(attachChildProcessBridge).mockReset();
   vi.unstubAllGlobals();
+});
+
+it("runs one-shot model inference in process unless Node must reload its trust store", () => {
+  const local = ["infer", "model", "run", "--local", "--prompt-stdin"];
+  const alias = ["--profile", "dev", "capability", "model", "--agent", "main", "run"];
+  for (const args of [local, alias, [...alias, "--gateway"]]) {
+    expect(buildPlan({ args, autoNodeExtraCaCerts: "" })).toBeNull();
+  }
+  const withCa = requirePlan({ args: local, autoNodeExtraCaCerts: systemCa });
+  expect(withCa.env.NODE_EXTRA_CA_CERTS).toBe(systemCa);
+  expect(withCa.argv).not.toContain(warningFlag);
+  const otherCommand = ["infer", "model", "--agent", "run", "list"];
+  expect(requirePlan({ args: otherCommand, autoNodeExtraCaCerts: "" }).argv).toContain(warningFlag);
 });
 
 it.each([undefined, "--max-old-space-size=4096"])(
@@ -210,7 +223,7 @@ it("spawns the standalone plan without adding runtime flags", async () => {
 });
 
 it("records status after the respawn child closes", async () => {
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const { child, spawn, detach } = mockChild();
   const writeError = vi.fn();
 
@@ -231,7 +244,7 @@ it("records status after the respawn child closes", async () => {
   expect(vi.mocked(attachChildProcessBridge).mock.calls[0]).toEqual([child, expect.any(Function)]);
 
   child.emit("exit", 7, null);
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   child.emit("close", 7, null);
   await completion;
   expect(process.exitCode).toBe(7);

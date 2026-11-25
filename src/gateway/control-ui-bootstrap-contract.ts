@@ -20,11 +20,24 @@ export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
 export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
 export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
 
+/** Operator access a signed-in Control UI asks for; browser code pairing approves the same set. */
+export const CONTROL_UI_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.questions",
+  "operator.pairing",
+] as const;
+
 /** Carries the gateway-configured Control UI mount path into browser bootstrap. */
 export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
 
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
+
+/** Public feature opt-in for callback/loader startup; never carries viewer data or authority. */
+export const CONTROL_UI_ID_LABS_ATTRIBUTE = "data-openclaw-id-enabled";
 
 export const CONTROL_UI_ENVIRONMENT_ATTRIBUTE = "data-openclaw-environment";
 export const CONTROL_UI_ENVIRONMENT_COLORS = [
@@ -82,6 +95,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
+  /** Explicit Labs opt-in; absence leaves every OpenClaw ID surface inert. */
+  openclawIdEnabled?: boolean;
   /** Whether optional composer prediction inference is enabled. */
   composerPredictionsEnabled?: boolean;
   seamColor?: string;

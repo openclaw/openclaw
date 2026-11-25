@@ -3,7 +3,7 @@ import {
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -11,6 +11,7 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
@@ -21,7 +22,10 @@ import {
   readCodexLiveThreadEphemeralPolicy,
   waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
-import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
+import {
+  CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+  wasCodexAppServerThreadClosed,
+} from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -61,6 +65,7 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
+import { buildCodexThreadGenericInstructions } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -170,7 +175,9 @@ export async function releaseCodexBoundLiveThread(
   options: CodexLiveThreadReleaseParams & {
     clientId?: string;
     ownerClientId?: string;
-    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    /** Cold resume may join asynchronous Stop cleanup, never force its release. */
+    waitForBackgroundCleanup?: boolean;
+    /** Runs synchronously if cancellation or timeout ends the wait for the previous owner's exit. */
     onExitWaitCancelled?: () => void;
   },
 ): Promise<boolean> {
@@ -216,42 +223,44 @@ export async function releaseCodexBoundLiveThread(
     }
   }
   try {
-    // Every unload must join settlement, including policy, context, and client rotation.
-    // Protection may also belong to a live resource lease, not a running turn.
-    const deadline = AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS);
-    const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
-    try {
-      await options.lifecycleTiming.measure("background-thread-cleanup", () =>
-        waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
-      );
-    } catch (error) {
-      throwIfCodexThreadLifecycleAborted(options.signal);
-      if (!deadline.aborted) {
-        throw error;
+    if (
+      options.waitForBackgroundCleanup &&
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+      isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId)
+    ) {
+      const deadline = AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS);
+      const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+      try {
+        await options.lifecycleTiming.measure("background-thread-cleanup", () =>
+          waitForCodexAppServerThreadBackgroundCleanup(client, options.threadId, signal),
+        );
+      } catch (error) {
+        throwIfCodexThreadLifecycleAborted(options.signal);
+        if (!deadline.aborted) {
+          throw error;
+        }
+        // A deadline is not settlement: the existing ownership guard still decides.
       }
-      // A deadline is not settlement: the existing ownership guard still decides.
-    }
-    throwIfCodexThreadLifecycleAborted(options.signal);
-    options.assertCurrent?.();
-    const clientClosed = client.getCloseError();
-    if (clientClosed) {
-      throw clientClosed;
+      options.assertCurrent?.();
+      const closed = client.getCloseError();
+      if (closed) {
+        throw closed;
+      }
     }
     const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
     const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
-    const backgroundOnly = isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId);
     if (claimed || protectedWork) {
       embeddedAgentLog.debug("codex app-server retained thread release blocked", {
         threadId: options.threadId,
         changedClient: Boolean(changedClient),
         claimed,
         protected: protectedWork,
-        backgroundOnly,
+        backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
       });
       throw new AgentHarnessPreflightError(
-        claimed && !deadline.aborted && !backgroundOnly
-          ? `Codex thread ${options.threadId} is claimed by active work; stop it first.`
-          : `Codex thread ${options.threadId} still has background work or live resources after waiting for cleanup; wait for them to settle or release the owning resources and retry.`,
+        options.waitForBackgroundCleanup && !claimed && protectedWork
+          ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
+          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
     }
     released = await releaseCodexRetainedLiveThread({
@@ -306,9 +315,25 @@ export async function releaseCodexBoundLiveThread(
               ),
           );
         }
-        // Siblings may keep the old process alive after this exact thread stops.
+        // A sibling can keep this process alive. Timing out leaves the old writer in place.
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
-          racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError),
+          raceWithTimeout(
+            Promise.race(stopped),
+            CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+            () => {
+              options.onExitWaitCancelled?.();
+              throw new CodexAppServerStartupError(
+                "timed_out",
+                "The previous Codex thread did not confirm shutdown before the handoff timed out. Try sending your message again in a few seconds. If the conversation still cannot resume, start a new chat.",
+              );
+            },
+            {
+              signal: options.signal,
+              onAbort: (signal) => {
+                throw exitWaitAbortError(signal);
+              },
+            },
+          ),
         );
       } else if (released && threadClosed) {
         // A live previous owner keeps the per-home writer lock until it unloads the thread
@@ -567,7 +592,11 @@ export async function tryReuseCodexLiveThread(
     if (
       incognito &&
       (!ephemeralPolicy ||
-        ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.developerInstructions !==
+          buildCodexThreadGenericInstructions(params.params, {
+            ...params,
+            config: resumeParams.config,
+          }) ||
         ephemeralPolicy.baseInstructions !==
           options.resolveOpenClawBaseInstructions(promptBinding) ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||

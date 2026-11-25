@@ -145,9 +145,6 @@ child.on('close', code => { process.exitCode = interrupt ? 1 : code; });
         return {
           status: "ok",
           candidateSha: sha,
-          selectedDevUpstream: null,
-          selectedDevSource: null,
-          localDevBranchExists: false,
         };
       } catch (error) {
         completed.reject(error);

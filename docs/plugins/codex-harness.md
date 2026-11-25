@@ -69,6 +69,10 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+Growing final-answer text uses the assistant stream. Answer-candidate telemetry
+publishes snapshots when a candidate starts, completes with authoritative text,
+is superseded, or is selected; it does not repeat the full answer for every delta.
+
 After a transient provider retry, final-answer recovery uses the original
 persisted user prompt and the completed tool results. It can produce a summary
 when the native turn finishes without text, without running those tools again.
@@ -616,27 +620,6 @@ session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
 Stop also retires an already-interrupted child without interrupting its finished
 turn again, so that child cannot keep its parent session blocked.
-A completed turn can still retain its thread for native process or child cleanup,
-or for a live MCP App view lease. A `no-active-run` Stop result does not mean that
-this protection is stale. Before unloading a retained thread for cold resume or
-policy, context-engine, or client rotation, OpenClaw waits for cleanup and
-rechecks ownership. Cancellation or the cleanup deadline never force-releases
-protected work. If resources still retain the thread, wait for their work or
-leases to settle before retrying.
-
-Debug protection records identify the physical client, thread, fixed owner kind,
-and remaining hold count. Owners include native commands and continuations, MCP
-discovery, compaction, and live MCP App views; no tool arguments or message content
-are included. A restart clears the in-memory inventory; it does not prove that work ended.
-
-Revoking a retained source also cancels its native-only background commands,
-including cancellation during background registration. Cleanup checks the exact
-admitted item and any known process handle on the original physical client before
-termination. An empty inventory or termination acknowledgment is not settlement;
-final item or thread receipts release custody. Failed cleanup remains unsettled
-and can be retried by Stop while the original client is available. Logical client
-close reports uncertain cleanup rather than pretending that native work stopped.
-
 Before retiring a canceled native child, Stop also waits for its owned process
 cleanup. An interrupted turn alone does not prove its commands stopped. This
 includes children whose parent has yielded and children interrupted before Stop.
@@ -792,7 +775,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.172.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

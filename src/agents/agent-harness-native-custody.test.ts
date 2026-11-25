@@ -56,7 +56,11 @@ it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
               sessionKey: scope.requesterSessionKey,
               operationalRunInstance:
                 createTestAdmittedRunContext("parent-run").operationalRunInstance,
-              receiptAuthority: () => callerCurrent,
+              receiptAuthority: () => {
+                if (!callerCurrent) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
               gatewayContextResolver: resolver,
             },
             () => captureAgentHarnessCompletionCustody(scope),

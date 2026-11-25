@@ -151,6 +151,33 @@ it("relays raw approval requests once before the later agent approval event", as
   });
 });
 
+it("routes an MCP approval to its ACP turn by run ID despite different tool IDs", async () => {
+  const h = await createHarness({ sessions: ["session-1", "session-2"] });
+  const secondRun = expectDefined(h.runIds[1], "second Gateway run id");
+  await h.send(tool(h.runId, "toolu_first"));
+  await h.send(tool(secondRun, "toolu_second"));
+  const send = (id: string, runId?: string, sessionKey = SESSION_KEY) =>
+    h.send({
+      type: "event",
+      event: "exec.approval.requested",
+      payload: {
+        id,
+        request: { sessionKey, runId, toolCallId: "mcp-exec", command: "echo actual" },
+      },
+    });
+
+  await send("no-run");
+  await send("stale-run", "finished");
+  await send("wrong-session", secondRun, "agent:main:elsewhere");
+  expect(h.requestPermission).not.toHaveBeenCalled();
+  await send("approval-mcp", secondRun);
+  await h.expectResolution("approval-mcp");
+  expectSingleCall(h.requestPermission, {
+    sessionId: "session-2",
+    toolCall: { toolCallId: "mcp-exec" },
+  });
+});
+
 it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
   const h = await createHarness({
     sessions: ["session-1", "session-2"],

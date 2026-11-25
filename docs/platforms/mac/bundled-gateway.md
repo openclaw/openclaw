@@ -37,18 +37,27 @@ See [Onboarding (macOS app)](/start/onboarding) for eligibility and fallbacks.
 
 ### Terminal commands
 
-The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLite.
+The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLite,
+unless that would replace an existing operator-selected terminal default.
 By default, `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`.
 
 When the app runs from a persistent location, it also links `openclaw-mac` beside
-that command. The default profile adds the bin directory to the usual shell
-profile files.
+that command. The first persistent installation adds `~/.openclaw/bin` to the
+usual Bash, zsh, fish, or POSIX sh startup files, respecting `ZDOTDIR` and
+`XDG_CONFIG_HOME` without overriding an existing PATH-selected command. A fresh named-profile install
+links its profile command there, so plain `openclaw qr` selects that installation.
+Open a new terminal after installation.
 
-Named profiles and apps running from Downloads, Desktop, a disk image, or a
-temporary directory such as `/tmp` do not change shell profiles. Use the full
-command path instead, for example `~/.openclaw-<profile>/bin/openclaw`.
+Later installations preserve that terminal default, even when its Gateway is
+offline. Existing configuration for another profile prevents a later install
+from claiming the default. No configuration or Gateway state is moved or merged.
+For a different installation, use its full command path, for example
+`~/.openclaw-<profile>/bin/openclaw qr`. Explicit `--profile` flags and inherited
+`OPENCLAW_PROFILE` override the launcher default.
 
-The app preserves an operator-created `openclaw` file.
+Apps running from Downloads, Desktop, a disk image, or a temporary directory
+such as `/tmp` do not change shell profiles. The app preserves operator-created
+`openclaw` files and links, and reports shell integration failures in its logs.
 
 ### Existing and development Gateways
 
@@ -78,10 +87,11 @@ Use **Retry setup** after a failed bundled setup. If the bundled runtime is
 missing or incompatible, reinstall OpenClaw.app. Installing a global CLI does
 not repair the app's runtime.
 
-If the runtime crashes with an illegal instruction (`SIGILL`), the app stops
-automatic restarts and saves the crash output in the Gateway log. Update or
-reinstall the app; include the log if the failure continues. The app does not
-automatically switch to Node.
+The app automatically restarts a crashed Gateway, including an illegal instruction
+(`SIGILL`), after 1, 2, 4, then 8 seconds. It stops after five fast failures and
+preserves the crash output in the Gateway log. A minute of healthy operation resets
+that limit. Update or reinstall the app if failures persist, and include the log
+when reporting them. The app does not automatically switch to Node.
 
 For an app-managed Gateway with an exact-version policy, **Retry setup** updates
 an older package through its installed CLI before starting it. Failed updates
