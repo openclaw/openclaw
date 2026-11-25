@@ -138,8 +138,11 @@ beforeEach(() => {
 });
 afterEach(async () => {
   // Timed-out bodies must join before their shared stdout mocks are restored.
-  await diagnosticFixture.cleanup();
-  vi.restoreAllMocks();
+  try {
+    await diagnosticFixture.cleanup();
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 it.each([
@@ -195,9 +198,19 @@ it.for([
       const stdoutWrite = process.stdout.write.bind(process.stdout);
       let flush: ((error?: Error | null) => void) | undefined;
       let output: Writable | undefined;
+      const destination = process.stdout;
+      const originalListeners = destination.rawListeners("error");
+      const sentinel = vi.fn();
+      destination.once("error", sentinel);
+      const baselineListeners = destination.rawListeners("error");
+      let errorListener: ((error: Error) => void) | undefined;
       vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
         if (String(chunk).includes(marker)) {
           flush = typeof encoding === "function" ? encoding : callback;
+          const added = destination
+            .rawListeners("error")
+            .filter((listener) => !baselineListeners.includes(listener));
+          errorListener = added.length === 1 ? added[0] : undefined;
           return true;
         }
         return typeof encoding === "function"
@@ -223,14 +236,6 @@ it.for([
         }
         return resolve(...args);
       });
-      const destination = process.stdout;
-      const originalListeners = destination.rawListeners("error");
-      const persistentListeners = originalListeners.filter(
-        (listener) => !Object.hasOwn(listener, "listener"),
-      );
-      const sentinel = () => {};
-      destination.on("error", sentinel);
-      const baselineListeners = destination.listeners("error");
       let flushed = false;
       let emitted = false;
       const releaseOutput = () => {
@@ -242,7 +247,10 @@ it.for([
       const releaseError = () => {
         if (rejectOutput && flushed && !emitted) {
           emitted = true;
-          destination.emit("error", outputError);
+          // Deliver only this write's event; shared stdout listeners belong to other owners.
+          expect(errorListener).toBeTypeOf("function");
+          expect(destination.rawListeners("error")).toEqual([...baselineListeners, errorListener]);
+          errorListener?.call(destination, outputError);
         }
       };
       const running = runRealGatewayUiTests([], env);
@@ -260,6 +268,7 @@ it.for([
           signal,
         );
         expect(flush).toBeTypeOf("function");
+        expect(errorListener).toBeTypeOf("function");
         expect(managed).not.toHaveBeenCalled();
         expect(createWorkers).not.toHaveBeenCalled();
         expect(disposeWorkers).not.toHaveBeenCalled();
@@ -273,16 +282,11 @@ it.for([
             ),
             signal,
           );
-          expect(destination.listeners("error")).toEqual([
-            ...baselineListeners,
-            expect.any(Function),
-          ]);
+          expect(destination.rawListeners("error")).toEqual([...baselineListeners, errorListener]);
           expect(managed).not.toHaveBeenCalled();
           expect(createWorkers).not.toHaveBeenCalled();
         }
       } finally {
-        releaseOutput();
-        releaseError();
         const onAbort = () => {
           output?.destroy();
         };
@@ -291,15 +295,29 @@ it.for([
           onAbort();
         }
         try {
-          await observed;
+          try {
+            try {
+              releaseOutput();
+            } finally {
+              releaseError();
+            }
+          } catch (error) {
+            onAbort();
+            throw error;
+          } finally {
+            await observed;
+          }
+          expect(destination.rawListeners("error")).toEqual(baselineListeners);
         } finally {
           signal.removeEventListener("abort", onAbort);
+          if (errorListener) {
+            destination.off("error", errorListener);
+          }
           destination.off("error", sentinel);
         }
       }
-      expect(destination.rawListeners("error")).toEqual(
-        rejectOutput ? persistentListeners : originalListeners,
-      );
+      expect(sentinel).not.toHaveBeenCalled();
+      expect(destination.rawListeners("error")).toEqual(originalListeners);
       const result = await observed;
       if (rejectConfig && rejectOutput && !sameError) {
         expect(result).toMatchObject({

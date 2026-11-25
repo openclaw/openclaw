@@ -57,9 +57,7 @@ async function requireTestConfig(config: unknown): Promise<ExpectedTestConfig> {
 async function projectConfigs(config: ViteUserConfig): Promise<ExpectedTestConfig[]> {
   const { test } = await resolveConfig({ config: false }, config);
   // Browser parents are hidden; ownership belongs to their expanded instances.
-  return test.resolvedProjects
-    .filter((entry) => !entry.hidden)
-    .map((entry) => entry.projectConfig);
+  return test.resolvedProjects.filter((entry) => !entry.hidden).map((entry) => entry.projectConfig);
 }
 const discover = (config: ExpectedTestConfig, packageRelative = false) =>
   globTestFiles(config.include ?? [], {
@@ -442,9 +440,10 @@ export default {
         discover(browsers.find((project) => project.name === "chromium") ?? {}, true),
       ).not.toContain(isolatedFile);
       expect(
-        discover(browsers.find((project) => project.name === "chromium-mock-registry") ?? {}, true).filter(
-          (file) => file === isolatedFile,
-        ),
+        discover(
+          browsers.find((project) => project.name === "chromium-mock-registry") ?? {},
+          true,
+        ).filter((file) => file === isolatedFile),
       ).toHaveLength(1);
     }
     expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
