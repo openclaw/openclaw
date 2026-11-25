@@ -25,11 +25,14 @@ struct RootSidebar: View {
 
     var body: some View {
         let categories = self.sessionCategories
-        let sessionLayout = Self.sessionLayout(self.visibleSessionSections(categories: categories))
+        let sessionLayout = Self.sessionLayout(query: self.searchText) { query in
+            self.visibleSessionSections(query: query, categories: categories)
+        }
         let rowPass = SessionRowPass(
             selectedSessionKey: self.resolvedSelectedSessionKey,
             mainSessionKey: self.resolvedMainSessionKey,
-            categories: categories)
+            categories: categories,
+            placementChildKeys: sessionLayout.placementChildKeys)
         VStack(spacing: 0) {
             self.brandHeader
             if self.isSearchActive {
@@ -614,10 +617,10 @@ struct RootSidebar: View {
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
-    private func visibleSessionSections(categories: [String]) -> [ChatSessionSidebarModel.Section] {
+    private func visibleSessionSections(query: String, categories: [String]) -> [ChatSessionSidebarModel.Section] {
         RootSidebarModel.sections(
             sessions: self.model.sessions,
-            query: self.searchText,
+            query: query,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
@@ -632,17 +635,30 @@ struct RootSidebar: View {
     struct SessionLayout: Equatable {
         let pinnedNodes: [ChatSessionSidebarModel.Node]
         let sections: [ChatSessionSidebarModel.Section]
+        let placementChildKeys: Set<String>
     }
 
-    static func sessionLayout(_ sections: [ChatSessionSidebarModel.Section]) -> SessionLayout {
-        guard let pinnedIndex = sections.firstIndex(where: { $0.id == "pinned" }) else {
-            return SessionLayout(pinnedNodes: [], sections: sections)
-        }
-        var remainingSections = sections
-        let pinnedSection = remainingSections.remove(at: pinnedIndex)
+    static func sessionLayout(query: String, sections: (String) -> [ChatSessionSidebarModel.Section]) -> SessionLayout {
+        let visible = sections(query)
+        // Search can promote a matching child to a visible root. Only the browsing
+        // tree determines whether it owns placement; Home and hidden rows stay excluded.
+        let browsing = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? visible : sections("")
+        return self.sessionLayout(visible, placementSections: browsing)
+    }
+
+    static func sessionLayout(
+        _ sections: [ChatSessionSidebarModel.Section],
+        placementSections: [ChatSessionSidebarModel.Section]? = nil) -> SessionLayout
+    {
+        let placementChildKeys = Set((placementSections ?? sections).flatMap {
+            ChatSessionSidebarModel.rows($0.nodes, showsChildren: { _ in true })
+                .filter { $0.depth > 0 }.map(\.id)
+        })
+        let pinned = sections.first { $0.id == "pinned" }
         return SessionLayout(
-            pinnedNodes: pinnedSection.nodes,
-            sections: remainingSections)
+            pinnedNodes: pinned?.nodes ?? [],
+            sections: sections.filter { $0.id != "pinned" },
+            placementChildKeys: placementChildKeys)
     }
 
     private var sessionCategories: [String] {
@@ -670,6 +686,7 @@ struct RootSidebar: View {
         let selectedSessionKey: String
         let mainSessionKey: String
         let categories: [String]
+        let placementChildKeys: Set<String>
     }
 
     private func displayRows(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Row] {
@@ -683,7 +700,7 @@ struct RootSidebar: View {
         rowPass: SessionRowPass) -> some View
     {
         HStack(spacing: 0) {
-            self.sessionButton(row.node, rowPass: rowPass, isChild: row.depth > 0)
+            self.sessionButton(row.node, rowPass: rowPass)
             if !row.node.children.isEmpty {
                 Button {
                     if !self.collapsedParents.insert(row.id).inserted {
@@ -705,8 +722,7 @@ struct RootSidebar: View {
 
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        rowPass: SessionRowPass,
-        isChild: Bool) -> some View
+        rowPass: SessionRowPass) -> some View
     {
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
@@ -716,7 +732,7 @@ struct RootSidebar: View {
                 isSelected: isSelected,
                 mainSessionKey: rowPass.mainSessionKey,
                 categories: rowPass.categories,
-                canChangePlacement: !isChild,
+                canChangePlacement: !rowPass.placementChildKeys.contains(session.key),
                 isConnected: self.appModel.isOperatorGatewayConnected,
                 minute: Int(Date().timeIntervalSince1970 / 60),
                 open: self.selectSession,
