@@ -214,29 +214,14 @@ export async function loadModelCatalog(
   const subscription = subscribeToSharedRequest(pending, {}, signal);
   const read = beginModelCatalogRead(client, params, controller.signal);
   const request = async () => {
-    let checkedStatus = false;
     for (let attempt = 0; ; attempt += 1) {
       try {
-        pending.statusChanged = false;
-        const result = await (timeoutMs === undefined
+        return await (timeoutMs === undefined
           ? client.request<ModelCatalogResult>("models.list", params)
           : client.request<ModelCatalogResult>("models.list", params, {
               timeoutMs,
               signal: controller.signal,
             }));
-        // A settlement matters only if this older receipt still has unresolved providers.
-        // A settled receipt already answers every status notice received during the read.
-        if (
-          params.refresh ||
-          pending.retired ||
-          !pending.statusChanged ||
-          checkedStatus ||
-          !result.pendingProviders?.length
-        ) {
-          return result;
-        }
-        checkedStatus = true;
-        controller.signal.throwIfAborted();
       } catch (error) {
         if (!isAgentDatabaseInspectionPendingError(error)) {
           throw error;

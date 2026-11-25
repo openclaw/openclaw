@@ -223,6 +223,11 @@ export function publishModelCatalogResult(
   }
   for (const pending of cache.requests.get(key)?.values() ?? []) {
     if (discoverySucceeded && (!pending.scope.refresh || (params.refresh && !pending.retired))) {
+      // The partial is already usable. A reader rechecking after a status notice
+      // needs a new wire instead of rejoining this already settled request.
+      if (entry.invalidated) {
+        pending.retired = true;
+      }
       pending.resolve(result);
     }
   }

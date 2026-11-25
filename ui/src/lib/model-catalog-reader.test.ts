@@ -62,7 +62,24 @@ function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) 
     publishModelCatalogResult(beginModelCatalogRead(client, target), target, result);
     return take();
   };
-  return { gateway, current, client, reader, publish, take, listModels };
+  const notice = (pendingOnly: boolean) => {
+    // The application invalidates the store before notifying mounted views.
+    invalidateChatMetadataStore(
+      client,
+      pendingOnly ? undefined : main,
+      undefined,
+      pendingOnly ? "pending" : "refresh",
+      { commandsChanged: false },
+    );
+    current().testOptions.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: pendingOnly
+        ? { modelCatalogChanged: false, modelCatalogStatusChanged: true }
+        : { ...main, modelCatalogChanged: true },
+    });
+  };
+  return { gateway, current, client, reader, publish, take, listModels, notice };
 }
 
 it("scopes warm publications and retires old bindings", async () => {
@@ -199,7 +216,7 @@ it.each([false, true])(
   "coalesces paired catalog notices across readers (reply still pending: %s)",
   async (stillPending) => {
     const received = vi.fn();
-    const { gateway, reader, current, client, listModels } = fixture({ onResult: received });
+    const { gateway, reader, client, listModels, notice } = fixture({ onResult: received });
     const sibling = new ModelCatalogReader(() => {}, { onResult: received });
     sibling.bind(gateway, main);
     onTestFinished(() => sibling.clear());
@@ -214,64 +231,75 @@ it.each([false, true])(
     void reader.read();
     void sibling.read();
     expect(wire).toHaveBeenCalledTimes(1);
-    const notify = (pendingOnly: boolean) => {
-      // The application invalidates the store before notifying mounted views.
-      invalidateChatMetadataStore(
-        client,
-        pendingOnly ? undefined : main,
-        undefined,
-        pendingOnly ? "pending" : "refresh",
-        { commandsChanged: false },
-      );
-      current().testOptions.onEvent?.({
-        type: "event",
-        event: "chat.metadata.changed",
-        payload: pendingOnly
-          ? { modelCatalogChanged: false, modelCatalogStatusChanged: true }
-          : { ...main, modelCatalogChanged: true },
-      });
-    };
-    notify(false);
-    notify(true);
-    notify(true);
+    onTestFinished(() => {
+      previous.resolve(first);
+      replacement.resolve(second);
+      final.resolve(second);
+    });
+    notice(false);
+    notice(true);
+    notice(true);
     expect(wire).toHaveBeenCalledTimes(2);
-    replacement.resolve(stillPending ? { ...first, pendingProviders: ["fixture"] } : second);
+    const partial = { ...first, pendingProviders: ["fixture"] };
+    const accepted = stillPending ? partial : second;
+    replacement.resolve(accepted);
+    await expect(direct).resolves.toEqual([{ status: "fulfilled", value: accepted }]);
+    previous.reject(new Error("Retired catalog failed"));
     if (stillPending) {
       await vi.waitFor(() => expect(wire).toHaveBeenCalledTimes(3));
-      expect(received).not.toHaveBeenCalled();
+      expect(received.mock.calls).toEqual([[partial], [partial]]);
       final.resolve(second);
     }
-    await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(2));
-    await expect(direct).resolves.toEqual([{ status: "fulfilled", value: second }]);
-    previous.reject(new Error("Retired catalog failed"));
-    await Promise.resolve();
-    expect(received.mock.calls).toEqual([[second], [second]]);
+    const outcomes = stillPending
+      ? [[partial], [partial], [second], [second]]
+      : [[second], [second]];
+    await vi.waitFor(() => expect(received.mock.calls).toEqual(outcomes));
     expect(peekModelCatalog(client, main)).toEqual(second);
     expect(wire).toHaveBeenCalledTimes(stillPending ? 3 : 2);
   },
 );
 
-it("displays the partial receipt if another status notice lands during its recheck", async () => {
-  const { client, listModels } = fixture();
-  const pending = { ...first, pendingProviders: ["fixture"] };
-  const original = createDeferred<ModelCatalogResult>();
-  const recheck = createDeferred<ModelCatalogResult>();
-  const wire = listModels
-    .mockReturnValueOnce(original.promise)
-    .mockReturnValueOnce(recheck.promise)
-    .mockResolvedValueOnce(second);
-  const display = loadModelCatalog(client, main);
-  invalidateChatMetadataStore(client, undefined, undefined, "pending");
-  original.resolve(pending);
-  await vi.waitFor(() => expect(wire).toHaveBeenCalledTimes(2));
-  invalidateChatMetadataStore(client, undefined, undefined, "pending");
-  recheck.resolve(pending);
-  await expect(display).resolves.toEqual(pending);
-  expect(peekModelCatalog(client, main, { allowStale: true })).toEqual(pending);
-  expect(peekModelCatalog(client, main)).toBeUndefined();
-  await expect(loadModelCatalog(client, main)).resolves.toEqual(second);
-  expect(wire).toHaveBeenCalledTimes(3);
-});
+it.each(["pending", "failure"] as const)(
+  "keeps partial choices visible through a slow and %s status recheck",
+  async (outcome) => {
+    const accepted = vi.fn(),
+      rejected = vi.fn();
+    const { client, reader, listModels, notice } = fixture({
+      onResult: accepted,
+      onError: rejected,
+    });
+    const partial = { ...first, pendingProviders: ["fixture"] };
+    const original = createDeferred<ModelCatalogResult>();
+    const recheck = createDeferred<ModelCatalogResult>();
+    onTestFinished(() => {
+      original.resolve(partial);
+      recheck.resolve(partial);
+    });
+    listModels
+      .mockReturnValueOnce(original.promise)
+      .mockReturnValueOnce(recheck.promise)
+      .mockResolvedValueOnce(second);
+    const display = reader.read();
+    notice(true);
+    original.resolve(partial);
+    await expect(display).resolves.toEqual(partial);
+    expect(accepted.mock.calls).toEqual([[partial]]);
+    expect(reader.snapshot.models).toEqual(first.models);
+    expect(listModels).toHaveBeenCalledTimes(2);
+    notice(true);
+    if (outcome === "failure") {
+      recheck.reject(new Error("Provider unavailable"));
+      await vi.waitFor(() => expect(rejected).toHaveBeenCalledOnce());
+    } else {
+      recheck.resolve(partial);
+      await vi.waitFor(() => expect(accepted).toHaveBeenCalledTimes(2));
+    }
+    expect(reader.snapshot.models).toEqual(first.models);
+    expect(peekModelCatalog(client, main)).toBeUndefined();
+    await expect(reader.read()).resolves.toEqual(second);
+    expect(listModels).toHaveBeenCalledTimes(3);
+  },
+);
 
 it("keeps the outcome of explicit discovery when its status changes during the request", async () => {
   const { client, listModels } = fixture();
