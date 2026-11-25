@@ -182,6 +182,23 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it.each(["fallbacks", "image-fallbacks"] as const)(
+    "rejects --agent on models %s list like the other fallback leaves",
+    async (group) => {
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new ExitError(code);
+      });
+      await expect(runModelsCommand(`models --agent poe ${group} list`)).rejects.toMatchObject({
+        code: 1,
+      });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining(`models ${group} list does not support --agent`),
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    },
+  );
+
   it("selects the image model field for set-image", async () => {
     await runModelsCommand("models set-image openai/gpt-image-1");
     expect(mocks.modelsSetCommand).toHaveBeenCalledWith(

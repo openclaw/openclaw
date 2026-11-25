@@ -422,8 +422,8 @@ export function registerModelsCli(program: Command) {
       .description(`List ${noun} models`)
       .option("--json", "Output JSON", false)
       .option("--plain", "Plain output", false)
-      .action(async (opts) => {
-        await withModelsRuntime(async ({ defaultRuntime }) => {
+      .action(async (opts, command: Command) => {
+        await withGlobalModelsRuntime(command, `${name} list`, async ({ defaultRuntime }) => {
           const { listFallbacksCommand } = await import("../commands/models/fallbacks-shared.js");
           await listFallbacksCommand(
             params,
