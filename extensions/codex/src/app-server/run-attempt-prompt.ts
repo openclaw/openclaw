@@ -34,7 +34,7 @@ import {
   selectCodexStaleBindingDelta,
 } from "./run-attempt-prompt-continuity.js";
 import {
-  applyCodexFrozenPrompt,
+  bindCodexFrozenPrompt,
   resolveCodexShiftedPromptRanges,
 } from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
@@ -389,11 +389,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
       continuity: (reportedContinuity = resolveContinuity()),
     });
+  const applyFrozenPrompt = bindCodexFrozenPrompt(params);
   const decorateCodexTurnPromptText = (
-    promptBuild: Parameters<typeof applyCodexFrozenPrompt>[2],
+    promptBuild: Parameters<typeof applyFrozenPrompt>[1],
     includeWorkspaceReferences = true,
   ) => {
-    const promptBuildResult = applyCodexFrozenPrompt(params, promptState.promptText, promptBuild);
+    const promptBuildResult = applyFrozenPrompt(promptState.promptText, promptBuild);
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
       buildOpenClawPromptContext(includeWorkspaceReferences),

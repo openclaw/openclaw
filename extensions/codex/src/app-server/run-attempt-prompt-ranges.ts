@@ -4,20 +4,15 @@ import type { CodexProjectedContextRange } from "./context-engine-projection.js"
 /**
  * An earlier fallback candidate may have frozen this turn's model text. Send those exact bytes
  * in place of this attempt's request, as embedded fallbacks do; this attempt's inbound and hook
- * context stay around them, like embedded fallback runtime context.
+ * context stay around them, like embedded fallback runtime context. Bind before this attempt
+ * captures its own projection, so same-attempt native retries keep their original input.
  */
-export function applyCodexFrozenPrompt(
+export function bindCodexFrozenPrompt(
   params: Pick<
     EmbeddedRunAttemptParamsV2,
     "prompt" | "skipPreparedUserTurnMessage" | "userTurnTranscriptRecorder"
   >,
-  promptText: string,
-  promptBuild: { prompt: string; promptInputRange?: CodexProjectedContextRange },
-): {
-  prompt: string;
-  promptInputRange: CodexProjectedContextRange | undefined;
-  promptText: string;
-} {
+) {
   const projection = params.skipPreparedUserTurnMessage
     ? undefined
     : params.userTurnTranscriptRecorder?.getPersistedMessage?.()?.["__openclaw"]
@@ -26,18 +21,27 @@ export function applyCodexFrozenPrompt(
     projection && typeof projection === "object" && "text" in projection
       ? projection.text
       : undefined;
-  const { prompt, promptInputRange } = promptBuild;
-  if (typeof frozen !== "string") {
-    return { prompt, promptInputRange, promptText };
-  }
-  // The hook input ends with the projected prompt, which ends with the current request.
-  const request = promptText.endsWith(params.prompt) ? params.prompt : params.prompt.trim();
-  const { start, end } = promptInputRange ?? { start: 0, end: prompt.length };
-  const requestStart = end - request.length;
-  return {
-    prompt: prompt.slice(0, requestStart) + frozen + prompt.slice(end),
-    promptInputRange: { start, end: requestStart + frozen.length },
-    promptText: promptText.slice(0, promptText.length - request.length) + frozen,
+  return (
+    promptText: string,
+    promptBuild: { prompt: string; promptInputRange?: CodexProjectedContextRange },
+  ): {
+    prompt: string;
+    promptInputRange: CodexProjectedContextRange | undefined;
+    promptText: string;
+  } => {
+    const { prompt, promptInputRange } = promptBuild;
+    if (typeof frozen !== "string") {
+      return { prompt, promptInputRange, promptText };
+    }
+    // The hook input ends with the projected prompt, which ends with the current request.
+    const request = promptText.endsWith(params.prompt) ? params.prompt : params.prompt.trim();
+    const { start, end } = promptInputRange ?? { start: 0, end: prompt.length };
+    const requestStart = end - request.length;
+    return {
+      prompt: prompt.slice(0, requestStart) + frozen + prompt.slice(end),
+      promptInputRange: { start, end: requestStart + frozen.length },
+      promptText: promptText.slice(0, promptText.length - request.length) + frozen,
+    };
   };
 }
 
