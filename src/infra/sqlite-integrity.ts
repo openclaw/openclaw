@@ -16,6 +16,8 @@ export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
+  fullIntegrityVerified: boolean;
+  toleratedFts: boolean;
 };
 
 export type SqliteIntegrityCheckTiming = {
@@ -234,7 +236,7 @@ export function assertSqliteIntegrity(
   if (options.check === "quick" && options.schemaOnly) {
     // Schema-only migrations leave existing payloads and FKs unchanged.
     runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
-    return { integrityCheck: "ok" };
+    return { integrityCheck: "ok", fullIntegrityVerified: false, toleratedFts: false };
   }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
   let staleFts = false;
@@ -271,10 +273,11 @@ export function assertSqliteIntegrity(
     }
   }
   runSqliteForeignKeyCheck(database, databaseLabel);
-  if (check === "integrity_check" && !staleFts) {
+  const fullIntegrityVerified = check === "integrity_check" && !staleFts;
+  if (fullIntegrityVerified) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck: "ok" };
+  return { integrityCheck: "ok", fullIntegrityVerified, toleratedFts: staleFts };
 }
 
 /** Only exact, owned FTS definitions may treat their inverted index as derived data. */

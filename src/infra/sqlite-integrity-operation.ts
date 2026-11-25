@@ -14,6 +14,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
       check: SqliteIntegrityCheck,
       error: unknown,
     ) => boolean | Promise<boolean>;
+    repairToleratedFts?: (check: SqliteIntegrityCheck) => boolean | Promise<boolean>;
   },
 ): Promise<T | undefined> {
   const signal = resolveSqliteInspectionSignal(options.signal) ?? options.signal;
@@ -26,6 +27,9 @@ export async function runSqliteIntegrityOperationInWorker<T>(
     let step = operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
+      let fullIntegrityVerified = false;
+      let toleratedFts = false;
+      let repairAttempted = false;
       try {
         await assertSqliteIntegrityInWorker(
           step.value.databaseLabel,
@@ -39,16 +43,36 @@ export async function runSqliteIntegrityOperationInWorker<T>(
             tables: step.value.tables,
             ftsSchemas: step.value.ftsSchemas,
           },
+          undefined,
+          (outcome) => {
+            fullIntegrityVerified = outcome.fullIntegrityVerified;
+            toleratedFts = outcome.toleratedFts;
+          },
         );
       } catch (error) {
         failure = { error };
       }
       // Neither cancellation nor lost custody may resume an index/schema repair.
       beforeResume();
-      if (!failure && step.value.check !== "quick") {
+      if (!failure && fullIntegrityVerified) {
         recordSqliteDatabaseIntegrity(step.value.database);
       }
-      if (failure && options.repairIntegrityError) {
+      if (!failure && toleratedFts && options.repairToleratedFts) {
+        repairAttempted = true;
+        try {
+          if (!(await options.repairToleratedFts(step.value))) {
+            failure = {
+              error: new Error(
+                `SQLite integrity check tolerated canonical FTS corruption for ${step.value.databaseLabel}, but no repair was applied.`,
+              ),
+            };
+          }
+        } catch (error) {
+          failure = { error };
+        }
+        beforeResume();
+      }
+      if (failure && options.repairIntegrityError && !repairAttempted) {
         const original = failure.error;
         try {
           if (await options.repairIntegrityError(step.value, original)) {

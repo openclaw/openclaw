@@ -51,6 +51,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -209,13 +210,20 @@ export async function backupDoctorMigrationDatabases(params: {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     }
     if (migration) {
+      const integrityCheck = resolveSchemaMigrationIntegrityCheck(migration, params.check);
+      // Agent FTS is derived data. Doctor rebuilds canonical indexes after preserving this backup.
       integrityChecks.set(
         realpathSync.native(pathname),
-        resolveSchemaMigrationIntegrityCheck(migration, params.check),
+        migration.kind === "agent"
+          ? { ...integrityCheck, ftsSchemas: AGENT_FTS_SCHEMAS }
+          : integrityCheck,
       );
     } else if (params.versionMigrationsOnly && !pending.has(pathname)) {
       // Companion databases are preserved for rollback but no schema tables change.
-      integrityChecks.set(realpathSync.native(pathname), { check: params.check ?? "quick" });
+      integrityChecks.set(realpathSync.native(pathname), {
+        check: params.check ?? "quick",
+        ...(pathname === sharedPath ? {} : { ftsSchemas: AGENT_FTS_SCHEMAS }),
+      });
     }
   }
   const postgresPaths = new Map(

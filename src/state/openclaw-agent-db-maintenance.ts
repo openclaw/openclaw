@@ -162,6 +162,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
         assertSupportedAgentSchemaVersion(database, pathname);
       },
       repairIntegrityError: repairIndexes,
+      repairToleratedFts: repairIndexes,
     });
     assertOwned();
     assertOpenClawAgentDatabaseForMaintenance(database, {

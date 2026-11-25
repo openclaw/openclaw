@@ -46,6 +46,8 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   let database: import("node:sqlite").DatabaseSync | undefined;
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
+  let fullIntegrityVerified = false;
+  let toleratedFts = false;
   try {
     if (input.background) {
       setPriority(0, constants.priority.PRIORITY_LOW);
@@ -61,7 +63,9 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel, input.integrity);
+      const checks = assertSqliteIntegrity(database, input.databaseLabel, input.integrity);
+      fullIntegrityVerified = checks.fullIntegrityVerified;
+      toleratedFts = checks.toleratedFts;
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }
@@ -82,7 +86,11 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
       failure = toStringifiedError(error);
     }
   }
-  let result: SqliteIntegrityWorkerResult = { ok: true };
+  let result: SqliteIntegrityWorkerResult = {
+    ok: true,
+    fullIntegrityVerified,
+    toleratedFts,
+  };
   if (failure) {
     result = {
       ok: false,

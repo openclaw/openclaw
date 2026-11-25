@@ -11,9 +11,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
 import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
+import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
@@ -21,7 +23,11 @@ import {
   runSqliteIntegrityCheckInWorkerSync,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
-import { sqliteIntegrityCheckSteps, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  sqliteIntegrityCheckSteps,
+  type SqliteIntegrityCheckTiming,
+} from "./sqlite-integrity.js";
 import * as inspectionBudget from "./sqlite-readonly-worker.js";
 
 const progress = vi.hoisted(() => vi.fn());
@@ -202,6 +208,81 @@ describe("SQLite integrity child", () => {
       sqliteIntegrityCheckSteps(database, source, undefined, { check: "full" }),
       options,
     );
+    expect(readSqliteDatabaseIntegrityVerification(database)?.verifiedAt).toEqual(
+      expect.any(Number),
+    );
+  });
+
+  it("does not publish tolerated FTS damage as full migration verification", async () => {
+    const source = path.join(tempDirs.make("openclaw-integrity-ftses-"), "source.sqlite");
+    const ftsSchema = AGENT_FTS_SCHEMAS.find((schema) =>
+      schema.includes("memory_index_chunks_fts"),
+    );
+    expect(ftsSchema).toBeDefined();
+    {
+      using database = openNodeSqliteDatabase(source);
+      database.exec(ftsSchema!);
+      database.exec("INSERT INTO memory_index_chunks_fts(text) VALUES ('ab'||char(65534)||'cd')");
+    }
+    installSqliteFtsTokenizerMismatch(source, "memory_index_chunks_fts");
+    using database = openNodeSqliteDatabase(source);
+    const options = {
+      busyTimeoutMs: 250,
+      signal: new AbortController().signal,
+      beforeResume: () => {},
+    };
+    const outcome: { fullIntegrityVerified: boolean; toleratedFts: boolean }[] = [];
+    await assertSqliteIntegrityInWorker(
+      source,
+      options.busyTimeoutMs,
+      options.signal,
+      undefined,
+      undefined,
+      { check: "full", tables: ["schema_meta"], ftsSchemas: AGENT_FTS_SCHEMAS },
+      undefined,
+      (result) => outcome.push(result),
+    );
+    expect(outcome).toEqual([{ fullIntegrityVerified: false, toleratedFts: true }]);
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, {
+        check: "full",
+        tables: ["schema_meta"],
+        ftsSchemas: AGENT_FTS_SCHEMAS,
+      }),
+      options,
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+
+    runSqliteIntegrityCheckInWorkerSync({
+      database,
+      databaseLabel: source,
+      check: "full",
+      tables: ["schema_meta"],
+      ftsSchemas: AGENT_FTS_SCHEMAS,
+    });
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+
+    const repaired = vi.fn(async () => {
+      database.exec(
+        "INSERT INTO memory_index_chunks_fts(memory_index_chunks_fts) VALUES ('rebuild')",
+      );
+      const result = assertSqliteIntegrity(database, source, {
+        check: "full",
+        ftsSchemas: AGENT_FTS_SCHEMAS,
+      });
+      return result.fullIntegrityVerified;
+    });
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, {
+        check: "full",
+        tables: ["schema_meta"],
+        ftsSchemas: AGENT_FTS_SCHEMAS,
+      }),
+      { ...options, repairToleratedFts: repaired },
+    );
+    expect(repaired).toHaveBeenCalledOnce();
     expect(readSqliteDatabaseIntegrityVerification(database)?.verifiedAt).toEqual(
       expect.any(Number),
     );
