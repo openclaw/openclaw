@@ -88,10 +88,22 @@ it("selects the first current Meet when another event ends at the same instant",
   const starting = { start: at(0), end: at(30), hangoutLink: MEET_URL };
   const tied = { ...starting, hangoutLink: "https://meet.google.com/ccc-cccc-ccc" };
   const events = [ending, starting, tied];
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    const min = url.searchParams.get("timeMin");
-    return cli.jsonResponse({ items: events.filter((event) => !min || event.end.dateTime > min) });
+  const listUrl = (timeMin: Date, timeMax: Date) => {
+    const query = new URLSearchParams({
+      maxResults: "50",
+      orderBy: "startTime",
+      showDeleted: "false",
+      singleEvents: "true",
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+    });
+    return `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+  };
+  const todayUrl = listUrl(new Date(2026, 10, 25), new Date(2026, 10, 26));
+  const defaultUrl = listUrl(noon, new Date(2026, 11, 2, 12));
+  const fetchMock = cli.stubJsonRoutes({
+    [todayUrl]: { items: events },
+    [defaultUrl]: { items: [starting, tied] },
   });
 
   vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(noon);
@@ -108,6 +120,7 @@ it("selects the first current Meet when another event ends at the same instant",
         })),
       });
     }
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([todayUrl, defaultUrl]);
   } finally {
     vi.useRealTimers();
   }
