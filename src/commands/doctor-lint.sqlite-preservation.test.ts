@@ -12,15 +12,21 @@ import { getRuntimeConfig } from "../config/io.runtime.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
+import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -94,6 +100,51 @@ const dropColumns = (table: string, columns: string) =>
 function registerDetector(id: string, detect: HealthCheck["detect"]) {
   registerHealthCheck({ id: `fixture/${id}`, kind: "plugin", description: id, detect });
 }
+
+it("doctor --lint reads committed WAL state without staging a live-owned database", () =>
+  withOpenClawTestState({ label: "doctor-live-sqlite" }, async (state) => {
+    await state.writeConfig({ plugins: { enabled: false } });
+    const writer = openOpenClawStateDatabase({ env: state.env });
+    const databasePath = writer.path;
+    const owner = acquireGatewayStateOwner({
+      databasePath,
+      payload: { ...defaultPayload(databasePath), role: "gateway" },
+    });
+    try {
+      await writer.walMaintenance.stop();
+      writer.db.exec("PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)");
+      const heldPath = state.statePath("held.sqlite");
+      runOpenClawStateWriteTransaction(
+        (database) =>
+          recordAgentDeletionRecoveryHolds(database, [{ agentId: "held", path: heldPath }]),
+        { env: state.env, database: writer },
+      );
+      const copies = [
+        vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync"),
+        vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation"),
+        vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited"),
+        vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync"),
+      ];
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const program = new Command();
+      registerMaintenanceCommands(program);
+      await expect(
+        program.parseAsync(["doctor", "--lint", "--only", "core/doctor/state-schema", "--json"], {
+          from: "user",
+        }),
+      ).rejects.toEqual(new ExitError(1));
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        checksRun: 1,
+        findings: [finding("core/doctor/agent-deletion-journal", "Held agent held database")],
+      });
+      expect(copies.flatMap((copy) => copy.mock.calls.map(([pathname]) => pathname))).not.toContain(
+        databasePath,
+      );
+    } finally {
+      await closeStateDatabaseForTest();
+      owner.release();
+    }
+  }));
 
 it.each([
   { args: ["--lint", "--json"], exitCode: 1, customStore: false, schemaVersion: 20 },
@@ -189,7 +240,7 @@ it.each([
           } finally {
             await auth.dispose();
           }
-          const snapshot = await prepareSqliteReadOnlyLocation(agentPath);
+          const snapshot = await snapshots.prepareSqliteReadOnlyLocation(agentPath);
           try {
             using db = new DatabaseSync(snapshot.location, { readOnly: true });
             const row = db.prepare("SELECT COUNT(*) AS count FROM conversations").get();

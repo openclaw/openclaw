@@ -323,6 +323,7 @@ async function prepareDoctorLintExecution(
       {
         env: sourceEnv,
         lazy: Boolean(opts.onlyIds?.length),
+        preferLiveOwner: true,
       },
     );
   } catch (error) {
