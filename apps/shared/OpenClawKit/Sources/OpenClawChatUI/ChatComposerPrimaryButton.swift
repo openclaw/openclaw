@@ -160,7 +160,11 @@ struct ChatComposerPrimaryButton: View {
     @State private var swapsWithoutFade = false
 
     var body: some View {
+        // Inside the composer's glass, a face that changed in the same update as the card's height was
+        // drawn against the card's old geometry, a row away from its slot, until the next update.
+        // Resolving the button's position as one unit keeps every face in its slot.
         self.menuHost
+            .geometryGroup()
             .task(id: self.role) {
                 self.isStopArmed = false
                 self.swapsWithoutFade = false
