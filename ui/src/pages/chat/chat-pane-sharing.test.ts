@@ -40,6 +40,7 @@ afterEach(() => {
 type SharingPane = TestChatPane & {
   loadSessionSharing: (row: GatewaySessionRow, force?: boolean) => Promise<void>;
   syncSelectedSessionSharing: (row: GatewaySessionRow | undefined) => void;
+  invalidateSessionSharing: (payload: unknown) => void;
   sessionSharingCacheKey: (sessionKey: string) => string;
   mutateSessionSharing: (
     row: GatewaySessionRow,
@@ -373,6 +374,7 @@ describe("chat pane sharing authorization", () => {
     });
     expect(sharingState(pane, row)).toEqual({
       loading: false,
+      sessionId: row.sessionId,
       result: sharingResult(row),
     });
   });
@@ -444,6 +446,29 @@ describe("chat pane sharing authorization", () => {
     expect(sharingState(pane, row)).toBe(failed);
   });
 
+  it("keeps an invalidated roster from seeding a replacement session's read", async () => {
+    const stale = sessionRow();
+    const replacement = { ...sessionRow(), sessionId: "session-replacement" };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...sharingResult(stale),
+        members: [{ identityId: "alice", addedAt: 1 }],
+      })
+      .mockRejectedValueOnce(new Error("Membership read failed"));
+    const { pane, state } = sharingPane(request);
+    await pane.loadSessionSharing(stale);
+    pane.invalidateSessionSharing(undefined);
+    state.sessionsResult = sharingSessionsResult(replacement);
+
+    await pane.loadSessionSharing(replacement);
+
+    expect(sharingState(pane, replacement)).toEqual({
+      loading: false,
+      error: "Membership read failed",
+    });
+  });
+
   it("releases a stale same-key sharing load for the replacement session", async () => {
     const stale = sessionRow();
     const replacement = { ...sessionRow(), sessionId: "session-replacement" };
@@ -472,6 +497,7 @@ describe("chat pane sharing authorization", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(sharingState(pane, replacement)).toEqual({
       loading: false,
+      sessionId: replacement.sessionId,
       result: sharingResult(replacement),
     });
   });
