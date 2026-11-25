@@ -2,10 +2,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
+  lowMemory: vi.fn(),
   stat: vi.fn(),
   prepare: vi.fn(),
   prewarm: vi.fn(),
 }));
+vi.mock("../infra/host-memory.js", () => ({ isConstrainedProcessLowOnMemory: mocks.lowMemory }));
 vi.mock("node:fs/promises", () => ({ default: { stat: mocks.stat } }));
 vi.mock("../config/sessions/session-sqlite-target.js", () => ({
   prepareSqliteTargetFromSessionStorePath: mocks.prepare,
@@ -22,6 +24,7 @@ const config: OpenClawConfig = {
 };
 
 beforeEach(() => {
+  mocks.lowMemory.mockReset().mockReturnValue(false);
   mocks.prewarm.mockReset().mockResolvedValue(undefined);
   mocks.stat.mockReset().mockResolvedValue({ isFile: () => true });
   mocks.prepare.mockReset().mockImplementation(async (_storePath, options) => ({
@@ -74,3 +77,17 @@ it.each(["absent", "unavailable", "available", "cancelled", "cancelled after dis
     }
   },
 );
+
+it("leaves history cold when memory falls during store discovery", async () => {
+  mocks.stat.mockImplementationOnce(async () => {
+    mocks.lowMemory.mockReturnValue(true);
+    return { isFile: () => true };
+  });
+  await prewarmGatewaySessionHistory(config);
+  expect(mocks.prewarm).not.toHaveBeenCalled();
+  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+
+  mocks.lowMemory.mockReturnValue(false);
+  await prewarmGatewaySessionHistory(config);
+  expect(mocks.prewarm).toHaveBeenCalledTimes(2);
+});
