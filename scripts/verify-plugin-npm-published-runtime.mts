@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { listBuiltRuntimeEntryCandidates } from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
 import { resolveNpmJsonString } from "./lib/npm-json-output.mts";

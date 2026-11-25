@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
-import {
-  formatTransportTranscript,
-  readTransportTranscript,
-  waitForNoOutbound,
-  waitForOutboundMessage,
-} from "./suite-runtime-transport.js";
+import { waitForNoOutbound, waitForOutboundMessage } from "./suite-runtime-transport.js";
 
 function createMessages(state = createQaBusState()) {
   return {
@@ -121,28 +116,6 @@ describe("qa suite transport helpers", () => {
     outbound('⚠️ No API key found for provider "openai".', { isError: true });
 
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
-  });
-
-  it("reads transport transcripts with generic helper names", () => {
-    const { state, inbound, outbound } = createMessages();
-    inbound("hello");
-    outbound("working on it");
-    outbound("done");
-
-    const messages = readTransportTranscript(state, {
-      conversationId: "qa-operator",
-      direction: "outbound",
-    });
-    const formatted = formatTransportTranscript(state, {
-      conversationId: "qa-operator",
-    });
-
-    expect(messages.map((message: { text: string }) => message.text)).toEqual([
-      "working on it",
-      "done",
-    ]);
-    expect(formatted).toContain("USER Alice: hello");
-    expect(formatted).toContain("ASSISTANT OpenClaw QA: working on it");
   });
 
   it("applies account filtering after the global outbound cursor", async () => {

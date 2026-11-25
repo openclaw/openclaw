@@ -335,9 +335,10 @@ route. An explicit `@profile` selection is locked; it cannot fall through to
 another account. Credentials resolve for the selected agent/profile during preparation;
 provider status makes no global V2 credential-readiness claim.
 V2 providers receive private prepared model/auth facts and a
-required `isAdmissible()` predicate. Check it immediately before physical I/O,
-including after DNS or a worker queue wait. False closes the request; do not
-swallow an authority assertion to continue inference.
+required `isAdmissible()` predicate. Check it one time, when the provider starts
+the request, and again after a worker queue wait or before a retry. False closes
+the request. A request that passed the check may finish; revocation, deselection
+and reload apply to the next request.
 
 The host retains the request until physical provider cleanup settles, even when
 cancellation or plugin reload has already revoked dispatch authority. It validates
@@ -397,9 +398,9 @@ For HTTP adapters, retain complete prepared request metadata when checking
 responses for reflected credentials. The existing
 `createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
 can account for replacement-auth headers and prefixes, plus configured header
-names. Structural result validation cannot detect leaked credentials. Preserve
-live admission checks after DNS or queue waits, and await response/transport
-release before settling the operation.
+names. Structural result validation cannot detect leaked credentials. Check
+admission when the request starts and after a queue wait. Await
+response/transport release before settling the operation.
 
 ## Decision models (contract version 1)
 
@@ -522,13 +523,13 @@ stops future evaluations, not already-dispatched work or use of its result. The
 host supplies `context.isAdmissible()` for ongoing consumer authority, model
 selection, and provider configuration/credential generation checks; the Labs
 toggle is not part of those ongoing checks. Providers performing external I/O
-must call it synchronously immediately before sending,
-after any lazy loading, DNS, or other awaited preparation. A false result closes
+call it when the request starts, and again after a queue wait or before a retry.
+A request that passed the check may finish. A false result closes
 that evaluation; a thrown authority assertion is terminal. The host remembers
 either observation across provider cleanup, so revocation cannot become a provider
 health failure or a later successful result. Omission preserves explicit
 `decision_evaluate` calls and older-host compatibility; it is not a Labs check for
-explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+explicit calls. The shared Decision HTTP executor makes this check for each request.
 The host still checks before provider dispatch and before returning results, but
 cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
 inference retains its existing signal-controlled worker lifecycle; it does not

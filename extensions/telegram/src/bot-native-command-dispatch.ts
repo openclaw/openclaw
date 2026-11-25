@@ -258,7 +258,29 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
+  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
+    cfg,
+    allowFrom: groupAllowOverride ?? params.allowFrom,
+    accountId,
+    senderId,
+    storeAllowFrom: isGroup ? [] : storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
+  // A DM sender the policy does not admit is ignored, as for ordinary messages (#181955).
+  // Owners and explicit command grants keep the refusal, as do admitted senders (#131408).
+  const ignoreUnadmittedDmSender =
+    !isGroup &&
+    !preContextCommandAccess.senderIsOwner &&
+    !preContextCommandAccess.authorizedByConfig &&
+    (effectiveDmPolicy === "disabled" ||
+      (effectiveDmPolicy === "allowlist" &&
+        !dmAllow.hasWildcard &&
+        !dmAllow.entries.includes(senderId)));
   const rejectNotAuthorized = async () => {
+    if (ignoreUnadmittedDmSender) {
+      logVerbose(`Dropped telegram native command in DM ${chatId} (sender not admitted)`);
+      return null;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () =>
@@ -319,27 +341,16 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
-    cfg,
-    allowFrom: groupAllowOverride ?? params.allowFrom,
-    accountId,
-    senderId,
-    storeAllowFrom: isGroup ? [] : storeAllowFrom,
-    dmPolicy: effectiveDmPolicy,
-  });
-  const {
-    authorized: commandAuthorized,
-    senderIsOwner,
-    assertOwnerCurrent,
-  } = await resolveTelegramCommandIngressAuthorization({
-    ...ingressParams,
-    dmPolicy: effectiveDmPolicy,
-    resolvedThreadId,
-    effectiveDmAllow: dmAllow,
-    effectiveGroupAllow,
-    eventKind: "native-command",
-    ownerContext,
-  });
+  const { authorized: commandAuthorized, senderIsOwner } =
+    await resolveTelegramCommandIngressAuthorization({
+      ...ingressParams,
+      dmPolicy: effectiveDmPolicy,
+      resolvedThreadId,
+      effectiveDmAllow: dmAllow,
+      effectiveGroupAllow,
+      eventKind: "native-command",
+      ownerContext,
+    });
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
@@ -352,7 +363,6 @@ async function resolveTelegramCommandAuth(params: {
     storeAllowFrom,
     commandAuthorized,
     senderIsOwner,
-    assertOwnerCurrent,
     route,
     targetSessionKey,
     inspectedRoute,
@@ -386,15 +396,11 @@ export async function prepareTelegramCommandDispatch(
   }
   const { route, bindingMode } = auth.inspectedRoute;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
-  auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);
-  auth.assertOwnerCurrent?.();
   if (bindingMode.kind === "configured") {
-    auth.assertOwnerCurrent?.();
     const ensured = await nativeCommandRuntime.ensureConfiguredBindingRouteReady({
       cfg: runtimeCfg,
       bindingResolution: bindingMode.binding,
-      assertActive: auth.assertOwnerCurrent,
     });
     if (!ensured.ok) {
       logVerbose(
@@ -471,7 +477,6 @@ export async function prepareTelegramCommandDispatch(
         agentId: route.agentId,
         sessionKey: auth.targetSessionKey,
         expectedSessionId: transcriptSessionId,
-        assertCurrent: auth.assertOwnerCurrent,
         commandText,
         replyText,
         commandId: `telegram:${route.accountId}:${auth.chatId}:${params.msg.message_id}`,

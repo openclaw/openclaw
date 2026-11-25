@@ -6,10 +6,10 @@ import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-re
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
-import { writeHostFile } from "./host-file-write.js";
+  prepareHostFileMutation,
+  writeHostFile,
+  type HostFileMutationPreparer,
+} from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -37,7 +37,9 @@ export type ApplyPatchFileOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Host default: false; sandbox default: true. */
   workspaceOnly?: boolean;
+  strictWorkspaceRoot?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
 };
 
 type PatchCreateOutcome = "created" | "exists";
@@ -66,62 +68,58 @@ export async function createPatchTarget(params: {
 }
 
 export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promise<PatchFileOps> {
-  const assertCurrent = captureAgentToolSourceExecutionGuard(options.signal);
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
-      readFile: (filePath) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          const buf = await bridge.readFile({ filePath, cwd: root });
-          assertCurrent();
-          return decodeUtf8Input(buf, `File ${filePath}`);
-        }),
-      writeFile: (filePath, content) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
-        }),
-      createFileExclusive: (filePath, content) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          if (!bridge.createFileExclusive) {
-            throw new Error(
-              "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
-            );
-          }
-          assertCurrent();
-          return await bridge.createFileExclusive({
-            filePath,
-            cwd: root,
-            data: content,
-            mkdir: true,
-            signal: options.signal,
-          });
-        }),
-      remove: (filePath) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
-        }),
+      readFile: async (filePath) => {
+        const buf = await bridge.readFile({ filePath, cwd: root });
+        options.signal?.throwIfAborted();
+        return decodeUtf8Input(buf, `File ${filePath}`);
+      },
+      writeFile: async (filePath, content) => {
+        options.signal?.throwIfAborted();
+        await bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
+      },
+      createFileExclusive: async (filePath, content) => {
+        if (!bridge.createFileExclusive) {
+          throw new Error(
+            "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
+          );
+        }
+        options.signal?.throwIfAborted();
+        return await bridge.createFileExclusive({
+          filePath,
+          cwd: root,
+          data: content,
+          mkdir: true,
+          signal: options.signal,
+        });
+      },
+      remove: async (filePath) => {
+        options.signal?.throwIfAborted();
+        await bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
+      },
     });
   }
 
   if (options.workspaceOnly === false) {
     return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
-      readFile: (filePath) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          const buffer = await fs.readFile(filePath);
-          assertCurrent();
-          return decodeUtf8Input(buffer, `File ${filePath}`);
-        }),
+      readFile: async (filePath) => {
+        const buffer = await fs.readFile(filePath);
+        options.signal?.throwIfAborted();
+        return decodeUtf8Input(buffer, `File ${filePath}`);
+      },
       writeFile: async (filePath, content) => {
-        await writeHostFile(filePath, content, options.signal);
+        await writeHostFile(filePath, content, options.signal, options.prepareHostFileMutation);
       },
       createFileExclusive: async (filePath, content) => {
         try {
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
-          });
+          await using effect = await prepareHostFileMutation(
+            options.prepareHostFileMutation,
+            options.signal,
+          );
+          effect.assertCurrent();
+          await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
           return "created";
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "EEXIST") {
@@ -130,82 +128,111 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
           throw error;
         }
       },
-      remove: (filePath) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await fs.rm(filePath);
-        }),
+      remove: async (filePath) => {
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
+        effect.assertCurrent();
+        await fs.rm(filePath);
+      },
       mkdirp: async (dir) => {
-        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await fs.mkdir(dir, { recursive: true });
-        });
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
+        effect.assertCurrent();
+        await fs.mkdir(dir, { recursive: true });
       },
     });
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const initialRoot = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
+  const initialRoot = await fsRoot(containmentRoot, {
+    assertBeforeMutation: () => options.signal?.throwIfAborted(),
+  });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
-    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+    const selectedRoot = await resolveHostRootAsync(
+      containmentRoot,
+      filePath,
+      options.strictWorkspaceRoot,
+    );
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
-      root = await fsRoot(selectedRoot, { assertBeforeMutation: assertCurrent });
+      root = await fsRoot(selectedRoot, {
+        assertBeforeMutation: () => options.signal?.throwIfAborted(),
+      });
       roots.set(selectedRoot, root);
     }
     const assertBeforeMutation = () => {
-      assertCurrent();
-      toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
+      options.signal?.throwIfAborted();
+      toRelativeSandboxPath(
+        resolveHostWorkspaceRoot(containmentRoot, filePath, options.strictWorkspaceRoot),
+        filePath,
+      );
     };
     return { root, relative, assertBeforeMutation };
   };
   // Rebase only the admitted root spelling. Root owns parent-alias resolution;
   // absolute paths keep a literal "~" component from becoming home expansion.
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
-    readFile: (filePath) =>
-      runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
-        const opened = await openRootFile({
-          absolutePath: filePath,
-          rootPath: selectedRoot,
-          boundaryLabel: "workspace root",
-          symlinks: "follow-parents-within-root",
-        });
-        assertBoundaryRead(opened, filePath);
-        try {
-          assertCurrent();
-          const buffer = await readFileDescriptor(opened.fd);
-          assertCurrent();
-          return decodeUtf8Input(buffer, `File ${filePath}`);
-        } finally {
-          await closeFileDescriptor(opened.fd);
-        }
-      }),
-    writeFile: async (filePath, content) => {
-      await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
-        assertBeforeMutation();
-        await root
-          .write(path.resolve(root.rootReal, relative), content, {
-            encoding: "utf8",
-            mutationSymlinks: "follow-parents-within-root",
-            assertBeforeMutation,
-          })
-          .catch(rethrowHostMutationError);
+    readFile: async (filePath) => {
+      const selectedRoot = await resolveHostRootAsync(
+        containmentRoot,
+        filePath,
+        options.strictWorkspaceRoot,
+      );
+      const opened = await openRootFile({
+        absolutePath: filePath,
+        rootPath: selectedRoot,
+        boundaryLabel: "workspace root",
+        symlinks: "follow-parents-within-root",
       });
+      assertBoundaryRead(opened, filePath);
+      try {
+        options.signal?.throwIfAborted();
+        const buffer = await readFileDescriptor(opened.fd);
+        options.signal?.throwIfAborted();
+        return decodeUtf8Input(buffer, `File ${filePath}`);
+      } finally {
+        await closeFileDescriptor(opened.fd);
+      }
+    },
+    writeFile: async (filePath, content) => {
+      const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+      await using effect = await prepareHostFileMutation(
+        options.prepareHostFileMutation,
+        options.signal,
+      );
+      assertBeforeMutation();
+      await root
+        .write(path.resolve(root.rootReal, relative), content, {
+          encoding: "utf8",
+          mutationSymlinks: "follow-parents-within-root",
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
+        })
+        .catch(rethrowHostMutationError);
     },
     createFileExclusive: async (filePath, content) => {
       try {
-        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
-          assertBeforeMutation();
-          await root.create(path.resolve(root.rootReal, relative), content, {
-            encoding: "utf8",
-            mutationSymlinks: "reject",
-            assertBeforeMutation,
-          });
+        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
+        assertBeforeMutation();
+        await root.create(path.resolve(root.rootReal, relative), content, {
+          encoding: "utf8",
+          mutationSymlinks: "reject",
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
         });
         return "created";
       } catch (error) {
@@ -216,15 +243,22 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
       }
     },
     remove: async (filePath) => {
-      await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
-        assertBeforeMutation();
-        // remove requires a relative path; "./" preserves literal tilde names.
-        // Omitted mutationSymlinks lets it unlink the final symlink itself.
-        await root
-          .remove(`./${relative}`, { assertBeforeMutation })
-          .catch(rethrowHostMutationError);
-      });
+      const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+      await using effect = await prepareHostFileMutation(
+        options.prepareHostFileMutation,
+        options.signal,
+      );
+      assertBeforeMutation();
+      // remove requires a relative path; "./" preserves literal tilde names.
+      // Omitted mutationSymlinks lets it unlink the final symlink itself.
+      await root
+        .remove(`./${relative}`, {
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
+        })
+        .catch(rethrowHostMutationError);
     },
   });
 }

@@ -93,7 +93,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
     expect(
-      resolveAllowAlwaysPersistenceDecision({
+      await resolveAllowAlwaysPersistenceDecision({
         segments: result.segments,
         authorizationPlan: result.authorizationPlan,
         commandText: command,

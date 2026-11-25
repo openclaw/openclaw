@@ -1,12 +1,6 @@
 import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -20,78 +14,70 @@ const step = action.runs.steps.find(
 );
 
 describe.skipIf(process.platform === "win32")("CI Git capability setup", () => {
-  function fixture(
-    options: { capable?: boolean; ubuntu?: boolean; uid?: string; repositoryTool?: boolean } = {},
-  ) {
+  function fixture(options: { capable?: boolean; codename?: string } = {}) {
     const root = tempDirs.make("openclaw-git-capability-");
     const bin = path.join(root, "bin");
+    const githubPath = path.join(root, "github-path");
     const log = path.join(root, "commands");
-    const capable = path.join(root, "capable");
-    const osRelease = path.join(root, "os-release");
+    const archive = "test Git package";
     mkdirSync(bin);
+    writeFileSync(githubPath, "");
     writeFileSync(log, "");
-    writeFileSync(osRelease, `ID=${options.ubuntu === false ? "debian" : "ubuntu"}\n`);
-    if (options.capable) {
-      writeFileSync(capable, "");
-    }
+    writeFileSync(
+      path.join(root, "os-release"),
+      `ID=ubuntu\nVERSION_CODENAME=${options.codename ?? "noble"}\n`,
+    );
     const shell = (file: string, body: string) =>
-      writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
+      writeFileSync(path.join(bin, file), `#!/bin/bash\nset -euo pipefail\n${body}\n`, {
+        mode: 0o755,
+      });
     shell(
-      path.join(bin, "git"),
-      `
-if [[ "$*" == --version ]]; then
-  [[ -f "$FIXTURE_CAPABLE" ]] && echo 'git version 2.56.0' || echo 'git version 2.43.0'
-elif [[ "$*" == '--no-lazy-fetch --version' && -f "$FIXTURE_CAPABLE" ]]; then
-  echo 'git version 2.56.0'
-else
-  echo 'unknown option: --no-lazy-fetch' >&2
-  exit 129
-fi`,
+      "git",
+      options.capable
+        ? "echo git version 2.56.0"
+        : `
+[[ "$*" == --version ]] || exit 129
+echo git version 2.43.0`,
     );
-    shell(path.join(bin, "id"), `echo '${options.uid ?? "1000"}'`);
+    shell("apt-get", `echo "Simulated Git PPA index outage: HTTP 503" >&2; exit 100`);
     shell(
-      path.join(bin, "timeout"),
+      "curl",
       `
-printf 'timeout %s\\n' "$*" >> "$FIXTURE_LOG"
-shift 3
-exec "$@"`,
+while [[ "$1" != --output ]]; do shift; done
+printf '%s\\n' "$3" >> "$FIXTURE_LOG"
+if [[ "$FIXTURE_PRIMARY_DOWN" == true && "$3" == https://deb.debian.org/* ]]; then exit 22; fi
+printf '%s' "${archive}$FIXTURE_CORRUPTION" > "$2"`,
     );
     shell(
-      path.join(bin, "sudo"),
+      "dpkg-deb",
       `
-printf 'sudo %s\\n' "$*" >> "$FIXTURE_LOG"
-[[ "$1" == -n ]]
-shift
-exec "$@"`,
+printf 'extract\\n' >> "$FIXTURE_LOG"
+mkdir -p "$3/usr/bin" "$3/usr/lib/git-core"
+cp "$FIXTURE_REPLACEMENT" "$3/usr/bin/git"
+printf 'git version 2.47.3\\n' > "$3/usr/lib/git-core/version"`,
     );
-    const repositoryTool = path.join(root, "repository-tool");
-    shell(repositoryTool, `printf 'repository %s\\n' "$*" >> "$FIXTURE_LOG"`);
-    if (options.repositoryTool !== false) {
-      copyFileSync(repositoryTool, path.join(bin, "add-apt-repository"));
+    shell(
+      "replacement-git",
+      `
+[[ "$*" == "--no-lazy-fetch --version" ]] || exit 129
+cat "$GIT_EXEC_PATH/version"`,
+    );
+    shell("sha256sum", `exec /usr/bin/shasum -a 256 "$@"`);
+    for (const command of ["env", "bash", "mktemp", "mkdir", "cp", "cat", "rm", "chmod"]) {
+      symlinkSync(
+        command === "bash" ? "/bin/bash" : `/usr/bin/${command}`,
+        path.join(bin, command),
+      );
     }
-    shell(
-      path.join(bin, "apt-get"),
-      `
-printf 'apt %s noninteractive=%s\\n' "$*" "$DEBIAN_FRONTEND" >> "$FIXTURE_LOG"
-[[ "\${FIXTURE_INSTALL_FAIL:-}" != true ]] || exit 100
-if [[ "$*" == *'software-properties-common' ]]; then
-  cp "$FIXTURE_REPOSITORY_TOOL" "$FIXTURE_BIN/add-apt-repository"
-elif [[ "$*" == *'--no-install-recommends git' && "\${FIXTURE_POST_FAIL:-}" != true ]]; then
-  : > "$FIXTURE_CAPABLE"
-fi`,
-    );
-    for (const [command, executable] of [
-      ["env", "/usr/bin/env"],
-      ["grep", "/usr/bin/grep"],
-      ["cp", "/bin/cp"],
-      ["bash", "/bin/bash"],
-    ] as const) {
-      symlinkSync(executable, path.join(bin, command));
-    }
-    // Keep actual OS parsing and setup intact; only relocate its read-only host fact.
+    // Use real checksum validation with synthetic bytes, and never touch the runner /etc.
     writeFileSync(
       path.join(root, "ensure-git.sh"),
-      readFileSync(helper, "utf8").replace("/etc/os-release", osRelease),
+      readFileSync(helper, "utf8")
+        .replaceAll("/etc/", `${root}/`)
+        .replace(
+          /checksum=[a-f0-9]{64}/g,
+          `checksum=${createHash("sha256").update(archive).digest("hex")}`,
+        ),
     );
     const run = (extra: Record<string, string> = {}) =>
       spawnSync("/bin/bash", ["-c", step.run], {
@@ -100,71 +86,68 @@ fi`,
         env: {
           PATH: bin,
           GITHUB_ACTION_PATH: root,
+          RUNNER_ARCH: "X64",
+          RUNNER_TEMP: root,
+          GITHUB_PATH: githubPath,
           FIXTURE_LOG: log,
-          FIXTURE_CAPABLE: capable,
-          FIXTURE_BIN: bin,
-          FIXTURE_REPOSITORY_TOOL: repositoryTool,
+          FIXTURE_REPLACEMENT: path.join(bin, "replacement-git"),
+          FIXTURE_PRIMARY_DOWN: "false",
+          FIXTURE_CORRUPTION: "",
           ...extra,
         },
       });
-    return { run, commands: () => readFileSync(log, "utf8"), capable };
+    const nextPath = () => readFileSync(githubPath, "utf8").trim();
+    const runNextStep = () =>
+      spawnSync("/bin/bash", ["-c", "git --no-lazy-fetch --version"], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { PATH: [nextPath(), bin].join(path.delimiter) },
+      });
+    return { run, runNextStep, nextPath, commands: () => readFileSync(log, "utf8") };
   }
 
-  it("keeps capable Git without any privileged or package command", () => {
+  it("keeps capable Git without downloading or changing PATH", () => {
     expect(step.if).toBe("runner.os == 'Linux'");
-    const setup = fixture({ capable: true, ubuntu: false });
+    const setup = fixture({ capable: true, codename: "jammy" });
     const result = setup.run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("git version 2.56.0");
     expect(setup.commands()).toBe("");
+    expect(setup.nextPath()).toBe("");
   });
 
-  it.each(["0", "1000"])("upgrades Ubuntu Git under UID %s and verifies its capability", (uid) => {
-    const setup = fixture({ uid });
+  it("provides capable Git when the Noble Git PPA is unavailable", () => {
+    const setup = fixture();
     const result = setup.run();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("git version 2.43.0");
-    expect(result.stdout).toContain("git version 2.56.0");
-    expect(existsSync(setup.capable)).toBe(true);
-    const commands = setup.commands();
-    expect(commands).toContain("repository --yes --no-update ppa:git-core/ppa");
-    expect(commands).toContain("Acquire::http::Timeout=30");
-    expect(commands).toContain("Acquire::https::Timeout=30");
-    expect(commands).toContain("Acquire::Retries=0");
-    expect(commands).toContain(
-      "install -y --no-install-recommends git noninteractive=noninteractive",
-    );
-    expect(commands.match(/^timeout /gm)).toHaveLength(3);
-    expect(commands.includes("sudo -n")).toBe(uid !== "0");
+    const next = setup.runNextStep();
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.stdout).toBe("git version 2.47.3\n");
   });
 
-  it("installs the Ubuntu repository tool only when missing", () => {
-    const setup = fixture({ repositoryTool: false });
-    const result = setup.run();
+  it("recovers from a missing primary package using the pinned snapshot", () => {
+    const setup = fixture();
+    const result = setup.run({ FIXTURE_PRIMARY_DOWN: "true" });
     expect(result.status, result.stderr).toBe(0);
-    expect(setup.commands()).toContain(
-      "install -y --no-install-recommends software-properties-common",
-    );
-    expect(setup.commands().match(/^timeout /gm)).toHaveLength(5);
+    expect(setup.commands()).toContain("https://snapshot.debian.org/");
+    expect(setup.runNextStep().status).toBe(0);
   });
 
-  it("rejects unsupported non-Ubuntu Git without package changes", () => {
-    const setup = fixture({ ubuntu: false });
+  it("rejects corrupt package bytes before extracting or changing PATH", () => {
+    const setup = fixture();
+    const result = setup.run({ FIXTURE_CORRUPTION: "corrupt" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED");
+    expect(setup.commands()).not.toContain("extract");
+    expect(setup.nextPath()).toBe("");
+  });
+
+  it("rejects an unsupported image with old Git without downloading", () => {
+    const setup = fixture({ codename: "jammy" });
     const result = setup.run();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Git 2.45 or newer with --no-lazy-fetch support");
     expect(setup.commands()).toBe("");
-  });
-
-  it.each(["FIXTURE_INSTALL_FAIL", "FIXTURE_POST_FAIL"])("fails closed on %s", (failure) => {
-    const setup = fixture();
-    const result = setup.run({ [failure]: "true" });
-    expect(result.status).not.toBe(0);
-    expect(existsSync(setup.capable)).toBe(false);
-    if (failure === "FIXTURE_POST_FAIL") {
-      expect(result.stderr).toContain("Git upgrade did not provide --no-lazy-fetch support");
-    } else {
-      expect(setup.commands()).not.toContain("install -y --no-install-recommends git");
-    }
+    expect(setup.nextPath()).toBe("");
   });
 });

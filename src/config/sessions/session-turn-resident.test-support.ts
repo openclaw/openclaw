@@ -143,7 +143,6 @@ export function runSessionTurnResidentTests(
       withReads(f, (reads) => {
         expect(f.prepareTurn(plan)).toMatchObject({
           runtimeTarget: { sessionKey: f.scope.sessionKey, selectedSessionId: f.scope.sessionId },
-          expectedSessionState: { abortedLastRun: false },
           messages: [{ pending: true, existing: undefined }],
           version: { rawSeq: null },
         });
@@ -166,7 +165,6 @@ export function runSessionTurnResidentTests(
       withEngineStoreAdmission(() => {
         const prepared = f.prepareTurn(plan);
         expect(prepared.messages).toEqual([{ pending: false, existing: undefined }]);
-        expect(prepared.expectedSessionState?.abortedLastRun).toBeUndefined();
         expect(f.nativeEntry()?.abortedLastRun).toBeUndefined();
       });
     }));
@@ -175,9 +173,9 @@ export function runSessionTurnResidentTests(
     withResident((f) => {
       f.read();
       f.writeEntry({ ...f.nativeEntry()!, abortedLastRun: true });
+      expect(f.nativeEntry()?.abortedLastRun).toBe(true);
       append(f, [message("native write", "next-input", "native")]);
       expect(f.prepareTurn(turn(f))).toMatchObject({
-        expectedSessionState: { abortedLastRun: true },
         version: { rawSeq: 0 },
         messages: [{ existing: { messageId: "native", message: { content: "native write" } } }],
       });
@@ -195,9 +193,9 @@ export function runSessionTurnResidentTests(
       } else {
         const destination = "agent:main:moved";
         f.writeEntry({ ...f.nativeEntry()!, abortedLastRun: true }, destination);
+        expect(f.read({ ...f.target, sessionKey: destination }).entry?.abortedLastRun).toBe(true);
         expect(f.prepareTurn(turn(f))).toMatchObject({
           runtimeTarget: { sessionKey: destination, selectedSessionId: f.scope.sessionId },
-          expectedSessionState: { abortedLastRun: true },
         });
       }
     }),
@@ -228,15 +226,15 @@ export function runSessionTurnResidentTests(
       }),
   );
 
-  it("uses committed identities for fresh inputs and returns stored bytes on retry", () =>
+  it("checks absent pending keys and returns stored bytes on retry", () =>
     withActor(async (f) => {
       expect((await accept(f, { turn: turn(f, "committed-input") })).kind).toBe("committed");
       withReads(f, (reads) => {
         expect(f.prepareTurn(turn(f))).toMatchObject({
           version: { rawSeq: 1 },
-          expectedSessionState: { abortedLastRun: false },
         });
-        expect(reads.read).toBe(0);
+        // Active residency cannot prove that a key has no retained source receipt.
+        expect(reads.read).toBe(1);
         const retry = turn(f, "committed-input", "different retry bytes");
         expect(f.prepareTurn(retry).messages?.[0]?.existing).toMatchObject({
           message: { content: "committed-input" },
@@ -263,7 +261,8 @@ export function runSessionTurnResidentTests(
       }
       withReads(f, (reads) => {
         expect(f.prepareTurn(turn(f)).messages?.[0]?.existing).toBeUndefined();
-        expect(reads.read).toBe(1);
+        // One indexed source-receipt lookup and one transcript identity lookup.
+        expect(reads.read).toBe(2);
       });
     }));
 

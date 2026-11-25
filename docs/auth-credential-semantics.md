@@ -43,7 +43,8 @@ Check results carry a `status` bucket (`ok`, `auth`, `rate_limit`, `billing`, `t
 | ------------------------ | ---------------------------------------------------------------------------- |
 | `excluded_by_auth_order` | Profile omitted from the explicit auth order for its provider.               |
 | `missing_credential`     | No inline credential or SecretRef is configured.                             |
-| `expired`                | Token `expires` is in the past.                                              |
+| `expired`                | Token `expires` is in the past, or an OAuth refresh is still in progress.    |
+| `refresh_failed`         | An OAuth refresh failed terminally; only a fresh sign-in recovers.           |
 | `invalid_expires`        | `expires` is not a valid positive Unix ms timestamp.                         |
 | `unresolved_ref`         | Configured SecretRef could not be resolved.                                  |
 | `ineligible_profile`     | Profile is incompatible with provider config (includes malformed key input). |
@@ -422,8 +423,9 @@ deleting a database marker is not evidence that the old grant is safe to retry.
 When an uncertain-outcome error asks for sign-in, obtain a new grant through the
 existing credential owner:
 
-- System or agent model profiles: run `openclaw models auth login --provider <id>`
-  for the affected agent/profile. Personal model accounts reconnect from
+- System or agent model profiles: select **Sign in again** on the account in the
+  Control UI **Models** page (shown for `refresh_failed`), or run
+  `openclaw models auth login --provider <id>` for the affected agent/profile. Personal model accounts reconnect from
   **Settings → Profile → Connected accounts**, not the system auth store.
 - Shared MCP OAuth: run `openclaw mcp logout <name>`, then
   `openclaw mcp login <name>`. Per-requester MCP users use their own sign-in flow.
@@ -520,7 +522,7 @@ they do not change message-execution profile rotation or session pins.
 Codex owns its native login. Ordinary status and model reads do not import its
 credentials into OpenClaw profiles. To retain a configured CLI-backed
 `openai:default` profile, explicitly import the current Codex login with
-`openclaw models auth login --provider openai --method device-code`. When that
+`openclaw models auth login --provider openai --method oauth`. When that
 OAuth profile is declared in `auth.profiles`, the source is the current native
 Codex home, and no other managed OpenAI OAuth profile exists, import preserves
 the profile ID and its existing model and session pins. The configured model

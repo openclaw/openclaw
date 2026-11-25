@@ -1,2 +1,0 @@
-75
-# macOS ancestry through root-owned login, unbounded JS-runtime environments, and per-PID layout-mismatch custody.

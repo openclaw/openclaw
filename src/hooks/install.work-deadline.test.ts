@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";

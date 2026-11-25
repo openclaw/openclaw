@@ -16,14 +16,11 @@ import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-
 import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 import { runStandaloneBootstrap } from "../helpers/standalone-bootstrap.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
-afterEach(() =>
-  temporary
-    .splice(0)
-    .forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })),
-);
+afterEach(() => cleanupTempDirs(temporary));
 
 function nativeAdapter(runtimeRoot: string, platform?: "darwin" | "linux") {
   const target: { platform?: "darwin" | "linux"; arch?: "arm64" } = platform

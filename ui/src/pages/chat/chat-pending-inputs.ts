@@ -1,24 +1,15 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
-  CHAT_PENDING_INPUT_MESSAGE_PREFIX,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
-import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
-import {
-  findChatSubmissionMessage,
-  readChatThreadMessageIdentity,
-} from "../../lib/chat/history-message-identity.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type {
@@ -28,16 +19,19 @@ import type {
 } from "./chat-pending-inputs.types.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
 } from "./history-merge.ts";
-import type { PendingInputStatus } from "./system-notice-kinds.ts";
+
+export type { PendingSteer } from "./chat-pending-input-display.ts";
+export { buildPendingInputQueueItems } from "./chat-pending-input-presentation.ts";
+
+export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
+  return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
+}
 
 export function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],
@@ -67,116 +61,6 @@ export function reconcileQueuedInputs(
       ? receipt.state === "pending" && receipt.queued
       : !input.runId || !queried.has(input.runId);
   });
-}
-
-function describePendingInputMessage(message: unknown): string {
-  const normalized = normalizeMessage(message);
-  let imageCount = 0;
-  const attachmentLabels = normalized.content.flatMap((part) => {
-    if (part.type === "image") {
-      imageCount += 1;
-      return part.sources.map(({ fileName }) => fileName);
-    }
-    return part.type === "attachment" || part.type === "attachment_error"
-      ? part.attachment.label
-      : [];
-  });
-  return (
-    extractText(message)?.trim() ||
-    describeChatQueueAttachmentLabels(attachmentLabels) ||
-    describeChatQueueAttachmentLabels(
-      (readPersistedMediaFacts(asNullableRecord(message) ?? {}) ?? []).map(
-        ({ fileName }) => fileName,
-      ),
-      imageCount,
-    )
-  );
-}
-
-export function buildPendingInputQueueItems(
-  inputs: ChatPendingInputsPage["items"],
-): ChatQueueDisplayItem[] {
-  return inputs
-    .filter((input) => input.queued && input.state === "queued" && input.runId)
-    .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
-    .map<ChatQueueDisplayItem>((input) => ({
-      id: `pending-input:${input.id}`,
-      text: describePendingInputMessage(input.message),
-      createdAt: input.acceptedAt,
-      pendingRunId: input.runId,
-      serverQueued: true,
-      sender: normalizeMessage(input.message).sender ?? undefined,
-    }));
-}
-
-const PENDING_INPUT_PREVIEW_MAX_CHARS = 60;
-
-function describePendingInputPreview(message: unknown): string {
-  const compact = describePendingInputMessage(message).replace(/\s+/gu, " ").trim();
-  if (!compact) {
-    return t("chat.pendingInputs.untitledInput");
-  }
-  return compact.length > PENDING_INPUT_PREVIEW_MAX_CHARS
-    ? `${truncateUtf16Safe(compact, PENDING_INPUT_PREVIEW_MAX_CHARS - 1)}…`
-    : compact;
-}
-
-function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
-  return (
-    !input.queued &&
-    input.state === "cancelled" &&
-    !input.cancelledByUser &&
-    asNullableRecord(input.message)?.display !== false
-  );
-}
-
-export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
-  return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
-}
-
-export function buildPendingInputItems(
-  inputs: ChatPendingInputsPage["items"],
-  workspaceSyncPendingRunIds: readonly string[] = [],
-  workerSetupPending = false,
-): ChatItem[] {
-  // Custody records stay outside active-run ordering until the writer promotes them.
-  const items: ChatItem[] = [];
-  for (const input of inputs) {
-    // Legacy interrupted custody is retained in storage but has no presentation.
-    if (input.state !== "queued" && input.state !== "cancelled") {
-      continue;
-    }
-    let pendingStatus: PendingInputStatus = input.state;
-    if (
-      input.state === "queued" &&
-      input.runId &&
-      (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
-    ) {
-      pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
-    }
-    const retired = isDismissablePendingInput(input)
-      ? {
-          id: input.id,
-          preview: describePendingInputPreview(input.message),
-        }
-      : undefined;
-    // Custody keeps submission correlation outside the message; use it for
-    // presentation without inventing transcript or execution identity.
-    items.push(
-      ...buildMessageItems([input.message], () =>
-        input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ).flatMap((item) =>
-        projectChatSystemNotice({ ...item, startsTurn: true }, undefined, {
-          status: pendingStatus,
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          ...(input.cancelledByUser ? { cancelledByUser: true } : {}),
-          ...(retired ? { retired } : {}),
-        }),
-      ),
-    );
-  }
-  return items;
 }
 
 export function getChatPendingInputs(state: ChatState): ChatPendingInputView | undefined {
@@ -279,6 +163,11 @@ export function applyChatPendingInputs(
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
+  if (view?.ownOnly) {
+    view.ownOnly = undefined;
+    view.request = undefined;
+    view.before = undefined;
+  }
   const queuedInputs = reconcileQueuedInputs(
     view?.queuedInputs ?? [],
     displayPage,
@@ -419,59 +308,38 @@ export async function mutateChatPendingInput(
   }
 }
 
-type PendingInput = ChatPendingInputsPage["items"][number];
-/**
- * Steers waiting on one run drain together, so one row speaks for all of them:
- * Send now on the newest sendable steer, otherwise Steering… on the newest.
- */
-type SteerRow = { newest?: true; sendNow?: true; deferToSendNow?: true };
-export type PendingSteer = PendingInput & SteerRow;
-// Stable copies keep transcript memo dependencies unchanged until a row moves.
-const markedSteers = new WeakMap<PendingInput, PendingSteer>();
-
-function markSteer(input: PendingInput, row: SteerRow): PendingSteer {
-  const cached = markedSteers.get(input);
-  if (
-    cached &&
-    cached.newest === row.newest &&
-    cached.sendNow === row.sendNow &&
-    cached.deferToSendNow === row.deferToSendNow
-  ) {
-    return cached;
-  }
-  const steer = { ...input, ...row };
-  markedSteers.set(input, steer);
-  return steer;
+/** Membership loss cannot take away the author’s own unsent text. */
+/** Admins read every session; only a non-admin may lose history yet keep its revoked inputs. */
+export function mayRestoreOwnCancelledInputs(state: ChatState): boolean {
+  return (
+    !hasOperatorAdminAccess(state.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(state, "chat.pendingInputs.own") === true
+  );
 }
 
-export function createPendingSteerLookup(inputs: ChatPendingInputsPage["items"] | undefined) {
-  const pendingSteers = new Map<string, PendingSteer>();
-  const steers = (inputs ?? []).filter((input) => input.steerNow && input.runId);
-  const newer = (a: PendingInput | undefined, b: PendingInput) =>
-    !a || b.acceptedAt >= a.acceptedAt ? b : a;
-  const newest = steers.reduce<PendingInput | undefined>(newer, undefined);
-  const sendable = steers
-    .filter((input) => input.steerNow?.status === "available")
-    .reduce<PendingInput | undefined>(newer, undefined);
-  for (const input of steers) {
-    const row: SteerRow = {
-      ...(input === newest ? { newest: true } : {}),
-      ...(input === sendable ? { sendNow: true } : {}),
-      ...(input === newest && sendable && sendable !== input ? { deferToSendNow: true } : {}),
-    };
-    const steer = row.newest || row.sendNow ? markSteer(input, row) : input;
-    pendingSteers.set(`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, steer);
-    if (input.runId) {
-      pendingSteers.set(input.runId, steer);
+export async function loadOwnCancelledInputs(
+  state: ChatState,
+  ownsRequest = () => true,
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const sessionId = state.currentSessionId;
+  const agentId = resolveUiSelectedSessionAgentId(state);
+  const current = () =>
+    ownsRequest() &&
+    connectionIsCurrent() &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === sessionId &&
+    resolveUiSelectedSessionAgentId(state) === agentId;
+  try {
+    const { restoreOwnCancelledInputs } = await import("./chat-pending-inputs.runtime.ts");
+    if (current()) {
+      await restoreOwnCancelledInputs(state, current);
     }
+  } catch {
+    // The caller still publishes its history failure; restoration is best effort.
   }
-  if (!pendingSteers.size) {
-    return undefined;
-  }
-  return (message: unknown) => {
-    const identity = readChatThreadMessageIdentity(message);
-    return identity?.role === "user"
-      ? pendingSteers.get(identity.sendId ?? identity.id ?? "")
-      : undefined;
-  };
 }

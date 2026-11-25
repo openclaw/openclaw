@@ -8,7 +8,9 @@ import {
 import type { StoreSchema } from "./contract.js";
 import type { PostgresCapabilities } from "./physical-facts-contract.js";
 import {
+  hasPostgresCatalogColumn,
   postgresCatalogQuery,
+  projectCompatiblePostgresCatalog,
   readPostgresCatalog,
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
@@ -89,13 +91,23 @@ export function readPostgresSchema(db: PostgresSqlConnection, namespace: string,
   }
   const metadata: {
     version: number;
+    min_reader?: number | null;
     store_id: string;
     fingerprint?: string;
     ddl_hash?: string;
     server_major?: number;
     search_extensions?: string;
   } = JSON.parse(row.metadata);
-  return { catalog: readPostgresCatalog(JSON.parse(row.catalog)), metadata };
+  const minReader = metadata.min_reader ?? metadata.version;
+  if (
+    !Number.isSafeInteger(metadata.version) ||
+    !Number.isSafeInteger(minReader) ||
+    minReader < (metadata.version === 0 ? 0 : 1) ||
+    minReader > metadata.version
+  ) {
+    throw new Error(`Invalid PostgreSQL schema version or minimum reader. ${recovery}`);
+  }
+  return { catalog: readPostgresCatalog(JSON.parse(row.catalog)), metadata, minReader };
 }
 
 export function withPostgresSearchExtensions(
@@ -171,7 +183,12 @@ export function postgresSchemaSql(
       definition.mode !== "keyword-only" && Object.keys(definition.vector ?? {}).length > 0;
     return `;\n${ddl}`;
   });
-  return [schema.postgres ?? "", ...ordered.values(), ...searchSql].join("\n");
+  const optional = schema.postgresWithoutOptionalColumn;
+  const eager =
+    optional && catalog && !hasPostgresCatalogColumn(catalog, optional.table, optional.column)
+      ? optional.sql
+      : schema.postgres;
+  return [eager ?? "", ...ordered.values(), ...searchSql].join("\n");
 }
 
 export function postgresSchemaHash(
@@ -215,6 +232,7 @@ export function verifyPostgresSchema(
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
   const schemaHash = postgresSchemaHash(schema, snapshot.catalog);
   const { metadata } = snapshot;
+  const newer = metadata.version > schema.version;
   const major = admitPostgresCapabilities(db).serverMajor;
   if (
     metadata.server_major === major &&
@@ -225,6 +243,15 @@ export function verifyPostgresSchema(
   }
   if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === schemaHash) {
     return schemaHash;
+  }
+  if (newer) {
+    // The newer writer attests compatibility; its whole-catalog seal stays authoritative.
+    if (metadata.server_major !== major || !metadata.fingerprint || !metadata.ddl_hash) {
+      throw new Error(
+        `Compatible newer PostgreSQL schema requires a matching installed schema seal. ${recovery}`,
+      );
+    }
+    return metadata.ddl_hash;
   }
   if (requireSeal) {
     throw new Error(`Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`);
@@ -245,10 +272,6 @@ function verifyPostgresSchemaDefinition(
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
 ): void {
-  const fingerprint = postgresSchemaFingerprint(snapshot.catalog, {
-    from: namespace,
-    to: namespace,
-  });
   const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
   db.exec(`CREATE SCHEMA ${quote(scratch)}`);
   try {
@@ -258,7 +281,13 @@ function verifyPostgresSchemaDefinition(
       `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
     ).rows[0];
     const expected = readPostgresCatalog(JSON.parse(String(row?.catalog)));
-    if (postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !== fingerprint) {
+    if (
+      postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !==
+      postgresSchemaFingerprint(projectCompatiblePostgresCatalog(snapshot.catalog, expected), {
+        from: namespace,
+        to: namespace,
+      })
+    ) {
       throw new Error(`PostgreSQL schema drift detected against generated DDL. ${recovery}`);
     }
   } finally {

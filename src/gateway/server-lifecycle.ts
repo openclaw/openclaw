@@ -46,10 +46,12 @@ import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.j
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { createGatewayReadyAnnouncer } from "./server-startup-readiness.js";
 import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
 import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
+import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -253,19 +255,14 @@ export async function prepareGatewayLifecycle(params: {
   if (unavailableGatewayMethods.size === 0) {
     startupMethodsReady.resolve();
   }
-  let readyAnnounced = false;
-  const announceReady = () => {
-    if (
-      !readyAnnounced &&
-      !unavailableGatewayMethods.has("chat.send") &&
-      startupState.sidecarsReady &&
-      runtime.getReadiness().ready
-    ) {
-      readyAnnounced = true;
-      runtime.startupTrace.mark("ready");
-      log.info("gateway ready");
-    }
-  };
+  const announceReady = createGatewayReadyAnnouncer({
+    getReadiness: runtime.getReadiness,
+    isClosing: () => lifecycle.closePreludeStarted,
+    isChatSendAvailable: () => !unavailableGatewayMethods.has("chat.send"),
+    areSidecarsReady: () => startupState.sidecarsReady,
+    startupTrace: runtime.startupTrace,
+    log,
+  });
   const kernel = {
     startupMethodsReady: startupMethodsReady.promise,
     pluginRuntimeGeneration,
@@ -281,7 +278,7 @@ export async function prepareGatewayLifecycle(params: {
         unavailableGatewayMethods.delete(method);
       }
       startupMethodsReady.resolve();
-      announceReady();
+      return announceReady();
     },
     publishMethodSurface: (methods: readonly string[]) => {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
@@ -413,10 +410,10 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
+    disposeGatewayDelegationCredentials();
     browserAuthRateLimiter.dispose();
     talkClose.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -527,10 +524,12 @@ export async function prepareGatewayLifecycle(params: {
     // Close intake before cancellation; accepted persistence keeps its own drain.
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
+    void mentionInbox.dispose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
+    runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
@@ -542,8 +541,7 @@ export async function prepareGatewayLifecycle(params: {
           if (!cfg) {
             return;
           }
-          const { persistRunningSessionsForRestart } = await import("./session-restart-resume.js");
-          await persistRunningSessionsForRestart({
+          await shutdownRuntime.sessionRestartResume.persistRunningSessionsForRestart({
             cfg,
             signal,
           });
@@ -551,12 +549,14 @@ export async function prepareGatewayLifecycle(params: {
         terminateRunningSubagentsForShutdown: async () => {
           // Persistence has settled or timed out; release marker retention before run claims.
           void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
-          const { terminateLiveSubagentsForShutdown } =
-            await import("../agents/subagents/registry/subagent-registry.js");
-          await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
+          await shutdownRuntime.subagentRegistry.terminateLiveSubagentsForShutdown(
+            runtime.resolvePluginGatewayContext,
+          );
         },
         cancelReceivedWork: (reason) => {
-          // Entry is fenced; retained principals still need their binding to settle.
+          // Restart markers and session stop classification precede authority retirement.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
         },
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,

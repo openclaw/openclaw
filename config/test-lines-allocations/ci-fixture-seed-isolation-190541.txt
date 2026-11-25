@@ -1,4 +1,0 @@
-# Reused distribution and locale seeds need complete byte/tree/object isolation proof.
-# Preserve deferred-wake cancellation, workflow admission, diagnostics and ratchet fixture imports.
-# Canonical test-line growth against the CI merge base; inherited callback fixes earn no credit.
-154

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +9,13 @@ import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
+import { canonicalizeJsonValue } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import {
+  classifyReleaseTrain,
+  parseReleaseVersion,
+  validateRetiredLineReason,
+} from "./lib/release-version.mjs";
 import {
   runReleaseToolingGh,
   validateReleasePublishParentRun,
@@ -27,6 +34,15 @@ const RECEIPT_KEYS =
   "version kind repository parentWorkflow parentRunId parentRunAttempt toolingRef toolingFullRef toolingSha releaseTag targetSha npmDistTag environment approvalJob approver".split(
     " ",
   );
+
+// Schema/policy admission belongs to the fast-track evidence owner. This
+// dependency-free receipt binds the entire admitted JSON packet as opaque data.
+function fastTrackPacketDigest(value) {
+  const packet = typeof value === "string" ? JSON.parse(value) : value;
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(canonicalizeJsonValue(packet)))
+    .digest("hex")}`;
+}
 
 function pattern(value, expression, label) {
   if (typeof value !== "string" || !expression.test(value)) {
@@ -63,22 +79,79 @@ function npmApprovals(approvals) {
   );
 }
 
+// Keep the artifact transport name stable; the authenticated payload owns its schema version.
 function releaseApprovalArtifactName({ parentRunId, parentRunAttempt }) {
   pattern(parentRunId, ID, "Parent run id");
   pattern(parentRunAttempt, ID, "Parent run attempt");
   return `openclaw-release-approval-v1-${parentRunId}-${parentRunAttempt}`;
 }
 
-export function validateReleaseApprovalReceipt(value) {
+// These are operator-reviewed observations, not an HTTP-status classifier.
+// A registry 404 does not establish an OIDC exchange failure.
+export function validateCorePluginDeferrals(value, { targetSha, releaseTag, npmDistTag }) {
   if (
-    !isRecord(value) ||
-    Object.keys(value).length !== RECEIPT_KEYS.length ||
-    RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 16 ||
+    npmDistTag !== "beta" ||
+    !/-beta\.[1-9][0-9]*$/u.test(releaseTag)
+  ) {
+    throw new Error("Core plugin deferrals require an explicit beta-prerelease package list.");
+  }
+  const names = new Set();
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      Object.keys(entry).toSorted().join(",") !== "evidence,packageName,reason,sourceSha,version" ||
+      typeof entry.packageName !== "string" ||
+      !/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u.test(entry.packageName) ||
+      names.has(entry.packageName) ||
+      entry.sourceSha !== targetSha ||
+      entry.version !== releaseTag.slice(1) ||
+      !["npm-eneedauth", "npm-trusted-publisher-exchange-http-404"].includes(entry.reason) ||
+      typeof entry.evidence !== "string" ||
+      !/^https:\/\/github\.com\/openclaw\/openclaw\/actions\/runs\/[1-9][0-9]*\/job\/[1-9][0-9]*$/u.test(
+        entry.evidence,
+      )
+    ) {
+      throw new Error(
+        "Core plugin deferral must name a unique exact-source package and original authentication failure job.",
+      );
+    }
+    names.add(entry.packageName);
+  }
+  return value;
+}
+
+export function validateReleaseApprovalReceipt(value) {
+  if (!isRecord(value) || RECEIPT_KEYS.some((key) => !Object.hasOwn(value, key))) {
+    throw new Error("Release approval receipt fields are invalid.");
+  }
+  if (![1, 2, 3, 4].includes(value.version)) {
+    throw new Error("Release approval receipt version must be 1, 2, 3 or 4.");
+  }
+  const optionalKeys =
+    value.version === 4
+      ? [
+          "fastTrackDigest",
+          ...["retiredLineReason", "corePluginDeferrals"].filter((key) =>
+            Object.hasOwn(value, key),
+          ),
+        ]
+      : value.version === 3
+        ? ["corePluginDeferrals"]
+        : value.version === 2
+          ? ["retiredLineReason"]
+          : [];
+  if (
+    Object.keys(value).length !== RECEIPT_KEYS.length + optionalKeys.length ||
+    optionalKeys.some((key) => !Object.hasOwn(value, key)) ||
+    (Object.hasOwn(value, "retiredLineReason") && Object.hasOwn(value, "corePluginDeferrals"))
   ) {
     throw new Error("Release approval receipt fields are invalid.");
   }
-  if (value.version !== 1) {
-    throw new Error("Release approval receipt version must be 1.");
+  if (value.version === 4) {
+    pattern(value.fastTrackDigest, /^sha256:[a-f0-9]{64}$/u, "Fast-track packet digest");
   }
   for (const key of RECEIPT_KEYS.slice(1)) {
     if (typeof value[key] !== "string") {
@@ -107,6 +180,20 @@ export function validateReleaseApprovalReceipt(value) {
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
+  if (Object.hasOwn(value, "retiredLineReason")) {
+    validateRetiredLineReason(value.retiredLineReason);
+    const version = parseReleaseVersion(value.releaseTag.slice(1));
+    if (
+      value.npmDistTag !== "extended-stable" ||
+      !version ||
+      classifyReleaseTrain(version) !== "extended-stable"
+    ) {
+      throw new Error("Retired-line approval is only valid for extended-stable.");
+    }
+  }
+  if (Object.hasOwn(value, "corePluginDeferrals")) {
+    validateCorePluginDeferrals(value.corePluginDeferrals, value);
+  }
   refIdentity(value.toolingRef, value.toolingFullRef, value.toolingSha);
   pattern(value.releaseTag, RELEASE_TAG, "Release tag");
   pattern(value.targetSha, SHA, "Target SHA");
@@ -127,6 +214,24 @@ export function validateReleaseApprovalReceipt(value) {
 }
 
 export function createReleaseApprovalReceipt(env, runGhJson = api) {
+  const preparedInput = env.PREPARED_PUBLICATION_INPUT
+    ? JSON.parse(env.PREPARED_PUBLICATION_INPUT)
+    : {};
+  const corePluginDeferrals = preparedInput.corePluginDeferrals;
+  const fastTrackDigest = env.FAST_TRACK_REQUEST_JSON
+    ? fastTrackPacketDigest(env.FAST_TRACK_REQUEST_JSON)
+    : undefined;
+  if (
+    corePluginDeferrals !== undefined &&
+    (env.PUBLISH_OPENCLAW_NPM !== "true" ||
+      env.PLUGIN_PUBLISH_SCOPE !== "all-publishable" ||
+      !env.PREPARED_NPM_ARTIFACT ||
+      env.RETIRED_LINE_PUBLICATION_REASON)
+  ) {
+    throw new Error(
+      "Explicit plugin deferrals require the original qualified all-package core publication.",
+    );
+  }
   if (env.GITHUB_EVENT_NAME !== "workflow_dispatch") {
     throw new Error("Release approval requires workflow_dispatch.");
   }
@@ -138,8 +243,34 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
   if (approvals.length === 0) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
+  if (env.FAST_TRACK_REQUEST_JSON) {
+    // Environment approval may wait past the preflight's expiry check. Minting
+    // this receipt starts publication; only an existing receipt can replay it.
+    const packet = JSON.parse(env.FAST_TRACK_REQUEST_JSON);
+    const expiresAt = packet?.request?.expiresAt;
+    if (
+      typeof expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(expiresAt)) ||
+      Date.parse(expiresAt) <= Date.now()
+    ) {
+      throw new Error(
+        "Fast-track request expired before publication admission. Prepare a fresh request for npm-release approval.",
+      );
+    }
+  }
   return validateReleaseApprovalReceipt({
-    version: 1,
+    version: fastTrackDigest
+      ? 4
+      : corePluginDeferrals !== undefined
+        ? 3
+        : env.RETIRED_LINE_PUBLICATION_REASON
+          ? 2
+          : 1,
+    ...(fastTrackDigest ? { fastTrackDigest } : {}),
+    ...(corePluginDeferrals !== undefined ? { corePluginDeferrals } : {}),
+    ...(env.RETIRED_LINE_PUBLICATION_REASON
+      ? { retiredLineReason: env.RETIRED_LINE_PUBLICATION_REASON }
+      : {}),
     kind: "openclaw-release-approval",
     repository: env.GITHUB_REPOSITORY,
     parentWorkflow: PARENT_WORKFLOW,
@@ -166,6 +297,12 @@ export function verifyReleaseApprovalReceipt({
   artifact,
 }) {
   validateReleaseApprovalReceipt(receipt);
+  const expectedFastTrackDigest = expected.fastTrackRequest
+    ? fastTrackPacketDigest(expected.fastTrackRequest)
+    : undefined;
+  if (receipt.fastTrackDigest !== expectedFastTrackDigest) {
+    throw new Error("Release approval receipt fast-track packet does not match this publication.");
+  }
   for (const key of [
     "repository",
     "parentRunId",
@@ -246,7 +383,18 @@ function api(path) {
   return JSON.parse(raw);
 }
 
-async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fetchImpl }) {
+async function readReleaseApprovalReceipt({
+  expected: inputExpected,
+  token,
+  runGhJson = api,
+  fetchImpl,
+}) {
+  // Programmatic consumers share the workflow input boundary with the CLI.
+  const expected = {
+    ...inputExpected,
+    fastTrackRequest:
+      inputExpected.fastTrackRequest ?? (process.env.FAST_TRACK_REQUEST_JSON || undefined),
+  };
   const name = releaseApprovalArtifactName(expected);
   const runPath = `actions/runs/${expected.parentRunId}/attempts/${expected.parentRunAttempt}`;
   const deadline = Date.now() + 5 * 60 * 1000;
@@ -284,7 +432,6 @@ async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fe
     token,
     fetchImpl,
     maxArchiveBytes,
-    retryAttempts: 1,
   });
   const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
     expectedEntries: ["approval.json"],
@@ -293,20 +440,29 @@ async function readReleaseApprovalReceipt({ expected, token, runGhJson = api, fe
     maxEntryBytes: () => MAX_RECEIPT_BYTES,
   });
   const receiptBytes = files.get("approval.json");
+  const parentRun = runGhJson(runPath);
+  const parentJobs = runGhJson(`${runPath}/jobs?per_page=100`);
   const receipt = verifyReleaseApprovalReceipt({
     receipt: JSON.parse(receiptBytes.toString("utf8")),
     expected,
-    parentRun: runGhJson(runPath),
-    parentJobs: runGhJson(`${runPath}/jobs?per_page=100`),
+    parentRun,
+    parentJobs,
     approvals: runGhJson(`actions/runs/${expected.parentRunId}/approvals`),
     artifact,
   });
-  return { receipt, artifact, receiptBytes };
+  const approvedAt = parentJobs.jobs.find((job) => job.name === PARENT_APPROVAL_JOB).started_at;
+  if (
+    approvedAt !== undefined &&
+    (typeof approvedAt !== "string" || !Number.isFinite(Date.parse(approvedAt)))
+  ) {
+    throw new Error("Original publication approval job has no valid start timestamp.");
+  }
+  return { receipt, artifact, receiptBytes, parentRun, approvedAt };
 }
 
 export async function downloadReleaseApprovalReceipt(params) {
-  const { receipt, artifact } = await readReleaseApprovalReceipt(params);
-  return { receipt, artifact };
+  const { receipt, artifact, approvedAt } = await readReleaseApprovalReceipt(params);
+  return { receipt, artifact, ...(approvedAt === undefined ? {} : { approvedAt }) };
 }
 
 // ClawHub may finish after its parent; npm publication requires a live parent
@@ -418,6 +574,7 @@ async function main() {
         ...(env.RELEASE_TARGET_SHA ? { targetSha: env.RELEASE_TARGET_SHA } : {}),
         ...(env.RELEASE_NPM_DIST_TAG ? { npmDistTag: env.RELEASE_NPM_DIST_TAG } : {}),
         parentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY || "active",
+        fastTrackRequest: env.FAST_TRACK_REQUEST_JSON || undefined,
       },
       token: env.GH_TOKEN,
     });

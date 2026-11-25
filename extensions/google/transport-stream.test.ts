@@ -1003,7 +1003,7 @@ describe("google transport stream", () => {
     expect(payload.toolConfig).toBeUndefined();
     expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
-      thinkingLevel: "HIGH",
+      thinkingLevel: "MEDIUM",
     });
     expect(result.api).toBe("google-generative-ai");
     expect(result.provider).toBe("google");
@@ -1926,12 +1926,10 @@ describe("google transport stream", () => {
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
-        new ReadableStream<Uint8Array>({
-          pull() {
-            resolveBodyRead();
-          },
-          cancel,
-        }),
+        new ReadableStream<Uint8Array>(
+          { pull: () => resolveBodyRead(), cancel },
+          { highWaterMark: 0 },
+        ), // Signal only when the transport actually reads the body.
         { headers: { "content-type": "text/event-stream" } },
       ),
     );
@@ -2563,40 +2561,31 @@ describe("google transport stream", () => {
     },
   );
 
-  it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
-    const model = buildGeminiModel({
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro",
-    });
-
-    const params = buildGoogleGenerativeAiParams(model, {
-      messages: [
-        {
-          role: "assistant",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          model: "claude-opus-4-7",
-          stopReason: "toolUse",
-          timestamp: 0,
-          content: [
-            {
-              type: "toolCall",
-              id: "call_1",
-              name: "lookup",
-              arguments: { q: "hello" },
-              thoughtSignature: "Zm9yZWlnbl9zaWc=",
-            },
-          ],
-        },
-      ],
-    } as never);
-
+  it("replays unsigned tool calls with the skip sentinel for Gemini 2.5 ids", () => {
+    // Google serves gemini-2.5-pro with a Gemini 3 model from 2026-12-01.
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }),
+      {
+        messages: [
+          googleToolCallAssistantTurn({
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-opus-4-7",
+            thoughtSignature: "Zm9yZWlnbl9zaWc=",
+          }),
+        ],
+      } as never,
+    );
     expect(params.contents[0]).toEqual({
       role: "model",
-      parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+      parts: [
+        {
+          functionCall: { name: "lookup", args: { q: "hello" } },
+          thoughtSignature: "skip_thought_signature_validator",
+        },
+      ],
     });
     expect(JSON.stringify(params.contents)).not.toContain("Zm9yZWlnbl9zaWc=");
-    expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
   it.each([{ stop: [] }, { stop: ["</tool>", "\n\nObservation:"] }])(

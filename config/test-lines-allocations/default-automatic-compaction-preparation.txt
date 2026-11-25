@@ -1,0 +1,21 @@
+# This change adds 2101 net test/helper lines against fcf29c4; 400 are unallocated.
+# The remaining lines protect the private default compaction producer/consumer cut:
+# full-fidelity native hydration and source-version rejection, bounded floor/render
+# byte parity, exact projected-row provenance, public API shape, and live owner/auth
+# cancellation before provider effects and guarded transcript writes. Existing host
+# replay/SDK suites remain the shared-policy owners; duplicate SDK policy leaf cases
+# were removed. Review and per-file costs remain required; this adds no test skip,
+# timeout, assertion exception, or baseline/threshold change.
+# Includes 32 lines moved into the prepared-runtime fixture registration owner;
+# the inherited over-cap harness has no growth, with all lazy mock behavior retained.
+# Includes one 93-line real-worker admission regression in the existing hydration suite:
+# plan and render must reject an oversized cohort before decoding a corrupted payload,
+# then the unchanged host stream must return the complete restored context. This
+# protects predecessor #194536 without a new cold shard, test-only seam or heap change.
+# Includes 17 net lines across the existing diagnostic/Gateway fixtures: an explicit
+# scoped host with a failing inherited-provider probe and distinct long-history read
+# arguments. Existing lifecycle, 40-call sender-policy and repeat-guard assertions stay.
+# Fixture follow-up supplies complete inert plugin ports and uses the canonical
+# SettingsManager factory after main retired an unused helper export.
+# No new test case/file/cold shard or isolation/timeout change.
+1701

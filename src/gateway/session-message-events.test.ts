@@ -45,6 +45,7 @@ import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
@@ -270,24 +271,6 @@ function waitForSessionsChangedMessagePhase(ws: GatewayWs, sessionKey: string) {
   return onceMessage(ws, matchingEvent("sessions.changed", { phase: "message", sessionKey }));
 }
 
-async function emitTranscriptUpdateAndCollectMessageEvent(params: {
-  ws: GatewayWs;
-  sessionKey: string;
-  sessionFile: string;
-  message: Record<string, unknown>;
-  messageId: string;
-  agentId?: string;
-  messageSeq?: number;
-}) {
-  const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
-
-  const { ws: _ws, ...update } = params;
-  emitSessionTranscriptUpdate(update);
-
-  const messageEvent = await messageEventPromise;
-  return { messageEvent };
-}
-
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
   watch: (timeoutMs: number) => Promise<unknown>;
@@ -440,26 +423,41 @@ describe("session.message websocket events", () => {
     await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
     await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
+    // Fixture preparation has no delivery deadline; arm observers after readiness, before send.
+    await prepareGatewayReplyRuntimeForTest();
+    // Loaded qualification measured >10s for admission separately from reply publication.
+    const runId = "scoped-delivery-proof";
+    const admissionTimeoutMs = 45_000;
+    const deliveryTimeoutMs = admissionTimeoutMs + 30_000;
     using otherChats = collectEventPayloads(otherWs, "chat");
     const chatEvents = [mainWs, legacyWs].map((ws) =>
-      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
+      onceMessage(
+        ws,
+        matchingEvent("chat", { sessionKey: "agent:main:main", runId }),
+        deliveryTimeoutMs,
+      ),
     );
 
     const [send, ...delivered] = await Promise.all([
-      rpcReq(mainWs, "chat.send", {
-        sessionKey: "main",
-        message: "/status",
-        toolBindings: {
-          browser: {
-            kind: "tab",
-            tabId: 7,
-            target: "host",
-            profile: "chrome",
-            targetId: "target-7",
+      rpcReq(
+        mainWs,
+        "chat.send",
+        {
+          sessionKey: "main",
+          message: "/status",
+          toolBindings: {
+            browser: {
+              kind: "tab",
+              tabId: 7,
+              target: "host",
+              profile: "chrome",
+              targetId: "target-7",
+            },
           },
+          idempotencyKey: runId,
         },
-        idempotencyKey: "scoped-delivery-proof",
-      }),
+        admissionTimeoutMs,
+      ),
       ...chatEvents,
     ]);
     expect(send.ok, JSON.stringify(send)).toBe(true);
@@ -773,16 +771,29 @@ describe("session.message websocket events", () => {
     const storePath = await createMainSessionStore();
     const blocked = { blockedBy: "policy-plugin", blockedAt: 1 };
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
-        ws,
-        sessionKey: "agent:main:main",
-        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
-        messageId: "blocked-message",
-        message: {
-          ...textMessage("The agent cannot read this message.", "user"),
-          __openclaw: { beforeAgentRunBlocked: blocked },
-        },
-      });
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      const [, messageEvent] = await Promise.all([
+        persistSessionTranscriptTurn(
+          { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+          {
+            messages: [
+              {
+                eventId: "blocked-message",
+                message: {
+                  ...textMessage("The agent cannot read this message.", "user"),
+                  idempotencyKey: "hook-block:before_agent_run:user:blocked-run",
+                  __openclaw: { beforeAgentRunBlocked: blocked },
+                },
+              },
+            ],
+          },
+        ),
+        messageEventPromise,
+      ]);
+      expectRecordFields(messageEvent.payload, { messageId: "blocked-message" });
+      await expect(
+        fs.access(path.join(path.dirname(storePath), "sess-main.jsonl")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
       const message = eventMessage(messageEvent);
       expectRecordFields(message, {
         role: "user",
@@ -900,18 +911,16 @@ describe("session.message websocket events", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
     };
-    const message = textMessage("spawn and thread route snapshot");
-    await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
+    const storePath = await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
-        ws,
-        sessionKey: "agent:main:child",
-        sessionFile: "agent:main:child",
-        message,
-        messageId: "msg-spawn",
-      });
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:child");
+      const [appended, messageEvent] = await Promise.all([
+        appendAssistant(storePath, "agent:main:child", "spawn and thread route snapshot"),
+        messageEventPromise,
+      ]);
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
+        messageId: appended.messageId,
         ...metadata,
         goal: { ...goal, tokenStartFresh: true },
       });

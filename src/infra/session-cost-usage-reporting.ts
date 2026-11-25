@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -32,11 +32,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { canAccess } from "./path-existence.js";
 import {
   loadCapturedSessionCostSummariesFromCache,
   runUsageReportAfterRefresh,
 } from "./session-cost-usage-cache-runtime.js";
-import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
+import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -68,7 +69,7 @@ async function withSessionUsageDiagnosticSource<
 ): Promise<Result | null> {
   const source = await resolveUsageSessionSource(params);
   const marker = source && parseSqliteSessionFileMarker(source.sessionFile);
-  if (!source || (!marker && !fs.existsSync(source.sessionFile))) {
+  if (!source || (!marker && !(await canAccess(source.sessionFile)))) {
     return null;
   }
   const signal = getAsyncWorkSignal();
@@ -178,11 +179,13 @@ export async function loadSessionUsageTimeSeries(
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     // Copied history stays charted in its source session, as in the usage rollups.
     for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
-      const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(record, prepareCost);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
         continue;
@@ -252,7 +255,9 @@ export async function loadSessionLogs(
     const limit = scoped.limit ?? 50;
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
       let role: SessionLogEntry["role"];
@@ -347,7 +352,7 @@ export async function loadSessionLogs(
 
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
-      const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(parsed, prepareCost);
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
@@ -412,8 +417,9 @@ async function* readTranscriptRecords(
       );
     }
     const records = events.filter(isRecord);
-    const visible = selectVisibleTranscriptEvents(records);
-    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
+    yield* options.countedOnly
+      ? selectBilledTranscriptEvents(records)
+      : selectVisibleTranscriptEvents(records);
     return;
   }
   // Diagnostic history and durable scans decode archives without plaintext files.
@@ -550,7 +556,7 @@ export async function resolveUsageSessionSource(input: {
         })
       : undefined);
 
-  if (candidate && fs.existsSync(candidate)) {
+  if (candidate && (await canAccess(candidate))) {
     return { sessionFile: candidate };
   }
   if (!sessionId) {
@@ -562,7 +568,7 @@ export async function resolveUsageSessionSource(input: {
       ? path.dirname(candidate)
       : resolveSessionTranscriptsDirForAgent(params.agentId);
     const baseFileName = `${sessionId}.jsonl`;
-    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+    const entries = (await fs.readdir(sessionsDir, { withFileTypes: true })).filter((entry) => {
       return (
         entry.isFile() &&
         (entry.name === baseFileName ||

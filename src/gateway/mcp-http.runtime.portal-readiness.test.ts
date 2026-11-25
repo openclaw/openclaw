@@ -4,7 +4,6 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import * as computerAvailability from "../agents/computer-use-node-capabilities.js";
 import "../agents/test-helpers/fast-bash-tools.js";
 import "../agents/test-helpers/fast-coding-tools.js";
@@ -14,7 +13,6 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayContextResolver as withGatewayResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as mcp from "./mcp-http-request.test-support.js";
 import {
   McpLoopbackToolCache as ToolCache,
   resolveMcpLoopbackPolicyTools as resolvePolicy,
@@ -27,7 +25,6 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 it.for([
   { mode: "exact", boundary: "availability" },
   { mode: "policy", boundary: "availability" },
-  { mode: "cached", boundary: "authority" },
   { mode: "exact", boundary: "final publication" },
   { mode: "policy", boundary: "final publication" },
   { mode: "cached", boundary: "final publication" },
@@ -70,20 +67,6 @@ it.for([
         } as unknown as GatewayRequestContext,
         () => projection,
       );
-      const authorityAbort = new AbortController();
-      const admission =
-        boundary === "authority"
-          ? mcp.prepareAdmission("portal-controller", "portal-readiness", {
-              cfg,
-              agentId: identity.agentId,
-              operatorAuthority: createAdmittedRunOperatorAuthority({
-                profileId: "portal-controller",
-                scopes: ["operator.write"],
-                signal: authorityAbort.signal,
-                assertCurrent: () => {},
-              }),
-            })
-          : undefined;
       const cache = new ToolCache();
       const releaseAvailability = createDeferred();
       let pending: Promise<unknown> | undefined;
@@ -100,7 +83,6 @@ it.for([
               grantToken: "synthetic-portal-grant",
               isGrantCurrent: () => true,
               signal,
-              admittedRunContext: await admission?.admit("gateway"),
               context: {
                 ...identity,
                 senderIsOwner: false,
@@ -145,9 +127,7 @@ it.for([
                     queries,
                     (read) => {
                       const catalog = consume(read);
-                      if (boundary === "authority") {
-                        authorityAbort.abort(new Error("Synthetic controller retirement"));
-                      } else if (!published) {
+                      if (!published) {
                         published = true;
                         update(!readiness);
                       }
@@ -160,12 +140,6 @@ it.for([
             }
             const resolving = resolve(params);
             pending = resolving;
-            if (boundary === "authority") {
-              await expect(resolving).rejects.toThrow(
-                "admitted run operator authority is no longer active",
-              );
-              return;
-            }
             if (boundary === "availability") {
               await withinTest(
                 awaitGateBeforeSettlement(
@@ -196,7 +170,6 @@ it.for([
         restore?.();
         signal.removeEventListener("abort", onAbort);
         cache.clear();
-        admission?.close();
         projection.dispose();
       }
     });

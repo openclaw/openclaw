@@ -529,6 +529,7 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessions.sessions,
     );
+    sidebar.setSessionSortMode("created");
     const dom = domProbe(sidebar);
 
     dom.query<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)?.click();

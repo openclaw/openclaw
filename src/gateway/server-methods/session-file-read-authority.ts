@@ -21,6 +21,8 @@ export type SessionFileReadPolicyTarget = {
   canonicalKey: string;
   entry?: InternalSessionEntry;
   unscopedHostRoot?: boolean;
+  /** Verified against the file reader's retained membership and exact session incarnation. */
+  invitedSession?: boolean;
   /** The read serves files from before the conversation switched to its PR workspace. */
   historical?: boolean;
 };
@@ -54,6 +56,7 @@ export function assertSessionFileReadPolicy(
     client: options.client,
     target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
     unscopedHostRoot: target.unscopedHostRoot,
+    invitedSession: target.invitedSession,
   });
   if (error) {
     throw new SessionMutationAuthorizationChangedError(error);
@@ -86,9 +89,10 @@ export function sessionFileWorkspaceMatches(
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
     previous?.worktree?.id === current?.worktree?.id &&
     isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
+    // A first turn records its empty selection; absent and empty both select no library skills.
     isDeepStrictEqual(
-      previous?.skillsSnapshot?.librarySelections,
-      current?.skillsSnapshot?.librarySelections,
+      previous?.skillsSnapshot?.librarySelections ?? [],
+      current?.skillsSnapshot?.librarySelections ?? [],
     )
   );
 }
@@ -103,6 +107,7 @@ export function createSessionFileReadAuthority(
     root?: string;
     fileRoot?: string;
     fileWorkspace?: Awaited<ReturnType<typeof prepareSessionFileWorkspace>>;
+    isInvitedWorkspaceTarget?: (target: SessionFileReadPolicyTarget) => boolean;
   },
 ) {
   const { context } = options;
@@ -184,6 +189,7 @@ export function createSessionFileReadAuthority(
           entry: current,
           unscopedHostRoot: source.fileWorkspace.unscopedHostRoot,
           historical: source.fileWorkspace.historical,
+          invitedSession: source.isInvitedWorkspaceTarget?.({ ...source, entry: current }),
         });
       }
       if (

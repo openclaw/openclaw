@@ -28,6 +28,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import okio.ByteString
 import org.bouncycastle.asn1.ASN1Integer
@@ -128,16 +129,25 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun sourceFaviconsRecoverAfterTransientHttpFailureWithoutReconnecting() {
+    runBlocking {
+      assertSourceFavicons(contextPath = "/socket", basePath = "/ui", recoverFailedFavicon = true)
+    }
+  }
+
   private suspend fun assertSourceFavicons(
     contextPath: String,
     basePath: String,
     proxyAcceptsRead: Boolean? = null,
     expectedBasePath: String = basePath.ifEmpty { contextPath },
+    recoverFailedFavicon: Boolean = false,
   ) = coroutineScope {
     val connected = CompletableDeferred<Unit>()
     val slowStarted = CompletableDeferred<Unit>()
     val releaseSlow = java.util.concurrent.CountDownLatch(1)
     val iconRequests = ConcurrentLinkedQueue<RecordedRequest>()
+    val failFirstRecoveryRequest = AtomicBoolean(true)
     val imageBytes = byteArrayOf(1, 2, 3, 4)
     val tls = if (proxyAcceptsRead != null) sourceFaviconTls() else null
     val proxyAuthorization = "Basic c3ludGhldGljOnByb3h5"
@@ -178,6 +188,9 @@ class GatewaySessionCustomHeadersTest {
               val authorization = request.getHeader("Authorization")
               if (proxyAcceptsRead == true && authorization != proxyAuthorization) return MockResponse().setResponseCode(401)
               if (proxyAcceptsRead != true && authorization != "Bearer shared-token") return MockResponse().setResponseCode(401)
+              if (request.path?.endsWith("recover.example") == true && failFirstRecoveryRequest.getAndSet(false)) {
+                return MockResponse().setResponseCode(503)
+              }
               return when {
                 request.path?.endsWith("redirect.example") == true -> {
                   MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
@@ -251,6 +264,15 @@ class GatewaySessionCustomHeadersTest {
       if (tls != null) assertTrue(iconRequests.all { it.getHeader("X-Proxy-Route") == "source-proof" })
       assertArrayEquals(imageBytes, load("example.com")?.bytes)
       assertEquals(expectedAuthorization.size, iconRequests.size)
+      if (recoverFailedFavicon) {
+        assertNull(load("recover.example"))
+        val recovered = load("recover.example")
+        assertArrayEquals("A transient HTTP failure must not poison the connection cache", imageBytes, recovered?.bytes)
+        val requestsAfterRecovery = iconRequests.size
+        val cached = load("recover.example")
+        assertArrayEquals(imageBytes, cached?.bytes)
+        assertEquals(requestsAfterRecovery, iconRequests.size)
+      }
       assertNull(load("redirect.example"))
       assertEquals(0, trap.requestCount)
       assertNull(load("large.example"))
@@ -432,6 +454,8 @@ class GatewaySessionCustomHeadersTest {
       val artifactRequests = ConcurrentLinkedQueue<kotlinx.serialization.json.JsonObject>()
       val audioRequestCount = AtomicInteger()
       val mediaRequests = ConcurrentLinkedQueue<RecordedRequest>()
+      val stalledDownloadRequest = CompletableDeferred<Unit>()
+      val mediaClient = CompletableDeferred<OkHttpClient>()
       val invalidMediaPaths =
         mapOf(
           "invalid-absolute" to "https://attacker.invalid$imagePath",
@@ -454,10 +478,26 @@ class GatewaySessionCustomHeadersTest {
                 if (request.path?.startsWith("$contextPath$filePath") == true) {
                   mediaRequests.add(request)
                   return when (request.requestUrl?.queryParameter("test")) {
-                    "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
-                    "oversized" -> MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
-                    "missing-mime" -> MockResponse().setBody(Buffer().write(fileBytes))
-                    else -> MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                    "stalled" -> {
+                      stalledDownloadRequest.complete(Unit)
+                      MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                    }
+
+                    "redirect" -> {
+                      MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
+                    }
+
+                    "oversized" -> {
+                      MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
+                    }
+
+                    "missing-mime" -> {
+                      MockResponse().setBody(Buffer().write(fileBytes))
+                    }
+
+                    else -> {
+                      MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                    }
                   }
                 }
                 if (request.path == "$contextPath$imagePath") {
@@ -526,6 +566,7 @@ class GatewaySessionCustomHeadersTest {
                             val path =
                               invalidFilePath ?: when (requestedArtifactId) {
                                 "file-redirect" -> "$filePath&test=redirect"
+                                "file-stalled" -> "$filePath&test=stalled"
                                 "file-oversized" -> "$filePath&test=oversized"
                                 "file-missing-mime" -> "$filePath&test=missing-mime"
                                 else -> filePath
@@ -570,6 +611,10 @@ class GatewaySessionCustomHeadersTest {
           onDisconnected = {},
           onEvent = { _, _ -> },
           customHeadersProvider = { error("Cleartext transport must not read custom headers") },
+          webSocketFactory = { client, request, listener ->
+            mediaClient.complete(client)
+            client.newWebSocket(request, listener)
+          },
         )
 
       try {
@@ -665,6 +710,33 @@ class GatewaySessionCustomHeadersTest {
             assertNull(session.loadMediaArtifact(stableId, "main", "main", id, GatewayMediaKind.File))
           }
           assertEquals(0, redirectTrap.requestCount)
+
+          val client = mediaClient.await()
+          val pendingDownload =
+            async { runCatching { session.loadMediaArtifact(stableId, "main", "main", "file-stalled", GatewayMediaKind.File) } }
+          try {
+            withTimeout(TEST_TIMEOUT_MS) { stalledDownloadRequest.await() }
+            val call =
+              client.dispatcher
+                .runningCalls()
+                .single { it.request().url.queryParameter("test") == "stalled" }
+            pendingDownload.cancel()
+            assertTrue(
+              "Canceling a media load must close its HTTP call without waiting for the network timeout",
+              call.isCanceled(),
+            )
+            withTimeout(TEST_TIMEOUT_MS) { pendingDownload.join() }
+          } finally {
+            pendingDownload.cancel()
+            // Release the real stalled request even when the cancellation regression fails.
+            client.dispatcher
+              .runningCalls()
+              .filter { it.request().url.queryParameter("test") == "stalled" }
+              .forEach { it.cancel() }
+          }
+          val afterCancellation =
+            session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+          assertArrayEquals(fileBytes, afterCancellation?.bytes)
         }
         assertTrue(
           artifactRequests.all {

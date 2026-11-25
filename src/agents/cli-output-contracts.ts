@@ -3,6 +3,7 @@ import type {
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
   CliBackendParseJsonlLifecycleEvent,
+  CliCompactionMeasurement,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
@@ -34,6 +35,8 @@ export type CliOutput = {
   text: string;
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
+  /** Completed held answers, excluding narration, mirrored by native identity in canonical history. */
+  interimNativeReplies?: Array<{ text: string; cliSessionId: string; externalId: string }>;
   rawText?: string;
   /**
    * Raw text of the model's final message when it differs from the cumulative
@@ -51,6 +54,12 @@ export type CliOutput = {
    */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
+  /** Completed native compactions this run observed, with the latest one's sizes. */
+  nativeCompaction?: {
+    compactionCount: number;
+    compactionTokensBefore?: number;
+    compactionTokensAfter?: number;
+  };
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   /** A caller interruption that ended the turn after usable assistant text was streamed. */
@@ -106,12 +115,16 @@ export type CliThinkingProgress = {
   modelProgress?: true;
 };
 
-export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
+export type CliCompactionDelta =
+  | { phase: "start" }
+  | ({ phase: "end"; completed: boolean } & CliCompactionMeasurement);
 
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
+  /** The native call follows completed text in the cumulative assistant lane. */
+  followsAssistantText?: true;
   // Preserve the producer kind: a server-native start without its result is not a failed local call.
   kind: "tool_use" | "server_tool_use" | "mcp_tool_use";
   args: Record<string, unknown>;

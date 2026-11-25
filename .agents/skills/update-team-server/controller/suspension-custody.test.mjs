@@ -362,6 +362,37 @@ check_suspension && arm_suspension_handoff
   assert.deepEqual(result.calls, ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.handoff"]);
 });
 
+test("handoff failure records only bounded terminal-persistence facts", () => {
+  const privateText = "private-fixture-do-not-log";
+  const terminalPersistence = { count: 10, oldestAgeMs: 30_000, runIds: ["fixture-run-a", "fixture-run-b"] };
+  const failure = (details) => JSON.stringify({ ok: false, error: {
+    type: "gateway_request_error", code: "UNAVAILABLE", message: privateText,
+    details: { terminalPersistence: details, privateText },
+  } });
+  for (const [payload, facts] of [
+    [failure({ ...terminalPersistence, privateText }), terminalPersistence],
+    [failure({ ...terminalPersistence, oldestAgeMs: null }), { ...terminalPersistence, oldestAgeMs: null }],
+    [failure({ ...terminalPersistence, runIds: Array(9).fill("fixture-run") }), null],
+    [failure({ ...terminalPersistence, runIds: ["x".repeat(257)] }), null],
+    [failure({ ...terminalPersistence, runIds: ["fixture\nforged-log"] }), null],
+    [failure({ ...terminalPersistence, count: -1 }), null],
+    [failure({ ...terminalPersistence, oldestAgeMs: -1 }), null],
+    [failure(terminalPersistence) + " ".repeat(20_000), null],
+    [privateText, null],
+  ]) {
+    const result = ownerRun(`
+assert_protected_identity() { :; }; assert_policy() { :; }
+run_gateway() { printf '%s' "$FAILURE"; return 1; }
+arm_suspension_handoff
+`, status(), status(), { FAILURE: payload });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, `SUSPENSION_HANDOFF_FAILED exit=1 details=${facts ? JSON.stringify({ terminalPersistence: facts }) : "unclassified"}\n`);
+    assert.doesNotMatch(result.stderr, new RegExp(privateText));
+  }
+});
+
 test("malformed preparation still retires its exact offered lease through existing exit owner", () => {
   const payload = prepare("draining", null);
   const result = ownerRun(`

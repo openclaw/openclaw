@@ -41,10 +41,18 @@ async function run(argv) {
 
   // Reads all rows in time order. Splits on \n only: message text may contain U+2028, which readline treats as a line break.
   async function readRows(filename) {
-    const rows = (await readFile(filename, "utf8"))
+    const rows = new TextDecoder("utf-8", { fatal: true })
+      .decode(await readFile(filename))
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));
+    // Reject rows without a usable UTC timestamp before sorting: a missing or
+    // null occurred_at would otherwise throw inside the sort key below.
+    for (const row of rows) {
+      if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
+        throw new Error("Row " + row.id + " needs a UTC occurred_at");
+      }
+    }
     // Ignore fractional padding without losing nanoseconds or changing the original timestamps.
     const timeKey = (row) => {
       const [seconds, fraction = ""] = row.occurred_at.slice(0, -1).split(".");
@@ -65,7 +73,7 @@ async function run(argv) {
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
     return new Map(
-      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id.slice(-4) : name]),
+      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id : name]),
     );
   }
 
@@ -95,10 +103,10 @@ async function run(argv) {
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
     }
-    // Discord user mentions (<@id>, <@!id>) read as @name when the author appears in the export.
+    // Discord and Slack user mentions (<@id>, <@!id>) read as @name when the author appears in the export.
     let text = payload.deleted_at
       ? "[deleted]"
-      : (payload.content || "[no text]").replace(/<@!?(\d+)>/g, (mention, id) =>
+      : (payload.content || "[no text]").replace(/<@!?([0-9A-Z]+)>/g, (mention, id) =>
           labels.has(id) ? "@" + labels.get(id) : mention,
         );
     if (payload.has_attachments) {
@@ -242,9 +250,6 @@ async function run(argv) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const days = new Map();
   for (const row of rows) {
-    if (!row.occurred_at?.endsWith("Z")) {
-      throw new Error("Row " + row.id + " needs a UTC occurred_at");
-    }
     const day = row.occurred_at.slice(0, 10);
     if (!days.has(day)) {
       days.set(day, []);

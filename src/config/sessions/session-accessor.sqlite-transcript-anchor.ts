@@ -53,14 +53,16 @@ export function readActiveTranscriptEntryIdentityInSnapshot(
   );
 }
 
-export function readActivePathEntryRelationFromProjection(
+/** The leaf or one of its ancestors; `null` matches only an empty transcript. */
+export function isOnActivePathInProjection(
   projection: CurrentTranscriptProjection,
   entryId: string | null,
-): "exact" | "ancestor" | "off-path" {
-  if (projection.state.leafEventId === entryId || entryId === null) {
-    return projection.state.leafEventId === entryId ? "exact" : "off-path";
-  }
-  return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
+): boolean {
+  return (
+    projection.state.leafEventId === entryId ||
+    (entryId !== null &&
+      readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) !== undefined)
+  );
 }
 
 /** The caller owns admission; anchor and source authority share the current statement snapshot. */

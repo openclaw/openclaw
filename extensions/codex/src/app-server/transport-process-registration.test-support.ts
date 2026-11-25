@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 export class RegistrationTestChildProcess extends ChildProcess {
   override pid!: number;
   override exitCode!: number | null;
+  override signalCode!: NodeJS.Signals | null;
   override stdin!: PassThrough;
   override stdout!: PassThrough;
   override stderr!: PassThrough;
@@ -24,6 +25,7 @@ export class RegistrationTestChildProcess extends ChildProcess {
       stderr,
       stdio,
       exitCode: null,
+      signalCode: null,
     })) {
       Object.defineProperty(this, key, {
         value,

@@ -11,7 +11,7 @@ const SIDEBAR_MAX_WIDTH_PX = 1_200;
 const SIDEBAR_MAX_HEIGHT_PX = 800;
 const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
 export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-const SIDEBAR_DIVIDER_WIDTH_PX = 6;
+const SIDEBAR_DIVIDER_WIDTH_PX = 12;
 
 export function clampWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
@@ -100,10 +100,8 @@ export function initializeBrowserSidebarWidth(
   }
   const nextColumn = { ...column };
   // Reclaim the centered chat's spare margins; share tighter panes evenly.
-  nextColumn.width = Math.max(
-    column.width,
-    availableWidth - Math.min(chatWidth, availableWidth / 2) - SIDEBAR_DIVIDER_WIDTH_PX,
-  );
+  const contentWidth = availableWidth - SIDEBAR_DIVIDER_WIDTH_PX;
+  nextColumn.width = Math.max(column.width, contentWidth - Math.min(chatWidth, contentWidth / 2));
   delete nextColumn.browserWidthPending;
   return fitSidebarLayout({ ...layout, columns: [nextColumn] }, availableWidth) ?? layout;
 }

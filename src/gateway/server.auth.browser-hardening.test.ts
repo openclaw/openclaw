@@ -193,7 +193,10 @@ describe("gateway auth browser hardening", () => {
         expect(payload).toMatchObject({
           type: "hello-ok",
           auth: { scopes: expect.arrayContaining(["operator.admin"]) },
-          features: { methods: expect.arrayContaining(["mcp.authLogin"]) },
+          features: {
+            methods: expect.arrayContaining(["mcp.authLogin"]),
+            capabilities: expect.arrayContaining(["session-approval-recipients-v1"]),
+          },
         });
       },
       REDACTED_SENTINEL,

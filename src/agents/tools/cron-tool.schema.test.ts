@@ -79,7 +79,7 @@ describe("cron model schema regressions", () => {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
     }
     expect(restricted.description).not.toContain("ADD: job");
-    expect(restricted.description).not.toContain("delayed self-wakeups");
+    expect(restricted.description).not.toContain("Schedule saved reminders");
     expect(restricted.description).toContain("remove");
     const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
     const paced = createCronToolSchema({
@@ -345,7 +345,11 @@ describe("cron shorthand and schedule recovery", () => {
         const identity = {
           agentId: "main",
           sessionKey: "agent:main:watcher-control",
-          receiptAuthority: () => current,
+          receiptAuthority: () => {
+            if (!current) {
+              throw new Error("The requesting turn is no longer active.");
+            }
+          },
         };
         // The harness host binds the admitted caller after a plugin builds its tools.
         const tool = wrapToolWithGatewayCallerIdentity(

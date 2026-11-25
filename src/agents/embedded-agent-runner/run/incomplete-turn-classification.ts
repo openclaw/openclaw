@@ -1,8 +1,9 @@
+import { isOpenAIResponsesApi } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
@@ -156,7 +157,7 @@ export function countSettledTurnDeliveryPayloads(params: {
   }).length;
 }
 
-export function hasPositiveOutputTokenUsage(message: AssistantMessage | null): boolean {
+export function hasPositiveOutputTokenUsage(message: AssistantHistoryMessage | null): boolean {
   return asPositiveFiniteNumber(message?.usage?.output) !== undefined;
 }
 
@@ -205,12 +206,6 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openai-completions",
   "anthropic-messages",
   "bedrock-converse-stream",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
 ]);
 export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n");
@@ -231,6 +226,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
     ) &&
       GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
+    isOpenAIResponsesApi(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
     isOllamaIncompleteTurnProvider(params)
   );
 }

@@ -1,26 +1,30 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { isIndexedSessionEntry } from "../config/sessions/session-entry-codec.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   retainSqliteDatabaseWriteScopesForPath,
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
 import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
@@ -29,36 +33,43 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { SESSION_FORK_SOURCE_TOOL } from "../sessions/input-provenance.js";
-import {
-  getActiveSessionRunCount,
-  isSessionRunActive,
-} from "../sessions/session-controller.queries.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import {
+  readLiveSessionForkRequest,
+  type SessionForkPin,
+} from "./embedded-agent-runner/session-fork-request.js";
+import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   readSessionForkRequesterFromTurn,
   type SessionForkRequester,
 } from "./session-fork-requester.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
+import { resolveSessionModelRef } from "./session-model-ref.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "./spawned-context.js";
 
 /**
- * A background agent run over a bounded copy of one session's conversation, through one
- * completed transcript entry. The fork may call only the listed tools, never writes the source
- * transcript, yields to foreground work, and stops when the source session is reset, replaced
- * or rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
+ * A background agent run on a copy of one session's conversation, through one completed
+ * transcript entry. The fork sends the session's own request (system prompt, tool definitions,
+ * prompt-cache key and history) and appends its prompt, so the provider serves the session's
+ * cached prefix. Every session tool stays listed; only the listed `tools` may execute. It never
+ * writes the source transcript, and stops when the source session is reset, replaced or
+ * rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
  */
 type SessionForkRunParams = {
   config: OpenClawConfig;
   /** The completed transcript entry the fork reads through. */
   source: TranscriptEntryAnchor;
   prompt: string;
+  /** Tools the fork may execute, as admitted by `prepareSessionFork`; empty for a tool-free fork. */
   tools: readonly string[];
   /** Caller-chosen id, so the caller can find what the fork's tools recorded even when it fails. */
   runId: string;
@@ -72,20 +83,20 @@ type SessionForkRunParams = {
   /** Plugin-owned tools added for this run; the source session's deny policy still applies. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   timeoutMs: number;
+  /** Output token limit; the session's own when omitted. */
+  maxTokens?: number;
+  /**
+   * Send one read-only prewarm of the session's cached prefix (`StreamOptions.cachePrewarm`):
+   * no output, no tools, the session's own tool choice, never a CLI turn. Refused without the
+   * session's pinned prompt, since a rebuilt prompt would write a new prefix instead.
+   */
+  cachePrewarm?: true;
   abortSignal?: AbortSignal;
   /** The caller's own liveness, rechecked with the source fences (for example, a feature switch). */
   assertCallerCurrent?: () => void;
   /** The exact source generation the fork read, reported before the model runs. */
   onSourceAdmitted?: (entry: { sessionId: string; lifecycleRevision?: string | null }) => void;
 };
-
-// A fork reads only a bounded suffix through the completed entry; it does not need to repay the
-// entire conversation's token budget for one background task.
-const FORK_CONTEXT_LIMITS = {
-  maxBytes: 32_768,
-  maxEvents: 64,
-  toolResultOverflow: "omit",
-} as const;
 
 // Retain initiating input across long tool loops without hydrating every result body.
 const FORK_TURN_SEARCH_LIMITS = {
@@ -102,7 +113,7 @@ type SessionForkTurn = {
 
 /**
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
- * the model its last assistant message ran on. The search stops at that turn's initiating input,
+ * the model its last provider response ran on. The search stops at that turn's initiating input,
  * within a bounded window. Returns undefined when that window no longer holds the input
  * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
  */
@@ -121,13 +132,16 @@ export async function readSessionForkTurn(
       continue;
     }
     const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    // Delivery mirrors and other OpenClaw-authored rows are assistant messages no provider
+    // answered; taking their marker as the model sends the fork to a model that does not exist.
     if (
       !model &&
       message.role === "assistant" &&
       typeof message.provider === "string" &&
       typeof message.model === "string" &&
       message.provider &&
-      message.model
+      message.model &&
+      !isTranscriptArtifactProvider(message.provider)
     ) {
       model = { provider: message.provider, model: message.model };
     }
@@ -146,6 +160,34 @@ export async function readSessionForkTurn(
 }
 
 /**
+ * The model a fork runs on: the anchored turn's (else the session's), on the credential the
+ * session's own turns use when the provider matches (a user pin or an automatic rotation). The
+ * fork's internal session has no stored selection, so without this it could bill another
+ * profile and miss the turn's cache.
+ */
+export function resolveSessionForkModel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry;
+  turnModel?: { provider: string; model: string };
+}) {
+  const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const turnModel = params.turnModel ?? sessionModel;
+  const sessionProfile =
+    turnModel && sessionModel && turnModel.provider === sessionModel.provider
+      ? params.entry.authProfileOverride?.trim()
+      : undefined;
+  return {
+    sessionModel,
+    turnModel,
+    model: turnModel && {
+      ...turnModel,
+      ...(sessionProfile ? { authProfileId: sessionProfile } : {}),
+    },
+  };
+}
+
+/**
  * Admits a fork before any model call: every fork tool must pass the source session's policy.
  * Returns the session's durable workspace (never a throwaway worktree), or undefined to refuse.
  */
@@ -156,8 +198,19 @@ export async function prepareSessionFork(params: {
   model: { provider: string; model: string };
   workspaceDir: string;
   requester?: SessionForkRequester;
+  /** The authenticated person who asked for the fork through the session, when known. */
+  caller?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
 }): Promise<{ workspaceDir: string } | undefined> {
+  // exec is not on the owner-only list: a fork runs it only on the owner's own turn and, when an
+  // authenticated person asked through the session, only when that person sent the turn.
+  if (
+    params.tools.includes("exec") &&
+    (params.requester?.senderIsOwner !== true ||
+      (params.caller !== undefined && params.requester.senderId !== params.caller))
+  ) {
+    return undefined;
+  }
   const { prepareConversationCapabilityProfile } =
     await import("./conversation-capability-profile.js");
   const { isToolAllowedByPolicies } = await import("./tool-policy-match.js");
@@ -211,8 +264,91 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
 }
 
 /**
- * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, yielding to
- * foreground work, or the source session changing under the fork. Anything else is a failure.
+ * The session's last system prompt checkpoint on this model and history. The model view keeps
+ * only checkpoint navigation, so the entry is hydrated from the transcript.
+ */
+async function readSessionForkPin(
+  manager: SessionManager,
+  scope: TranscriptEntryAnchor,
+  model: { provider: string; model: string },
+  signal: AbortSignal,
+): Promise<SessionForkPin | undefined> {
+  const entries = manager.getBranch();
+  const index = entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  );
+  const version = manager.getTranscriptSnapshotVersion();
+  if (index < 0 || !version || entries.slice(index + 1).some((e) => e.type === "model_change")) {
+    return undefined;
+  }
+  const reader = prepareSessionTranscriptHydration(scope, undefined, signal);
+  const { event } = await reader.readCurrentTurnEntry({
+    entryId: entries[index]!.id,
+    version,
+    includeEntry: true,
+  });
+  reader.assertCurrent();
+  const data = isIndexedSessionEntry(event) && event.type === "custom" ? event.data : undefined;
+  const route = isRecord(data) ? parseSystemPromptRouteKey(data.routeKey) : undefined;
+  const historyId =
+    entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ?? null;
+  if (
+    !isRecord(data) ||
+    typeof data.prefix !== "string" ||
+    !Array.isArray(data.tools) ||
+    data.historyId !== historyId ||
+    route?.provider !== model.provider ||
+    route.model !== model.model
+  ) {
+    return undefined;
+  }
+  // SAFETY: the session prompt owner alone writes the checkpoint's tool definitions.
+  const tools = data.tools as SessionForkPin["tools"];
+  return { prefix: data.prefix, tools };
+}
+
+/**
+ * A tool call still running at the fork's anchor gets a non-error result saying so, so the
+ * fork does not read the call as failed. The model view has no persistence target: these
+ * results exist only in the fork.
+ */
+async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+  // The latest batch is the last assistant message plus the tool results recorded after it.
+  const completed = new Set<string>();
+  let batch: AssistantHistoryMessage | undefined;
+  for (const entry of manager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    if (entry.message.role === "toolResult") {
+      completed.add(entry.message.toolCallId);
+      continue;
+    }
+    batch = entry.message.role === "assistant" ? entry.message : undefined;
+    break;
+  }
+  for (const block of batch?.content ?? []) {
+    if (block.type === "toolCall" && !completed.has(block.id)) {
+      await manager.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: block.id,
+        toolName: block.name,
+        content: [
+          {
+            type: "text",
+            text: "This tool call is still running. Its result is not available yet.",
+          },
+        ],
+        isError: false,
+        timestamp: Date.now(),
+      });
+    }
+  }
+}
+
+/**
+ * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, or the
+ * source session changing under the fork. Anything else is a failure.
  */
 type SessionForkOutcome =
   | { ok: true; result: EmbeddedAgentRunResult }
@@ -280,7 +416,6 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     const sessionManager = await SessionManager.openModelContextAsync(scoped, {
       cwd: workspaceDir,
       through: source,
-      limits: FORK_CONTEXT_LIMITS,
       signal: abortSignal,
     });
     assertPreparationCurrent();
@@ -350,7 +485,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   const assertScopeCurrent = () => {
     assertPhysicalCurrent();
     if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
-      throw new SessionTranscriptReadFenceError("Session fork authority changed");
+      throw new SessionTranscriptReadFenceError(
+        "Session fork source changed. Retry in a new turn.",
+      );
     }
     params.assertCallerCurrent?.();
   };
@@ -428,16 +565,31 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     projection: "list",
   });
   const agentDir = resolveAgentDir(config, agentId);
+  // Keep the transcript's durable cwd, but prepare sandbox execution exactly as a parent turn.
+  const executionWorkspaceDir =
+    entry?.worktree &&
+    resolveSandboxRuntimeStatus({
+      cfg: config,
+      agentId,
+      sessionKey,
+      preparedSessionEntry: entry,
+    }).sandboxed
+      ? (resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: entry.spawnedBy,
+          workspaceDir: entry.spawnedWorkspaceDir,
+          cwd: entry.spawnedCwd,
+        }) ?? workspaceDir)
+      : workspaceDir;
 
-  const foreground = new AbortController();
-  const yieldToForeground = () => {
-    const ownRun = isSessionRunActive(forkSession.sessionId) ? 1 : 0;
-    if (getActiveSessionRunCount() > ownRun) {
-      foreground.abort(new DOMException("Session fork yielded to foreground work", "AbortError"));
-    }
-  };
-  const unsubscribe = onGatewayWorkMetricsChanged(yieldToForeground);
-  const runSignal = AbortSignal.any([abortSignal, foreground.signal]);
+  const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
+  // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
+  // request carry the session's system prompt and tool definitions too.
+  const pin = await readSessionForkPin(sessionManager, scoped, params.model, abortSignal);
+  if (params.cachePrewarm && (live || !pin || params.tools.length > 0)) {
+    // A live run keeps its own cache warm; without the pin the rebuilt prompt is a new prefix.
+    throw new Error("Cache prewarm needs a settled session with its pinned prompt and no tools.");
+  }
+  await markRunningToolCalls(sessionManager);
   // Background runs stay out of the Control UI and never project into a user session.
   registerAgentRunContext(runId, {
     agentId,
@@ -449,8 +601,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     projectSessionMessages: false,
   });
   try {
-    yieldToForeground();
-    runSignal.throwIfAborted();
+    abortSignal.throwIfAborted();
     const { runEmbeddedAgent } = await import("./embedded-agent.js");
     const result = await runEmbeddedAgent({
       agentId,
@@ -474,9 +625,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         runId,
       },
       sessionManager,
-      workspaceDir,
+      workspaceDir: executionWorkspaceDir,
       permissionMode: sourceEntry.permissionMode,
-      abortSignal: runSignal,
+      abortSignal,
       prompt: params.prompt,
       provider: params.model.provider,
       model: params.model.model,
@@ -493,19 +644,28 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       retryTransientErrors: false,
       allowAuthProfileFallback: false,
       authProfileFailurePolicy: "local_transient",
+      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      // A prewarm reads the cache the session's own embedded turns wrote, so it stays embedded.
+      ...(params.cachePrewarm ? {} : { cliBackendDispatch: "subscription-auth" as const }),
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
-      toolsAllow: [...params.tools],
+      // The source's prewarms count on the cache-TTL clock, so the copy prunes as the source would.
+      ...(entry?.promptCacheKeepWarm ? { promptCacheKeepWarm: entry.promptCacheKeepWarm } : {}),
+      // A prewarm is one request; it never compacts the copy it reads.
+      ...(params.cachePrewarm ? { disableCompactionRecovery: true } : {}),
+      // Every session tool stays listed for the provider's cached prefix; the run gates execution.
       toolExecutionAllow: [...params.tools],
-      codeModeOverride: false,
-      disableToolSearch: true,
-      promptMode: "minimal",
-      bootstrapContextMode: "lightweight",
-      forceMessageTool: false,
-      contextTokenBudget: 16_384,
-      streamParams: { maxTokens: 2_048 },
-      thinkLevel: "low",
-      timeoutMs: Math.min(params.timeoutMs, 120_000),
+      sessionForkRequest: {
+        ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
+        ...(pin ? { pin } : {}),
+        ownOutputLimit: params.maxTokens !== undefined,
+        ...(params.cachePrewarm ? { cachePrewarm: true as const } : {}),
+      },
+      ...(live?.promptCacheKey ? { promptCacheKey: live.promptCacheKey } : {}),
+      ...(params.maxTokens !== undefined ? { streamParams: { maxTokens: params.maxTokens } } : {}),
+      // Thinking is part of the cached prefix on Anthropic and OpenAI; follow the session.
+      thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+      timeoutMs: params.timeoutMs,
       disableTrajectory: true,
       silentExpected: true,
       allowEmptyAssistantReplyAsSilent: true,
@@ -513,8 +673,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });
-    foreground.signal.throwIfAborted();
-    emitInternalRunUsageDiagnostic(result, {
+    await emitInternalRunUsageDiagnostic(result, {
       config,
       agentId,
       agentDir,
@@ -525,7 +684,6 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     });
     return result;
   } finally {
-    unsubscribe();
     preparedRunAdmission.close();
     clearAgentRunContext(runId);
     cleanupSessionResources(forkSession.sessionId);

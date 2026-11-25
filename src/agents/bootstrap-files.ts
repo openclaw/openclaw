@@ -4,11 +4,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-  type AgentBootstrapHookContext,
-} from "../hooks/internal-hooks.js";
+import type { AgentBootstrapHookContext } from "../hooks/internal-hook-types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";

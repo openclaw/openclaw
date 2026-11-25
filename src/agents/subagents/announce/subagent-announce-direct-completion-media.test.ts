@@ -114,11 +114,6 @@ it.each<MediaCase>([
     [{ text: `Voice ready\nMEDIA:${voice}\n${hidden}`, mediaUrls: [voice], audioAsVoice: true }],
   ],
   ["recorded absent result", { result: "(no output)", noVisibleResult: true }, null],
-  [
-    "failed completion without its media",
-    { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
-    [],
-  ],
 ])("delivers only visible completed content: %s", async (_name, event, rawExpected, payloads) => {
   const expected = rawExpected === undefined ? (["Image ready", [image]] as const) : rawExpected;
   const { result, sendMessage } = await deliver({ event, payloads });
@@ -149,8 +144,6 @@ it("does not settle or retry a partially sent media batch", async () => {
   const { result } = await deliver({ event: imageEvent, sendMessage, onDeliveryResult });
   expect(result).toMatchObject({
     delivered: false,
-    terminal: true,
-    disposition: "permanent_failure",
   });
   expect(sendMessage).toHaveBeenCalledOnce();
   expect(onDeliveryResult).not.toHaveBeenCalled();

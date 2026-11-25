@@ -61,6 +61,16 @@ export function fullClaw(text = TEXT): StoredClaw {
       role: "operator",
       peer_keys: keys,
       listed_seq: keys.map(() => SEQ),
+      devices: Object.fromEntries(
+        keys.map((key, k) => [
+          key,
+          {
+            device_pub: ed(2e6 + m * 100 + k),
+            label: text,
+            approved_by: { kind: "member_device", device_fp: fp(m) },
+          },
+        ]),
+      ),
       last_seen: Object.fromEntries(keys.map((key) => [key, NOW])),
     };
   }
@@ -81,7 +91,13 @@ export function fullClaw(text = TEXT): StoredClaw {
       status: "pending",
       proof_key: hex(i),
       created_by: fp(0),
-      pending: { account_id: text, device_pub: ed(i), peer_key: iroh(i), requested_at: NOW },
+      pending: {
+        account_id: text,
+        device_pub: ed(i),
+        label: text,
+        peer_key: iroh(i),
+        requested_at: NOW,
+      },
     };
     reports[id(i)] = {
       account_id: text,
@@ -101,6 +117,23 @@ export function fullClaw(text = TEXT): StoredClaw {
     invite_reports: reports,
     member_approved_at: Object.fromEntries(
       Object.keys(authority.members).map((accountId) => [accountId, NOW]),
+    ),
+    member_browser_requests: Object.fromEntries(
+      Object.keys(authority.members).map((accountId) => [
+        accountId,
+        {
+          notice: {
+            requestId: id(1),
+            label: text,
+            location: text,
+            requestedAt: NOW,
+            expiresAt: NOW + 1800,
+          },
+          recent: [1, 2, 3].map((n) => ({ requestId: id(n), until: NOW + 1800 })),
+          terminal: [4, 5, 6].map((n) => ({ requestId: id(n), until: NOW + 1800 })),
+          blockedUntil: NOW + 1800,
+        },
+      ]),
     ),
     owner_profile: { sub: text, email: text, name: text },
     binding: {

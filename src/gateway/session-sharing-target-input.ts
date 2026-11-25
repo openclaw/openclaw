@@ -97,7 +97,11 @@ export function resolveDirectSessionTargets(
   method: string,
   params: unknown,
 ): SessionMutationTarget[] {
-  if (method === "sessions.create" || method === "sessions.list") {
+  if (
+    method === "sessions.create" ||
+    method === "sessions.list" ||
+    method === "chat.pendingInputs.own"
+  ) {
     return [];
   }
   const record = asOptionalRecord(params);
@@ -265,9 +269,22 @@ export function resolveTalkSessionTargetInput(
 
 export function resolveSessionMutationTargets(params: {
   method: string;
+  participationRequired?: true;
+  hasInvitedAccessCeiling?: boolean;
+  sessionScope?: string;
+  client?: GatewayClient | null;
   requestParams: unknown;
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
+  if (
+    (params.method === "session.typing" || params.method === "session.suggestions.add") &&
+    (params.participationRequired ||
+      (params.sessionScope === "operator.sessions.write" && params.hasInvitedAccessCeiling))
+  ) {
+    const sessionKey = readSessionSharingStringParam(params.requestParams, "sessionKey");
+    const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
+    return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : undefined;
+  }
   if (params.method === "sessions.patchMany") {
     const targets =
       params.requestParams &&

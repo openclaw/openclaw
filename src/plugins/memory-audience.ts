@@ -1,18 +1,24 @@
-import {
-  isSessionDeliveryGenerationRevokedError,
-  prepareSessionGenerationFacts,
-} from "../config/sessions/session-delivery-generation.js";
+import { isSessionDeliveryGenerationRevokedError } from "../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../config/sessions/transcript-lease.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry,
+  SessionScheduledMemoryParent,
+} from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 
 const MAX_LINEAGE_HOPS = 64;
 const SESSION_ID_PATTERN = /^[a-f0-9-]{36}$/;
 
-type GenerationLease = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>;
+type GenerationLease = TranscriptLease;
 
 // One record per minted audience. A delegated record owns its child-session
 // lease and borrows its parent's record, so either side going stale rejects it.
@@ -83,7 +89,7 @@ async function readEntryInWorker(params: {
   sessionKey: string;
   storePath: string;
   assertCallerCurrent: () => void;
-}): Promise<SessionEntry | undefined> {
+}): Promise<InternalSessionEntry | undefined> {
   const read = await withSessionEntryReadOnlyInWorker(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     params.assertCallerCurrent,
@@ -105,13 +111,20 @@ async function leaseSessionGeneration(params: {
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
 }): Promise<GenerationLease | undefined> {
   try {
-    return await prepareSessionGenerationFacts({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
-      sessionId: params.entry?.sessionId ?? null,
-      lifecycleRevision: params.entry?.lifecycleRevision ?? null,
-    });
+    // A grant holds the incarnation it was minted in: a reset ends it, a compaction successor
+    // keeps it.
+    return await acquireTranscriptLease(
+      chatRef({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
+      }),
+      {
+        sessionId: params.entry?.sessionId ?? null,
+        lifecycleRevision: params.entry?.lifecycleRevision,
+      },
+      { exact: "lifecycle" },
+    );
   } catch (error) {
     if (isSessionDeliveryGenerationRevokedError(error)) {
       return undefined;
@@ -174,15 +187,11 @@ function mintMemoryAudience(
 /**
  * A scheduled run's exact parent incarnation and the owner bit its execution
  * context resolved for this occurrence. Scheduled run rows record no spawn
- * receipt, so this plays that role for the run's first lineage hop.
+ * receipt, so this plays that role for the run's first lineage hop. A
+ * child-placement run also stamps it on its row as `scheduledMemoryParent`
+ * for the sessions it spawns.
  */
-export type ScheduledMemoryParent = Readonly<{
-  sessionKey: string;
-  sessionId: string;
-  /** Absent when the link recorded only the session id, which is all it can prove. */
-  lifecycleRevision?: string;
-  senderIsOwner: boolean;
-}>;
+export type ScheduledMemoryParent = Readonly<SessionScheduledMemoryParent>;
 
 type MemoryAudienceResolutionParams = {
   agentId: string;
@@ -204,7 +213,7 @@ type MemoryAudienceResolutionParams = {
  */
 export async function resolveMemoryAudienceFromEntry(
   params: MemoryAudienceResolutionParams,
-  admittedEntry: SessionEntry,
+  admittedEntry: InternalSessionEntry,
 ): Promise<MemoryAudienceResolution> {
   let { sessionKey, sessionId, senderIsOwner } = params;
   const { agentId } = params;
@@ -302,6 +311,25 @@ export async function resolveMemoryAudienceFromEntry(
         requiredLifecycleRevision = parent.lifecycleRevision;
         sessionIdOnly = parent.lifecycleRevision === undefined;
         senderIsOwner = parent.senderIsOwner;
+        continue;
+      }
+      // A session spawned by a scheduled run reaches the run's row, which cron
+      // stamped with the parent its occurrence was admitted against. Both the
+      // spawn and the occurrence must be owner-attributed to follow it; any other
+      // combination keeps resolving from the run row, as before the receipt.
+      const receipt =
+        depth > 0 && entry.spawnedBy === undefined ? entry.scheduledMemoryParent : undefined;
+      if (receipt?.senderIsOwner && senderIsOwner === true) {
+        if (receipt.lifecycleRevision === "") {
+          return deny(
+            "ineligible",
+            `scheduled run session ${sessionKey} has a malformed parent receipt`,
+          );
+        }
+        sessionKey = receipt.sessionKey;
+        sessionId = receipt.sessionId;
+        requiredLifecycleRevision = receipt.lifecycleRevision;
+        sessionIdOnly = receipt.lifecycleRevision === undefined;
         continue;
       }
       if (entry.spawnedBy !== undefined) {

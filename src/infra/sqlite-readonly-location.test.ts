@@ -20,6 +20,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
 import {
@@ -336,7 +337,7 @@ it("identifies filesystem failures whose path belongs to the staging destination
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
-it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
+it("preserves source corruption across acquisition and validation without staging quota errors", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
   const databasePath = createTempDatabasePath(
     "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');",
@@ -348,6 +349,11 @@ it("preserves source corruption without reporting a snapshot staging quota failu
   } finally {
     fs.closeSync(descriptor);
   }
+  const sourceBefore = fs.readFileSync(databasePath);
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
 
   withDatabase(
     databasePath,
@@ -360,23 +366,37 @@ it("preserves source corruption without reporting a snapshot staging quota failu
   );
 
   await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
-      (error: unknown) => error,
-    );
-    const workerError = await prepareSqliteReadOnlyLocation(databasePath).catch(
-      (error: unknown) => error,
-    );
-
-    expect(inProcessError).toMatchObject({
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
-      message: "database disk image is malformed",
-    });
-    expect(workerError).toBeInstanceOf(Error);
-    expect((workerError as Error).message).toContain(
-      "database disk image is malformed (code=ERR_SQLITE_ERROR, errcode=11)",
-    );
-    expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+    for (const prepare of [prepareSqliteReadOnlyLocationInProcess, prepareSqliteReadOnlyLocation]) {
+      let prepared: PreparedSqliteReadOnlyLocation | undefined;
+      let failure: unknown;
+      try {
+        prepared = await prepare(databasePath);
+        // Acquisition may reject malformed pages while reading their footprint.
+        // Otherwise the raw image must retain the damage for consumer validation.
+        withDatabase(
+          prepared.location,
+          (snapshot) => snapshot.prepare("PRAGMA quick_check;").get(),
+          true,
+        );
+      } catch (error) {
+        failure = error;
+      } finally {
+        if (prepared) {
+          expect(await prepared.cleanupAsync()).toBe(true);
+        }
+      }
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toContain("database disk image is malformed");
+      expect(message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+      if (prepared || prepare === prepareSqliteReadOnlyLocationInProcess) {
+        expect(failure).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+      } else {
+        expect(message).toContain("(code=ERR_SQLITE_ERROR, errcode=11)");
+      }
+      expect(fs.readFileSync(databasePath)).toEqual(sourceBefore);
+      expect(fs.readdirSync(stagingRoot)).toEqual([]);
+    }
   });
 });
 
@@ -756,7 +776,7 @@ it.each([
   },
 );
 
-it("snapshots a verified live writer once despite checkpoints that exhaust raw-copy retries", async () => {
+it("takes one read transaction when a live WAL writer outlasts every raw copy", async () => {
   const root = tempDirs.make("sqlite-live-metadata-");
   const source = path.join(root, "state", "openclaw.sqlite");
   const staging = path.join(root, "staging");
@@ -775,11 +795,18 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       await writer.commit();
       return result;
     });
-    await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
-      "reason=wal-copy-unstable, attempts=10",
-    );
+    const fallback = await prepareSqliteReadOnlyCopyInProcess(source, staging);
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();
+    try {
+      using db = new (requireNodeSqlite().DatabaseSync)(fallback.location, { readOnly: true });
+      const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
+      expect(rows[0]?.generation).toBeGreaterThan(0);
+      expect(rows[0]).toEqual(rows[1]);
+    } finally {
+      expect(fallback.cleanup()).toBe(true);
+    }
+    // A verified live owner skips the raw attempts and takes that transaction directly.
     const prepared = await prepareSnapshot(source, snapshotOptions(source));
     try {
       using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
@@ -803,6 +830,40 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
     await writer.stop();
     owner.release();
   }
+});
+
+it("keeps a WAL family without its index byte-neutral when every raw copy changes", async () => {
+  const root = tempDirs.make("sqlite-unindexed-churn-");
+  const source = path.join(root, "openclaw.sqlite");
+  {
+    using db = new (requireNodeSqlite().DatabaseSync)(source);
+    db.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE probe(value); INSERT INTO probe VALUES('kept');",
+    );
+  }
+  fs.writeFileSync(`${source}-wal`, Buffer.alloc(0));
+  fs.rmSync(`${source}-shm`, { force: true });
+  const before = fs.readFileSync(source);
+  const copy = copies.copySqliteFile;
+  const raw = vi.spyOn(copies, "copySqliteFile").mockImplementation(async (...args) => {
+    const result = await copy(...args);
+    if (args[1].endsWith("database.sqlite.partial")) {
+      const bytes = fs.readFileSync(args[1]);
+      bytes.writeUInt32BE(bytes.readUInt32BE(60) + 1, 60);
+      fs.writeFileSync(args[1], bytes);
+    }
+    return result;
+  });
+  try {
+    await expect(prepareSqliteReadOnlyCopyInProcess(source)).rejects.toThrow(
+      "reason=main-changed-during-copy, attempts=10",
+    );
+  } finally {
+    raw.mockRestore();
+  }
+  expect(fs.existsSync(`${source}-shm`)).toBe(false);
+  expect(fs.readFileSync(`${source}-wal`)).toEqual(Buffer.alloc(0));
+  expect(fs.readFileSync(source)).toEqual(before);
 });
 
 it.each(["absent", "unverifiable"])(

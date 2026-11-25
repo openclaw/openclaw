@@ -5,6 +5,7 @@ import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import {
   buildQualifiedChatModelValue,
@@ -12,33 +13,35 @@ import {
 } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
 import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 export type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
   onPermissionRetry?: (message: string) => void;
   modelCatalog?: ModelCatalogEntry[];
-  recovery?: Pick<
-    ChatThreadProps,
-    | "failureActionsRunId"
-    | "runActive"
-    | "runWorking"
-    | "onRetryRun"
-    | "failedMessageEditSource"
-    | "onFocusComposer"
-    | "onDismissPendingInput"
-  >;
+  recovery?: Partial<Pick<ChatThreadProps, "sessionKey">> &
+    Pick<
+      ChatThreadProps,
+      | "currentAgentId"
+      | "fullMessageAgentId"
+      | "failureActionsRunId"
+      | "runActive"
+      | "runWorking"
+      | "onRetryRun"
+      | "onStartNewSession"
+      | "onDismissPendingInput"
+    >;
 };
 
 // Text-only notices paint with their transcript row; only interactive cards load later.
-const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
-  export: "ChatPermissionCard",
-});
 const ChatSkillLearnedNotice = lazy(() => import("./chat-skill-learned-notice.tsx"), {
   export: "ChatSkillLearnedNotice",
 });
@@ -51,41 +54,23 @@ function SystemLine(props: {
   label: string;
   children?: JSX.Element;
   metric?: string;
-  compaction?: "active" | "complete";
 }) {
   return (
     <div
       class="chat-divider__rule"
-      role={props.compaction ? "status" : "separator"}
-      aria-live={props.compaction ? "polite" : undefined}
+      role="separator"
       aria-label={props.metric ? `${props.label}, ${props.metric}` : props.label}
     >
       <span class="chat-divider__line" />
       <span class="chat-divider__label">
-        <Show
-          when={props.compaction}
-          fallback={
-            <Show when={props.icon}>
-              {(icon) => (
-                <span class="chat-divider__icon" aria-hidden="true">
-                  <Icon name={icon()} />
-                </span>
-              )}
-            </Show>
-          }
-        >
-          <span class="chat-compaction__glyph" aria-hidden="true">
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <Icon name="check" />
-          </span>
+        <Show when={props.icon}>
+          {(icon) => (
+            <span class="chat-divider__icon" aria-hidden="true">
+              <Icon name={icon()} />
+            </span>
+          )}
         </Show>
-        <span class={["chat-divider__title", { "text-shimmer": props.compaction === "active" }]}>
-          {props.children ?? props.label}
-        </span>
+        <span class="chat-divider__title">{props.children ?? props.label}</span>
         <Show when={props.metric}>
           <span class="chat-divider__separator" aria-hidden="true">
             ·
@@ -101,19 +86,11 @@ function SystemLine(props: {
 export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }> }) {
   return (
     <div
-      class={[
-        "chat-divider",
-        props.item.compaction ? `chat-compaction chat-compaction--${props.item.compaction}` : "",
-      ]}
+      class="chat-divider"
       data-chat-row-key={props.item.key}
       data-ts={String(props.item.timestamp)}
     >
-      <SystemLine
-        icon={props.item.icon}
-        label={props.item.label}
-        metric={props.item.metric}
-        compaction={props.item.compaction}
-      />
+      <SystemLine icon={props.item.icon} label={props.item.label} metric={props.item.metric} />
       <Show when={props.item.description}>
         <div class="chat-divider__details">
           <span class="chat-divider__description">{props.item.description}</span>
@@ -147,7 +124,7 @@ function InlineNotice(props: ChatNoticeProps) {
         <span class="chat-notice-inline__icon" aria-hidden="true">
           <Icon name={props.item.icon ?? "cpu"} />
         </span>
-        <strong class="chat-notice-inline__label">{props.item.label}</strong>
+        <span class="chat-notice-inline__label">{props.item.label}</span>
         <Show when={props.item.showTimestamp}>
           <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
         </Show>
@@ -304,12 +281,10 @@ export function ChatNoticeDetails(props: ChatNoticeProps) {
     >
       <Match when={props.item.permissionMissing}>
         <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
-          <ChatLazyBoundary>
-            <ChatPermissionCard
-              request={props.item.permissionMissing!}
-              onRetry={props.onPermissionRetry}
-            />
-          </ChatLazyBoundary>
+          <ChatPermissionCard
+            request={props.item.permissionMissing!}
+            onRetry={props.onPermissionRetry}
+          />
         </div>
       </Match>
       <Match when={props.item.collapsedBody && props.item.text}>

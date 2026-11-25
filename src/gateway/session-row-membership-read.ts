@@ -10,7 +10,7 @@ import type {
 } from "../config/sessions/combined-store.types.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
@@ -167,6 +167,7 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    onMembershipChange: membership.onMembershipChange,
     readMembership(query: records.Lookup) {
       if (!params.isActive()) {
         return undefined;
@@ -236,6 +237,7 @@ export function createSessionRowMembershipReadAccess(params: {
       }
       return { status: "ready" as const, target };
     },
+    memberAccess: membership.access,
     hasMembership: (storePath: string, key: string, identity: string) =>
       membership.membership(storePath, key)?.includes(identity) ?? false,
     needsExactMembershipPreparation(
@@ -430,7 +432,7 @@ export function createSessionRowEntryReadAccess(
                 scopes!,
               );
             },
-            projectionLane,
+            sessionStoreLane,
           );
         },
         updateMembership() {

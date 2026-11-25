@@ -1,0 +1,2 @@
+302
+# Scheduled-run helper memory receipt: resolver grant/stale/non-owner regressions, cron writer and forgery-boundary tests, and the per-spawn owner recheck for sessions_spawn and sessions_create.

@@ -1,4 +1,0 @@
-# PR #191326 (56617cd0): exact 350-line regression growth for billing-route warnings
-# on config writes, credential-route classification, and CLI warning delivery.
-# Omitted at landing; preserve this coverage without changing the shared scalar.
-350

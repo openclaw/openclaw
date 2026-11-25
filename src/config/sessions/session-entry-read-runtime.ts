@@ -1,12 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -48,15 +45,19 @@ import type {
   SessionEntryCohortReader,
   SessionEntrySummaryWorkerRead,
 } from "./session-entry-read-runtime.types.js";
-import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import {
+  assertCapturedSessionEntryReadSource,
+  prepareSessionEntryReadSource,
+} from "./session-entry-read-source.js";
 import type {
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
-import {
-  captureSessionStoreReadCandidate,
-  type SessionStoreReadCandidate,
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
+import type {
+  SessionStoreReadCandidate,
+  SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
 import {
   prepareSessionStoreReaderCandidates,
@@ -64,8 +65,8 @@ import {
 } from "./session-store-target-runtime.js";
 import type { SessionStoreWorkerReader } from "./session-store-worker-reader.types.js";
 import {
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
+  prepareSessionStoreCandidatesInWorker,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -77,6 +78,7 @@ export type SessionEntryReadWorkerOwner = {
   scope?: SessionEntryReadOnlyWorkerScope;
   source?: SessionEntryReadWorkerResult["source"];
   selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
+  readCustody?: SessionStoreReadCustody;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
   revalidateTarget?: () => Promise<void>;
@@ -95,8 +97,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
 ): Promise<T> {
   const memory = captureMemoryExactSessionReader(input, assertCallerCurrent);
   if (memory) {
-    const entry = memory.read(input.sessionKey, input.projection);
-    return consume(ok(entry), {
+    return consume(ok(memory.read(input.sessionKey, input.projection)), {
       kind: "incognito",
       assertCurrent: () => memory.assertCurrent(),
       source: memory.source,
@@ -151,7 +152,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     },
     {
       backing: true,
-      lane: lane ?? projectionLane,
+      lane: lane ?? sessionStoreLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
       prepareSource,
@@ -275,7 +276,7 @@ export function createSessionEntryListReader(
           },
         };
       },
-      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: projectionLane },
+      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: sessionStoreLane },
     ).finally(() => {
       pending = undefined;
     }));
@@ -322,7 +323,20 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   options?: SessionEntryCohortReadOptions,
 ): Promise<T> {
   options?.signal?.throwIfAborted();
-  const prepareConsume = options?.prepareConsume;
+  const custody = [...new Set(inputs.flatMap((input) => input.readCustody ?? []))];
+  const prepareCaller = options?.prepareConsume;
+  const prepareConsume =
+    custody.length > 0
+      ? async () => {
+          await prepareCaller?.();
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              validate: { readCustody: custody, candidates: [], sources: [] },
+            },
+            capturedInputs.every((input) => input.pointRead) ? true : undefined,
+          );
+        }
+      : prepareCaller;
   const originalInputs = [...inputs];
   const capturedInputs: SessionEntryWorkerRead[] = originalInputs.map((input) => {
     const captured: SessionEntryWorkerRead = {
@@ -345,7 +359,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
-          lane: targetDiscoveryLane,
+          lane: sessionStoreLane,
           prepareSource: options.prepareSource?.bind(
             options,
             originalInputs[capturedInputs.indexOf(input)]!,
@@ -483,10 +497,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
               source: database,
               databaseIdentity: memory.source.databaseIdentity,
               placeholders: [],
-              members: [...facts].map(([sessionKey, value]) => ({
-                sessionKey,
-                identityIds: value.members.map((member) => member.identityId),
-              })),
+              members: [...facts].map(([key, value]) =>
+                sessionMemberSharingFacts(key, value.members),
+              ),
             },
           }
         : {}),
@@ -505,7 +518,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "list", lane: projectionLane, dataOnly, prepareSource },
+    { backing: input.projection === "list", lane: sessionStoreLane, dataOnly, prepareSource },
   );
 }
 
@@ -534,7 +547,7 @@ export async function withSessionStoreReaderInWorker<T>(
   const agentId = input.agentId === undefined ? undefined : normalizeAgentId(input.agentId);
   const storePath = input.storePath;
   const preparedSource = input.preparedSource && { ...input.preparedSource };
-  const readLane = lane ?? (input.projection === "sharing" ? projectionLane : undefined);
+  const readLane = lane ?? (input.projection === "sharing" ? sessionStoreLane : undefined);
   preparedSource?.assertCurrent();
   logical?.assertCurrent?.();
   const onReadError = logical?.onReadError;
@@ -548,6 +561,7 @@ export async function withSessionStoreReaderInWorker<T>(
       inspection,
       preparedSource,
       allowDirect: !preparedSource && !logical,
+      pointRead: input.pointRead,
     });
     preparedSource?.assertCurrent();
     logical?.assertCurrent?.();
@@ -585,7 +599,7 @@ export async function withSessionStoreReaderInWorker<T>(
       const owner = captureCanonicalSessionReaderContinuation(database);
       if (owner) {
         continuations.push({
-          path: captureSessionStoreReadCandidate(database.path).physicalPath,
+          path: readOpenClawAgentDatabaseIdentity(database).canonicalPath,
           owner,
         });
       }
@@ -596,7 +610,11 @@ export async function withSessionStoreReaderInWorker<T>(
       sourcePath: string,
       route: Pick<
         SessionEntryReadWorkerOwner,
-        "assertCurrent" | "onRegistryChange" | "refreshBeforeDispatch" | "revalidateTarget"
+        | "assertCurrent"
+        | "onRegistryChange"
+        | "refreshBeforeDispatch"
+        | "revalidateTarget"
+        | "readCustody"
       >,
     ) => {
       const continuation = continuations.find(
@@ -604,38 +622,24 @@ export async function withSessionStoreReaderInWorker<T>(
           item.path === database.path &&
           (!logical || item.owner.receipt.agentId === database.agentId),
       )?.owner;
-      let sourceIdentity =
-        candidates.find(
-          (candidate) => candidate.identity && candidate.physicalPath === database.path,
-        )?.identity ??
-        (prepareSource || capturePhysicalSource
-          ? readDatabasePathIdentitySync(database.path)
-          : undefined);
-      const preparedDatabase = {
+      const preparedDatabase: PreparedSessionEntryWorkerRead["database"] = {
         ...database,
         env: { ...env },
-        readIdentity: privateCopy ? sourceIdentity : undefined,
       };
-      let sourcePrepared = false;
-      const prepareRead = () => {
-        if (sourcePrepared || !sourceIdentity) {
-          return;
-        }
-        // A missing file can be created by the writer ahead of this cold read.
-        // Capture it under the read's existing admission before dispatching the snapshot.
-        if (!inspection && sourceIdentity.birthtime === undefined) {
-          sourceIdentity = readDatabasePathIdentitySync(database.path);
-        }
-        prepareSource?.(preparedDatabase, sourceIdentity);
-        sourcePrepared = true;
-      };
+      const source = await prepareSessionEntryReadSource(
+        preparedDatabase,
+        route.readCustody ?? { sourcePath, candidates },
+        { inspection, capturePhysicalSource, prepareSource },
+      );
+      preparedDatabase.readIdentity = privateCopy ? source.identity : undefined;
       return withSessionHistoryWorkerDatabase(
         {
           ...database,
           requestedPaths: [storePath, sourcePath],
           env,
-          prepareRead,
-          readIdentity: privateCopy ? sourceIdentity : undefined,
+          prepareRead: source.prepareRead,
+          readCustody: [...(input.readCustody ?? []), ...source.readCustody],
+          readIdentity: privateCopy ? source.identity : undefined,
           readSourcePath: privateCopy ? sourcePath : undefined,
         },
         async (reader) => {
@@ -644,24 +648,18 @@ export async function withSessionStoreReaderInWorker<T>(
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
-            // Discovery can yield before writable admission; retain its selected physical source.
-            if (!inspection && !preparedSource && sourceIdentity?.key.startsWith("file:")) {
-              assertExistingDatabaseIdentity(
-                database.path,
-                sourceIdentity.key,
-                sourceIdentity.birthtime,
-              );
-            }
+            source.assertCurrent();
           };
           if (dataOnly && (logical?.assertCurrent || preparedSource)) {
             assertFinalCurrent = assertCapturedCurrent;
           }
           assertCapturedCurrent();
-          if (sourceIdentity?.birthtime !== undefined) {
-            prepareRead();
+          if (source.identity?.birthtime !== undefined) {
+            await source.prepareRead(undefined);
           }
-          return await read({
+          const value = await read({
             ...route,
+            readCustody: route.readCustody ?? { sourcePath, candidates },
             reader,
             database: preparedDatabase,
             logicalAgentId,
@@ -669,6 +667,11 @@ export async function withSessionStoreReaderInWorker<T>(
             continuation: continuation?.receipt,
             assertCurrent: assertCapturedCurrent,
           });
+          if (dataOnly) {
+            await route.revalidateTarget?.();
+            assertCapturedCurrent();
+          }
+          return value;
         },
         readLane,
       );
@@ -707,6 +710,9 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
+        undefined,
+        undefined,
+        input.pointRead,
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

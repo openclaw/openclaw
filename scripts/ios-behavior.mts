@@ -1,0 +1,1637 @@
+#!/usr/bin/env node
+// Measures chat UX on the iOS simulator against an isolated Gateway whose model is the scripted
+// QA mock: streaming follow, reading position while scrolled up, keyboard, relaunch, gestures and
+// older-history paging that must not move the transcript, and a blank transcript judged from
+// screenshots (keyboard, chat length and agent turns, chat switches).
+// Usage: pnpm ios:behavior [--setup] [--profile ios-ux] [--cases a,b] [--samples 3] [--app <app>]
+// --setup writes the profile (Gateway stopped): loopback port, token auth, mock model.
+// Then run the mock and the Gateway (see .agents/skills/ios-e2e/BEHAVIOR.md) and this script.
+// IOS_SIM reuses a paired simulator; otherwise a fresh one is paired and deleted afterwards.
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { parseArgs } from "node:util";
+import {
+  type ProbeFrame,
+  type ProbeLog,
+  type Rect,
+  type ScreenLine,
+  bodyCounts,
+  composerGap,
+  hiddenBelowComposer,
+  firstEvent,
+  firstFrame,
+  isReaderWrite,
+  lastFrameBefore,
+  marks,
+  motion,
+  offsetMovedPt,
+  offsetWriters,
+  offsetWrites,
+  parseProbeLog,
+  percentile,
+  prependShift,
+  remounts,
+  restingMotion,
+  scrollPhases,
+  transcriptText,
+  window,
+} from "./lib/ios-behavior-grade.mts";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+
+const repoRoot = resolveRepoRoot(import.meta.url);
+const { values } = parseArgs({
+  options: {
+    setup: { type: "boolean", default: false },
+    profile: { type: "string", default: "ios-ux" },
+    port: { type: "string", default: "19061" },
+    "mock-url": { type: "string", default: "http://127.0.0.1:44180/v1" },
+    cases: {
+      type: "string",
+      default: [
+        "stream-turn",
+        "stream-follow",
+        "scrolled-up",
+        "keyboard",
+        "relaunch",
+        "sidebar-open-still",
+        "swipe-right-still",
+        "disclosure-header-still",
+        "prepend-no-jump",
+        ...["up", "down"].flatMap((keyboard) =>
+          ["short", "long"].flatMap((length) =>
+            ["plain", "agent"].map((content) => `blank-${keyboard}-${length}-${content}`),
+          ),
+        ),
+      ].join(","),
+    },
+    samples: { type: "string", default: "3" },
+    out: { type: "string" },
+    // Existing chats (session keys, `agent:main:` omitted) for the cases that need history, in
+    // place of seeding mock turns: point --profile at a scratch copy of a real profile to judge
+    // real transcripts. Never commit such profiles or their screenshots.
+    sessions: { type: "string" },
+    app: {
+      type: "string",
+      default: path.join(
+        repoRoot,
+        "apps/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app",
+      ),
+    },
+  },
+});
+const profile = values.profile;
+const END_MARKER = "UX-STREAM-END";
+const MOCK_MODEL = "mock-openai/gpt-5.6-luna";
+// Prompts for the blank-transcript cases. The defaults drive the QA mock; `UXAGENT` is an agent
+// turn (commentary, tool calls, progress card, then a long reply). A profile with a real model
+// passes its own prompts through these variables.
+const SEED_PROMPT = process.env.IOS_BEHAVIOR_SEED_PROMPT ?? "UXSTREAM chunks=150 interval=0";
+const REPLY_PROMPT = process.env.IOS_BEHAVIOR_REPLY_PROMPT ?? "UXSTREAM chunks=300 interval=20";
+const AGENT_SEED_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0 label=SEED";
+const AGENT_REPLY_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_REPLY_PROMPT ??
+  "UXAGENT steps=4 chunks=300 interval=20 label=REPLY";
+// The mock names the reply's plan steps after it; a real-model prompt has none, so no check.
+const AGENT_REPLY_LABEL = /\blabel=([A-Za-z]+)/.exec(AGENT_REPLY_PROMPT)?.[1];
+// The gesture and paging cases share one chat per run: `HISTORY_TURNS` agent turns, each a user
+// message, eight tool steps folded into a Worked disclosure and a short reply. Pages are 200
+// messages (or 512 KB first, 256 KB older), so 40 turns (~720 messages) leave at least two older
+// pages behind the first. Seeding takes a few minutes; `--sessions <key>` reuses a seeded chat.
+const HISTORY_PROMPT =
+  process.env.IOS_BEHAVIOR_HISTORY_PROMPT ?? "UXAGENT steps=8 chunks=40 interval=0 label=HISTORY";
+const HISTORY_TURNS = Number(process.env.IOS_BEHAVIOR_HISTORY_TURNS ?? "40");
+const replaySessions = values.sessions
+  ?.split(",")
+  .map((key) => key.trim())
+  .filter(Boolean);
+if (replaySessions?.length === 0) {
+  console.error("ios:behavior: --sessions needs at least one chat.");
+  process.exit(1);
+}
+let replayIndex = 0;
+
+// Set once this run creates a simulator, so every exit path deletes it.
+const owned: { simulator?: string; recorder?: ChildProcess } = {};
+
+function deleteOwnedSimulator() {
+  if (owned.simulator) {
+    spawnSync("xcrun", ["simctl", "delete", owned.simulator]);
+    owned.simulator = undefined;
+  }
+}
+
+function fail(message: string): never {
+  // simctl finishes the file on SIGINT by itself; without it, recording outlives the runner.
+  owned.recorder?.kill("SIGINT");
+  deleteOwnedSimulator();
+  console.error(`ios:behavior: ${message}`);
+  process.exit(1);
+}
+
+function run(command: string, args: string[], options: { allowFailure?: boolean } = {}) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (!options.allowFailure && (result.error || result.status !== 0)) {
+    fail(`${command} ${args.slice(0, 3).join(" ")} failed:\n${result.stderr || result.stdout}`);
+  }
+  return { ok: result.status === 0, stdout: result.stdout ?? "" };
+}
+
+const openclaw = (args: string[]) =>
+  run("node", ["openclaw.mjs", "--profile", profile, ...args]).stdout.trim();
+
+if (values.setup) {
+  // The token stays out of argv: the batch goes through a private temp file.
+  const dir = mkdtempSync(path.join(tmpdir(), "ios-behavior-"));
+  try {
+    const batch = path.join(dir, "config.json");
+    writeFileSync(
+      batch,
+      JSON.stringify([
+        { path: "gateway.mode", value: "local" },
+        { path: "gateway.port", value: Number(values.port) },
+        { path: "gateway.auth.mode", value: "token" },
+        { path: "gateway.auth.token", value: randomBytes(24).toString("hex") },
+        { path: "models.mode", value: "replace" },
+        {
+          path: "models.providers.mock-openai",
+          value: {
+            baseUrl: values["mock-url"],
+            apiKey: "test",
+            api: "openai-responses",
+            request: { allowPrivateNetwork: true },
+            models: [
+              {
+                id: "gpt-5.6-luna",
+                name: "gpt-5.6-luna",
+                api: "openai-responses",
+                compat: { sendSessionIdHeader: true },
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+        { path: "agents.defaults.model", value: { primary: MOCK_MODEL } },
+        {
+          path: "agents.defaults.models",
+          value: { [MOCK_MODEL]: { params: { transport: "sse", openaiWsWarmup: false } } },
+        },
+      ]),
+      { mode: 0o600 },
+    );
+    openclaw(["config", "set", "--batch-file", batch]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log(`ios:behavior: profile ${profile} uses ${MOCK_MODEL} on port ${values.port}`);
+  process.exit(0);
+}
+
+if (!existsSync(values.app)) {
+  fail(`no app at ${values.app}. Build it first (mobilebuildmcp simulator build) or pass --app.`);
+}
+const bundleId = run("/usr/libexec/PlistBuddy", [
+  "-c",
+  "Print :CFBundleIdentifier",
+  path.join(values.app, "Info.plist"),
+]).stdout.trim();
+const samples = Number(values.samples);
+const caseNames = values.cases.split(",").map((name) => name.trim());
+const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const outDir = path.resolve(values.out ?? path.join(repoRoot, ".artifacts/ios-behavior", stamp));
+mkdirSync(outDir, { recursive: true });
+
+let sim = process.env.IOS_SIM ?? "";
+if (sim) {
+  run("xcrun", ["simctl", "install", sim, values.app]);
+} else {
+  sim = run("xcrun", [
+    "simctl",
+    "create",
+    `openclaw-behavior-${Date.now()}`,
+    "iPhone 17",
+  ]).stdout.trim();
+  owned.simulator = sim;
+  const paired = spawnSync(
+    "node",
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/ios-sim-pair.mts",
+      "--profile",
+      profile,
+      "--app",
+      values.app,
+    ],
+    { cwd: repoRoot, encoding: "utf8", env: { ...process.env, IOS_SIM: sim } },
+  );
+  if (paired.status !== 0) {
+    fail(`pairing failed:\n${paired.stderr || paired.stdout}`);
+  }
+}
+
+// UI drivers type through hardware key events, after which iOS records a hardware keyboard and
+// never shows the software one, so the app's keyboard-up layout cannot be measured. Clear that
+// record while the simulator is off; cases then enter text by pasting, never by typing.
+run("xcrun", ["simctl", "shutdown", sim], { allowFailure: true });
+const keyboardPrefs = path.join(
+  homedir(),
+  "Library/Developer/CoreSimulator/Devices",
+  sim,
+  "data/Library/Preferences/com.apple.keyboard.preferences.plist",
+);
+for (const key of ["HardwareKeyboardLastSeen", "AutomaticMinimizationEnabled"]) {
+  run("plutil", ["-replace", key, "-bool", "NO", keyboardPrefs]);
+}
+run("xcrun", ["simctl", "boot", sim]);
+run("xcrun", ["simctl", "bootstatus", sim, "-b"]);
+// bootstatus returns before app launches are accepted; the first launches can fail. On a loaded
+// Mac that took longer than the old 20 s, so wait by time and report the last error.
+const launchDeadline = Date.now() + 90_000;
+for (;;) {
+  const launched = spawnSync("xcrun", ["simctl", "launch", sim, bundleId], { encoding: "utf8" });
+  if (launched.status === 0) {
+    break;
+  }
+  if (Date.now() > launchDeadline) {
+    fail(`the app would not launch on the rebooted simulator:\n${launched.stderr}`);
+  }
+  await delay(2000);
+}
+
+const axe = path.join(
+  run("brew", ["--prefix", "mobilebuildmcp"]).stdout.trim(),
+  "libexec/bundled/axe",
+);
+
+const ui = (args: string[], options: { allowFailure?: boolean } = {}) =>
+  run("mobilebuildmcp", ["ui-automation", ...args, "--simulator-id", sim], options);
+function ref(pattern: RegExp): string {
+  const rows = ui(["snapshot-ui", "--style", "minimal"]).stdout.split("\n");
+  const row = rows.findLast((line) => pattern.test(line));
+  return row?.split("|")[0]?.trim() || fail(`no element matches ${pattern} on screen.`);
+}
+const tap = (pattern: RegExp) => ui(["tap", "--element-ref", ref(pattern)]);
+
+type AxNode = {
+  AXLabel?: string;
+  AXValue?: string;
+  AXUniqueId?: string;
+  frame?: { x: number; y: number; width: number; height: number };
+  children?: AxNode[];
+};
+type AxMatch = AxNode & { frame: Rect };
+// Elements outside the app's own tree (the edit menu) and plain scroll views only show up in
+// AXe's tree, with frames in points. Every node `match` accepts that has a frame.
+function axMatches(match: (node: AxNode) => boolean) {
+  const roots = JSON.parse(run(axe, ["describe-ui", "--udid", sim]).stdout) as AxNode[];
+  const found: AxMatch[] = [];
+  const walk = (node: AxNode) => {
+    if (match(node) && node.frame) {
+      found.push({ ...node, frame: node.frame });
+    }
+    node.children?.forEach(walk);
+  };
+  roots.forEach(walk);
+  return found;
+}
+/** The tallest node `match` accepts. */
+function axFrame(match: (node: AxNode) => boolean) {
+  return axMatches(match).reduce<Rect | undefined>(
+    (best, { frame }) => (!best || frame.height > best.height ? frame : best),
+    undefined,
+  );
+}
+function tapAt(x: number, y: number) {
+  run(axe, ["tap", "-x", String(Math.round(x)), "-y", String(Math.round(y)), "--udid", sim]);
+}
+const keyboardShown = () => ui(["snapshot-ui", "--style", "minimal"]).stdout.includes("|space|");
+
+// Paste through the edit menu: leaves the software keyboard up and the text exact.
+async function enterText(text: string) {
+  spawnSync("xcrun", ["simctl", "pbcopy", sim], { input: text });
+  ui(["long-press", "--element-ref", ref(/chat-message-input/), "--duration", "900"]);
+  await delay(800);
+  const paste = axFrame((node) => node.AXLabel === "Paste") ?? fail("the edit menu has no Paste.");
+  tapAt(paste.x + paste.width / 2, paste.y + paste.height / 2);
+  await delay(500);
+}
+
+// The transcript's tap gesture resigns the composer. Tap low in the transcript: starter cards
+// fill the top of an empty chat, and tapping one sends it.
+async function hideKeyboard() {
+  const transcript =
+    axFrame((node) => node.AXUniqueId === "chat-transcript") ??
+    fail("no chat transcript on screen.");
+  tapAt(transcript.x + transcript.width / 2, transcript.y + transcript.height * 0.85);
+  await delay(1000);
+}
+
+// The MobileBuildMCP daemon ends any request after 30 s, so long waits repeat a 25 s wait.
+async function waitForText(text: string, totalMs: number) {
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    const waited = ui(
+      ["wait-for-ui", "--predicate", "textContains", "--text", text, "--timeout-ms", "25000"],
+      { allowFailure: true },
+    );
+    if (waited.ok) {
+      return;
+    }
+    await delay(250);
+  }
+  const screenshot = path.join(outDir, "timeout.png");
+  run("xcrun", ["simctl", "io", sim, "screenshot", screenshot], { allowFailure: true });
+  fail(`"${text}" did not appear within ${totalMs} ms; screen: ${screenshot}`);
+}
+
+function launch(session: string) {
+  const startedAt = Date.now();
+  run("xcrun", [
+    "simctl",
+    "launch",
+    "--terminate-running-process",
+    sim,
+    bundleId,
+    "--openclaw-behavior-probe",
+    "--openclaw-chat-session",
+    session,
+    "-AppleLanguages",
+    "(en)",
+    "-AppleLocale",
+    "en_US",
+  ]);
+  ui([
+    "wait-for-ui",
+    "--predicate",
+    "exists",
+    "--identifier",
+    "chat-message-input",
+    "--timeout-ms",
+    "25000",
+  ]);
+  return startedAt;
+}
+
+async function send(prompt: string) {
+  await enterText(prompt);
+  tap(/chat-send-message/);
+}
+
+async function readProbe(file: string): Promise<ProbeLog> {
+  // The probe flushes every 250 ms.
+  await delay(600);
+  const container = run("xcrun", [
+    "simctl",
+    "get_app_container",
+    sim,
+    bundleId,
+    "data",
+  ]).stdout.trim();
+  const text = readFileSync(path.join(container, "Library/Caches/behavior-probe.jsonl"), "utf8");
+  writeFileSync(file, text);
+  return parseProbeLog(text);
+}
+
+/** A chat with history: the next --sessions chat, or `session` after a seeded mock turn. */
+async function longChat(session: string, seedPrompt: string) {
+  if (replaySessions) {
+    replayIndex += 1;
+    return replaySessions[replayIndex % replaySessions.length] ?? session;
+  }
+  await agentTurn(session, seedPrompt);
+  return session;
+}
+
+function runAsync(command: string, args: string[]) {
+  return new Promise<string>((resolve) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", (error) => fail(`${command} failed: ${error.message}`));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve(stdout)
+        : fail(`${command} ${args.slice(0, 3).join(" ")} failed:\n${stderr || stdout}`),
+    );
+  });
+}
+
+// One agent turn in `session` through the Gateway CLI; settles when the run finishes. Seeds chat
+// history without driving the app, so turns for several chats can run at once.
+const agentTurn = (session: string, message: string) =>
+  runAsync("node", [
+    "openclaw.mjs",
+    "--profile",
+    profile,
+    "agent",
+    "--agent",
+    "main",
+    "--session-key",
+    `agent:main:${session}`,
+    "--message",
+    message,
+    "--json",
+  ]);
+
+let historySeed: Promise<string> | undefined;
+/** Seeds the run's history chat once, before the first case that needs it starts recording. */
+function seedHistory() {
+  historySeed ??= (async () => {
+    const key = `ux-history-${stamp}`.toLowerCase();
+    console.log(`ios:behavior: seeding ${key} with ${HISTORY_TURNS} turns of "${HISTORY_PROMPT}"`);
+    for (let turn = 1; turn <= HISTORY_TURNS; turn += 1) {
+      await agentTurn(key, HISTORY_PROMPT);
+    }
+    console.log(`ios:behavior: seeded ${key}; reuse it with --sessions ${key}`);
+    return key;
+  })();
+  return historySeed;
+}
+
+/** The chat for the gesture and paging cases: the next --sessions chat, or the seeded one. */
+async function historyChat() {
+  if (replaySessions) {
+    replayIndex += 1;
+    return replaySessions[replayIndex % replaySessions.length] ?? fail("no --sessions chat.");
+  }
+  return seedHistory();
+}
+
+const prepareHistory = async () => {
+  if (!replaySessions) {
+    await seedHistory();
+  }
+};
+
+// Screen oracle. Each sample is a screenshot plus the accessibility geometry nearest in time
+// (where the transcript and composer are, and the chrome to ignore); text recognition runs over a
+// batch of screenshots afterwards. The view tree and accessibility both kept listing content while
+// a real iPhone showed a blank chat (#191478); recognized pixels do not.
+type ScreenSample = {
+  png: string;
+  screen: { width: number; height: number };
+  transcript?: Rect;
+  exclude: Rect[];
+  /** The progress card's label ("Plan, 4 of 4 steps done, Completed: …"), when one is drawn. */
+  plan?: string;
+};
+let screenCount = 0;
+const screensDir = path.join(outDir, "screens");
+mkdirSync(screensDir, { recursive: true });
+
+// Compiled once per run: the Vision CLI takes ~0.2 s per screenshot in batch; the motion CLI reads
+// every native frame of a recording window (~4 s for a 12 s window).
+const screenTextTool = path.join(outDir, "ios-screen-text");
+const screenMotionTool = path.join(outDir, "ios-screen-motion");
+for (const [tool, source] of [
+  [screenTextTool, "ios-screen-text.swift"],
+  [screenMotionTool, "ios-screen-motion.swift"],
+] as const) {
+  run("xcrun", ["swiftc", "-O", "-o", tool, path.join(repoRoot, "scripts", source)]);
+}
+
+type Layout = Omit<ScreenSample, "png">;
+
+function readLayout(roots: AxNode[]): Layout {
+  let transcript: Rect | undefined;
+  let composerTop = Infinity;
+  const exclude: Rect[] = [];
+  let plan: string | undefined;
+  const walk = (node: AxNode) => {
+    const id = node.AXUniqueId ?? "";
+    const text = node.AXLabel ?? "";
+    if (node.frame) {
+      if (id === "chat-transcript" && (!transcript || node.frame.height > transcript.height)) {
+        transcript = node.frame;
+      }
+      if (id === "chat-composer-surface" || id === "chat-message-input") {
+        composerTop = Math.min(composerTop, node.frame.y);
+      }
+      // Chrome that stays drawn while the messages are gone: the progress card and run footer.
+      if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
+        exclude.push(node.frame);
+      }
+      // The card above the composer has no identifier, only this label.
+      if (text.startsWith("Plan, ")) {
+        plan = text;
+      }
+    }
+    node.children?.forEach(walk);
+  };
+  roots.forEach(walk);
+  const screen = roots[0]?.frame ?? { width: 0, height: 0 };
+  if (transcript) {
+    const bottom = Math.min(transcript.y + transcript.height, composerTop);
+    transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
+  }
+  return { screen, transcript, exclude, plan };
+}
+
+/** Screenshots a screen check needs before it judges a window. */
+const MIN_SCREEN_SHOTS = 3;
+
+/**
+ * Screenshots back to back for `ms`, and at least `MIN_SCREEN_SHOTS`, each paired with the
+ * accessibility read nearest in time. A screenshot takes ~0.4 s and `describe-ui` ~1.9 s, so the
+ * reads run in their own loop: one read per screenshot left 2.5-6 s between samples, enough to
+ * miss a blank users see. The rects only move with the keyboard, navigation or a progress card; a
+ * read ~1 s off the screenshot is accepted. Screenshots sometimes take ~0.75 s; by time alone a
+ * 1.5 s end check then got two and failed its setup gate with text on screen.
+ */
+async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
+  const until = Date.now() + ms;
+  const timed = async <T,>(work: Promise<T>) => {
+    const start = Date.now();
+    const value = await work;
+    return { t: (start + Date.now()) / 2, value };
+  };
+  const layouts: { t: number; layout: Layout }[] = [];
+  const shots: { t: number; png: string }[] = [];
+  await Promise.all([
+    (async () => {
+      do {
+        const { t, value } = await timed(runAsync(axe, ["describe-ui", "--udid", sim]));
+        layouts.push({ t, layout: readLayout(JSON.parse(value) as AxNode[]) });
+      } while (Date.now() < until || shots.length < MIN_SCREEN_SHOTS);
+    })(),
+    (async () => {
+      do {
+        screenCount += 1;
+        const png = path.join(screensDir, `${String(screenCount).padStart(4, "0")}-${label}.png`);
+        const { t } = await timed(runAsync("xcrun", ["simctl", "io", sim, "screenshot", png]));
+        shots.push({ t, png });
+      } while (Date.now() < until || shots.length < MIN_SCREEN_SHOTS);
+    })(),
+  ]);
+  return shots.map(({ t, png }) => {
+    const { layout } = layouts.reduce((best, entry) =>
+      Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
+    );
+    const { screen, transcript, exclude, plan } = layout;
+    return { png, screen, transcript, exclude, plan };
+  });
+}
+
+type ScreenRead = { png: string; lines: number };
+
+/**
+ * Lines of transcript text per sample, grouped like `windows` (one `watchScreen` call each); -1
+ * where no transcript was on screen to judge.
+ */
+function readScreens(windows: ScreenSample[][]): ScreenRead[][] {
+  const watched = windows.flat();
+  const lines = new Map<string, ScreenLine[]>();
+  for (let start = 0; start < watched.length; start += 50) {
+    const batch = watched.slice(start, start + 50).map((entry) => entry.png);
+    for (const record of run(screenTextTool, batch).stdout.trim().split("\n")) {
+      if (record) {
+        const parsed = JSON.parse(record) as { image: string; lines: ScreenLine[] };
+        lines.set(parsed.image, parsed.lines);
+      }
+    }
+  }
+  return windows.map((shots) =>
+    shots.map((entry) => ({
+      png: entry.png,
+      lines: entry.transcript
+        ? transcriptText(lines.get(entry.png) ?? [], entry.screen, entry.transcript, entry.exclude)
+            .length
+        : -1,
+    })),
+  );
+}
+
+function screenGates(windows: ScreenRead[][], when: string): Result {
+  const reads = windows.flat();
+  const judged = reads.filter((entry) => entry.lines >= 0);
+  const blank = judged.filter((entry) => entry.lines === 0);
+  for (const entry of blank) {
+    console.log(`ios:behavior: blank transcript on screen: ${entry.png}`);
+  }
+  for (const entry of reads.filter((read) => read.lines < 0)) {
+    console.log(`ios:behavior: no transcript to judge: ${entry.png}`);
+  }
+  return {
+    metrics: {
+      screenSamples: judged.length,
+      blankSamples: blank.length,
+      unjudgedSamples: reads.length - judged.length,
+      minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
+    },
+    gates: {
+      // Every sample: a transcript that vanished from the screen, then came back, must not pass
+      // because the samples around it could be judged.
+      [`transcript on screen to judge ${when} (setup)`]:
+        reads.length >= MIN_SCREEN_SHOTS && judged.length === reads.length,
+      [`transcript text on screen ${when}`]: blank.length === 0,
+    },
+  };
+}
+
+type Metrics = Record<string, number | undefined>;
+/**
+ * `drawnMotion`: windows (epoch ms) and screen areas (points) to measure on the case's recording
+ * once it is written; `ignoreX` is a column range holding a control that moves by design.
+ */
+type DrawnWindow = {
+  from: number;
+  to: number;
+  area: Rect;
+  screenWidth: number;
+  ignoreX?: [number, number];
+};
+type Result = {
+  metrics: Metrics;
+  gates: Record<string, boolean>;
+  drawnMotion?: DrawnWindow[];
+  /** Who wrote the transcript's contentOffset in the measured window (probe `offset` events). */
+  writers?: Record<string, { writes: number; movedPt: number }>;
+};
+// `guard`: every gate passes in every sample. `bad`: reproduces an open bug, so its setup gates
+// pass and another gate fails in at least one sample; once the fix lands every gate passes and
+// the case becomes a guard. No majority vote: a jump in one sample is a jump users see.
+// `prepare` runs once before the case's samples, outside their recordings.
+type Case = {
+  kind: "guard" | "bad";
+  prepare?: () => Promise<void>;
+  run: (session: string, file: string) => Promise<Result>;
+};
+
+const isSetupGate = (gate: string) => gate.endsWith("(setup)");
+
+function verdict(kind: Case["kind"], passes: Record<string, number>, sampleCount: number) {
+  const entries = Object.entries(passes);
+  if (entries.some(([gate, count]) => isSetupGate(gate) && count < sampleCount)) {
+    return "setup failed";
+  }
+  const allPass = entries.every(([, count]) => count === sampleCount);
+  if (kind === "guard") {
+    return allPass ? "ok" : "regressed";
+  }
+  return allPass ? "bug fixed: make it a guard" : "ok (known bug)";
+}
+
+const sendTime = (log: ProbeLog) =>
+  firstEvent(log.events, (event) => event.e === "mark" && event.k === "send") ??
+  fail("the probe recorded no send; is this a DEBUG build with the probe?");
+
+// A long reply streams in after a send. The app has two reading policies (ChatView
+// handleTimelineChange): with the keyboard hidden it pins the sent message near the top and lets
+// the reply grow below it; with the keyboard up it follows the live edge (#108692).
+function streamCase(keyboardUp: boolean): Case {
+  return {
+    kind: "guard",
+    async run(session, file) {
+      launch(session);
+      await enterText("UXSTREAM chunks=300 interval=40");
+      if (!keyboardUp) {
+        await hideKeyboard();
+      }
+      const keyboardAtSend = keyboardShown();
+      tap(/chat-send-message/);
+      // The turn recap sits above the composer, so it shows even when the transcript ends up
+      // scrolled away from the reply (a bug this case records rather than aborts on).
+      await waitForText("Done in", 90_000);
+      await delay(2000);
+      const end = Date.now();
+      const log = await readProbe(file);
+      const sentAt = sendTime(log);
+      const view = window(log, sentAt, end);
+      const mountOf = (prefix: string) =>
+        view.events.find((e) => e.e === "mount" && e.k?.startsWith(prefix) === true);
+      const finalKey = mountOf("assistant/")?.k;
+      const aliases = finalKey ? { [finalKey]: "live" } : {};
+      const finalAt = mountOf("assistant/")?.t;
+      const moved = motion(view.frames, { aliases });
+      const userMount = mountOf("user/");
+      const firstText = firstFrame(view.frames, (frame) => "live" in frame.f);
+      const bodies = bodyCounts(view.events);
+      // Only the composer is tagged in every frame; read the end against its last position.
+      const last = view.frames.findLast((frame) => "composer" in frame.f);
+      const common: Metrics = {
+        sendToBubbleMs: userMount && userMount.t - sentAt,
+        sendToFirstTextMs: firstText && firstText - sentAt,
+        teleports: moved.teleports,
+        remounts: remounts(log.events, sentAt, end),
+        liveBodies: bodies.live ?? 0,
+        bubbleBodies: bodies.bubble ?? 0,
+      };
+      const setup = {
+        [`keyboard ${keyboardUp ? "up" : "hidden"} at send (setup)`]: keyboardAtSend === keyboardUp,
+      };
+      if (keyboardUp) {
+        const streaming = view.frames.filter(
+          (frame) => firstText !== undefined && frame.t >= firstText && frame.t < (finalAt ?? end),
+        );
+        const followLag = percentile(
+          streaming.map((frame) => hiddenBelowComposer(frame) ?? 0),
+          0.95,
+        );
+        const hidden = hiddenBelowComposer(last);
+        // Teleports and backward motion are reported, not gated: in about one run in ten the
+        // transcript still flashes to the top for ~80 ms as the final row replaces the live bubble,
+        // and the reply's end dips ~40 pt for a frame as the working indicator leaves.
+        return {
+          metrics: {
+            ...common,
+            backwardPt: moved.backwardPt,
+            followLagP95Pt: followLag,
+            hiddenAtEndPt: hidden,
+          },
+          gates: {
+            ...setup,
+            "reply followed while streaming (p95 ≤4 pt hidden)": (followLag ?? Infinity) <= 4,
+            "end in view after it finishes (≤4 pt hidden)": (hidden ?? Infinity) <= 4,
+            "no remounts": common.remounts === 0,
+          },
+        };
+      }
+      // The one-shot move to the new turn lands within a second; after that the pin must hold. The
+      // gate reads the recording: on the `List` transcript (#192232) the probe also reports cell
+      // layouts of 5–60 pt that never reach the screen, so its drift is reported only. Two drawn
+      // windows cover it. While the reply grows, its footer row moves down, which the recording
+      // cannot tell from a scroll, so the early window's area ends above the footer's first
+      // position (it only moves down from there). It opens once that area spans three 40 pt
+      // strips, so two hold content even when the gap above the reply leaves one blank, ~150–500
+      // ms after the first second. From when the reply fills the screen, the late window
+      // covers the whole transcript above the run footer, which appears when the reply ends,
+      // minus the columns of the jump-to-latest button, which floats over the reply.
+      const pinned = motion(window(log, sentAt + 1000, end).frames, { aliases });
+      const userKey = userMount?.k;
+      const replyHidden = hiddenBelowComposer(last) ?? 0;
+      const layout = currentLayout();
+      const transcript = layout.transcript ?? fail("no transcript on screen after the reply.");
+      const filled = firstFrame(
+        view.frames,
+        (frame) => (frame.f.live?.[1] ?? 0) > (frame.f.composer?.[0] ?? Infinity),
+      );
+      // Bottom of the reply's footer row: avatar and elapsed time, 44 pt tall.
+      const footerTop = (frame: ProbeFrame) => (frame.f.live?.[1] ?? 0) - 44;
+      const early = view.frames.find(
+        (frame) => frame.t >= sentAt + 1000 && footerTop(frame) - transcript.y >= 120,
+      );
+      const jump = axFrame((node) => node.AXLabel === "Jump to latest reply");
+      return {
+        metrics: {
+          ...common,
+          pinnedTopPt: userKey ? last?.f[userKey]?.[0] : undefined,
+          rowDriftPt: pinned.maxDriftPt,
+          replyBelowFoldPt: replyHidden,
+        },
+        gates: {
+          ...setup,
+          "reply grew past the fold (setup)":
+            replyHidden > 100 && filled !== undefined && early !== undefined,
+          "no teleports": moved.teleports === 0,
+          "no remounts": common.remounts === 0,
+        },
+        drawnMotion: [
+          {
+            from: early?.t ?? end,
+            // Past the late window's start: each window measures from its own first frame, so a
+            // jump right at the boundary would be the late window's baseline.
+            to: filled === undefined ? end : filled + 500,
+            area: { ...transcript, height: early ? footerTop(early) - transcript.y : 0 },
+            screenWidth: layout.screen.width,
+          },
+          {
+            from: filled ?? end,
+            to: end,
+            area: readableArea(layout),
+            screenWidth: layout.screen.width,
+            ignoreX: jump && [jump.x, jump.x + jump.width],
+          },
+        ],
+      };
+    },
+  };
+}
+
+/** Largest one-frame move of a visible row that the paging case accepts outside the reader's scroll. */
+const JUMP_PT = 4;
+const px = (value: number) => String(Math.round(value));
+
+function currentLayout() {
+  return readLayout(JSON.parse(run(axe, ["describe-ui", "--udid", sim]).stdout) as AxNode[]);
+}
+
+const SIDEBAR_SHOW = "RootTabs.Sidebar.Show";
+/**
+ * Whether the drawer covers the chat. The sidebar's own controls stay in AXe's tree while it is
+ * closed, so read the chat side: its Show Sidebar button exists only while the drawer is closed,
+ * and the open drawer slides the transcript right.
+ */
+function drawerOpen() {
+  const nodes = axMatches(
+    (node) => node.AXUniqueId === SIDEBAR_SHOW || node.AXUniqueId === "chat-transcript",
+  );
+  const transcript = nodes.find((node) => node.AXUniqueId === "chat-transcript");
+  return !nodes.some((node) => node.AXUniqueId === SIDEBAR_SHOW) || (transcript?.frame.x ?? 0) > 40;
+}
+
+/** Tagged rows drawn between the top of the screen and the composer. */
+function rowsOnScreen(frame: ProbeFrame | undefined) {
+  const bottom = frame?.f.composer?.[0] ?? Number.POSITIVE_INFINITY;
+  return Object.entries(frame?.f ?? {}).filter(
+    ([key, [top, rowBottom]]) => key !== "composer" && rowBottom > 0 && top < bottom,
+  ).length;
+}
+
+/** The transcript between `from` and `to` while a gesture must not scroll it at all. */
+function stillness(log: ProbeLog, from: number, to: number) {
+  // Every frame counts: a gesture that starts a scroll is the bug, not the reader's own motion.
+  const moved = motion(window(log, from, to, { keepUserScroll: true }).frames);
+  const writes = offsetWrites(log.events, from, to);
+  return {
+    driftPt: moved.maxDriftPt,
+    teleports: moved.teleports,
+    offsetMovedPt: offsetMovedPt(writes),
+    userWrites: writes.filter(isReaderWrite).length,
+    scrollPhases: scrollPhases(log.events, from, to),
+  };
+}
+
+/** The transcript above the progress card and run footer: the area drawn-motion windows read. */
+function readableArea(layout: Layout): Rect {
+  const transcript = layout.transcript ?? fail("no transcript on screen.");
+  const bottom = Math.min(
+    transcript.y + transcript.height,
+    ...layout.exclude.filter((rect) => rect.y > transcript.y).map((rect) => rect.y),
+  );
+  return { ...transcript, height: bottom - transcript.y };
+}
+
+/** Opens the history chat at its latest turn and returns the settled layout. */
+async function openHistoryChat() {
+  launch(await historyChat());
+  await delay(3000);
+  return currentLayout();
+}
+
+/**
+ * One finger from `from` to `to` (points) through explicit touch moves (~60 moves/s), released at
+ * the speed it moved. A real thumb drifts vertically on a sideways swipe, so the sideways cases
+ * end 40 pt above or below where they start.
+ */
+function drag(from: [number, number], to: [number, number], seconds: number) {
+  run(axe, [
+    "drag",
+    "--start-x",
+    px(from[0]),
+    "--start-y",
+    px(from[1]),
+    "--end-x",
+    px(to[0]),
+    "--end-y",
+    px(to[1]),
+    "--duration",
+    String(seconds),
+    "--steps",
+    px(seconds * 60),
+    "--udid",
+    sim,
+  ]);
+}
+
+// Tool activity headers: the completed-work summary ("Worked …") and single tool rows. Only the
+// disclosure button carries the Collapsed/Expanded value; the row around it repeats the label.
+const DISCLOSURE_HEADER = /^(Worked|Ran |Called )/;
+const isDisclosureHeader = (node: AxNode) =>
+  DISCLOSURE_HEADER.test(node.AXLabel ?? "") &&
+  (node.AXValue === "Collapsed" || node.AXValue === "Expanded");
+
+/**
+ * A disclosure header with room above it for a drawn-motion window: the lowest collapsed one, else
+ * the lowest expanded one (the case then collapses it first).
+ */
+function disclosureHeader(area: Rect) {
+  const inView = axMatches(isDisclosureHeader).filter(({ frame }) => {
+    const mid = frame.y + frame.height / 2;
+    return mid > area.y + 120 && mid < area.y + area.height - 60;
+  });
+  return inView.findLast((node) => node.AXValue === "Collapsed") ?? inView.at(-1);
+}
+
+/**
+ * The disclosure header nearest to where `header` was, in its column. Not matched by label: on
+ * `main` the Worked summary adds "N tool calls" while expanded. Headers of other turns sit a turn
+ * apart, further than a toggle moves the tapped one.
+ */
+function headerNear(header: AxMatch) {
+  return axMatches(
+    (node) => isDisclosureHeader(node) && Math.abs((node.frame?.x ?? 0) - header.frame.x) <= 4,
+  ).reduce<AxMatch | undefined>(
+    (best, node) =>
+      !best || Math.abs(node.frame.y - header.frame.y) < Math.abs(best.frame.y - header.frame.y)
+        ? node
+        : best,
+    undefined,
+  );
+}
+
+const cases: Record<string, Case> = {
+  "stream-turn": streamCase(false),
+  "stream-follow": streamCase(true),
+  // Scrolled up while a reply streams below: what the reader sees must not move.
+  "scrolled-up": {
+    kind: "guard",
+    async run(session, file) {
+      launch(session);
+      await send("UXSTREAM chunks=150 interval=0");
+      await waitForText(END_MARKER, 60_000);
+      // 80 s of streaming: still running when the hold ends, so the hold sees only growth below.
+      await send("UXSTREAM chunks=2000 interval=40");
+      await delay(2000);
+      // An interactive swipe would also dismiss the keyboard and move every row; settle it first.
+      await hideKeyboard();
+      // By coordinates inside the transcript's frame: the iOS transcript is a `List`, which the
+      // UI driver does not offer as a scroll container (#192232).
+      const area =
+        axFrame((node) => node.AXUniqueId === "chat-transcript") ?? fail("no transcript.");
+      const x = String(Math.round(area.x + area.width / 2));
+      run(axe, [
+        "swipe",
+        "--start-x",
+        x,
+        "--start-y",
+        String(Math.round(area.y + area.height * 0.25)),
+        "--end-x",
+        x,
+        "--end-y",
+        String(Math.round(area.y + area.height * 0.75)),
+        "--duration",
+        "0.3",
+        "--udid",
+        sim,
+      ]);
+      await delay(1500);
+      const holdFrom = Date.now();
+      await delay(5000);
+      const holdTo = Date.now();
+      const log = await readProbe(file);
+      const view = window(log, holdFrom, holdTo);
+      const moved = motion(view.frames);
+      const away = hiddenBelowComposer(lastFrameBefore(log.frames, holdFrom));
+      const rebuilt = remounts(log.events, holdFrom, holdTo);
+      return {
+        metrics: {
+          scrolledAwayPt: away,
+          readingDriftPt: moved.maxDriftPt,
+          teleports: moved.teleports,
+          remounts: rebuilt,
+        },
+        gates: {
+          "scrolled away from the end (setup)": (away ?? 0) > 100,
+          "reading position holds (≤1 pt)": moved.maxDriftPt <= 1,
+          "no remounts": rebuilt === 0,
+        },
+      };
+    },
+  },
+  // Keyboard up and down at the end of a transcript: no gap opens above the composer.
+  keyboard: {
+    kind: "guard",
+    async run(session, file) {
+      launch(session);
+      await send("UXSTREAM chunks=150 interval=0");
+      await waitForText(END_MARKER, 60_000);
+      await hideKeyboard();
+      const before = Date.now();
+      tap(/chat-message-input/);
+      await delay(1500);
+      const opened = Date.now();
+      await hideKeyboard();
+      const after = Date.now();
+      const log = await readProbe(file);
+      const at = (t: number) => lastFrameBefore(log.frames, t);
+      const gapBefore = composerGap(at(before));
+      const gapOpen = composerGap(at(opened));
+      const gapAfter = composerGap(at(after));
+      const lift = (at(before)?.f.composer?.[0] ?? 0) - (at(opened)?.f.composer?.[0] ?? 0);
+      const moved = motion(window(log, before, after).frames);
+      const steady = (gap: number | undefined) =>
+        gap !== undefined && gapBefore !== undefined && Math.abs(gap - gapBefore) <= 1;
+      return {
+        metrics: {
+          keyboardLiftPt: Math.round(lift),
+          gapBeforePt: gapBefore,
+          gapOpenPt: gapOpen,
+          gapAfterPt: gapAfter,
+          teleports: moved.teleports,
+        },
+        gates: {
+          "software keyboard shown (setup)": lift > 100,
+          "gap steady with keyboard up (≤1 pt)": steady(gapOpen),
+          "gap steady after dismiss (≤1 pt)": steady(gapAfter),
+          "no teleports": moved.teleports === 0,
+        },
+      };
+    },
+  },
+  // Cold relaunch into a session with history, three times per sample. Teleports are reported,
+  // not gated: on main the first frame sometimes shows the top of history and then jumps to the
+  // end, but too rarely (3 of 9 launches) for a gate that does not flake.
+  relaunch: {
+    kind: "guard",
+    async run(session, file) {
+      launch(session);
+      await send("UXSTREAM chunks=150 interval=0");
+      await waitForText(END_MARKER, 60_000);
+      const launches = [];
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const startedAt = launch(session);
+        await delay(3000);
+        const end = Date.now();
+        const view = window(
+          await readProbe(file.replace(/\.jsonl$/, `-${attempt}.jsonl`)),
+          startedAt,
+          end,
+        );
+        const rowsAt = firstFrame(view.frames, (frame) =>
+          Object.keys(frame.f).some((key) => key.includes("/")),
+        );
+        const moved = motion(
+          view.frames.filter((frame) => rowsAt !== undefined && frame.t >= rowsAt),
+        );
+        launches.push({
+          composerMs: firstFrame(view.frames, (frame) => "composer" in frame.f),
+          rowsMs: rowsAt && rowsAt - startedAt,
+          startedAt,
+          moved,
+          hidden: hiddenBelowComposer(view.frames.at(-1)),
+        });
+      }
+      const teleports = launches.reduce((sum, entry) => sum + entry.moved.teleports, 0);
+      return {
+        metrics: {
+          launchToComposerMs: percentile(
+            launches.flatMap((entry) =>
+              entry.composerMs ? [entry.composerMs - entry.startedAt] : [],
+            ),
+            0.5,
+          ),
+          launchToRowsMs: percentile(
+            launches.flatMap((entry) => (entry.rowsMs ? [entry.rowsMs] : [])),
+            0.5,
+          ),
+          shiftAfterFirstRowsPt: Math.max(...launches.map((entry) => entry.moved.maxDriftPt)),
+          teleports,
+        },
+        gates: {
+          "opens at the end (≤4 pt hidden)": launches.every(
+            (entry) => (entry.hidden ?? Infinity) <= 4,
+          ),
+        },
+      };
+    },
+  },
+  // The sidebar drawer opened twice, from the screen edge (with 40 pt of vertical thumb drift) and
+  // with the chat's Show Sidebar button, each time closed by tapping the slid-out chat: the chat
+  // card only slides sideways, so no row may move vertically, the transcript's own pan must not
+  // scroll it, and nothing may write the scroll offset. A guard: the iPhone-reported scroll on
+  // opening does not reproduce with simulated drags, which never start the transcript's pan.
+  "sidebar-open-still": {
+    kind: "guard",
+    prepare: prepareHistory,
+    async run(_session, file) {
+      const layout = await openHistoryChat();
+      const area = readableArea(layout);
+      const y = area.y + area.height / 2;
+      const routes: [string, () => void][] = [
+        ["edge", () => drag([4, y], [layout.screen.width * 0.8, y + 40], 0.4)],
+        [
+          "button",
+          () => {
+            const show = axFrame((node) => node.AXUniqueId === SIDEBAR_SHOW);
+            if (show) {
+              tapAt(show.x + show.width / 2, show.y + show.height / 2);
+            }
+          },
+        ],
+      ];
+      const rounds: {
+        route: string;
+        openFrom: number;
+        closeFrom: number;
+        end: number;
+        opened: boolean;
+        closed: boolean;
+      }[] = [];
+      for (const [route, open] of routes) {
+        const openFrom = Date.now();
+        open();
+        await delay(1500);
+        const opened = drawerOpen();
+        const closeFrom = Date.now();
+        // The dismissal layer covers the part of the chat card left on screen.
+        tapAt(layout.screen.width - 16, y);
+        await delay(1500);
+        const closed = !drawerOpen();
+        rounds.push({ route, openFrom, closeFrom, end: Date.now(), opened, closed });
+      }
+      const log = await readProbe(file);
+      const writers: NonNullable<Result["writers"]> = {};
+      const result: Result = {
+        metrics: {},
+        gates: {
+          "transcript rows on screen (setup)":
+            rowsOnScreen(lastFrameBefore(log.frames, rounds[0]?.openFrom ?? 0)) >= 2,
+        },
+        writers,
+      };
+      for (const { route, openFrom, closeFrom, end, opened, closed } of rounds) {
+        const open = stillness(log, openFrom, closeFrom);
+        const close = stillness(log, closeFrom, end);
+        for (const [writer, entry] of Object.entries(
+          offsetWriters(offsetWrites(log.events, openFrom, end)),
+        )) {
+          writers[`${route}: ${writer}`] = entry;
+        }
+        Object.assign(result.metrics, {
+          [`${route}OpenDriftPt`]: open.driftPt,
+          [`${route}OpenOffsetMovedPt`]: open.offsetMovedPt,
+          [`${route}OpenUserWrites`]: open.userWrites,
+          [`${route}OpenScrollPhases`]: open.scrollPhases,
+          [`${route}CloseDriftPt`]: close.driftPt,
+          [`${route}CloseOffsetMovedPt`]: close.offsetMovedPt,
+          [`${route}Teleports`]: open.teleports + close.teleports,
+        });
+        Object.assign(result.gates, {
+          [`${route}: sidebar opened (setup)`]: opened,
+          [`${route}: sidebar closed (setup)`]: closed,
+          [`${route}: rows hold still while the sidebar opens (≤1 pt)`]: open.driftPt <= 1,
+          [`${route}: no offset writes while the sidebar opens (≤0.5 pt)`]:
+            open.offsetMovedPt <= 0.5,
+          [`${route}: the transcript's pan never scrolls it while the sidebar opens`]:
+            open.userWrites === 0,
+          [`${route}: rows hold still while the sidebar closes (≤1 pt)`]: close.driftPt <= 1,
+          [`${route}: no offset writes while the sidebar closes (≤0.5 pt)`]:
+            close.offsetMovedPt <= 0.5,
+        });
+      }
+      return result;
+    },
+  },
+  // Left-to-right swipes across the middle of the transcript, away from the 44 pt edge zone, each
+  // drifting 40 pt down (`down`) or up (`up`) as a thumb does: horizontal-dominant, so the chat
+  // must not scroll (the transcript locks to its axis) and the drawer must not open (the shell-wide
+  // drag gesture runs alongside the transcript's pan). A guard, like `sidebar-open-still`: on the
+  // simulator `main` passes too.
+  "swipe-right-still": {
+    kind: "guard",
+    prepare: prepareHistory,
+    async run(_session, file) {
+      const layout = await openHistoryChat();
+      const area = readableArea(layout);
+      const y = area.y + area.height / 2;
+      const rounds: { shape: string; from: number; to: number; drawer: boolean }[] = [];
+      for (const [shape, drift] of [
+        ["down", 40],
+        ["up", -40],
+      ] as const) {
+        const from = Date.now();
+        drag([layout.screen.width * 0.2, y], [layout.screen.width * 0.85, y + drift], 0.4);
+        await delay(2000);
+        const to = Date.now();
+        const drawer = drawerOpen();
+        if (drawer) {
+          // Closed again so the next swipe and the end-of-case screen check see the transcript.
+          tapAt(layout.screen.width - 16, y);
+          await delay(1500);
+        }
+        rounds.push({ shape, from, to, drawer });
+      }
+      const log = await readProbe(file);
+      const writers: NonNullable<Result["writers"]> = {};
+      const result: Result = {
+        metrics: {},
+        gates: {
+          "transcript rows on screen (setup)":
+            rowsOnScreen(lastFrameBefore(log.frames, rounds[0]?.from ?? 0)) >= 2,
+        },
+        writers,
+        // A drawer the swipe opened slides the whole card sideways, which reads as unexplained
+        // frames rather than vertical motion; the drawer gates cover it.
+        drawnMotion: rounds.map(({ from, to }) => ({
+          from,
+          to,
+          area,
+          screenWidth: layout.screen.width,
+        })),
+      };
+      for (const { shape, from, to, drawer } of rounds) {
+        const still = stillness(log, from, to);
+        for (const [writer, entry] of Object.entries(
+          offsetWriters(offsetWrites(log.events, from, to)),
+        )) {
+          writers[`${shape}: ${writer}`] = entry;
+        }
+        Object.assign(result.metrics, {
+          [`${shape}DrawerOpened`]: drawer ? 1 : 0,
+          [`${shape}DriftPt`]: still.driftPt,
+          [`${shape}OffsetMovedPt`]: still.offsetMovedPt,
+          [`${shape}UserWrites`]: still.userWrites,
+          [`${shape}ScrollPhases`]: still.scrollPhases,
+          [`${shape}Teleports`]: still.teleports,
+        });
+        Object.assign(result.gates, {
+          [`${shape}: swipe outside the edge does not open the drawer`]: !drawer,
+          [`${shape}: rows hold still (≤1 pt)`]: still.driftPt <= 1,
+          [`${shape}: no offset writes (≤0.5 pt)`]: still.offsetMovedPt <= 0.5,
+          [`${shape}: the transcript's pan never scrolls it`]: still.userWrites === 0,
+        });
+      }
+      return result;
+    },
+  },
+  // Expand and collapse a Worked/tool disclosure (a collapsed one when any is in view, else an
+  // expanded one, collapsed first): the header the reader tapped keeps its window Y through both
+  // taps, and nothing at or above it moves; only what is below it may.
+  "disclosure-header-still": {
+    kind: "guard",
+    prepare: prepareHistory,
+    async run(_session, file): Promise<Result> {
+      const layout = await openHistoryChat();
+      const area = readableArea(layout);
+      let header = disclosureHeader(area);
+      // Earlier turns' headers sit above the latest reply; bring one down into view.
+      for (let attempt = 0; !header && attempt < 8; attempt += 1) {
+        const top = area.y + area.height * 0.3;
+        const x = area.x + area.width / 2;
+        drag([x, top], [x, top + 200], 0.8);
+        await delay(1500);
+        header = disclosureHeader(area);
+      }
+      if (!header) {
+        return { metrics: {}, gates: { "disclosure header in view (setup)": false } };
+      }
+      const tapped = header;
+      const startedExpanded = tapped.AXValue === "Expanded";
+      const midY = (rect: Rect) => rect.y + rect.height / 2;
+      const firstFrom = Date.now();
+      tapAt(tapped.frame.x + 24, midY(tapped.frame));
+      await delay(1500);
+      const afterFirst = headerNear(tapped);
+      const secondFrom = Date.now();
+      tapAt(tapped.frame.x + 24, midY((afterFirst ?? tapped).frame));
+      await delay(1500);
+      const afterSecond = headerNear(tapped);
+      const end = Date.now();
+      const [expanded, collapsed] = startedExpanded
+        ? [afterSecond, afterFirst]
+        : [afterFirst, afterSecond];
+      const toggled =
+        afterFirst !== undefined &&
+        afterFirst.AXValue !== tapped.AXValue &&
+        afterSecond?.AXValue === tapped.AXValue;
+      const log = await readProbe(file);
+      const atTap = lastFrameBefore(log.frames, firstFrom);
+      const y = midY(tapped.frame);
+      const rows = Object.entries(atTap?.f ?? {}).filter(([key]) => key !== "composer");
+      const row = rows.find(([, [top, bottom]]) => top <= y && bottom >= y)?.[0];
+      const bottomAt = (t: number) =>
+        row === undefined ? undefined : lastFrameBefore(log.frames, t)?.f[row]?.[1];
+      const firstTapRowChange =
+        (bottomAt(secondFrom) ?? Number.NaN) - (bottomAt(firstFrom) ?? Number.NaN);
+      // The header's own row and every row above it.
+      const heldKeys = new Set(rows.filter(([, [top]]) => top <= y).map(([key]) => key));
+      const held = motion(
+        window(log, firstFrom, end, { keepUserScroll: true }).frames.map((frame) => ({
+          t: frame.t,
+          f: Object.fromEntries(
+            Object.entries(frame.f).filter(([key]) => key === "composer" || heldKeys.has(key)),
+          ),
+        })),
+      );
+      const shift = (node: AxMatch | undefined) =>
+        node ? Math.round(Math.abs(node.frame.y - tapped.frame.y) * 10) / 10 : undefined;
+      const chevronRight = tapped.frame.x + tapped.frame.width;
+      return {
+        metrics: {
+          startedExpanded: startedExpanded ? 1 : 0,
+          expandShiftPt: shift(expanded),
+          collapseShiftPt: shift(collapsed),
+          firstTapRowChangePt: Number.isNaN(firstTapRowChange)
+            ? undefined
+            : Math.round(firstTapRowChange),
+          heldRowDriftPt: held.maxDriftPt,
+          teleports: held.teleports,
+          offsetMovedPt: offsetMovedPt(offsetWrites(log.events, firstFrom, end)),
+        },
+        gates: {
+          "disclosure header in view (setup)": true,
+          "disclosure toggled both ways (setup)": toggled,
+          "tapped header holds on expand (≤1 pt)": (shift(expanded) ?? Infinity) <= 1,
+          "tapped header holds on collapse (≤1 pt)": (shift(collapsed) ?? Infinity) <= 1,
+          "rows at and above the header hold still every frame (≤1 pt)": held.maxDriftPt <= 1,
+        },
+        writers: offsetWriters(offsetWrites(log.events, firstFrom, end)),
+        // Down to the header's bottom edge; its chevron rotates by design.
+        drawnMotion: [
+          {
+            from: firstFrom,
+            to: end,
+            area: { ...area, height: tapped.frame.y + tapped.frame.height - area.y },
+            screenWidth: layout.screen.width,
+            ignoreX: [chevronRight - 44, chevronRight],
+          },
+        ],
+      };
+    },
+  },
+  // Slow drags up into older history until two pages prepend. Each prepend keeps the reading
+  // position (rows shift only as far as the reader's own scroll moved them, so one landing
+  // mid-deceleration counts too), and while the reader is not scrolling no visible row steps.
+  "prepend-no-jump": {
+    kind: "bad",
+    prepare: prepareHistory,
+    async run(_session, file) {
+      const layout = await openHistoryChat();
+      const area = readableArea(layout);
+      const x = area.x + area.width / 2;
+      const top = area.y + area.height * 0.25;
+      const distance = Math.min(300, area.height * 0.6);
+      const start = Date.now();
+      const prependsSince = (log: ProbeLog) =>
+        marks(log.events, "older-prepend").filter((t) => t >= start);
+      let drags = 0;
+      let pages = 0;
+      // ~250 pt/s at release with a pause after each drag, so pages land both while the reader
+      // moves and while the transcript rests.
+      while (drags < 90 && pages < 2) {
+        drag([x, top], [x, top + distance], 1.2);
+        drags += 1;
+        await delay(1000);
+        if (drags % 5 === 0) {
+          pages = prependsSince(await readProbe(file)).length;
+        }
+      }
+      await delay(2000);
+      const end = Date.now();
+      const log = await readProbe(file);
+      const prepends = prependsSince(log);
+      const shifts = prepends
+        .map((t) => prependShift(log, t))
+        .filter((shift): shift is number => shift !== undefined);
+      const worst = shifts.length > 0 ? Math.max(...shifts.map(Math.abs)) : undefined;
+      const resting = restingMotion(log, start, end);
+      return {
+        metrics: {
+          pages: prepends.length,
+          drags,
+          worstPrependShiftPt: worst,
+          largestRestingStepPt: resting.largestStepPt,
+          teleports: resting.teleports,
+        },
+        gates: {
+          "two older pages prepended (setup)": prepends.length >= 2,
+          "every prepend measured (setup)": shifts.length === prepends.length,
+          [`rows hold across each prepend (≤${JUMP_PT} pt beyond the reader's scroll)`]:
+            (worst ?? Infinity) <= JUMP_PT,
+          [`no row step >${JUMP_PT} pt while the reader is not scrolling`]:
+            resting.largestStepPt <= JUMP_PT,
+          "no teleports": resting.teleports === 0,
+        },
+        writers: offsetWriters(offsetWrites(log.events, start, end)),
+      };
+    },
+  },
+  ...blankMatrix(),
+};
+
+// Every combination of keyboard up/down, short/long chat and plain/agent content, each judged by
+// the screen oracle from composer focus until after the reply ends. The harness missed #191478
+// because its only keyboard-up sends were in short plain chats; `blank-up-long-agent` is that bug.
+function blankMatrix(): Record<string, Case> {
+  const matrix: Record<string, Case> = {};
+  for (const keyboard of ["up", "down"] as const) {
+    for (const length of ["short", "long"] as const) {
+      for (const content of ["plain", "agent"] as const) {
+        matrix[`blank-${keyboard}-${length}-${content}`] = {
+          kind: "guard",
+          async run(session) {
+            const prompt = content === "agent" ? AGENT_REPLY_PROMPT : REPLY_PROMPT;
+            const chat =
+              length === "long"
+                ? await longChat(session, content === "agent" ? AGENT_SEED_PROMPT : SEED_PROMPT)
+                : session;
+            launch(chat);
+            await delay(2000);
+            await enterText(prompt);
+            if (keyboard === "down") {
+              await hideKeyboard();
+            }
+            const keyboardAtSend = keyboardShown();
+            const focused = await watchScreen("focus", 3000);
+            tap(/chat-send-message/);
+            const sent: ScreenSample[][] = [];
+            const until = Date.now() + 90_000;
+            let replied = false;
+            while (!replied && Date.now() < until) {
+              sent.push(await watchScreen("send", 2000));
+              // The run footer is static text, which the snapshot's target list leaves out. The
+              // app shows it only for a run it watched from its own send.
+              replied =
+                axFrame((node) => node.AXLabel?.startsWith("Done in") ?? false) !== undefined;
+            }
+            if (replied) {
+              sent.push(await watchScreen("done", 3000));
+            }
+            // A new chat has no text before the send; judge it from the send on.
+            const judged = length === "short" ? sent : [focused, ...sent];
+            const result = screenGates(readScreens(judged), "from focus to after the reply");
+            result.gates[`keyboard ${keyboard} at send (setup)`] =
+              keyboardAtSend === (keyboard === "up");
+            result.gates["reply finished (setup)"] = replied;
+            if (content === "agent" && AGENT_REPLY_LABEL) {
+              // The mock's last step closes the card only after every earlier step succeeded, and
+              // the long reply follows it; a failed step ends the turn with a short error reply.
+              // The label tells this turn's card from the seed turn's, which also completed.
+              result.gates["every agent tool step succeeded (setup)"] = sent
+                .flat()
+                .some(
+                  (sample) =>
+                    /^Plan, (\d+) of \1 steps done/.test(sample.plan ?? "") &&
+                    sample.plan?.includes(AGENT_REPLY_LABEL),
+                );
+            }
+            return result;
+          },
+        };
+      }
+    }
+  }
+  return matrix;
+}
+
+const selected = caseNames.map((name) => ({
+  name,
+  testCase: cases[name] ?? fail(`unknown case ${name}; known: ${Object.keys(cases).join(", ")}.`),
+}));
+
+type CaseSummary = {
+  name: string;
+  kind: Case["kind"];
+  samples: Result[];
+  passes: Record<string, number>;
+  medians: Metrics;
+  /** Offset writers over every sample: total writes and points moved. */
+  writers: Record<string, { writes: number; movedPt: number }>;
+};
+const summaries: CaseSummary[] = [];
+try {
+  for (const { name, testCase } of selected) {
+    await testCase.prepare?.();
+    const results: Result[] = [];
+    for (let sample = 1; sample <= samples; sample += 1) {
+      const session = `ux-${name}-${stamp}-${sample}`.toLowerCase();
+      const file = path.join(outDir, `${name}-${sample}.jsonl`);
+      // Every case is recorded for review and ends with a screen check, so cases that gate on
+      // motion are also judged on what is drawn.
+      const recording = path.join(outDir, `${name}-${sample}.mp4`);
+      const video = spawn("xcrun", ["simctl", "io", sim, "recordVideo", "--force", recording], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      owned.recorder = video;
+      // The recording's first frame is drawn when simctl reports the start. Wait for it here: the
+      // cases block the event loop with synchronous commands, which would stamp the line late.
+      const videoStartedAt = await new Promise<number>((resolve) => {
+        const stopped = () =>
+          fail(`the recording of ${name} #${sample} stopped before it started.`);
+        video.once("exit", stopped);
+        video.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+          if (chunk.includes("Recording started")) {
+            video.off("exit", stopped);
+            resolve(Date.now());
+          }
+        });
+      });
+      const result = await testCase.run(session, file);
+      const settled = screenGates(
+        readScreens([await watchScreen(`${name}-end`, 1500)]),
+        "at the end",
+      );
+      // Both gates: without a transcript to read, the text gate passes on zero samples.
+      Object.assign(result.gates, settled.gates);
+      result.metrics.endTextLines = settled.metrics.minTextLines;
+      video.kill("SIGINT");
+      if (video.exitCode === null) {
+        await new Promise((resolve) => {
+          video.once("exit", resolve);
+        });
+      }
+      owned.recorder = undefined;
+      if (result.drawnMotion) {
+        const measured = result.drawnMotion.map(({ from, to, area, screenWidth, ignoreX }) => {
+          const args = [area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])];
+          return JSON.parse(
+            run(screenMotionTool, [
+              recording,
+              ...[(from - videoStartedAt) / 1000, (to - videoStartedAt) / 1000].map(String),
+              ...args.map((value) => String(Math.round(value))),
+            ]).stdout,
+          ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
+        });
+        // Per window: which one moved, and at what second of the recording.
+        console.log(`ios:behavior: ${name} #${sample} drawn windows ${JSON.stringify(measured)}`);
+        result.metrics.drawnMovePt = Math.max(...measured.map((entry) => entry.maxMovePt));
+        // Reported, not gated: on `main` the live bubble → final row handoff redraws the reply
+        // about 2 pt right and 1 pt down for a few frames, which no vertical shift explains.
+        result.metrics.drawnUnexplainedFrames = measured.reduce(
+          (sum, entry) => sum + entry.unexplainedFrames,
+          0,
+        );
+        // A window outside the recording reads no frame and a blank area no strips, both as 0 pt
+        // without seeing anything. simctl writes a frame only when the screen changes, so a window
+        // where nothing moved reads one frame: the one on screen when it opened.
+        result.gates["recording covers each window with content (setup)"] = measured.every(
+          (entry) => entry.frames >= 1 && entry.strips >= 2,
+        );
+        result.gates["drawn transcript holds still (≤1 pt)"] = result.metrics.drawnMovePt <= 1;
+      }
+      results.push(result);
+      console.log(`ios:behavior: ${name} #${sample} ${JSON.stringify(result.metrics)}`);
+      if (result.writers) {
+        console.log(
+          `ios:behavior: ${name} #${sample} offset writers ${JSON.stringify(result.writers)}`,
+        );
+      }
+    }
+    // Gates and metrics of every sample: one that failed setup early returns fewer of them.
+    const passes: Record<string, number> = {};
+    for (const gate of new Set(results.flatMap((result) => Object.keys(result.gates)))) {
+      passes[gate] = results.filter((result) => result.gates[gate]).length;
+    }
+    const medians: Metrics = {};
+    for (const metric of new Set(results.flatMap((result) => Object.keys(result.metrics)))) {
+      const numbers = results
+        .map((result) => result.metrics[metric])
+        .filter((value): value is number => value !== undefined);
+      medians[metric] = percentile(numbers, 0.5);
+    }
+    const writers: CaseSummary["writers"] = {};
+    for (const [writer, entry] of results.flatMap((result) =>
+      Object.entries(result.writers ?? {}),
+    )) {
+      const total = (writers[writer] ??= { writes: 0, movedPt: 0 });
+      total.writes += entry.writes;
+      total.movedPt = Math.round((total.movedPt + entry.movedPt) * 10) / 10;
+    }
+    summaries.push({ name, kind: testCase.kind, samples: results, passes, medians, writers });
+  }
+} finally {
+  deleteOwnedSimulator();
+}
+
+const lines = [
+  `# iOS behavior ${stamp}`,
+  "",
+  `${samples} samples per case. Gate column: samples that passed.`,
+  "",
+];
+for (const summary of summaries) {
+  const caseVerdict = verdict(summary.kind, summary.passes, samples);
+  lines.push(
+    `## ${summary.name} (${summary.kind}): ${caseVerdict}`,
+    "",
+    "| Gate | Result |",
+    "| --- | --- |",
+  );
+  for (const [gate, count] of Object.entries(summary.passes)) {
+    lines.push(`| ${gate} | ${count}/${samples}${count === samples ? "" : " FAIL"} |`);
+  }
+  lines.push("", "| Metric (median) | Value |", "| --- | --- |");
+  for (const [metric, value] of Object.entries(summary.medians)) {
+    lines.push(`| ${metric} | ${value ?? "n/a"} |`);
+  }
+  if (Object.keys(summary.writers).length > 0) {
+    lines.push("", "| Offset writer (all samples) | Writes | Moved pt |", "| --- | --- | --- |");
+    for (const [writer, entry] of Object.entries(summary.writers)) {
+      lines.push(`| ${writer.replaceAll("|", "\\|")} | ${entry.writes} | ${entry.movedPt} |`);
+    }
+  }
+  lines.push("");
+}
+writeFileSync(path.join(outDir, "summary.json"), JSON.stringify(summaries, null, 2));
+writeFileSync(path.join(outDir, "summary.md"), lines.join("\n"));
+console.log(lines.join("\n"));
+console.log(`ios:behavior: probe logs and summary in ${outDir}`);
+const failed = summaries.some(
+  (summary) => !verdict(summary.kind, summary.passes, samples).startsWith("ok"),
+);
+process.exit(failed ? 1 : 0);

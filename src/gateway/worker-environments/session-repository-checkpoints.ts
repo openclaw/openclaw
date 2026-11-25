@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -7,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runExec } from "../../process/exec.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
@@ -430,26 +430,18 @@ export async function stageSessionRepositoryCheckpoint(
       if (!gitPackPath) {
         throw new Error("worker Git history has no pack");
       }
-      const pack = await fs.open(gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        const stat = await pack.stat();
-        if (!stat.isFile() || stat.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
-          throw new Error("worker Git pack exceeds its byte limit");
-        }
-        assertRevision();
-        blob = (
-          await runExec(
-            "git",
-            workspaceResultGitCommand(root, ["hash-object", "-w", "--stdin"]).slice(1),
-            {
-              stdinFileDescriptor: pack.fd,
-              timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-            },
-          )
-        ).stdout.trim();
-      } finally {
-        await pack.close();
+      await using pack = await openCommandStdinFile(gitPackPath);
+      if (pack.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+        throw new Error("worker Git pack exceeds its byte limit");
       }
+      assertRevision();
+      blob = (
+        await runExec(
+          "git",
+          workspaceResultGitCommand(root, ["hash-object", "-w", "--stdin"]).slice(1),
+          { stdinFile: pack.stdinFile, timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS },
+        )
+      ).stdout.trim();
     } catch (error) {
       assertRevision();
       if (params.requireGitHistory) {

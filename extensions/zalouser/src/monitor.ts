@@ -20,6 +20,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -33,7 +34,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildZaloNameIndex } from "./directory-index.js";
@@ -42,7 +42,11 @@ import {
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
-import { createZalouserIngressMonitor } from "./ingress.js";
+import {
+  createZalouserIngressMonitor,
+  normalizeZalouserAllowEntry,
+  zalouserIngressIdentity,
+} from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
@@ -71,15 +75,6 @@ type ZalouserMonitorOptions = {
 const ZALOUSER_TEXT_LIMIT = 2000;
 
 type ZalouserCoreRuntime = ReturnType<typeof getZalouserRuntime>;
-
-function normalizeZalouserAllowEntry(entry: string): string {
-  return entry.replace(/^(zalouser|zlu):/i, "").trim();
-}
-
-function normalizeZalouserSender(value: string): string | null {
-  return normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null;
-}
-
 function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: string): void {
   if (core.logging.shouldLogVerbose()) {
     runtime.log(`[zalouser] ${message}`);
@@ -319,11 +314,7 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         await core.channel.inbound.ingress.resolveStable({
           channelId: "zalouser",
           accountId: account.accountId,
-          identity: {
-            normalize: normalizeZalouserSender,
-            sensitivity: "pii",
-            entryIdPrefix: "zalouser-entry",
-          },
+          identity: zalouserIngressIdentity,
           cfg: config,
           readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
           subject: { stableId: senderId },
@@ -757,7 +748,9 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
               await sendMessageZalouser(chatId, text, {
                 profile,
                 mediaMaxBytes,
-                ...(mediaUrl ? { mediaUrl } : {}),
+                ...(mediaUrl
+                  ? { mediaUrl, mediaAccess: resolveOutboundMediaAccessForConfig(config) }
+                  : {}),
                 isGroup,
                 textMode: "markdown",
                 textChunkMode: chunkMode,

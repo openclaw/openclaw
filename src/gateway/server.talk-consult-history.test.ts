@@ -105,7 +105,7 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
-let expectedRevokedWriters: Map<string, () => boolean>;
+let reportParityFailure: (() => void) | undefined;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -114,28 +114,15 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  reportParityFailure = undefined;
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
-  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
       const persist = prepareLifecycle(params);
-      return lifecycleWrites.track(async () => {
-        try {
-          await persist();
-        } catch (error) {
-          const isCurrent = params.event.runId
-            ? expectedRevokedWriters.get(params.event.runId)
-            : undefined;
-          if (!isCurrent || isCurrent()) {
-            throw error;
-          }
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
-        }
-      });
+      return lifecycleWrites.track(persist);
     });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
@@ -211,7 +198,10 @@ beforeEach(async () => {
     transcriptCapable: true,
   });
 });
-afterEach(async () => {
+afterEach(async ({ task }) => {
+  if (task.result?.state === "fail") {
+    reportParityFailure?.();
+  }
   releaseModel.resolve();
   try {
     try {
@@ -495,7 +485,7 @@ it("preserves an actual human stop command", async () => {
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
-it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
+it("keeps read-only Talk operator consult scaffolding out of chat but in model history and the raw archive", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
   const completeModel = heldModel();
   let modelReply = consultAnswer;
@@ -597,9 +587,9 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expect.soft(generated[0]).toMatchObject({
     role: "user",
     display: false,
-    excludeFromContext: true,
     provenance: { kind: "internal_system" },
   });
+  expect(generated[0]).not.toHaveProperty("excludeFromContext");
   const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
   expect.soft(metadata?.senderIdentity).toBeUndefined();
   expect.soft(metadata?.senderIsOwner).not.toBe(true);
@@ -612,7 +602,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
   for (const manager of [SessionManager.open(scope()), SessionManager.openModelContext(scope())]) {
     const messages = manager.buildSessionContext().messages;
-    expectNoGeneratedInput(messages, "reopened model context");
+    expect(generatedInputs(messages).map(extractText)).toEqual([extractText(generated[0])]);
     expect(messages.map(extractText)).toEqual(
       expect.arrayContaining([spoken, answer, consultCommentary, consultToolResult, consultAnswer]),
     );
@@ -708,8 +698,8 @@ it.each(["before-final", "after-final"] as const)(
       expect(generated[0]).toMatchObject({
         role: "user",
         display: false,
-        excludeFromContext: true,
       });
+      expect(generated[0]).not.toHaveProperty("excludeFromContext");
       expect(
         storedMessages.filter((message) => message.role === "assistant").map(extractText),
       ).toEqual([directAnswer]);
@@ -723,7 +713,7 @@ it.each(["before-final", "after-final"] as const)(
         expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
       const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
-      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(generatedInputs(modelContext).map(extractText)).toEqual([extractText(generated[0])]);
       expect(modelContext.map(extractText)).toContain(directAnswer);
     } finally {
       releaseModel.resolve();
@@ -773,14 +763,16 @@ it("preserves the original operator source through chat-backed capability adapta
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
 it.runIf(process.platform === "linux").each([false, true])(
-  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  "keeps admitted node approvals through device revocation and honors Stop (public callback: %s)",
   async (publicOnly) => {
     const { runTalkNodePermissionParity } =
       await import("./server.talk-permission-parity.test-support.js");
     await runTalkNodePermissionParity({
       ...parityFixture(),
       publicOnly,
-      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
+      setFailureReporter: (report) => {
+        reportParityFailure = report;
+      },
     });
   },
 );

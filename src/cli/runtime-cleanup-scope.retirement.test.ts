@@ -75,7 +75,8 @@ it.each(["success", "failure"])(
           executableAdmission = true;
           try {
             const command = withCliProcessScope(() => withCliCommandCleanup(false, async cleanup => {
-              assert(skillsResolutions > 0, "watcher callback was not retained before dispatch");
+              assert.equal(skillsResolutions, 0, "unused watcher runtime loaded before dispatch");
+              await import(entries.skills);
               const closeWatchers = cleanup.closeSkillsWatchers;
               const watcherGate = Promise.withResolvers();
               const watcherStarted = Promise.withResolvers();

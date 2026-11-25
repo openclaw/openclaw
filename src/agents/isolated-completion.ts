@@ -343,7 +343,7 @@ async function runIsolatedCompletionOwned(
                 });
               const dispatch = () =>
                 observeIsolatedCompletionUsage(
-                  { ...usageOwner, runtimeKind: "cli" },
+                  { ...usageOwner, runtimeKind: "cli", assertCurrent },
                   execute,
                   (result) => {
                     const backend = resolveCliBackendConfig(cliOwner, config, { agentId });
@@ -463,6 +463,7 @@ async function runIsolatedCompletionOwned(
             preparedModelRuntime: lease.snapshot,
             signal: request.abortSignal,
             modelResolver: resolveAuthorizedModel,
+            selectedModelStores: true,
           },
           assertCurrent,
         );
@@ -490,7 +491,7 @@ async function runIsolatedCompletionOwned(
             {
               abortSignal: request.abortSignal,
               assertCurrent,
-              ...lease.snapshot.createStores(),
+              selectedModelStores: true,
               preparedModelRuntime: lease.snapshot,
               workspaceDir,
               authProfileId: request.authProfileId,
@@ -598,6 +599,7 @@ async function runIsolatedCompletionOwned(
                       abortSignal: request.abortSignal,
                       assertCurrent,
                       modelIdSource: "selected",
+                      selectedModelStores: true,
                       preparedModelRuntime: lease.snapshot,
                       workspaceDir,
                       authProfileId,
@@ -627,7 +629,7 @@ async function runIsolatedCompletionOwned(
             execution.assertCurrent();
             const dispatch = () =>
               observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-                { ...usageOwner, runtimeKind: "harness" },
+                { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
                 (onResult) =>
                   harness.runIsolatedCompletionV2!({
                     ...commonParams,
@@ -680,7 +682,7 @@ async function runIsolatedCompletionOwned(
         const execution = modelAuthority.bind(modelForAuthorization);
         const dispatch = () =>
           observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-            { ...usageOwner, runtimeKind: "harness" },
+            { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
             (onResult) =>
               harness.runIsolatedCompletion!(
                 prepareIsolatedHostAuthorization(harness, {

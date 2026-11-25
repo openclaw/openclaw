@@ -135,7 +135,7 @@ async function buildTtsAudioReply(params: {
   log.warn(`Audio generation failed: ${result.error ?? "unknown error"}`);
   return {
     error: stopWithText(
-      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ),
   };
 }
@@ -292,7 +292,7 @@ async function handleTtsStatusAction(
 }
 
 export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
-  { label: "TTS command", match: parseTtsCommand, silentUnauthorized: true },
+  { label: "TTS command", match: parseTtsCommand },
   async (params, parsed) => {
     const accountId = params.ctx?.AccountId;
     const config = resolveTtsConfig(params.cfg, {

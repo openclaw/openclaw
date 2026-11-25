@@ -1,4 +1,5 @@
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../config/sessions/session-run-lifecycle-projection.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { isTerminalSessionStatus } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
@@ -23,6 +25,7 @@ import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js
 import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
+import { readVisibleSessionActivityAt } from "./session-row-transcript-backfill.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 type GatewaySessionLifecycleEventParams = {
@@ -142,6 +145,17 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     matchesProviderReviewWriter(sessionEntry.entry, terminalReview)
       ? terminalReview
       : undefined;
+  // Incognito transcripts stay in the Gateway process; the agent database has no row to read.
+  const visibleActivityAt =
+    phase === "start" || isIncognitoSessionKey(sessionEntry.canonicalKey)
+      ? undefined
+      : await readVisibleSessionActivityAt({
+          agentId: sessionEntry.agentId,
+          storePath: sessionEntry.storePath,
+          sessionKey: sessionEntry.canonicalKey,
+          sessionId: sessionEntry.entry.sessionId,
+          sessionEntry: sessionEntry.entry,
+        });
   let effects: SessionLifecyclePatchEffects | undefined;
   const persisted = await applySessionEntryTargetOperation(
     {
@@ -163,7 +177,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           runId: params.event.runId,
           clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
-          controlUiVisible: params.event.controlUiVisible,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },
@@ -173,6 +186,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         lifecycleRevision,
         exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
         gatewayShutdown,
+        visibleActivityAt,
         expectedWriter: params.expectedWriter,
         providerReview: providerReview
           ? {
@@ -194,8 +208,15 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         ]),
       },
       ...(providerReview ? { providerReviewMutation: true } : {}),
-      onCommitted: (_entry, _predicate, lifecycleEffects) => {
+      onCommitted: (entry, _predicate, lifecycleEffects) => {
         effects = lifecycleEffects;
+        if (isTerminalSessionStatus(entry.status) && entry.lastRunId) {
+          subagentRuns.recordRequesterCompletion(
+            sessionEntry.canonicalKey,
+            sessionEntry.agentId,
+            entry.lastRunId,
+          );
+        }
         sessionChanges.emit({
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,

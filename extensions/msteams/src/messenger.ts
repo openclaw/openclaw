@@ -1,5 +1,9 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  loadOutboundMediaFromUrl,
+  type OutboundMediaLoadOptions,
+} from "openclaw/plugin-sdk/outbound-media";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -7,7 +11,6 @@ import {
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
@@ -35,7 +38,6 @@ import {
 } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -117,11 +119,7 @@ export function renderReplyPayloadsToMessages(
     }
 
     if (reply.text) {
-      const chunks = getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
-        reply.text,
-        chunkLimit,
-        chunkMode,
-      );
+      const chunks = chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
       for (const chunk of chunks) {
         const text = chunk.trim();
         if (text) {
@@ -163,6 +161,9 @@ export async function sendMSTeamsMessages(
     sharePointSiteId?: string;
     /** Max media size in bytes. Default: 100MB. */
     mediaMaxBytes?: number;
+    /** Agent-scoped local media access; omitted roots fall back to the process defaults. */
+    mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
+    mediaLocalRoots?: readonly string[];
     /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
     feedbackLoopEnabled?: boolean;
     serviceUrlBoundary?: MSTeamsSdkCloudOptions;
@@ -208,7 +209,11 @@ export async function sendMSTeamsMessages(
 
         if (isLocalPath(msg.mediaUrl)) {
           const maxBytes = mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
-          const media = await loadWebMedia(msg.mediaUrl, maxBytes);
+          const media = await loadOutboundMediaFromUrl(msg.mediaUrl, {
+            maxBytes,
+            mediaAccess: params.mediaAccess,
+            mediaLocalRoots: params.mediaLocalRoots,
+          });
           contentType = media.contentType ?? contentType;
           fileName = media.fileName ?? fileName;
 

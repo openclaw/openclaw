@@ -270,13 +270,6 @@ export async function handleApproveCommandFromContext(
       if (!isSystemAgentApproval) {
         throw new Error("unknown or expired approval id");
       }
-      if (systemAgentNeedsOwner) {
-        try {
-          params.command.assertOwnerCurrent?.();
-        } catch {
-          throw new Error("your owner authority changed; send /approve again");
-        }
-      }
     }
     const request = {
       cfg: params.cfg,
@@ -329,12 +322,12 @@ export async function handleApproveCommandFromContext(
           return blocked;
         }
         return commandReply(
-          "That approval is no longer available. Check the request in the Control UI.",
+          "That approval is no longer available. Check the request in the OpenClaw app.",
         );
       }
       log.warn(`Approval submission failed: ${formatErrorMessage(error)}`);
       return commandReply(
-        "⚠️ Couldn't confirm that approval. Check the request in the Control UI before trying again.",
+        "⚠️ Couldn't confirm that approval. Check the request in the OpenClaw app before trying again.",
       );
     }
   }

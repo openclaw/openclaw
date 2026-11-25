@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -69,7 +69,7 @@ async function fixture() {
     api["actions/runs/" + id + "/jobs"] = { total_count: parentJobs.length, jobs: parentJobs };
     const jobs = await f.client.getRunAttemptJobs(id);
     api["actions/runs/" + id + "/attempts/1/jobs"] = { total_count: jobs.length, jobs };
-    api["view/" + id] = f.client.getRunView(id);
+    api["view/" + id] = await f.client.getRunView(id);
     if (id === f.runId) {
       for (const job of parentJobs) {
         respondBytes("actions/jobs/" + job.id + "/logs", await f.client.getJobLog(job.id));
@@ -102,6 +102,19 @@ async function fixture() {
     const separator = key.indexOf(":");
     const path = `contents/${key.slice(separator + 1)}?ref=${key.slice(0, separator)}`;
     api[path] = admissionResponse(path);
+  }
+  api[`contents/scripts/e2e/lib/upgrade-survivor?ref=${f.admission.receipt.request.candidateSha}`] =
+    f.client.getCandidateFileNames();
+  for (const [path, source] of f.qualificationSources) {
+    const bytes = Buffer.from(source);
+    api[`contents/${path}?ref=${f.q}`] ??= {
+      type: "file",
+      encoding: "base64",
+      path,
+      size: bytes.length,
+      content: bytes.toString("base64"),
+      sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+    };
   }
   const artifact = <T extends { id: number }>(metadata: T, name: string, value: unknown) => {
     const zip = makeStoredZip({ [name]: JSON.stringify(value) });
@@ -185,7 +198,7 @@ if (process.argv[1] === root + '/bin/gh') {
   write("bin/npm", "#!/usr/bin/env node\n", true);
   write(
     "bin/git",
-    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.q + "'\n",
+    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.c + "'\n",
     true,
   );
   const env = {
@@ -204,7 +217,7 @@ if (process.argv[1] === root + '/bin/gh') {
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,
     WORKFLOW_FULL_REF: f.publisherFullRef,
-    EXPECTED_RELEASE_SHA: f.q,
+    EXPECTED_RELEASE_SHA: f.c,
     PREFLIGHT_WORKFLOW_SHA: f.q,
     PREFLIGHT_WORKFLOW_BRANCH: f.branch,
     PREFLIGHT_WORKFLOW_PATH: ".github/workflows/full-release-validation.yml",
@@ -237,7 +250,7 @@ if (process.argv[1] === root + '/bin/gh') {
       ...Object.entries({
         "full-release-manifest": "full-release-validation/full-release-validation-manifest.json",
         repository: f.repository,
-        "source-sha": f.q,
+        "source-sha": f.c,
         "workflow-sha": f.q,
         "publisher-sha": f.p,
         "publisher-full-ref": f.publisherFullRef,
@@ -251,7 +264,7 @@ if (process.argv[1] === root + '/bin/gh') {
 
 describe("npm final publication authority", () => {
   it.each([true, false])(
-    "publishes through trusted tooling with candidate admission: %s",
+    "publishes only through trusted tooling with candidate admission: %s",
     async (candidate) => {
       const f = await fixture();
       if (!candidate) {
@@ -260,6 +273,13 @@ describe("npm final publication authority", () => {
         f.env.PREFLIGHT_WORKFLOW_SHA = f.env.WORKFLOW_SHA;
       }
       const result = f.publish();
+      expect(result.stderr).not.toContain("CANDIDATE_");
+      if (!candidate) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Publication requires authenticated P admission");
+        expect(f.state().writes).toEqual([]);
+        return;
+      }
       expect(result.status, result.stderr).toBe(0);
       expect(f.state().writes.map((args) => args[1])).toEqual(
         [0, 1, 2, 3].map((i) => "./preflight-tarball/package-" + i + ".tgz"),
@@ -267,23 +287,10 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      expect(result.stderr).not.toContain("CANDIDATE_");
-      const publications: { package_name: string; source_commit: string }[] = readFileSync(
-        f.env.GITHUB_OUTPUT,
-        "utf8",
-      )
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line.slice(line.indexOf("=") + 1)));
-      expect(publications.map((publication) => publication.package_name)).toEqual([
-        "@openclaw/gateway-protocol",
-        "openclaw",
-      ]);
-      expect(
-        publications.every(
-          (publication) => publication.source_commit === f.env.EXPECTED_RELEASE_SHA,
-        ),
-      ).toBe(true);
+      const outputs = existsSync(f.env.GITHUB_OUTPUT)
+        ? readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+        : "";
+      expect(outputs).not.toMatch(/^(?:openclaw|gateway_protocol)_publication=/m);
     },
   );
 

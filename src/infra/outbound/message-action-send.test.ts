@@ -139,13 +139,9 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
     it.each([
-      ["suppressed", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }, false],
-      [
-        "failed with an attempt ID",
-        { ok: false, error: "send failed", messageId: "attempt-id" },
-        false,
-      ],
-      ["dry-run", { ok: true, dryRun: true, messageId: "dry-run-id" }, false],
+      ["suppressed", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }],
+      ["failed with an attempt ID", { ok: false, error: "send failed", messageId: "attempt-id" }],
+      ["dry-run", { ok: true, dryRun: true, messageId: "dry-run-id" }],
       [
         "explicit partial delivery",
         {
@@ -154,24 +150,26 @@ describe("runMessageAction plugin dispatch", () => {
           sentBeforeError: true,
           messageId: "partial-receipt",
         },
-        true,
       ],
-      ["successful delivery", { ok: true, messageId: "sent-1" }, true],
-    ] as const)("handles Gateway-relayed %s receipts", async (_name, receipt, accepted) => {
-      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
-        sessionKey: "agent:main:gatewaychat:direct:user-123",
-        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
-        peer: { kind: "direct", id: "user-123" },
-        chatType: "direct",
-        from: "gatewaychat:user-123",
-        to: "user-123",
-      });
-      registerGatewayChat(vi.fn());
-      mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
-      const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
-      expect(result.payload).toEqual(receipt);
-      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
-    });
+      ["successful delivery", { ok: true, messageId: "sent-1" }],
+    ] as const)(
+      "leaves Gateway-relayed %s route commits to the Gateway",
+      async (_name, receipt) => {
+        vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+          sessionKey: "agent:main:gatewaychat:direct:user-123",
+          baseSessionKey: "agent:main:gatewaychat:direct:user-123",
+          peer: { kind: "direct", id: "user-123" },
+          chatType: "direct",
+          from: "gatewaychat:user-123",
+          to: "user-123",
+        });
+        registerGatewayChat(vi.fn());
+        mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
+        const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
+        expect(result.payload).toEqual(receipt);
+        expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+      },
+    );
     it.each(["gatewaychat", "gatewaydeliver"])(
       "preserves data URL bytes and MIME through %s",
       async (channel) => {

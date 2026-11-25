@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -13,21 +14,28 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { readSessionForkTurn } from "../session-fork-run.js";
+import { readSessionForkTurn, runSessionFork } from "../session-fork-run.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 import { toolResult } from "./session-message-fixtures.test-support.js";
+
+const runEmbeddedAgent = vi.hoisted(() =>
+  vi.fn<typeof import("../embedded-agent.js").runEmbeddedAgent>(),
+);
+// mock-isolation: run the real fork preparation without sending a provider request.
+vi.mock("../embedded-agent.js", () => ({ runEmbeddedAgent }));
 
 async function withHistory(
   label: string,
   run: (fixture: {
     scope: SessionTranscriptRuntimeTarget;
     source: SessionManager;
+    workspaceDir: string;
     verifyRead: (read: () => void | Promise<void>) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withSessionState(label, async ({ scope }) => {
+  await withSessionState(label, async ({ scope, state }) => {
     const source = SessionManager.open(scope);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const snapshot = () =>
@@ -38,6 +46,7 @@ async function withHistory(
     await run({
       scope,
       source,
+      workspaceDir: state.workspaceDir,
       verifyRead: async (read) => {
         const before = snapshot();
         try {
@@ -776,3 +785,53 @@ it.each([false, true])(
     );
   },
 );
+
+it("shows a fork a still-running tool call as pending without writing the source", async () => {
+  await withHistory("fork-running-tool", async ({ source, workspaceDir, verifyRead }) => {
+    await source.appendMessageAsync(makeUserMessage("Run the probe", 1));
+    // One call of the batch finished; the other is still running.
+    await source.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [toolCall("done"), toolCall("running")],
+        stopReason: "toolUse",
+      }),
+    );
+    const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+      toolResult("done-output", "done", 1),
+    );
+    assert(anchor);
+    await verifyRead(async () => {
+      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"] = [];
+      runEmbeddedAgent.mockImplementationOnce(async ({ sessionManager }) => {
+        assert(sessionManager);
+        messages = sessionManager.buildSessionContext().messages;
+        return { meta: { durationMs: 1 } };
+      });
+      const outcome = await runSessionFork(
+        {
+          config: {},
+          source: anchor,
+          prompt: "Review the probe results",
+          tools: [],
+          runId: "pending-tool-fork",
+          owner: "core:test",
+          model: { provider: "openai", model: "gpt-test" },
+          workspaceDir,
+          timeoutMs: 1_000,
+        },
+        async (result) => result,
+      );
+      expect(outcome).toMatchObject({ ok: true });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const results = messages.filter((message) => message.role === "toolResult");
+      expect(results).toMatchObject([
+        { toolCallId: "done", content: [{ text: "done-output" }] },
+        {
+          toolCallId: "running",
+          isError: false,
+          content: [{ text: "This tool call is still running. Its result is not available yet." }],
+        },
+      ]);
+    });
+  });
+});

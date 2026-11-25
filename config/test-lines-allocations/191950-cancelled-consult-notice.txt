@@ -1,4 +1,0 @@
-# Relay regressions for provider-cancelled consults: the voice model gets one unknown-outcome
-# notice when an unfinished call is retired, and none after the consult result was accepted.
-# Exact net growth for PR #191950.
-38

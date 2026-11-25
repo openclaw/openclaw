@@ -489,6 +489,47 @@ async function verifyExplicitDrainWait(
 export function registerPluginRetainedWorkReloadTests(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
+  it("defers automatic config replacement before fencing ready traffic while plugin work is busy", async () => {
+    const prepareConfigEffects = vi.fn(() => ({ retire() {}, rollback: async () => {} }));
+    const fixture = await createRecoveryFixture({
+      automatic: true,
+      abortOnCandidateStart: false,
+      prepareConfigEffects,
+    });
+    const instance = fixture.instance();
+    const release = instance.retainWork();
+    const statuses = vi.spyOn(fixture.owner, "setReloadStatus");
+    const nextConfig: OpenClawConfig = {
+      plugins: { allow: ["first", "sibling"], entries: { first: { config: { mode: "new" } } } },
+    };
+    vi.useFakeTimers();
+    const operation = observeSettlement(
+      fixture.reload(nextConfig, ["first"], ["plugins.entries.first.config.mode"]),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(operation.state.settled).toBe(true);
+      expect(await operation.result).toMatchObject({
+        details: { committed: false },
+        cause: { message: expect.stringContaining("retained work") },
+      });
+      expect(prepareConfigEffects).not.toHaveBeenCalled();
+      expect(statuses).not.toHaveBeenCalled();
+      expect(fixture.owner.getReloadStatus()).toBeUndefined();
+      expect(instance.replacementPending).toBe(false);
+      expect(instance.run(() => "serving previous config")).toBe("serving previous config");
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+      release();
+      await expect(
+        fixture.reload(nextConfig, ["first"], ["plugins.entries.first.config.mode"]),
+      ).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    } finally {
+      release();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await operation.result;
+      vi.useRealTimers();
+    }
+  });
   it("refuses a live borrowed turn before effects and permits its closed context to reload", async () => {
     // #151706: the requesting turn holds the plugin even between its callbacks.
     let allowEffects = false;
@@ -518,6 +559,7 @@ export function registerPluginRetainedWorkReloadTests(
     );
     const runInTurn = lease.run(() => AsyncLocalStorage.snapshot());
     try {
+      runInTurn(() => instance.wrap(() => "plugin used by this turn")());
       expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
       await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");
       expect(prepareConfigEffects).not.toHaveBeenCalled();

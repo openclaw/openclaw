@@ -69,10 +69,14 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);
           const primary = page.getByRole("button", { name: /^Model: GPT-5.5/ });
           await primary.waitFor();
+          const moreSettings = page.locator("[data-models-more-settings]");
+          if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+            await moreSettings.click();
+          }
           expect(await primary.textContent()).not.toContain("alex@example.com");
           expect(await primary.locator(".picker-select__description").count()).toBe(0);
           const rows = await page
-            .locator(".model-providers__defaults .settings-row")
+            .locator(".model-providers__defaults .settings-row:not([data-models-more-settings])")
             .evaluateAll((elements) =>
               elements.map((row) => {
                 const label = row.querySelector(".settings-row__text")!.getBoundingClientRect();
@@ -92,7 +96,7 @@ suite.define(() => {
           expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
           expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
           const bounds = await page
-            .locator("[data-models-connect], .model-providers__refresh-button")
+            .locator("[data-models-login-discover], .model-providers__refresh-button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
@@ -112,19 +116,30 @@ suite.define(() => {
               expect(overlaps).toBe(false);
             }
           }
+          const access = page.getByRole("heading", { name: "Providers", exact: true });
+          const section = page.locator(".settings-section").filter({ has: access });
+          const group = section.locator(":scope > .settings-group");
+          expect((await access.boundingBox())!.x).toBe((await group.boundingBox())!.x);
           await primary.scrollIntoViewIfNeeded();
           const beforeDiscovery = await primary.boundingBox();
           await primary.click();
           await page.locator('.model-providers__defaults [role="listbox"]').first().waitFor();
           await gateway.setMethodResponse("models.list", {
             ...catalog,
+            models: [
+              ...models,
+              { id: "published", name: "Published model", provider: "openai", available: true },
+            ],
             pendingProviders: ["openai"],
           });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          await page
+            .locator('.model-providers__defaults [role="option"][data-value="openai/published"]')
+            .first()
+            .waitFor();
           const progress = page.locator('.model-providers__catalog-progress[role="status"]');
-          await progress.waitFor();
+          expect(await progress.count()).toBe(0);
           expect(await primary.boundingBox()).toEqual(beforeDiscovery);
-          expect(await progress.locator('[aria-hidden="true"]').count()).toBe(1);
           await page.keyboard.press("Escape");
         },
       );

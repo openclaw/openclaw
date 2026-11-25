@@ -26,6 +26,7 @@ export class ModelCatalogReader {
   private controller?: AbortController;
   private unsubscribe?: () => void;
   private deferredRead = false;
+  private statusDuringRead = false;
   failed = false;
 
   constructor(
@@ -86,8 +87,12 @@ export class ModelCatalogReader {
     );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
-      () => {
+      (invalidation) => {
         if (this.owns(binding)) {
+          if (invalidation === "pending" && this.pending && this.isPresented()) {
+            this.statusDuringRead = true;
+            return;
+          }
           void this.read();
         } else {
           this.notify();
@@ -112,18 +117,27 @@ export class ModelCatalogReader {
     );
   }
 
+  private isPresented(): boolean {
+    return document.visibilityState !== "hidden" && this.options.isPresented?.() !== false;
+  }
+
   read(): Promise<ModelCatalogResult | undefined> {
+    return this.readCurrent(true);
+  }
+
+  private readCurrent(recheckStatus: boolean): Promise<ModelCatalogResult | undefined> {
     const binding = this.binding;
     if (!binding || !this.owns(binding)) {
       return Promise.resolve(undefined);
     }
     this.controller?.abort();
     this.controller = undefined;
-    if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
+    if (!this.isPresented()) {
       this.deferredRead = true;
       return Promise.resolve(undefined);
     }
     this.deferredRead = false;
+    this.statusDuringRead = false;
     const cached = peekModelCatalog(binding.client, binding.scope);
     if (cached) {
       this.failed = false;
@@ -145,9 +159,19 @@ export class ModelCatalogReader {
         if (!this.owns(binding) || this.controller !== controller) {
           return undefined;
         }
+        const recheck =
+          recheckStatus &&
+          this.statusDuringRead &&
+          !result.refreshFailed &&
+          result.pendingProviders?.length;
         this.controller = undefined;
         this.options.onResult?.(result);
         this.notify();
+        // Show healthy rows before the optional follow-up. Another status notice
+        // during that follow-up leaves the partial available for the next demand.
+        if (recheck && this.owns(binding) && !this.controller) {
+          void this.readCurrent(false);
+        }
         return result;
       },
       (error: unknown) => {

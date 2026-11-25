@@ -7,7 +7,6 @@ export type CompactSessionMenuView =
   | "assign-owner"
   | "icon"
   | "group"
-  | "collections"
   | "snooze"
   | "advanced";
 
@@ -19,7 +18,6 @@ const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView>
   "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
-  "compact:open-collections": "collections",
   "compact:open-icon": "icon",
   "compact:open-open-in": "open-in",
 };

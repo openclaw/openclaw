@@ -25,6 +25,7 @@ import type { AgentRunExecutionContext } from "../command/execution-context.type
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -83,6 +84,7 @@ export type RunCliAgentParams = Pick<
   runtimeFactsInTurn?: true;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
   imagePrompt?: string;
+  mediaImageLayout?: MediaImageLayout;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.
@@ -109,6 +111,8 @@ export type RunCliAgentParams = Pick<
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
   modelContextWindow?: number;
+  /** Catalog model a CLI-native alias selects, taken from the CLI's own model menu. */
+  nativeModelId?: string;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;
@@ -246,7 +250,11 @@ export type PreparedCliRunContext = {
   contextEngine?: ContextEngine;
   deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
+  /** Set after bootstrap; sent as current-turn context so the system prompt stays cacheable. */
+  contextEngineSystemPromptAddition?: string;
   promptContext?: CliBackendPromptContext;
+  /** This run's before_model_request gate; absent on isolated and control runs. */
+  beforeModelRequest?: import("./model-request-hook.js").CliModelRequestGate;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
   modelId: string;
@@ -266,8 +274,8 @@ export type PreparedCliRunContext = {
   /** Only the exact resumed native session may receive these newly committed conversation rows. */
   resumeContext?: string;
   transcriptCursor?: CliSessionBinding["transcriptCursor"];
-  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
-  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
+  /** The account this turn runs under and whether saved history may enter its prompt. */
+  cliHistoryAdmission?: import("./history-boundary.js").CliHistoryAdmission;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

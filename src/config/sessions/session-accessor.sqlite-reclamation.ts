@@ -226,6 +226,7 @@ function reclaimSqliteRowsInTransaction(
           transactionDb,
           plan.deleteParams.target,
           snapshot,
+          callbacks.preparedReferenceOwners,
         );
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
@@ -374,6 +375,7 @@ export function createSessionMaintenanceStatisticsOperation(
 
 export function createSessionMaintenanceFinalizationOperation(params: {
   agentId: string;
+  retainedMcpSessionIds?: readonly string[];
   databaseOptions: OpenClawAgentDatabaseOptions;
   entries: SessionEntryRemovalPlan[];
   materializedPlans: MaterializedSessionStateDeletePlan[];

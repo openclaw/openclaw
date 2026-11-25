@@ -133,12 +133,12 @@ function stripWindowsShellWrapperOnce(command: string): string {
   return command;
 }
 
-export function analyzeWindowsShellCommand(params: {
+export async function analyzeWindowsShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
-}): ExecCommandAnalysis {
+}): Promise<ExecCommandAnalysis> {
   const effective = stripWindowsShellWrapper(params.command.trim());
   const unsupported = findWindowsUnsupportedToken(effective);
   if (unsupported) {
@@ -158,7 +158,7 @@ export function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(
+        resolution: await resolveCommandResolutionFromArgv(
           argv,
           params.cwd,
           params.env,

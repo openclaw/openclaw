@@ -95,10 +95,7 @@ function turn(
   };
 }
 
-async function fixture(
-  initialEntry: Partial<InternalSessionEntry> = {},
-  cliWriter?: SessionTurnPlan["cliWriter"],
-) {
+async function fixture(initialEntry: Partial<InternalSessionEntry> = {}) {
   const { actor } = await openFixture(sessionKey);
   committed(
     await actor.acceptInput(
@@ -121,7 +118,6 @@ async function fixture(
               initialSessionEntry: { sessionId, incognito: true, updatedAt: 1, ...initialEntry },
             },
           ),
-          cliWriter,
         },
       },
       authority,
@@ -407,43 +403,6 @@ describe("memory actor transcript", () => {
       ),
     ).toMatchObject({ kind: "rolled-back" });
     expect(actor.snapshot(authority)).toEqual(before);
-  });
-
-  it("advances CLI account coverage only across its own contiguous writes", async () => {
-    const writer = {
-      runId: "cli-run",
-      authFingerprint: "a".repeat(64),
-      lifecycleRevision: "cli-life",
-    };
-    const { actor, append } = await fixture(
-      {
-        activeWriterRunId: writer.runId,
-        lifecycleRevision: writer.lifecycleRevision,
-        cliHistoryBoundary: {
-          version: 1,
-          state: "known",
-          sessionId,
-          writerRunId: writer.runId,
-          authFingerprint: writer.authFingerprint,
-          generation: null,
-          maxSeq: null,
-        },
-      },
-      writer,
-    );
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 1 });
-    const message = { role: "assistant", content: "CLI output" };
-    committed(await append({ ...turn({ message, eventId: "cli-2" }), cliWriter: writer }));
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
-    committed(
-      await append({
-        ...turn({ message, eventId: "other-account" }),
-        cliWriter: { ...writer, authFingerprint: "b".repeat(64) },
-      }),
-    );
-    committed(await append({ ...turn({ message, eventId: "after-gap" }), cliWriter: writer }));
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
-    expect(actor.snapshot(authority)?.transcript.anchors.at(-1)?.entryId).toBe("after-gap");
   });
 
   it("commits a Goal with its admission turn and replays the receipt without another user message", async () => {

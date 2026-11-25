@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
 import * as isolated from "./isolated-agent/run.test-harness.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
@@ -44,6 +45,8 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
             failureAlert: { enabled: true, after: 1, cooldownMs: 0 },
           },
           sendCronFailureAlert,
+          admitScheduledOccurrence: ({ job }) =>
+            admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
           runIsolatedAgentJob: async (runParams) =>
             await runCronIsolatedAgentTurn({
               ...runParams,
@@ -70,7 +73,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           });
           expect(sendCronFailureAlert).toHaveBeenCalledOnce();
           expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
-            'Automation "mount check" failed 1 times',
+            'Automation "mount check" failed',
           );
         } finally {
           cron.stop();

@@ -1,7 +1,7 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "./openai-provider.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
@@ -18,7 +18,7 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
     return response;
   });
   try {
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => ({ mode: "api_key", apiKey, profileId, source: "profile" }),
       resolveProviderApiKey: () => ({ apiKey }),
       config: baseUrl
@@ -42,30 +42,59 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
 }
 
 beforeEach(clearLiveCatalogCacheForTests);
+afterEach(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+});
 const modelRows = (ids: string[]) => ids.map((id) => ({ id, object: "model" }));
 
-it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
-  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-5.6-cyber", "gpt-6.2"];
-  // Include pre-GPT-5, non-chat, subscription-only and experimental model families.
-  const unadmittedIds = (
-    "gpt-4-0613 gpt-4.1-mini o3 ft:gpt-4.1-mini:acme::abc123 gpt-5.3-codex-spark " +
-    "gpt-unknown-cyber-fixture gpt-7-alpha kepler-alpha " +
-    "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment " +
-    "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment " +
-    "gpt-4o-mini-search-preview gpt-5-search-api gpt-live-1 gpt-4o-transcribe-diarize " +
-    "gpt-image-2 gpt-realtime-2.1-mini gpt-audio-mini gpt-3.5-turbo-instruct babbage-002 " +
+it("lists configured API-key models without loading profile auth runtimes", async () => {
+  // mock-isolation: Prepared credentials must not load either broad auth owner.
+  vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+    throw new Error("Configured API-key catalogs must not load broad auth helpers");
+  });
+  // mock-isolation: Prepared credentials must not initialize profile auth runtimes.
+  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => {
+    throw new Error("Configured API-key catalogs must not load profile auth runtime");
+  });
+  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-6.2"];
+  // Listed ids that often fail for the listing key or name a non-text family: absent from
+  // default pickers, still runnable by typed or configured ref.
+  const unlikelyIds = (
+    "gpt-5.6-cyber gpt-unknown-cyber-fixture gpt-7-alpha codename-alpha " +
+    "gpt-fixture-codex-exp-treatment gpt-fixture-exp-0101 gpt-live-fixture " +
+    "gpt-image-2 gpt-realtime-2.1-mini gpt-audio-mini babbage-002 " +
     "text-embedding-3-small omni-moderation-latest tts-1-hd whisper-1 sora-2"
   ).split(" ");
+  // Pre-GPT-5, subscription-only and Chat-Completions-only search families are not listed.
+  const droppedIds = (
+    "gpt-4-0613 gpt-4.1-mini o3 ft:gpt-4.1-mini:acme::abc123 gpt-5.3-codex-spark " +
+    "gpt-4o-mini-search-preview gpt-5-search-api gpt-4o-transcribe-diarize gpt-3.5-turbo-instruct"
+  ).split(" ");
   const data = [
-    ...modelRows(["gpt-5.5", ...admittedIds, ...unadmittedIds]),
+    ...modelRows(["gpt-5.5", ...unlikelyIds, ...droppedIds]),
+    ...admittedIds.map((id) => ({ id, object: "model", capabilities: { chat: true } })),
     // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
     { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
   ];
   const { provider } = await runCatalog(Response.json({ data }));
 
-  expect(provider.models.map((model) => model.id).toSorted()).toEqual(
+  const ids = (keep: (model: (typeof provider.models)[number]) => boolean) =>
+    provider.models
+      .filter(keep)
+      .map((model) => model.id)
+      .toSorted();
+  expect(ids((model) => model.inference === undefined)).toEqual(
     ["gpt-5.5", ...admittedIds].toSorted(),
   );
+  expect(ids((model) => model.inference?.chatEvidence === "unlikely")).toEqual(
+    unlikelyIds.toSorted(),
+  );
+  expect(provider.models).toHaveLength(1 + admittedIds.length + unlikelyIds.length);
+  expect(provider.models.find((model) => model.id === "tts-1-hd")?.inference).toEqual({
+    chat: true,
+    chatEvidence: "unlikely",
+  });
   for (const id of ["gpt-5.3-codex", "gpt-6.2"]) {
     expect(provider.models.find((model) => model.id === id)).toEqual({
       id,
@@ -99,7 +128,12 @@ it.each([
       : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
-  expect(provider.models.map((model) => model.id)).toEqual(
+  // Picker-offered rows: an embedding-named bare row is unlikely chat, listed but not offered.
+  expect(
+    provider.models
+      .filter((model) => model.inference?.chat !== false && !model.inference?.chatEvidence)
+      .map((model) => model.id),
+  ).toEqual(
     status === "unavailable"
       ? manifest.modelCatalog.providers.openai.models.map((model) => model.id)
       : [],
@@ -110,6 +144,14 @@ it.each([
       profileId: "openai:api-key",
       ...(apiKey === "secretref-managed" ? { rejectionScope: "catalog" } : {}),
       status,
+      ...(status === "ready"
+        ? {
+            modelIdCatalog: {
+              baseUrl: "https://api.openai.com/v1",
+              modelIds: ["text-embedding-3-small"],
+            },
+          }
+        : {}),
     },
   ]);
   if (apiKey === "secretref-managed") {

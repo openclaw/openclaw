@@ -1,6 +1,6 @@
 import type { TranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import type { TranscriptExportRead, TranscriptLibraryError } from "./store-read.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export type TranscriptExportCommand = {
   type: "meetingTranscripts.export";

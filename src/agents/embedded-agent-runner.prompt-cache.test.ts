@@ -8,7 +8,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { stableStringify } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -22,7 +22,6 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
-import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveActiveReplyOperationForSessionId } from "../sessions/session-controller.queries.js";
@@ -55,6 +54,12 @@ const cases = [
   ["anthropic-messages", "anthropic", "claude-opus-5", "in-history"],
 ] satisfies Array<[WireApi, string, string, string]>;
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
+// Just over the 32,000-character live cap at this fixture's context size.
+const OVERSIZED_TOOL_RESULT_REPEATS = 1_600;
+// On a contended CPU, the first admitted turn took 80s (cold runtime and
+// five tool calls); the remaining ten turns took 15s together.
+const FIRST_TURN_TIMEOUT_MS = 120_000;
+const PROMPT_CACHE_TEST_TIMEOUT_MS = 180_000;
 const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
 const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
@@ -98,14 +103,12 @@ function rateLimitResponse(api: WireApi) {
   });
 }
 
-afterEach(() => clearActivePluginRegistry());
-
 it.for(cases)(
   "preserves %j prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
-  { timeout: 120_000 },
-  async ([api, provider, model, route], { signal }) => {
+  { timeout: PROMPT_CACHE_TEST_TIMEOUT_MS },
+  async ([api, provider, model, route], { signal, onTestFinished }) => {
     const responses = api === "openai-responses";
-    await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
+    const journey = withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
       await bindSessionMcpRuntimeTestScheduler();
       const mcp = await startPromptCacheMcpServer(signal);
       try {
@@ -124,7 +127,7 @@ it.for(cases)(
           path.join(pluginDir, "index.cjs"),
           `module.exports = {
       id: "cache-proof", register(api) {
-        api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a large deterministic synthetic result.", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "synthetic tool result ".repeat(5000) }] }) });
+        api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a large deterministic synthetic result.", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "synthetic tool result ".repeat(${OVERSIZED_TOOL_RESULT_REPEATS}) }] }) });
         api.on("before_prompt_build", (event) => ({ prependContext: "hook before " + event.prompt, appendContext: "hook after " + event.prompt }));
       }
     };`,
@@ -132,6 +135,9 @@ it.for(cases)(
         const sessionId = `cache-${route}`;
         const sessionKey = `agent:main:telegram:direct:${sessionId}`;
         const config = cacheRunnerConfig({
+          // Room for the full journey below the compaction trigger: this proof covers prefix
+          // stability. agent-runner-compaction-fallback.test.ts owns the warm summary shape.
+          contextWindow: 131_072,
           api,
           provider,
           model,
@@ -162,9 +168,15 @@ it.for(cases)(
         };
         await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const host = getAiTransportHost();
+        let firstContinuation:
+          | {
+              previousResponseId: unknown;
+              toolOutputs: number;
+              toolCalls: number;
+            }
+          | undefined;
         const requests: Array<{
           turn: number;
-          payload: unknown;
           prefix: ReturnType<typeof snapshotProviderPrefix>;
           userEnvelopes: Map<string, string>;
         }> = [];
@@ -238,6 +250,18 @@ it.for(cases)(
                 assert(Array.isArray(payload.input));
                 const previousId =
                   "previous_response_id" in payload ? payload.previous_response_id : undefined;
+                if (requests.length === 1) {
+                  // Runtime context may accompany the tool results on the wire.
+                  firstContinuation = {
+                    previousResponseId: previousId,
+                    toolOutputs: payload.input.filter(
+                      (item) => isRecord(item) && item.type === "function_call_output",
+                    ).length,
+                    toolCalls: payload.input.filter(
+                      (item) => isRecord(item) && item.type === "function_call",
+                    ).length,
+                  };
+                }
                 if (previousId !== undefined) {
                   assert.equal(typeof previousId, "string");
                   const inherited = responseHistory.get(previousId as string);
@@ -250,18 +274,11 @@ it.for(cases)(
               }
               const prefix = snapshotProviderPrefix(api, effectivePayload);
               if (route === "messages") {
-                const runtimeIndex = prefix.history.findIndex((item) =>
-                  item.includes(RUNTIME_CONTEXT_HEADER),
-                );
+                // Runtime-context carriers stay in history, so they may carry a checkpoint.
                 expect(prefix.breakpoints.length).toBeGreaterThan(0);
-                expect(
-                  prefix.breakpoints.some(
-                    (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
-                  ),
-                ).toBe(false);
               }
               expect(prefix.tools, "advertised tool").toContain('"name":"cache_probe"');
-              requests.push({ turn, payload, prefix, userEnvelopes });
+              requests.push({ turn, prefix, userEnvelopes });
               requestsThisTurn++;
               if (turn === 6 && requestsThisTurn === 1) {
                 const outcome = await steerSessionControllerOperation({
@@ -304,6 +321,7 @@ it.for(cases)(
         });
         try {
           for (turn = 1; turn <= 11; turn++) {
+            signal.throwIfAborted();
             requestsThisTurn = 0;
             if (turn === 3) {
               const runtime = peekSessionMcpRuntime({ sessionKey });
@@ -423,8 +441,7 @@ it.for(cases)(
                 thinkLevel: "off",
                 toolsAllow: ["cache_probe", "cache_fixture__probe", "message"],
                 runId,
-                // The first admitted turn lazily loads the provider/plugin runtime.
-                timeoutMs: turn === 1 ? 60_000 : 20_000,
+                timeoutMs: turn === 1 ? FIRST_TURN_TIMEOUT_MS : 20_000,
                 prompt: provenance
                   ? transcriptPrompt
                   : turn % 2 === 0
@@ -475,12 +492,11 @@ it.for(cases)(
             expect(afterFailure).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
             expect(afterFailure).not.toContain(FAILED_ASSISTANT_TEXT);
             expect(historyAt(7)).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
-            const continuation = requests[1]!.payload as Record<string, unknown>;
-            expect(continuation.previous_response_id).toBe("cache_1");
-            const input = continuation.input as Array<Record<string, unknown>>;
-            // The runner may append fresh runtime context alongside the tool results.
-            expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
-            expect(input.filter((item) => item.type === "function_call")).toEqual([]);
+            expect(firstContinuation).toEqual({
+              previousResponseId: "cache_1",
+              toolOutputs: 5,
+              toolCalls: 0,
+            });
           }
           expect(requests[0]!.userEnvelopes.size).toBeGreaterThan(0);
           const firstPrefix = requests[0]!.prefix.history.join("");
@@ -579,5 +595,12 @@ it.for(cases)(
         await mcp.close();
       }
     });
+    // Vitest can time out before the runner unwinds. Join fixture disposal before
+    // the next route writes its process-wide config, transport, and plugin state.
+    onTestFinished(async () => {
+      await Promise.allSettled([journey]);
+      await clearActivePluginRegistry();
+    });
+    await journey;
   },
 );
