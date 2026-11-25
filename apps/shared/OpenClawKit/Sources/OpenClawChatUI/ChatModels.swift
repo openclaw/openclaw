@@ -526,7 +526,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     var sourceMetadata: OpenClawMetadata?
     var senderLabel: String?
     var senderSession: AnyCodable?
-    public let model: String?
+    public internal(set) var model: String?
+    /// Which provider and served model answered, as the Gateway recorded them (web isRecordedOpenAIModel).
+    var provider: String?
+    var responseModel: String?
 
     // Transient projection fields; deliberately absent from CodingKeys.
     var presentationBlockIndex: Int?
@@ -620,6 +623,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case role
         case model
+        case provider
+        case responseModel
         case senderLabel
         case senderSession
         case phase
@@ -734,6 +739,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
             forKey: .provenance)
 
         self.model = try? container.decode(String.self, forKey: .model)
+        self.provider = try? container.decode(String.self, forKey: .provider)
+        self.responseModel = try? container.decode(String.self, forKey: .responseModel)
         self.senderLabel = try? container.decode(String.self, forKey: .senderLabel)
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
         self.sourceMetadata = decodedOpenClaw
@@ -845,6 +852,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.model, forKey: .model)
+        try container.encodeIfPresent(self.provider, forKey: .provider)
+        try container.encodeIfPresent(self.responseModel, forKey: .responseModel)
         try container.encodeIfPresent(self.senderLabel, forKey: .senderLabel)
         try container.encodeIfPresent(self.senderSession, forKey: .senderSession)
         try container.encodeIfPresent(self.phase, forKey: .phase)

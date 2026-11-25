@@ -73,9 +73,12 @@ extension ChatTranscriptRow {
 
         return turns.enumerated().flatMap { index, turn -> [Self] in
             let isFenced = ownership.fenced[index]
-            // A handoff's closing line describes the whole request, not one run's work.
+            // A handoff's closing line describes the whole request, not one run's work. Only OpenAI
+            // models mark what they say between tool calls, so only their turns fold; every other
+            // model's text stays where it was said (web isOpenAIWorkSegment, chat-turn-presentation.ts:219-243).
             guard !liveTurns.contains(index), terminalReplies[index] != nil,
-                  !turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true })
+                  !turn.contains(where: { $0.workMessage?.hasConfirmedHandoff == true }),
+                  Self.isOpenAIWork(turn)
             else { return isFenced ? turn : Self.coalescingActivityRuns(turn) }
             let continuationID = continuations[index].flatMap { turns[$0].first?.id }
             if isFenced {
@@ -465,6 +468,27 @@ extension ChatTranscriptRow {
         return (next, previous)
     }
 
+    /// Every model-authored row was answered by an OpenAI model. Host rows, streamed commentary and
+    /// subagent completions are not authors; a turn with no author does not fold.
+    static func isOpenAIWork(_ turn: [Self]) -> Bool {
+        var foundAuthor = false
+        for row in turn {
+            let messages: [OpenClawChatMessage] = switch row {
+            case let .message(message): [message]
+            case let .completedWork(work): work.messages
+            case .systemNotice, .historyDivider: []
+            }
+            for message in messages where message.role.lowercased() == "assistant" &&
+                message.provider?.lowercased() != "openclaw" && message.streamSegmentID == nil &&
+                !message.content.contains(where: { $0.type == "subagent_completion" })
+            {
+                guard message.isRecordedOpenAIModel else { return false }
+                foundAuthor = true
+            }
+        }
+        return foundAuthor
+    }
+
     private var workMessage: OpenClawChatMessage? {
         if case let .message(message) = self { return message }
         return nil
@@ -618,6 +642,30 @@ extension OpenClawChatMessage {
 }
 
 extension OpenClawChatMessage {
+    /// The saved response, not the composer's model, says which model answered; a router counts by
+    /// the model it served (web isRecordedOpenAIModel, chat-turn-presentation.ts:186-216).
+    var isRecordedOpenAIModel: Bool {
+        func lowered(_ value: String?) -> String {
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        }
+        let (model, provider, served) = (lowered(self.model), lowered(self.provider), lowered(self.responseModel))
+        guard !provider.isEmpty, !model.isEmpty else { return false }
+        let direct = ["openai", "codex", "openai-codex"].contains(provider)
+        func upstream(_ id: String) -> (provider: String, model: String)? {
+            let id = !direct && id.hasPrefix(provider + "/") ? String(id.dropFirst(provider.count + 1)) : id
+            guard let slash = id.firstIndex(of: "/") else { return nil }
+            let vendor = id[..<slash].trimmingCharacters(in: .whitespaces)
+            let name = id[id.index(after: slash)...].trimmingCharacters(in: .whitespaces)
+            return vendor.isEmpty || name.isEmpty ? nil : (vendor, name)
+        }
+        if let actual = upstream(served) { return actual.provider == "openai" }
+        let requested = upstream(model)
+        if direct { return requested.map { $0.provider == "openai" } ?? true }
+        guard let requested, requested.provider == "openai" else { return false }
+        let undated = served.replacingOccurrences(of: #"-\d{4}-\d{2}-\d{2}$"#, with: "", options: .regularExpression)
+        return served.isEmpty || served == requested.model || undated == requested.model
+    }
+
     /// A spoken realtime-voice rendition: its own footer identity, never collapsible work.
     var isRealtimeVoiceTranscript: Bool {
         self.provenance?.kind == "realtime_voice" || self.model == "realtime-voice"
