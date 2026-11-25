@@ -361,6 +361,18 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_history does not report truncation when only usage metadata is stripped", async () => {
+    const details = await readHistory("usage-only", [
+      { ...textAssistant("hello"), usage: { output: 1 } },
+    ]);
+    expect(details).toMatchObject({
+      contentTruncated: false,
+      truncated: false,
+      droppedMessages: false,
+    });
+    expect(details.messages?.[0]).not.toHaveProperty("usage");
+  });
+
   it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
     const details = await readHistory("preserved", [
