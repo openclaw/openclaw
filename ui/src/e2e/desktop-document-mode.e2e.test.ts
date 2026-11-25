@@ -476,17 +476,15 @@ suite.define(() => {
   it("identifies a focused Desktop source before connecting on a phone", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const prefix = "node:" + "a".repeat(63);
-      const devices = ["Mac Studio", "Mac Studio", "Review laptop", undefined].map(
-        (label, index) => ({
-          ...makeEnvironment(prefix + index),
-          label,
-        }),
+      const devices = ["Mac Studio", "Mac Studio", "Review laptop", undefined].map((label, index) =>
+        Object.assign(makeEnvironment(prefix + index), { label }),
       );
       const { gateway, panel } = await openDesktopDocument(page, "focus/desktop", {
         environments: [gatewayEnvironment, ...devices],
       });
       const rows = panel.locator(".desktop-environment");
       await rows.nth(4).waitFor();
+      // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered line break between name and ID.
       expect(await rows.nth(0).locator(".desktop-environment__id").innerText()).toBe(
         "This computer",
       );
@@ -495,6 +493,7 @@ suite.define(() => {
         const name = row.locator(".desktop-environment__id");
         const expected =
           index < 2 ? [device.label, device.id].join("\n") : (device.label ?? device.id);
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered line break between name and ID.
         expect(await name.innerText()).toBe(expected);
         expect(await row.getByRole("button").getAttribute("aria-describedby")).toBe(
           await name.getAttribute("id"),
