@@ -4724,6 +4724,16 @@ setImmediate(() => {
         );
       }
     }
+    for (const jobName of ["build-artifacts", "checks-ui"]) {
+      for (const overrides of [
+        { eventName: "workflow_dispatch" },
+        { headRepository: "contributor/openclaw" },
+      ] as const) {
+        expect(evaluateTimeout(jobName, { ...canonicalPullRequest, ...overrides }), jobName).toBe(
+          35,
+        );
+      }
+    }
     expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
 
     const androidRunStep = expectDefined(
@@ -5245,15 +5255,24 @@ setImmediate(() => {
       },
     });
     for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid", "runson"] as const) {
-      expect(
-        evaluateWorkflowExpression(`\${{ ${preflightRestore?.step.if} }}`, {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          runnerBackend,
-          steps: { manifest: { outputs: { run_node: "true" } } },
-        }),
-      ).toBe(runnerBackend === "blacksmith");
+      for (const [eventName, ref, headRepository, eligible] of [
+        ["push", "refs/heads/main", "openclaw/openclaw", true],
+        ["push", "refs/heads/feature", "openclaw/openclaw", false],
+        ["pull_request", "refs/pull/1/merge", "openclaw/openclaw", true],
+        ["pull_request", "refs/pull/1/merge", "contributor/openclaw", false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${preflightRestore?.step.if} }}`, {
+            eventName,
+            ref,
+            headRepository,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+            steps: { manifest: { outputs: { run_node: "true" } } },
+          }),
+        ).toBe(eligible && runnerBackend === "blacksmith");
+      }
     }
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([

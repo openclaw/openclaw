@@ -5493,16 +5493,22 @@ describe("ci workflow guards", () => {
       eventName: "push",
       repository: "openclaw/openclaw",
       runAttempt: 1,
-      matrix: { group: "extension-package-boundary", task: "lint" },
       steps: {
         "extension-boundary-inputs": { outputs: { enabled: "true" } },
         "boundary-sticky-restore": { outputs: { restored: "false" } },
       },
     } as const;
-    for (const gate of [boundaryMount, lintMount]) {
+    for (const [gate, matrix] of [
+      [boundaryMount, { group: "extension-package-boundary" }],
+      [lintMount, { task: "lint" }],
+    ] as const) {
       for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid"] as const) {
         expect(
-          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, { ...stickyContext, runnerBackend }),
+          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, {
+            ...stickyContext,
+            matrix,
+            runnerBackend,
+          }),
         ).toBe(runnerBackend === "blacksmith");
       }
     }
@@ -5738,14 +5744,22 @@ describe("ci workflow guards", () => {
     const seedStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Seed extension boundary sticky disk",
     );
-    for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
+    for (const [gate, matrix] of [
+      [restoreStep, { group: "extension-package-boundary" }],
+      [lintRestoreStep, { task: "lint" }],
+      [seedStep, { group: "extension-package-boundary" }],
+    ] as const) {
       expect(gate.run).toContain(fingerprintReference);
       expect(gate.run).toContain(".source-fingerprint");
       expect(gate.run).not.toContain("git rev-parse HEAD:");
       expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
       for (const runnerBackend of ["blacksmith", "github", "boat", "hybrid"] as const) {
         expect(
-          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, { ...stickyContext, runnerBackend }),
+          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, {
+            ...stickyContext,
+            matrix,
+            runnerBackend,
+          }),
         ).toBe(runnerBackend === "blacksmith");
       }
     }
