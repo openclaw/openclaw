@@ -45,4 +45,14 @@ final class ChatComposerAddRulesTests: XCTestCase {
             OpenClawChatViewModel.draft("//not a command", insertingCommand: "/notion"),
             "/notion //not a command")
     }
+
+    func testConnectorTitleReadsTheServerNameAsAName() {
+        func title(_ name: String) -> String {
+            OpenClawChatComposerConnector(name: name, baseEnabled: true, tools: []).title
+        }
+        XCTAssertEqual(title("mobbin"), "Mobbin")
+        XCTAssertEqual(title("google-drive"), "Google Drive")
+        XCTAssertEqual(title("my_notes"), "My Notes")
+        XCTAssertEqual(title("GitHub"), "GitHub")
+    }
 }

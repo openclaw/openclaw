@@ -751,7 +751,7 @@ private struct ChatComposerConnectorsPage: View {
                             LabeledContent {
                                 Text(isOn ? "On" : "Off").font(OpenClawChatTypography.settingsBody)
                             } label: {
-                                Text(verbatim: connector.name).font(OpenClawChatTypography.settingsBody)
+                                Text(verbatim: connector.title).font(OpenClawChatTypography.settingsBody)
                             }
                         }
                         .accessibilityIdentifier("chat-composer-connector-\(connector.name)")
@@ -813,7 +813,6 @@ private struct ChatComposerConnectorPage: View {
                                         Text(verbatim: description)
                                             .font(OpenClawChatTypography.settingsFootnote)
                                             .foregroundStyle(.secondary)
-                                            .lineLimit(2)
                                     }
                                 }
                             }
@@ -834,7 +833,7 @@ private struct ChatComposerConnectorPage: View {
         }
         .listStyle(.insetGrouped)
         .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
-        .navigationTitle(Text(verbatim: self.name))
+        .navigationTitle(Text(verbatim: connector?.title ?? self.name))
         .navigationBarTitleDisplayMode(.inline)
     }
 }

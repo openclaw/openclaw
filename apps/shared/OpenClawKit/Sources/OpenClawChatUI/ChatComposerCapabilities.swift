@@ -147,6 +147,14 @@ public struct OpenClawChatComposerConnector: Identifiable, Equatable, Sendable {
         self.name
     }
 
+    /// The configured server name read as a title, each word capitalized: mobbin reads as Mobbin. MCP servers send
+    /// the phone no display name, description or icon, so this is the closest proper name it has.
+    public var title: String {
+        self.name.split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
     public init(
         name: String,
         baseEnabled: Bool,
