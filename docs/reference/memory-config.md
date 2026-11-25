@@ -664,11 +664,12 @@ and Bun, and match paths relative to the workspace, including default memory fil
 overlapping `extraPaths`. Outside-workspace extra roots are unaffected. A leading `./` or `/` is
 ignored, and a trailing `/` covers the whole directory (`memory/dreaming/` equals
 `memory/dreaming/**`). Per-agent `excludePaths` add to the global list.
-Changing this list changes the index scope, so `openclaw memory status` reports a scope change and
-vector search pauses until you rebuild with `openclaw memory index --agent <id>`; the rebuild drops
-rows for excluded files. Exclusions apply to search indexing and file watching only: they do not
-delete source files, block `memory_get` reads, or change which files are eligible for short-term
-recall/promotion.
+Changing this list changes the index scope: the next memory search or sync rebuilds the index
+automatically and drops rows for excluded files, which can re-embed content (see the warning under
+[Provider selection](/reference/memory-config#provider-selection)).
+`openclaw memory index --agent <id>` rebuilds on demand. Exclusions apply to search indexing and
+file watching only: they do not delete source files, block `memory_get` reads, or change which
+files are eligible for short-term recall/promotion.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
 resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
