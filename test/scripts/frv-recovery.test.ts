@@ -161,6 +161,7 @@ function fixture(candidateSha = Q) {
           typeof import("../../scripts/release-qualification-admission.mjs").verifyQualificationAdmission
         >[0],
       ) => ({
+        request: { inputs: {} },
         baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }),
@@ -208,22 +209,41 @@ function fixture(candidateSha = Q) {
 }
 
 describe("retained receipt recovery operator", () => {
-  it.each([false, true])(
-    "recovers missing parent source from authenticated inputs (changed=%s)",
-    async (changed) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    "recovers missing parent source from authenticated inputs (changed=%s, preflight first=%s)",
+    async (changed, preflightFirst) => {
       const f = fixture();
-      const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+      const original = candidatePublicationFixture({
+        candidateSha: Q,
+        runId: "10",
+        preflightFirst,
+      });
       f.artifacts.set("10", []);
       for (const child of original.admission.receipt.coverage.children) {
         f.jobs.find((job) => job.name === child.key)!.name = child.parentJobName;
       }
       f.runs.get(10)!.head_branch = original.branch;
+      if (preflightFirst) {
+        for (const [stage, name] of [
+          ["npm", "Prepare initial release npm artifacts"],
+          ["candidate", "Acquire full release candidate"],
+          ["docker", "Prepare release Docker artifacts"],
+        ]) {
+          f.jobs.find((job) => job.name === stage)!.name = name;
+        }
+      }
       const frozen = f.client.getWorkflowSource(Q);
       f.client.getWorkflowSource.mockImplementation((_sha, path) =>
         path === "scripts/lib/release-validation-waivers.json"
           ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
-          : frozen +
-            `
+          : preflightFirst
+            ? readFileSync(".github/workflows/full-release-validation.yml", "utf8")
+            : frozen +
+              `
   resolve_target:
     name: Resolve target ref
     steps:
