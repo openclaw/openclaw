@@ -21,6 +21,10 @@ import {
   runWithLiveSubagentGateway,
   until,
 } from "../subagents/announce/subagent-challenges.live.test-support.js";
+import {
+  isTerminalExecutorOutcome,
+  observeHeldExecutor,
+} from "../subagents/announce/subagent-external-gate.test-support.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../subagents/registry/subagent-registry-persistence.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
@@ -263,6 +267,7 @@ describeLive("retained native child continuation", () => {
             });
             const held = gates.create();
             let foreignRunId: string | undefined;
+            let foreignOutcome: { status: string; endedAt?: number } | undefined;
             try {
               if (change === "controller") {
                 const foreign = "agent:main:dashboard:foreign-" + id;
@@ -287,9 +292,13 @@ describeLive("retained native child continuation", () => {
                   expectsCompletionMessage: false,
                 });
                 await until("foreign child executor is actually live", () =>
-                  isSubagentRunLive(subagentRuns.get(running.runId)) && held.snapshot().waiting > 0
-                    ? true
-                    : undefined,
+                  observeHeldExecutor({
+                    isHeldAndLive: () =>
+                      isSubagentRunLive(subagentRuns.get(running.runId)) &&
+                      held.snapshot().waiting > 0,
+                    waitForRun: () =>
+                      gateway.request("agent.wait", { runId: running.runId, timeoutMs: 100 }),
+                  }),
                 );
                 const current = await gateway.request<{
                   session: { controlOwnerSessionKey?: string };
@@ -384,14 +393,18 @@ describeLive("retained native child continuation", () => {
             } finally {
               held.release("FOREIGN_COMPLETE");
               if (foreignRunId) {
-                await until("foreign execution settles", async () => {
-                  const ended = await gateway.request<{ status: string }>("agent.wait", {
-                    runId: foreignRunId,
-                    timeoutMs: 1000,
-                  });
-                  return ended.status === "ok" ? true : undefined;
+                foreignOutcome = await until("foreign execution settles", async () => {
+                  const ended = await gateway.request<{ status: string; endedAt?: number }>(
+                    "agent.wait",
+                    { runId: foreignRunId, timeoutMs: 1000 },
+                  );
+                  return isTerminalExecutorOutcome(ended) ? ended : undefined;
                 });
               }
+            }
+            if (foreignRunId) {
+              // Preserve the success assertion without masking the original failure in cleanup.
+              expect(foreignOutcome?.status).toBe("ok");
             }
           }
           const scopedSource = "agent:main:dashboard:scoped-notify-" + id;

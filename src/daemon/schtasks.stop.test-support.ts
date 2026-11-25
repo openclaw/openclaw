@@ -86,11 +86,8 @@ export const {
   suspendScheduledTaskAutoStartForUpdate,
 } = await import("./schtasks-control.js");
 export const { resolveTaskScriptPath } = await import("./schtasks-layout.js");
-export const {
-  probeProcessState,
-  resolveScheduledTaskOwnedGatewayPids,
-  terminateScheduledTaskGatewayListeners,
-} = await import("./schtasks-process.js");
+export const { probeProcessState, terminateScheduledTaskGatewayListeners } =
+  await import("./schtasks-process.js");
 export const { formatWindowsTaskSupervisorChildArgument } =
   await import("./windows-task-supervisor-contract.js");
 export const GATEWAY_PORT = 18789;

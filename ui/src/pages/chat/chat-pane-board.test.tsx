@@ -513,7 +513,7 @@ describe("chat pane board shell", () => {
 
     await expect(pending).resolves.toBe(false);
     expect(reset).not.toHaveBeenCalled();
-    expect(pane.state.lastError).toContain("operator.admin");
+    expect(pane.state.lastError).toBe("You don’t have permission to do this.");
     expect(pane.state.chatError).toBe(pane.state.lastError);
   });
 
