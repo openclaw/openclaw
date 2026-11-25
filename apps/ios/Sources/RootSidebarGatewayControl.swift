@@ -149,145 +149,43 @@ struct SidebarGatewayPicker: View {
     }
 }
 
-private struct SidebarUserProfileResponse: Decodable {
-    struct Profile: Decodable {
-        struct GitHubIdentity: Decodable {
-            let login: String
-        }
-
-        let id: String
-        let displayName: String?
-        let githubIdentity: GitHubIdentity?
-
-        var name: String? {
-            for candidate in [self.displayName, self.githubIdentity?.login] {
-                if let name = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-                    return name
-                }
-            }
-            return nil
-        }
-    }
-
-    let profile: Profile
-}
-
-private struct SidebarUserProfileRequest: Equatable {
-    let ownerID: String
-    let authorityGeneration: UInt64
-    let isConnected: Bool
-}
-
-private struct SidebarUserProfileSnapshot {
-    let request: SidebarUserProfileRequest
-    let name: String
-
-    var initials: String {
-        self.name.split(whereSeparator: \.isWhitespace)
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-            .uppercased()
-    }
-}
-
 struct RootSidebarGatewayControl: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var registry = GatewaySettingsStore.GatewayRegistry.empty
     @State private var switchError: String?
-    @State private var profileSnapshot: SidebarUserProfileSnapshot?
     let fallbackName: String
     let openSettings: () -> Void
 
+    /// Always the connection control: it shows the connection and switches it. The person's identity
+    /// belongs to Settings, not to this bar.
     var body: some View {
-        let profileRequest = self.profileRequest
-        Group {
-            if let profile = self.visibleProfile {
-                self.profileLabel(profile)
-            } else {
-                SidebarGatewayPicker(
-                    presentation: SidebarGatewayPresentation(
-                        registry: self.registry,
-                        connectionID: self.appModel.activeGatewayConnectConfig?.effectiveStableID,
-                        connectedID: self.appModel.connectedGatewayID,
-                        state: GatewayStatusBuilder.build(appModel: self.appModel)),
-                    fallbackName: self.fallbackName,
-                    isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
-                        self.gatewayController.hasPendingConnectionHandoff,
-                    selectGateway: self.switchGateway,
-                    openSettings: self.openSettings)
-            }
-        }
-        .onAppear { self.refreshRegistry() }
-        .task(id: profileRequest) { await self.refreshProfile(profileRequest) }
-        .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
-            .receive(on: DispatchQueue.main)) { _ in self.refreshRegistry() }
-        .alert("Could Not Switch Gateway", isPresented: Binding(
-            get: { self.switchError != nil },
-            set: { if !$0 { self.switchError = nil } }))
-        {
-            Button { self.switchError = nil } label: {
-                Text("OK")
+        SidebarGatewayPicker(
+            presentation: SidebarGatewayPresentation(
+                registry: self.registry,
+                connectionID: self.appModel.activeGatewayConnectConfig?.effectiveStableID,
+                connectedID: self.appModel.connectedGatewayID,
+                state: GatewayStatusBuilder.build(appModel: self.appModel)),
+            fallbackName: self.fallbackName,
+            isSwitching: self.appModel.isGatewayPickerRequestInFlight ||
+                self.gatewayController.hasPendingConnectionHandoff,
+            selectGateway: self.switchGateway,
+            openSettings: self.openSettings)
+            .onAppear { self.refreshRegistry() }
+            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+                .receive(on: DispatchQueue.main)) { _ in self.refreshRegistry() }
+            .alert("Could Not Switch Gateway", isPresented: Binding(
+                get: { self.switchError != nil },
+                set: { if !$0 { self.switchError = nil } }))
+            {
+                Button { self.switchError = nil } label: {
+                    Text("OK")
+                        .font(OpenClawType.body)
+                }
+            } message: {
+                Text(verbatim: self.switchError ?? "")
                     .font(OpenClawType.body)
             }
-        } message: {
-            Text(verbatim: self.switchError ?? "")
-                .font(OpenClawType.body)
-        }
-    }
-
-    private var profileRequest: SidebarUserProfileRequest {
-        SidebarUserProfileRequest(
-            ownerID: self.appModel.chatViewModelOwnerID,
-            authorityGeneration: self.appModel.operatorAuthorityGeneration,
-            isConnected: self.appModel.isOperatorGatewayConnected)
-    }
-
-    private var visibleProfile: SidebarUserProfileSnapshot? {
-        guard let snapshot = self.profileSnapshot,
-              snapshot.request.isConnected,
-              snapshot.request == self.profileRequest
-        else { return nil }
-        return snapshot
-    }
-
-    private func profileLabel(_ profile: SidebarUserProfileSnapshot) -> some View {
-        HStack(spacing: 10) {
-            Text(verbatim: profile.initials)
-                .font(OpenClawType.avatar(size: 16))
-                .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                .frame(width: 36, height: 36)
-                .background(OpenClawSidebarPalette.elevated, in: Circle())
-                .accessibilityHidden(true)
-            Text(verbatim: profile.name)
-                .font(OpenClawType.subheadMedium)
-                .foregroundStyle(OpenClawSidebarPalette.text)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("RootTabs.Sidebar.UserProfile")
-    }
-
-    private func refreshProfile(_ request: SidebarUserProfileRequest) async {
-        guard request == self.profileRequest, !Task.isCancelled else { return }
-        self.profileSnapshot = nil
-        guard request.isConnected else { return }
-        let gateway = self.appModel.operatorSession
-        guard let route = await gateway.currentRoute(),
-              request == self.profileRequest,
-              let data = try? await gateway.request(method: "users.self", params: [:], ifCurrentRoute: route),
-              let result = try? JSONDecoder().decode(SidebarUserProfileResponse.self, from: data),
-              let name = result.profile.name
-        else { return }
-        // Identity is scoped to the admitted operator connection, including same-host account changes.
-        guard !Task.isCancelled,
-              await gateway.currentRoute() == route,
-              request == self.profileRequest
-        else { return }
-        self.profileSnapshot = SidebarUserProfileSnapshot(request: request, name: name)
     }
 
     private func refreshRegistry() {
