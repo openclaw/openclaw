@@ -21,7 +21,6 @@ import {
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
-  type RestartRecoveryOperatorSource,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
@@ -38,7 +37,6 @@ export type RestoredGatewayOperatorAuthority = {
 type QueuedRecoveryParams = {
   source: unknown;
   liveAuthority?: AdmittedRunOperatorAuthority;
-  operatorSource?: RestartRecoveryOperatorSource;
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
@@ -47,14 +45,12 @@ type QueuedRecoveryParams = {
 /** Restore owner-held saved facts at the next start, never during the admitted run. */
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
-  source?: RestartRecoveryOperatorSource;
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
 }): Promise<RestoredGatewayOperatorAuthority> {
   return restoreGatewayQueuedOperatorRecovery({
     source: { kind: "gateway", snapshot: params.snapshot },
-    operatorSource: params.source,
     agentId: params.agentId,
     context: params.context,
     assertCurrent: params.assertCurrent,
@@ -104,9 +100,7 @@ async function admitQueuedSource(
   const capturedFacts =
     captured.kind === "unavailable" && params.liveAuthority
       ? ({ kind: "live", authority: params.liveAuthority } as const)
-      : captured.kind === "gateway" && params.operatorSource
-        ? { ...captured, source: params.operatorSource }
-        : captured;
+      : captured;
   if (capturedFacts.kind === "unavailable") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }

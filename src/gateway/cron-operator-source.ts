@@ -96,7 +96,6 @@ export async function restoreCronOperatorSource(params: {
     operator = await restoreScheduledAutomationOperator({
       agentId: target?.agentId ?? source.agentId,
       source: { kind: "gateway", snapshot: source.snapshot },
-      operatorSource: source,
       context,
       assertCurrent,
     });
