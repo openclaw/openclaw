@@ -487,6 +487,16 @@ export function createUsagePage(context: ApplicationContext) {
     void loadUsage();
   }
 
+  function changeSelectedDays(selectedDays: string[]) {
+    details.timeSeries.clear();
+    setFilters({ selectedDays });
+    const [key] = usageSelectedSessions;
+    if (key && usageSelectedSessions.length === 1) {
+      void details.timeSeries.load(key);
+    }
+    refreshOverview();
+  }
+
   function applyQuery() {
     clearDebounce("queryDebounceTimer");
     setFilters({ query: filters.queryDraft });
@@ -581,21 +591,11 @@ export function createUsagePage(context: ApplicationContext) {
             refreshOverview();
           },
           onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => {
-            setFilters({
-              selectedDays: toggleUsageRangeSelection(
-                filters.selectedDays,
-                day,
-                orderedDays,
-                shiftKey,
-                "toggle",
-              ),
-            });
-            refreshOverview();
+            changeSelectedDays(
+              toggleUsageRangeSelection(filters.selectedDays, day, orderedDays, shiftKey, "toggle"),
+            );
           },
-          onClearDays: () => {
-            setFilters({ selectedDays: [] });
-            refreshOverview();
-          },
+          onClearDays: () => changeSelectedDays([]),
           onClearSessions: () => {
             usageSelectedSessions = [];
             selectedSession = null;

@@ -52,7 +52,7 @@ function formatUtcOffset(timezoneOffsetMinutes: number): string {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 }
 
-function buildSessionUsageDateParams(timeZone: "local" | "utc") {
+export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
   return timeZone === "utc"
     ? { mode: "utc" }
     : {
