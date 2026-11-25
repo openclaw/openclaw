@@ -94,6 +94,26 @@ it.each(["pinned", "ambient", "snapshot", "override"] as const)(
             }).readConfigFileSnapshot();
             expect(snapshot.valid).toBe(true);
             setRuntimeConfigSnapshot(snapshot.config, snapshot.sourceConfig);
+            const provider = baseConfig.models.providers["cost-fixture"];
+            await fs.writeFile(
+              configPath,
+              JSON.stringify({
+                ...baseConfig,
+                models: {
+                  providers: {
+                    "cost-fixture": {
+                      ...provider,
+                      models: [
+                        {
+                          ...provider.models[0],
+                          cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
+                        },
+                      ],
+                    },
+                  },
+                },
+              }),
+            );
           }
           await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
             const runtime = createTestRuntime();
