@@ -122,6 +122,31 @@ public struct OpenClawChatComposerTool: Identifiable, Equatable, Sendable {
         self.name
     }
 
+    /// The description's first sentence, whole. Connector descriptions are written for the model and run on with
+    /// instructions to it; the first sentence says what the tool does.
+    public var summary: String {
+        Self.firstSentence(of: self.description)
+    }
+
+    /// Text up to the first ".", "!" or "?" followed by a space or the end. Abbreviations ("e.g.", "i.e.", "etc.",
+    /// "vs.") don't end it, and a period inside a number has no space after it. No end means the whole text.
+    nonisolated static func firstSentence(of text: String) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let abbreviations: Set = ["e.g", "i.e", "etc", "vs", "cf"]
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            if ".!?".contains(text[index]), next == text.endIndex || text[next].isWhitespace {
+                let word = text[..<index].split(whereSeparator: { $0.isWhitespace || $0 == "(" }).last ?? ""
+                if text[index] != "." || !abbreviations.contains(word.lowercased()) {
+                    return String(text[..<next])
+                }
+            }
+            index = next
+        }
+        return text
+    }
+
     public init(
         name: String,
         label: String,

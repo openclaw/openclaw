@@ -55,4 +55,29 @@ final class ChatComposerAddRulesTests: XCTestCase {
         XCTAssertEqual(title("my_notes"), "My Notes")
         XCTAssertEqual(title("GitHub"), "GitHub")
     }
+
+    func testToolDescriptionShowsItsFirstSentenceWhole() {
+        func summary(_ text: String) -> String {
+            OpenClawChatComposerTool.firstSentence(of: text)
+        }
+        XCTAssertEqual(
+            summary("Search Mobbin for multi-step user flows (e.g. onboarding, checkout) using natural language. "
+                + "Returns evenly-spaced preview images inline along with metadata for each flow."),
+            "Search Mobbin for multi-step user flows (e.g. onboarding, checkout) using natural language.")
+        XCTAssertEqual(
+            summary("Search Mobbin for UI screens using natural language. Returns matching screens with inline "
+                + "images and metadata. When you present results to the user, ALWAYS cite each screen."),
+            "Search Mobbin for UI screens using natural language.")
+        XCTAssertEqual(
+            summary("Search Mobbin for website sections (e.g. About, Pricing, Footer) using natural language. "
+                + "Returns section images inline along with metadata."),
+            "Search Mobbin for website sections (e.g. About, Pricing, Footer) using natural language.")
+        XCTAssertEqual(
+            summary("Compare files, i.e. two versions, vs. the base etc. on macOS 14.2 at 1.5x speed. Then more."),
+            "Compare files, i.e. two versions, vs. the base etc. on macOS 14.2 at 1.5x speed.")
+        XCTAssertEqual(summary("Find code across repositories"), "Find code across repositories")
+        XCTAssertEqual(summary("Is it ready? Check first."), "Is it ready?")
+        XCTAssertEqual(summary("  "), "")
+        XCTAssertEqual(summary(""), "")
+    }
 }

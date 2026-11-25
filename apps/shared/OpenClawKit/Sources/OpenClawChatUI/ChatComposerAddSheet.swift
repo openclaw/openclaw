@@ -828,7 +828,7 @@ private struct ChatComposerConnectorPage: View {
                             }) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(verbatim: tool.label).font(OpenClawChatTypography.settingsBody)
-                                    let description = tool.description.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let description = tool.summary
                                     if !description.isEmpty {
                                         Text(verbatim: description)
                                             .font(OpenClawChatTypography.settingsFootnote)
