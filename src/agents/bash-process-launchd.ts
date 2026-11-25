@@ -3,9 +3,11 @@ import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isSupported, readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { resolveStateDir } from "../config/paths.js";
 import { DURABLE_PROCESS_LAUNCHD_LABEL_PREFIX } from "../daemon/constants.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { describeLiveProcesses } from "../process/supervisor/service-child-group-ownership.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { escapeXml } from "../shared/xml.js";
 import {
@@ -26,6 +28,9 @@ type WrapperStatus =
       exitSignal: NodeJS.Signals | null;
       reason: "exit" | "signal" | "overall-timeout" | "spawn-error";
       durationMs: number;
+      /** The command's group; wrappers from before root-exit completion omit both. */
+      pgid?: number;
+      startedAt?: number;
     };
 
 const REQUIREMENT =
@@ -109,22 +114,37 @@ async function listJob(label: string): Promise<{ pid?: number; status: number } 
   return undefined;
 }
 
-// EPERM means some process still holds the group; only ESRCH proves it empty. A group
-// recorded before the last boot is never this job's (its id may belong to another program).
+// EPERM means the process (or a group member) exists; only ESRCH proves it gone. An id
+// recorded before the last boot is never this job's (it may belong to another program).
 // Accepted edge case: an id reused within one boot after the wrapper died reads as alive.
-function groupAlive({ pgid, startedAt }: { pgid: number; startedAt: number }): boolean {
+function alive(id: number, startedAt: number): boolean {
   if (Date.now() - os.uptime() * 1000 > startedAt) {
     return false;
   }
   try {
-    process.kill(-pgid, 0);
+    process.kill(id, 0);
     return true;
   } catch (error) {
     return !hasErrnoCode(error, "ESRCH");
   }
 }
 
+/** What the command left running in its group; a process started after `endedAt` reused the id. */
+function leftovers(pgid: number, startedAt: number, endedAt: number) {
+  if (!alive(-pgid, startedAt)) {
+    return [];
+  }
+  return describeLiveProcesses((row) => {
+    if (row.pgid !== pgid) {
+      return false;
+    }
+    const identity = isSupported() ? readProcessIdentity(row.pid) : null;
+    return !identity || identity.startTimeMicros / 1000 <= endedAt;
+  });
+}
+
 function exited(status: Extract<WrapperStatus, { phase: "exited" }>): DurableProcessObservation {
+  const { pgid, startedAt } = status;
   return {
     state: "exited",
     exitCode: status.exitCode,
@@ -132,6 +152,10 @@ function exited(status: Extract<WrapperStatus, { phase: "exited" }>): DurablePro
     reason: status.reason,
     result: status.reason,
     durationMs: status.durationMs,
+    survivors:
+      pgid === undefined || startedAt === undefined
+        ? []
+        : leftovers(pgid, startedAt, startedAt + status.durationMs),
   };
 }
 
@@ -151,9 +175,10 @@ async function readDurableProcess(label: string): Promise<DurableProcessObservat
     return { state: "running", pid: job.pid };
   }
   if (status?.phase === "running") {
-    // The wrapper is gone (for example SIGKILL), so check the group it recorded at start.
-    // A wrapper first seen in this read may have finished between the reads; read again.
-    return before?.phase !== "running" || groupAlive(status)
+    // The wrapper is gone (for example SIGKILL), so check the command it recorded at start
+    // (the group leader). A wrapper first seen in this read may have finished between the
+    // reads; read again.
+    return before?.phase !== "running" || alive(status.pgid, status.startedAt)
       ? { state: "running" }
       : {
           state: "exited",
@@ -162,6 +187,7 @@ async function readDurableProcess(label: string): Promise<DurableProcessObservat
           reason: "spawn-error",
           result: "supervisor-lost",
           note: LOST_NOTE,
+          survivors: leftovers(status.pgid, status.startedAt, Date.now()),
         };
   }
   if (!job) {

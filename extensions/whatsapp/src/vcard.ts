@@ -4,7 +4,7 @@ export function parseVcard(vcard?: string) {
   if (!vcard) {
     return { phones: [] };
   }
-  const lines = vcard.split(/\r?\n/);
+  const lines = vcard.replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
   let nameFromN: string | undefined;
   let nameFromFn: string | undefined;
   const phones: string[] = [];
@@ -26,7 +26,15 @@ export function parseVcard(vcard?: string) {
     if (!baseKey || !ALLOWED_VCARD_KEYS.has(baseKey)) {
       continue;
     }
-    const value = rawValue.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
+    // Consume escape pairs before interpreting bare semicolons as N component separators.
+    const value = rawValue
+      .replace(/\\[\\,;nN]|;/g, (token) => {
+        if (token === ";") {
+          return baseKey === "N" ? " " : token;
+        }
+        return token === "\\n" || token === "\\N" ? " " : token.slice(1);
+      })
+      .trim();
     if (!value) {
       continue;
     }
@@ -58,5 +66,5 @@ function normalizeVcardKey(key: string): string | undefined {
 }
 
 function normalizeVcardName(value: string): string {
-  return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
+  return value.replace(/\s+/g, " ").trim();
 }

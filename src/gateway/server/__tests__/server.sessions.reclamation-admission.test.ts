@@ -37,7 +37,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             agentId: "main",
             path: reclamation.invalidateAtStart,
           }).db.exec("DROP INDEX idx_agent_transcript_message_idempotency");
-          invalidateOpenClawAgentDatabaseValidation(reclamation.invalidateAtStart);
+          invalidateOpenClawAgentDatabaseValidation(
+            reclamation.invalidateAtStart,
+            "a maintenance write",
+          );
           reclamation.invalidateAtStart = undefined;
         }
         const gate =
@@ -242,7 +245,7 @@ test("sessions.delete rejects revoked authority before repair", async ({ signal 
   const originalLeases = readLeases();
   expect(originalLeases).toHaveLength(1);
   database.db.exec("DROP INDEX idx_agent_transcript_message_idempotency");
-  invalidateOpenClawAgentDatabaseValidation(database.path);
+  invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
   const readRepairIndex = () =>
     database.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")

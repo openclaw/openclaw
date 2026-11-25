@@ -522,11 +522,15 @@ export type AgentEvent =
   | { type: "agent_end"; messages: AgentMessage[] }
   // Turn lifecycle - a turn is one assistant response + any tool calls/results
   | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+  | { type: "turn_end"; message: AssistantMessage; toolResults: ToolResultMessage[] }
   // Message lifecycle - emitted for user, assistant, and toolResult messages
   | { type: "message_start"; message: AgentMessage }
   // Only emitted for assistant messages during streaming
-  | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+  | {
+      type: "message_update";
+      message: AssistantMessage;
+      assistantMessageEvent: AssistantMessageEvent;
+    }
   | { type: "message_end"; message: AgentMessage }
   | {
       type: "tool_execution_start";

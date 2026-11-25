@@ -500,10 +500,11 @@ export function renderPluginCapabilitySection(
   title: string,
   values: PluginCapabilityRow[],
   icon?: () => JSX.Element,
+  description?: string,
 ): JSX.Element {
   return values.length ? (
     <div class="plugin-capabilities">
-      <SettingsSection title={title} carapace>
+      <SettingsSection title={title} description={description} carapace>
         <For each={values}>
           {(value) => {
             const content = (chevron: boolean) => (
@@ -645,7 +646,8 @@ export function renderPluginContentCapabilities(params: {
   uiCapabilities?: readonly PluginUiCapability[];
   skillsSection?: JSX.Element;
   skills: Array<{ name: string; description?: string }>;
-  tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
+  tools: PluginCapabilityRow[];
+  toolsDescription?: string;
   mcpServers: readonly string[];
   mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
   mcpDescription?: string;
@@ -667,9 +669,14 @@ export function renderPluginContentCapabilities(params: {
         renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
           <Icon name="bookOpenText" />
         ))}
-      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
-        <Icon name="wrench" />
-      ))}
+      {renderPluginCapabilitySection(
+        t("pluginsPage.detailTools"),
+        params.tools,
+        () => (
+          <Icon name="wrench" />
+        ),
+        params.toolsDescription,
+      )}
       {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails, params.mcpDescription)}
     </>
   );

@@ -74,6 +74,8 @@ presentation does not resume the run or recover an answer that was never saved.
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
+Before you archive or delete a session with enabled linked automations, the
+confirmation shows their names and any available schedules in read-only cards.
 
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
@@ -107,9 +109,11 @@ for messages, a calendar clock for scheduled jobs, and an image for image genera
 Shared tools keep their semantic icons regardless of the provider. Tools owned by
 installed third-party plugins may show the plugin logo when the Gateway has
 confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
-keep their monochrome activity icons. Missing or unreadable logos fall back to
-the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
-icon. Unknown publisher metadata does not enable branding.
+keep their monochrome activity icons. When an installed, non-bundled plugin
+owns an MCP tool but provides no activity artwork for it, chat can use the
+plugin's icon instead, even for an OpenClaw-published service wrapper. Missing
+or unreadable artwork falls back to the normal tool glyph; unknown tools use a
+puzzle icon.
 
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.
@@ -122,8 +126,10 @@ and on to retry; the error’s details retain the technical failure.
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
-Reloading history preserves the recorded purpose. A saved call without a loaded
-result shows **No result available** rather than counting as an unknown outcome.
+Reloading history preserves the recorded purpose. In imported Claude CLI history,
+a tool result without an error flag counts as completed, just as it does live.
+A saved call without a loaded result shows **No result available** rather than
+counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;
 the run being active alone does not. Refreshing the same session retains those
 facts until history records an outcome. Partial output alone does not finish a
@@ -1017,11 +1023,11 @@ Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when
 
 Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up. A run-error banner remains available when its durable thread notice has not loaded; once that notice is present, the duplicate banner is hidden.
 
-Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
+Other chat error banners, including cloud runner startup failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
 When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
 
-Run-error banners offer **Refresh** to reload the conversation without resending a message or replacing your draft. If the conversation changes before a message can run and dispatch cannot verify a safe continuation, the banner explains that the message did not run and asks you to refresh before sending it again. The original diagnostic remains under **Details**. OpenClaw does not automatically redirect that message into a replacement conversation.
+When a reply fails and its thread notice is unavailable, the card above the composer shows the redacted error on one line, cut off with an ellipsis when it does not fit. It has no details or expansion control. **Refresh** reloads the conversation without resending a message or replacing your draft; **X** dismisses the card. Sign-in failures offer **Open Models**, and busy-state failures offer **Check status**. Reporting a bug remains available from Help. If the conversation changes before a message can run, OpenClaw does not automatically redirect that message into a replacement conversation.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
@@ -1520,7 +1526,10 @@ Closing the sheet hides it without clearing the conversation or its draft.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the
 space left after navigation, split panes, and other panels—not the window width
-alone. The column scrolls independently and never covers the conversation.
+alone. Details and the Home agent sidebar can both stay open if the remaining
+chat pane fits its default reading column and Details. The column scrolls
+independently and never covers the conversation. If the session has no details
+to show, the open panel says so instead of leaving an empty column.
 
 When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly

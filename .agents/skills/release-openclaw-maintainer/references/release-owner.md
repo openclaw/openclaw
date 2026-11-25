@@ -111,9 +111,11 @@ Make intake explicit:
   audit lanes. Serialize changes to the canonical branch and record source and
   destination commits plus focused proof before taking the next group. Finish
   the complete inventory and resolve the final selection before freezing C/Q.
-  If the operator requests early diagnostic validation while more backports arrive,
-  record that it is provisional; it qualifies publication only if the final
-  candidate and all required inputs remain exactly unchanged and eligible.
+  If the operator requests an early run during intake, record it as provisional
+  and select `validation_purpose=diagnostic`. For publication, use a parent
+  admitted with `validation_purpose=publish` for the frozen candidate and
+  publication selection. Follow the [evidence reuse rules](../../../../docs/reference/full-release-validation/evidence.md)
+  for eligible prior work.
 - **Frozen/validating:** new opportunities normally queue for the next release;
   only confirmed blockers enter under the shared release boundaries. An explicit
   operator instruction may reopen intake for named backports. Record which

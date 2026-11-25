@@ -33,8 +33,13 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
-import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
+import {
+  gitIsAncestor,
+  inspectCandidateChangelogRange,
+  validateCandidateChangelog,
+} from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
@@ -52,6 +57,7 @@ import {
 import {
   PluginSdkApiAcknowledgementError,
   findPluginSdkApiReleaseNoteOmissions,
+  isPluginSdkApiAcknowledgement,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -96,6 +102,7 @@ type PreflightTarballs = Partial<Record<"corePackageTarballs" | "dependencyTarba
 type RequiredCandidateFlag = { flag: string; value: string; reason: string };
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
+const CANDIDATE_PARALLELS_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
@@ -178,7 +185,7 @@ Options:
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --skip-dispatch                    Require an admitted Full Release Validation run.
   --skip-local-generated-check        Do not run local generated release baseline checks.
-  --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
+  --run-parallels                    Force local Parallels smoke with an early host preflight; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
   --parallels-registry-package-artifact <dir>
                                       Add a verified plugin npm preflight artifact directory. Repeatable.
@@ -330,9 +337,11 @@ export function parseArgs(argv: string[]) {
   }
   if (
     options.pluginSdkApiAcknowledgement &&
-    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+    !isPluginSdkApiAcknowledgement(options.pluginSdkApiAcknowledgement)
   ) {
-    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
+    throw new Error(
+      "--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest, optionally followed by @<qualified-predecessor-tag>",
+    );
   }
   options.workflowRef ||= "main";
   if (options.workflowRef !== "main") {
@@ -1461,17 +1470,37 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
+      // Only these workflow paths can supply recovery candidates. The strict
+      // verifier below authenticates the exact recovery operation and producer.
+      const workflowPath =
+        typeof info.workflowPath === "string" ? info.workflowPath.split("@", 1)[0] : undefined;
+      const isFullReleaseValidation = expected.workflowName === "Full Release Validation";
       const receiptRecovery =
-        expected.workflowName === "Full Release Validation" &&
-        info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
-      if (info.workflowName !== expected.workflowName && !receiptRecovery) {
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
+      const sealedRecovery =
+        isFullReleaseValidation &&
+        workflowPath === ".github/workflows/openclaw-release-prepare.yml";
+      const protectedRecoveryTag =
+        sealedRecovery &&
+        PUBLISH_TOOLING_TAG_PATTERN.test(info.headBranch ?? "") &&
+        info.headBranch?.startsWith(`release-publish/${info.headSha.slice(0, 12)}-`);
+      if (
+        info.workflowName !== expected.workflowName &&
+        !receiptRecovery &&
+        !(sealedRecovery && (info.headBranch === "main" || protectedRecoveryTag))
+      ) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
       const acceptsPinnedWorkflow =
         expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
-      if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
+      if (
+        info.headBranch !== expected.workflowRef &&
+        !acceptsPinnedWorkflow &&
+        !protectedRecoveryTag
+      ) {
         throw new Error(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
@@ -1557,7 +1586,6 @@ export function buildPrepareCommand(
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
@@ -1687,6 +1715,8 @@ export function candidateParallelsArgs(
     "exec",
     "tsx",
     join(candidateRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
+    "--provider",
+    CANDIDATE_PARALLELS_PROVIDER,
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1699,6 +1729,46 @@ export function candidateParallelsArgs(
   ];
 }
 
+function candidateParallelsLoginPrefix() {
+  // Login shells can replace the invoking Node and load the smoke credentials.
+  return [
+    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(dirname(process.execPath))}:"$PATH";`,
+  ];
+}
+
+function preflightCandidateParallels() {
+  // P can check the host before FRV identifies Q. Q still selects the exact
+  // guests and snapshots and performs the actual smoke against C's tarballs.
+  const check = `
+import { detectParallelsHostIp } from './scripts/e2e/parallels/host-server.ts';
+import { listVmNames } from './scripts/e2e/parallels/parallels-vm.ts';
+import { resolveProviderAuth } from './scripts/e2e/parallels/provider-auth.ts';
+if (listVmNames().length === 0) throw new Error('no Parallels guests are registered');
+if (!detectParallelsHostIp()) throw new Error('failed to detect Parallels host IP');
+resolveProviderAuth({ provider: '${CANDIDATE_PARALLELS_PROVIDER}' });
+`;
+  const command = [
+    ...candidateParallelsLoginPrefix(),
+    "exec",
+    ...[process.execPath, "--import", "./scripts/tsx.mjs", "--input-type=module", "-e", check].map(
+      shellQuote,
+    ),
+  ].join(" ");
+  const result = spawnSync("bash", ["-lc", command], {
+    cwd: TOOLING_ROOT,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  if (result.status !== 0) {
+    const reason =
+      result.stderr?.trim() || result.error?.message || `exit ${result.status ?? result.signal}`;
+    throw new Error(
+      `Candidate Parallels preflight failed: ${reason}. Run from a configured Parallels host with smoke credentials, or, if the local smoke has been explicitly waived, rerun with --skip-parallels. Required hosted validation is unchanged.`,
+    );
+  }
+}
+
 export function candidateParallelsShellCommand(
   tarballPath: string,
   timeoutBin: string,
@@ -1707,12 +1777,8 @@ export function candidateParallelsShellCommand(
   macosSnapshotHint = "",
   candidateRoot = process.cwd(),
 ) {
-  // Login shells can replace the candidate's supported Node with ambient host Node.
-  // Keep the invoking Node first so pnpm and npm use the validated runtime.
-  const nodeBinDir = dirname(process.execPath);
   return [
-    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
-    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
+    ...candidateParallelsLoginPrefix(),
     "exec",
     shellQuote(timeoutBin),
     "--foreground",
@@ -1837,8 +1903,10 @@ async function runTelegramIfNeeded(
   if (coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
     const waived = qualificationManifest.waivers?.some(
       (waiver: JsonRecord) =>
-        waiver.jobName ===
-        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+        waiver.childRole === "releaseChecksCandidate" &&
+        (waiver.jobName === undefined ||
+          waiver.jobName ===
+            "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"),
     );
     if (waived) {
       return { status: "waived", providerMode: "mock-openai" };
@@ -1980,6 +2048,9 @@ async function main() {
     toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
     workflowRef: options.workflowRef,
   });
+  if (!options.skipParallels) {
+    preflightCandidateParallels();
+  }
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const hasRetainedRequest = existsSync(join(options.outputDir, "frv-request.json"));
@@ -2060,7 +2131,7 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText, changelogPaths } =
     validateCandidateChangelog({
       rootDir: targetRoot,
       repository: options.repo,
@@ -2200,7 +2271,10 @@ async function main() {
     runId: options.fullReleaseRunId,
     runAttempt: fullRun.runAttempt,
     sourceSha: targetSha,
-    toolingSha: fullRun.headSha,
+    toolingSha:
+      retainedPublicationArtifactSource(fullManifest)?.workflow.sha ??
+      fullValidationEvidence.qualification?.qualificationSha ??
+      fullRun.headSha,
     outputDir: npmDir,
     token: run("gh", ["auth", "token"], { capture: true }).trim(),
   });
@@ -2441,6 +2515,13 @@ async function main() {
   if (prepareCommand) {
     publishPreflight.command = prepareCommand;
   }
+  const candidateRange = inspectCandidateChangelogRange({
+    rootDir: targetRoot,
+    repository: options.repo,
+    recordedTarget: releaseNotesProvenance.target,
+    targetSha,
+    changelogPaths,
+  });
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2469,7 +2550,7 @@ async function main() {
       fullReleaseValidation: fullArtifactName,
     },
     releaseNotesCheck,
-    releaseNotesProvenance,
+    releaseNotesProvenance: { ...releaseNotesProvenance, candidateRange },
     androidVersionCheck,
     localGeneratedCheck,
     tarball: {
@@ -2513,7 +2594,7 @@ async function main() {
       }`,
       `- full release artifact: ${fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
-      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`,
+      `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target}). ${candidateRange.summary}`,
       `- ${
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
@@ -2554,6 +2635,7 @@ async function main() {
   );
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  console.log(candidateRange.summary);
   console.log(publishPreflightTable);
   if (publishPreflight.failed) {
     throw new Error("Publish preflight failed; resolve the reported gates before publication.");

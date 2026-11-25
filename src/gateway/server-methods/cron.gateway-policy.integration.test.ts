@@ -101,18 +101,14 @@ afterEach(() => {
 });
 
 async function withModelTurn(
-  source: "control-ui-admin" | "channel-owner",
+  source: "operator" | "channel-owner",
   run: (identity: AgentRuntimeIdentity) => Promise<void>,
 ) {
   const runId = "automation-policy-model";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const capability = expectDefined(
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "local" },
-      source === "channel-owner" ? { source, isCurrent: () => true } : { source },
-    ),
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source }),
     "model authority",
   );
   const identity: AgentRuntimeIdentity = {
@@ -222,7 +218,7 @@ async function withCron(run: (fixture: ReturnType<typeof createPolicyFixture>) =
 }
 
 describe("Gateway automation policy", () => {
-  it.each(["control-ui-admin", "channel-owner"] as const)(
+  it.each(["operator", "channel-owner"] as const)(
     "keeps %s model calls scoped and preserves ordinary updates",
     async (source) => {
       await withCron(async ({ cron, tool, invoke, readJobs }) => {
@@ -352,7 +348,7 @@ describe("Gateway automation policy", () => {
         const before = await readJobs();
         // Keep admin grants to prove command policy independently of caller-scope filtering.
         setRuntimeConfigSnapshot(commandRestricted);
-        await withModelTurn("control-ui-admin", async (identity) => {
+        await withModelTurn("operator", async (identity) => {
           const grant = expectDefined(
             bindCronManagementGrant(identity.operationalRunInstance.runId),
             "management grant",
@@ -374,7 +370,7 @@ describe("Gateway automation policy", () => {
       const job = await cron.add(commandJob);
       const before = await readJobs();
       setRuntimeConfigSnapshot(commandRestricted);
-      await withModelTurn("control-ui-admin", async (identity) => {
+      await withModelTurn("operator", async (identity) => {
         // The tool resolves the stored kind before sending a typed RPC payload.
         await expect(
           tool(identity).execute("kindless", {
@@ -392,7 +388,7 @@ describe("Gateway automation policy", () => {
     await withCron(async ({ cron, tool, invoke, readJobs, commandRunner }) => {
       const job = await cron.add(commandJob);
       setRuntimeConfigSnapshot(commandRestricted);
-      await withModelTurn("control-ui-admin", async (identity) => {
+      await withModelTurn("operator", async (identity) => {
         const create = await invoke("cron.add", commandJob, identity, ["operator.admin"]);
         expectDenied(create, "command automations");
         await expect(
@@ -424,7 +420,7 @@ describe("Gateway automation policy", () => {
     "constructs tools using the %s",
     async (_name, config, startup, commandAllowed, managementAllowed) => {
       setRuntimeConfigSnapshot(startup);
-      await withModelTurn("control-ui-admin", async (identity) => {
+      await withModelTurn("operator", async (identity) => {
         const automation = createCronTool({ config, runId: identity.operationalRunInstance.runId });
         expect(
           Value.Check(automation.parameters, {

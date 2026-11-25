@@ -310,7 +310,6 @@ export function resolveSessionCreationCommitGuard(
     assertDelegationCurrent?.();
     if (hasSelection) {
       prepared.assertPreparedTargetCurrent();
-      prepared.readOperatorAuthority()?.assertCurrent();
       const error = prepared.validateSelection();
       if (error) {
         throw new Error(error.message);

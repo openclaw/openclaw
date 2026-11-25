@@ -22,7 +22,7 @@ import {
 import { planRemember, claimPayload } from "./remember.js";
 import { withdrawnIds, eligible } from "./retrieval.js";
 import { StorageLifecycle } from "./storage-lifecycle.js";
-import { canonical, scopeKey, type Prepared } from "./storage-types.js";
+import { canonical, scopeKey, type Plan, type Prepared } from "./storage-types.js";
 import { digest } from "./vault.js";
 
 /** Why relink chose a subject, recorded as the annotation reason. */
@@ -257,8 +257,57 @@ export class StorageIngestion extends StorageLifecycle {
       scope = scopeKey(access.scope),
       intent = digest(canonical({ operation: "remember", input }));
     const prior = this.store.withDatabase((db) => this.row(db, scope, requestId));
+    let legacyReceipt: Receipt | undefined;
     if (prior) {
-      this.checkReplay(prior, intent);
+      const expected = prior.intent.startsWith("remember:") ? "remember:" + intent : intent;
+      if (prior.intent !== expected) {
+        // Older remember calls persisted a batch digest. Prove that exact lineage:
+        // modern main receipts are also unprefixed, but hash the full remember input.
+        const receipt: Receipt = JSON.parse(prior.receipt),
+          publication: Plan = JSON.parse(prior.plan),
+          records = publication.records ?? [publication.record];
+        const items = (receipt.items ?? []).flatMap(({ key, id }) => {
+          const item = /^i\d+$/.test(key) ? input.items[Number(key.slice(1))] : undefined,
+            record = records.find((r) => r.id === id),
+            evidence = record?.metadata.evidence?.[0];
+          return item && record && evidence
+            ? [
+                {
+                  key,
+                  kind: "claim" as const,
+                  input: claimPayload(
+                    item,
+                    {
+                      subject: "none",
+                      subjectId: record.metadata.entities?.[0],
+                    },
+                    {
+                      ...evidence,
+                      sha256: digest(input.excerpt),
+                      end_line: input.excerpt.split(/\r?\n/).length,
+                    },
+                    input.attribution,
+                  ),
+                },
+              ]
+            : [];
+        });
+        this.checkReplay(
+          prior,
+          digest(
+            canonical({
+              operation: "batch",
+              input: {
+                requestId,
+                expectedVaultId: this.config.vaultId,
+                expectedOntologyFingerprint: receipt.ontologyFingerprint,
+                items,
+              },
+            }),
+          ),
+        );
+        legacyReceipt = receipt;
+      }
       if (prior.state === "accepted") {
         // An accepted remember blocks its own catalog read; resolve subjects after publication.
         this.resume(access, requestId);
@@ -269,8 +318,34 @@ export class StorageIngestion extends StorageLifecycle {
         withdrawn = this.store.withDatabase((db) =>
           withdrawnIds(db, this.retrievalBinding(access)),
         );
+      let active = eligible(data, withdrawn, false),
+        plannedInput = input;
+      if (legacyReceipt) {
+        // Replay the historical text/kind/subject decision through the same planner.
+        // Suppressed assertion fields were never retained; do not publish them now.
+        const assertion = {
+          origin: undefined,
+          assertion_origin: undefined,
+          occurred_at: undefined,
+          due_at: undefined,
+          valid_from: undefined,
+          valid_until: undefined,
+          expires_at: undefined,
+          owner: undefined,
+        };
+        const published = new Set(legacyReceipt.items?.map((item) => item.id));
+        active = active
+          .toSorted((a, b) => Number(published.has(b.id)) - Number(published.has(a.id)))
+          .map((record) =>
+            Object.assign({}, record, { metadata: Object.assign({}, record.metadata, assertion) }),
+          );
+        plannedInput = {
+          ...input,
+          items: input.items.map((item) => Object.assign({}, item, assertion)),
+        };
+      }
       return {
-        plan: planRemember(data, eligible(data, withdrawn, false), input, withdrawn),
+        plan: planRemember(data, active, plannedInput, withdrawn),
         fingerprint: data.ontology?.fingerprint,
       };
     });

@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -7,6 +6,7 @@ import {
   MAX_MENTIONABLE_USERS,
   errorShape,
   type ErrorShape,
+  type SessionMemberPermissionLevel,
   type MentionableUser,
   type UsersMentionableParams,
   type UsersMentionableResult,
@@ -15,18 +15,17 @@ import type { SessionEntry } from "../config/sessions.js";
 import { updateSessionProfileInvolvementAsync } from "../config/sessions/session-accessor.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionParticipantRecord } from "../config/sessions/session-membership-facts.types.js";
-import type { SessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
-import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
 } from "./current-user-profile-display.js";
+import { prepareHumanMentionInvitation } from "./human-mention-invitation.js";
 import type { MentionInbox } from "./mention-inbox.contracts.js";
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
@@ -39,6 +38,7 @@ import { authenticatedProfileUnavailableError } from "./server-methods/gateway-c
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { isSessionCreatorProfile } from "./session-creator.js";
+import { resolveSessionMemberAccess } from "./session-member-access.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import {
@@ -46,7 +46,6 @@ import {
   prepareSessionSharingRead,
 } from "./session-sharing-target-read.js";
 import {
-  createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
   prepareSessionSharing,
   resolveSessionVisibility,
@@ -55,12 +54,16 @@ import {
 const MAX_DIRECTORY_PROFILES = 10_000;
 
 type MentionProfile = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
-export type MentionSharingTarget = SessionSharingTarget & { membership?: ReadonlySet<string> };
+export type MentionSharingTarget = SessionSharingTarget & {
+  membership?: ReadonlySet<string>;
+  memberAccess?: Readonly<Record<string, SessionMemberPermissionLevel>>;
+};
 type MentionTarget = {
   agentId: string;
   sessionKey?: string;
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
   membership?: ReadonlySet<string>;
+  memberAccess?: Readonly<Record<string, SessionMemberPermissionLevel>>;
 };
 type MentionReader = {
   profile: MentionProfile;
@@ -216,12 +219,19 @@ export function createHumanMentionPolicy(params: {
     if (scopes.includes(ADMIN_SCOPE)) {
       return profile;
     }
-    const entryFilter = createProfileSessionEntryFilter({
-      profileId: profile.profileId,
-      sessionCap: policy?.sessions.others,
-      membership: target.membership,
+    const access = resolveSessionMemberAccess({
+      policy,
+      scopes,
+      creator: isSessionCreatorProfile(target.entry.createdActor, profile.profileId),
+      admin: false,
+      member: {
+        present: target.membership?.has(profile.profileId) ?? false,
+        access: target.memberAccess?.[profile.profileId],
+      },
+      visibility: resolveSessionVisibility(target.entry),
+      incognito: target.entry.incognito,
     });
-    return entryFilter(target.sessionKey, target.entry) ||
+    return access.canRead ||
       (canInvite &&
         policy?.sessions.others === "invited" &&
         resolveSessionVisibility(target.entry) !== "draft")
@@ -252,6 +262,7 @@ export function createHumanMentionPolicy(params: {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,
         membership: resolved.membership,
+        memberAccess: resolved.memberAccess,
         entry: {
           createdActor: resolved.entry.createdActor,
           visibility: resolved.entry.visibility,
@@ -316,6 +327,7 @@ export function createHumanMentionPolicy(params: {
             sessionKey: target.canonicalKey,
             entry: target.entry,
             membership: target.membership,
+            memberAccess: target.memberAccess,
           },
           cfg,
         );
@@ -330,77 +342,19 @@ export function createHumanMentionPolicy(params: {
   return {
     prepareInvitation(
       this: void,
-      ...[client, target, mentions]: Parameters<MentionInbox["prepareInvitation"]>
-    ) {
-      const select = (): SessionMentionInvitation | undefined => {
-        if (!active) {
-          throw new Error("Mention invitation authority is closed");
-        }
-        const cfg = params.getRuntimeConfig();
-        const candidates = mentions.flatMap((mention) => {
-          const profile = readProfile(mention.profileId);
-          if (!profile) {
-            throw new Error("Mention recipient changed; select the recipients again");
-          }
-          return resolveOperatorRolePolicyForProfile(profile.profileId, cfg)?.sessions.others ===
-            "invited"
-            ? [{ ...mention, profile }]
-            : [];
-        });
-        if (!candidates.length) {
-          return undefined;
-        }
-        if (!target.entry) {
-          throw new Error("Mention invitation requires an admitted session");
-        }
-        const requester = identify(client, cfg);
-        if (!requester.ok) {
-          throw new Error(requester.error.message);
-        }
-        const selectedTarget = { ...target, entry: target.entry };
-        if (!requester.value.canInvite(selectedTarget)) {
-          return undefined;
-        }
-        const profiles = new Map<string, SessionMentionInvitation["profiles"][number]>();
-        for (const { profile, token } of candidates) {
-          if (!recipientProfile(profile.profileId, selectedTarget, cfg, true)) {
-            throw new Error("Mention recipient changed; select the recipients again");
-          }
-          const previous = profiles.get(profile.profileId);
-          profiles.set(profile.profileId, {
-            profileId: profile.profileId,
-            aliases: [...readResidentUserProfileAliases(profile.profileId)].toSorted(),
-            tokens: [...new Set([...(previous?.tokens ?? []), token])],
-          });
-        }
-        return {
-          addedBy: requester.value.profile.profileId,
-          expectedEntry: {
-            sessionId: target.entry.sessionId,
-            createdActor: target.entry.createdActor,
-            visibility: target.entry.visibility,
-            incognito: target.entry.incognito,
-          },
-          profiles: [...profiles.values()],
-        };
-      };
-      const invitation = select();
-      return invitation
-        ? {
-            invitation,
-            assertCurrent() {
-              const current = select();
-              // The store owns transcript/view preconditions; this hook checks current authority.
-              if (
-                !current ||
-                current.addedBy !== invitation.addedBy ||
-                !isDeepStrictEqual(current.profiles, invitation.profiles)
-              ) {
-                throw new Error("Mention invitation is not authorized");
-              }
-            },
-          }
-        : undefined;
+      ...args: Parameters<MentionInbox["prepareInvitation"]>
+    ): ReturnType<MentionInbox["prepareInvitation"]> {
+      return prepareHumanMentionInvitation(
+        {
+          getRuntimeConfig: params.getRuntimeConfig,
+          readRecipientPolicy: resolveOperatorRolePolicyForProfile,
+          isActive: () => active,
+          readProfile,
+          identify,
+          recipientProfile,
+        },
+        ...args,
+      );
     },
     async prepareContext(
       input: UsersMentionableParams,
@@ -434,7 +388,13 @@ export function createHumanMentionPolicy(params: {
         return {
           readTarget: () => {
             const current = prepared.readCurrent(params.getRuntimeConfig());
-            return current.target && { ...current.target, membership: current.membership };
+            return (
+              current.target && {
+                ...current.target,
+                membership: current.membership,
+                memberAccess: current.memberAccess,
+              }
+            );
           },
           readRanking: () => {
             const current = prepared.readCurrent(params.getRuntimeConfig());
@@ -463,33 +423,34 @@ export function createHumanMentionPolicy(params: {
       if (!agent.ok || isIncognitoSessionKey(input.sessionKey)) {
         return;
       }
-      const select = () => {
-        const cfg = params.getRuntimeConfig();
-        const current = facts.readCurrent(cfg);
-        const target = current.target && { ...current.target, membership: current.membership };
-        const profileIds = involvedProfiles(input, target, cfg);
-        const requester = client && identify(client, cfg);
-        if (
-          client &&
-          (!target ||
-            !requester?.ok ||
-            requester.value.profile.profileId !== readProfile(input.senderProfileId)?.profileId ||
-            !requester.value.canRead({
-              agentId: target.agentId,
-              sessionKey: target.canonicalKey,
-              entry: target.entry,
-              membership: current.membership,
-            }) ||
-            input.recipientProfileIds.some((id) => {
-              const profile = readProfile(id);
-              return !profile || !profileIds.includes(profile.profileId);
-            }))
-        ) {
-          throw new Error("Committed mention recipients or sender authority changed");
-        }
-        return { target, profileIds };
+      const current = facts.readCurrent(initialCfg);
+      const target = current.target && {
+        ...current.target,
+        membership: current.membership,
+        memberAccess: current.memberAccess,
       };
-      const { target, profileIds } = select();
+      const profileIds = involvedProfiles(input, target, initialCfg);
+      const requester = client && identify(client, initialCfg);
+      if (
+        client &&
+        (!target ||
+          !requester?.ok ||
+          requester.value.profile.profileId !== readProfile(input.senderProfileId)?.profileId ||
+          !requester.value.canRead({
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            entry: target.entry,
+            membership: current.membership,
+          }) ||
+          input.recipientProfileIds.some((id) => {
+            const profile = readProfile(id);
+            return !profile || !profileIds.includes(profile.profileId);
+          }))
+      ) {
+        throw new Error(
+          "Committed mention recipients or sender are unavailable. Retry the request.",
+        );
+      }
       if (!target || !profileIds.length) {
         return;
       }
@@ -501,9 +462,8 @@ export function createHumanMentionPolicy(params: {
           profileIds,
           change: { kind: "mention", source: input.committedSource },
           assertCurrent() {
-            const current = select();
-            if (!active || !isDeepStrictEqual(current.profileIds, profileIds)) {
-              throw new Error("Committed mention authority changed before involvement commit");
+            if (!active) {
+              throw new Error("Mention policy closed. Retry the request.");
             }
           },
         },
@@ -573,6 +533,10 @@ export function createHumanMentionPolicy(params: {
       if (eligibleDirectory?.key !== key) {
         const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg, canInvite);
+          const policy = candidate && resolveOperatorRolePolicyForProfile(candidate.profileId, cfg);
+          const ceiling =
+            policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined;
+          const levels = ["read", "suggest", "send"] as const;
           return candidate
             ? [
                 {
@@ -584,6 +548,9 @@ export function createHumanMentionPolicy(params: {
                   avatarUrl: candidate.avatarUrl,
                   logins,
                   online: false,
+                  ...(canInvite && ceiling
+                    ? { inviteAccessOptions: levels.slice(0, levels.indexOf(ceiling) + 1) }
+                    : {}),
                 },
               ]
             : [];
@@ -622,6 +589,7 @@ export function createHumanMentionPolicy(params: {
             : candidate.displayName,
         avatarUrl: candidate.avatarUrl,
         online: online.has(candidate.profileId),
+        inviteAccessOptions: canInvite ? candidate.inviteAccessOptions : undefined,
       }));
       const ranking = prepared?.readRanking?.();
       const speakers = new Map<string, number>();

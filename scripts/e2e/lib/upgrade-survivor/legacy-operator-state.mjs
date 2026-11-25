@@ -97,24 +97,34 @@ function approvalsCommand() {
 }
 
 export function seedLegacyOperatorState() {
-  // Published baselines expose either the retired boolean or the later mode.
-  // Read their schema before authoring settings; never retry a rejected write.
+  // Use the installed baseline's schema to select both the owner and opt-out field.
   const schema = cli(["config", "schema"], "legacy-operator-config-schema", { json: true });
-  const autonomous =
-    schema.properties?.skills?.properties?.workshop?.properties?.autonomous?.properties ?? {};
+  const coreAutonomous =
+    schema.properties?.skills?.properties?.workshop?.properties?.autonomous?.properties;
+  const pluginAutonomous =
+    schema.properties?.plugins?.properties?.entries?.properties?.["skill-workshop"]?.properties
+      ?.config?.properties?.autonomous?.properties;
+  const workshopInPlugin = Boolean(pluginAutonomous);
+  assert.notEqual(
+    Boolean(coreAutonomous),
+    workshopInPlugin,
+    "legacy operator Workshop schema must expose exactly one config location",
+  );
+  const autonomous = pluginAutonomous ?? coreAutonomous;
   const hasEnabled = Object.hasOwn(autonomous, "enabled");
   assert.notEqual(
     hasEnabled,
     Object.hasOwn(autonomous, "mode"),
     "legacy operator Workshop schema must expose exactly one autonomous field",
   );
+  const mode = autonomous.mode;
   assert(
     hasEnabled
       ? autonomous.enabled?.type === "boolean"
-      : Array.isArray(autonomous.mode?.anyOf) &&
-          autonomous.mode.anyOf.some(
-            (option) => option.type === "string" && option.const === "off",
-          ),
+      : workshopInPlugin
+        ? mode?.type === "string" && Array.isArray(mode.enum) && mode.enum.includes("off")
+        : Array.isArray(mode?.anyOf) &&
+          mode.anyOf.some((option) => option.type === "string" && option.const === "off"),
     "legacy operator Workshop schema does not support an explicit opt-out",
   );
   const workshopAutonomousField = hasEnabled ? "enabled" : "mode";
@@ -167,7 +177,10 @@ export function seedLegacyOperatorState() {
   set("agents.defaults.model.primary", MODEL);
   // Preserve an authored workspace skill without autonomous learning; the
   // restrictive plugin allowlist intentionally excludes unrelated defaults.
-  set(`skills.workshop.autonomous.${workshopAutonomousField}`, hasEnabled ? false : "off");
+  const workshopPath = workshopInPlugin
+    ? "plugins.entries.skill-workshop.config"
+    : "skills.workshop";
+  set(`${workshopPath}.autonomous.${workshopAutonomousField}`, hasEnabled ? false : "off");
   seedLegacyOperatorAuth();
   // Every fixture client shares this container's loopback network namespace.
   set("plugins.entries.device-pair", {
@@ -175,7 +188,10 @@ export function seedLegacyOperatorState() {
     config: { publicUrl: "ws://127.0.0.1:18789" },
   });
   unsetSystemAgent();
-  writeJson(artifact("legacy-operator-baseline.json"), { workshopAutonomousField });
+  writeJson(artifact("legacy-operator-baseline.json"), {
+    workshopAutonomousField,
+    workshopInPlugin,
+  });
   seedLegacyOperatorWebhooks(set);
   const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
@@ -612,11 +628,21 @@ export function assertLegacyOperatorConfig(stage) {
   const coreWorkshop = Object.hasOwn(config.skills ?? {}, "workshop");
   const pluginEntry = config.plugins?.entries?.["skill-workshop"];
   const pluginWorkshop = Object.hasOwn(pluginEntry ?? {}, "config");
-  // Published baselines and older candidates keep core settings. Newer Doctor
-  // moves them into marked plugin config and deletes the retired core key.
+  // Older releases keep core settings; newer ones write marked plugin config.
   assert.notEqual(coreWorkshop, pluginWorkshop, "legacy operator Workshop locations changed");
-  if (stage === "baseline") {
-    assert(coreWorkshop, "legacy operator baseline Workshop placement changed");
+  const baseline =
+    stage === "baseline" ? readJson(artifact("legacy-operator-baseline.json")) : null;
+  const field = baseline ? baseline.workshopAutonomousField : "mode";
+  assert(
+    field === "enabled" || field === "mode",
+    "legacy operator Workshop baseline field missing",
+  );
+  if (baseline) {
+    assert.equal(
+      pluginWorkshop,
+      baseline.workshopInPlugin,
+      "legacy operator baseline Workshop placement changed",
+    );
   }
   if (pluginWorkshop) {
     assert.equal(
@@ -627,14 +653,6 @@ export function assertLegacyOperatorConfig(stage) {
   }
   const autonomous =
     (pluginWorkshop ? pluginEntry.config : config.skills.workshop)?.autonomous ?? {};
-  const field =
-    stage === "baseline"
-      ? readJson(artifact("legacy-operator-baseline.json")).workshopAutonomousField
-      : "mode";
-  assert(
-    field === "enabled" || field === "mode",
-    "legacy operator Workshop baseline field missing",
-  );
   assert(
     Object.hasOwn(autonomous, field) &&
       !Object.hasOwn(autonomous, field === "enabled" ? "mode" : "enabled"),

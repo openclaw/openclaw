@@ -7,9 +7,11 @@ import {
   latest,
   lazy,
   Loading,
+  onSettled,
   Show,
 } from "solid-js";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
+import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import {
   pathForPluginCatalogEntry,
   pathForPluginSettings,
@@ -23,7 +25,10 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
-import { currentConfigRead } from "../../lib/config/config-state-model.ts";
+import {
+  currentConfigRead,
+  resolveEditableSnapshotConfig,
+} from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -41,6 +46,7 @@ import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
 import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
+import { pluginToolBlockEntries } from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginSkillPreview, renderPluginSkillsSection } from "./skill-preview.tsx";
@@ -51,6 +57,11 @@ const PluginSettingsDetail = lazy(() => import("./settings-view.tsx"), {
 const PluginCatalogDetail = lazy(() => import("./catalog-detail.tsx"), {
   export: "renderPluginCatalogDetail",
 });
+
+function LoadPluginToolBlocks(props: { load: () => void }) {
+  onSettled(() => props.load());
+  return null;
+}
 
 function PluginDetailBoundary(props: { children: JSX.Element; onRetry: () => void }) {
   return (
@@ -258,6 +269,15 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
     const settings = () => page().state.installedDetailTab === "configuration";
+    const manageToolBlocks = () =>
+      page().surface === "settings" &&
+      !settings() &&
+      page().context.runtimeConfig.canPatch === true &&
+      page().accessBlockedReason() === null &&
+      Boolean(page().state.detail?.inspection) &&
+      Boolean(
+        (page().state.detail?.tools ?? page().state.detail?.inspection?.declared.tools)?.length,
+      );
     const settingsLocation = () =>
       page().surface === "discovery"
         ? pluginSettingsLocation(detailProps.pluginId)
@@ -265,6 +285,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     const overviewLocation = () => pluginDetailLocation(page().routeData?.location, false);
     return (
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
+        <Show when={manageToolBlocks()}>
+          <LoadPluginToolBlocks load={() => void page().context.runtimeConfig.ensureLoaded()} />
+        </Show>
         <PluginSettingsDetail
           {...shared()}
           promptBusy={page().recommendedPrompts.pending}
@@ -303,6 +326,35 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           catalogIconUrls={page().state.catalogIconUrls}
           catalogIconLoading={page().icons.catalog.isLoading}
           resolveCredential={page().settings.resolveCredential}
+          toolBlocks={
+            manageToolBlocks()
+              ? {
+                  entries: pluginToolBlockEntries(
+                    resolveEditableSnapshotConfig(configState().configSnapshot),
+                  ),
+                  saving: configState().configAutoSaveStatus === "saving",
+                  set: (name, blocked) => {
+                    void page().context.runtimeConfig.patchFromSnapshot((snapshot) => {
+                      const entries = pluginToolBlockEntries(snapshot);
+                      if (!entries) {
+                        return { error: t("pluginsPage.toolBlockUnavailable") };
+                      }
+                      const remaining = entries.filter(
+                        (entry) => normalizeToolPolicyName(entry) !== name,
+                      );
+                      return {
+                        options: {
+                          raw: { tools: { deny: blocked ? [...remaining, name] : remaining } },
+                          note: `tools: ${blocked ? "block" : "unblock"} ${name}`,
+                          replacePaths: blocked ? undefined : ["tools.deny"],
+                          canDispatch: manageToolBlocks,
+                        },
+                      };
+                    });
+                  },
+                }
+              : undefined
+          }
           tools={page().state.detail?.tools}
           onOpenTool={(name) =>
             page().skillPreview.openTool(

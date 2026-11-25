@@ -2,9 +2,11 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogTranscriptItem,
+  SessionCatalogRouteMethods,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -13,9 +15,10 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
+import { readCatalogRoute } from "../../lib/sessions/catalog-read-method.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -28,6 +31,15 @@ function isOutboundSessionShare(key: CatalogSessionKey): boolean {
 }
 
 export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
+  protected readonly catalogAccess = projectChatFields<{
+    route?: {
+      catalogId: string;
+      hello: ApplicationGatewaySnapshot["hello"];
+      generation: number;
+      methods: SessionCatalogRouteMethods;
+    };
+  }>({ route: undefined });
+
   private catalogRead:
     | { controller: AbortController; older: boolean; refresh: boolean }
     | undefined;
@@ -64,6 +76,26 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
   }
 
   protected handleCatalogGatewayEvent(event: string): void {
+    if (event === "sessions.catalog.routes.changed") {
+      const key = parseCatalogSessionKey(this.state?.sessionKey);
+      if (key) {
+        // A replacement can remove the caller's read grant. Retire the old read
+        // and transcript before a foreground or resumed lookup uses the new owner.
+        this.retireCatalogRead();
+        this.catalogAccess.route = undefined;
+        this.history.catalogMessages = [];
+        this.history.catalogPreviewImage = undefined;
+        this.history.catalogHost = null;
+        this.history.catalogSession = null;
+        this.history.catalogCursor = undefined;
+        this.catalogReadPending = true;
+        this.catalogReadRefreshPending = false;
+        if (this.secondarySessionReadsReady()) {
+          this.resumeCatalogRead();
+        }
+      }
+      return;
+    }
     if (
       event !== "terminal.exit" ||
       this.history.catalogSession?.canContinue !== false ||
@@ -78,11 +110,14 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     }
   }
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
+    this.catalogLoadGeneration += 1;
     this.catalogRequestedSessionKey = this.sessionKey;
     this.history.catalogMessages = [];
+    this.history.catalogPreviewImage = undefined;
     this.history.catalogCursor = undefined;
     this.history.catalogSession = null;
     this.history.catalogHost = null;
+    this.catalogAccess.route = undefined;
     // Payload-store entries and their object URLs are reclaimed only by
     // explicit release; clearing the array alone strands them for the tab.
     releaseChatAttachmentPayloads(state.chatAttachments);
@@ -158,6 +193,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       return false;
     }
     const { state, client } = scope;
+    const snapshot = scope.context.gateway.snapshot;
     if (
       older &&
       (!this.history.catalogCursor || (isOutboundSessionShare(key) && !this.history.catalogSession))
@@ -169,31 +205,65 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     this.catalogRead = read;
     this.catalogReadPending = false;
     const agentId = resolveChatAgentId(state);
+    const profileRelation = this.catalogProfileRelation;
+    const relationKey = JSON.stringify(profileRelation);
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       !read.controller.signal.aborted &&
       this.catalogRead === read &&
+      JSON.stringify(this.catalogProfileRelation) === relationKey &&
       this.isConnectionScopeCurrent(scope) &&
+      scope.context.gateway.snapshot.hello === snapshot.hello &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
     if (!older && !metadataOnly && !refresh) {
       this.history.catalogLoading = true;
       this.history.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
-      this.historyObserverArmed = false;
+      this.historyReaderIntent = false;
       this.transcriptScrollTop = null;
-      this.historyObserver?.disconnect();
-      this.historyObserver = null;
     }
     try {
+      const previous = this.catalogAccess.route;
+      const route =
+        previous?.catalogId === key.catalogId &&
+        previous.hello === snapshot.hello &&
+        previous.generation === scope.generation
+          ? previous
+          : await readCatalogRoute(
+              client,
+              snapshot,
+              { catalogId: key.catalogId },
+              read.controller.signal,
+            );
+      if (!isCurrent()) {
+        return false;
+      }
+      if (route && route !== previous) {
+        this.catalogAccess.route = {
+          catalogId: key.catalogId,
+          hello: snapshot.hello,
+          generation: scope.generation,
+          methods: route.methods,
+        };
+      }
+      if (!route?.methods.list || !route.methods.read) {
+        this.catalogAccess.route = undefined;
+        this.history.catalogSession = null;
+        this.history.catalogMessages = [];
+        this.history.catalogPreviewImage = undefined;
+        state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
+        return false;
+      }
       if (!older) {
         const lookup = await lookupCatalogSession({
           agentId,
           client,
           key,
+          profileRelation,
           isCurrent,
           signal: read.controller.signal,
-          listMethod: catalogMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
+          listMethod: route.methods.list,
         });
         if (!lookup || !isCurrent()) {
           return false;
@@ -207,24 +277,34 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           (!lookup.session || !lookup.host?.connected || lookup.host.error)
         ) {
           this.history.catalogSession = null;
+          this.history.catalogPreviewImage = undefined;
           state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
           return false;
+        }
+        if (lookup.session?.previewImageDigest !== this.history.catalogPreviewImage?.digest) {
+          this.history.catalogPreviewImage = undefined;
         }
         if (metadataOnly) {
           return true;
         }
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
+      const wantImage =
+        !older &&
+        Boolean(this.history.catalogSession?.previewImageDigest) &&
+        !this.history.catalogPreviewImage;
       const page = await client.request<SessionsCatalogReadResult>(
-        catalogMethod(scope.context.gateway.snapshot, key.catalogId, "read"),
+        route.methods.read,
         {
           agentId,
           catalogId: key.catalogId,
           hostId: key.hostId,
           threadId: key.threadId,
+          ...(profileRelation ? { profileRelation } : {}),
           ...(this.history.catalogSession?.sourceHomeId
             ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
             : {}),
+          ...(wantImage ? { includePreviewImage: true } : {}),
           limit: 50,
           ...(older && this.history.catalogCursor ? { cursor: this.history.catalogCursor } : {}),
         },
@@ -232,6 +312,9 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       );
       if (!isCurrent()) {
         return false;
+      }
+      if (wantImage) {
+        this.history.catalogPreviewImage = page.previewImage;
       }
       // Only accepted pages advance progress. A cancelled read must leave its
       // cursor reusable instead of falsely exhausting a later retry.
@@ -293,6 +376,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         if (older) {
           this.history.olderError = formatUiError(error);
         } else {
+          this.history.catalogPreviewImage = undefined;
           state.lastError = formatUiError(error);
         }
       }

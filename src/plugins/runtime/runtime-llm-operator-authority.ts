@@ -100,7 +100,6 @@ export function bindLlmOperatorAuthority(
         withOperatorAuthorization(() => {
           borrowed?.assertCurrent();
           capturedOperator.assertInvocationCurrent?.();
-          operatorAuthority?.assertCurrent();
         });
       };
       assertCurrent();

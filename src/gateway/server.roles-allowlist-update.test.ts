@@ -371,9 +371,14 @@ test("an authorized client starts a package release update and observes its reco
           status: { root, installKind: "package", packageManager: "pnpm" },
           installReceipt: null,
         });
-      const prepare = vi
-        .spyOn(releaseUpdate, "prepareUpdate")
-        .mockRejectedValue(new Error("synthetic candidate unavailable"));
+      const prepare = vi.spyOn(releaseUpdate, "prepareUpdate");
+      const link = fs.link;
+      const lockFailure = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+        if (path.basename(destination.toString()) === ".update.lock") {
+          throw new Error("synthetic update lock failure");
+        }
+        return await link(source, destination);
+      });
       try {
         const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
           sessionKey: "agent:main:whatsapp:dm:+15555550123",
@@ -394,6 +399,7 @@ test("an authorized client starts a package release update and observes its reco
           });
         }, FAST_WAIT_OPTS);
       } finally {
+        lockFailure.mockRestore();
         prepare.mockRestore();
         installation.mockRestore();
       }
@@ -461,29 +467,6 @@ describe("gateway node command allowlist", () => {
     ).resolves.toEqual({ ok: true, ignored: true });
     await respondToInvoke(allowedClient, payload, allowedNodeId);
     expect((await invokeResP).ok).toBe(true);
-
-    for (const [id, result, expectedPayload] of [
-      ["null", { payloadJSON: null, error: null }, undefined],
-      ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
-      [
-        "explicit",
-        { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
-        { source: "payload" },
-      ],
-    ] as const) {
-      const invokeResult = invokeCanvasSnapshot(allowedNodeId, `allowlist-${id}-payloadjson`);
-      const captured = await invokeCapture.waitForInvoke();
-      await allowedClient.request("node.invoke.result", {
-        id: captured.id,
-        nodeId: captured.nodeId,
-        ok: true,
-        ...result,
-      });
-      const response = await invokeResult;
-      expect(response.ok).toBe(true);
-      expect(response.payload?.payloadJSON).toBeNull();
-      expect(response.payload?.payload).toEqual(expectedPayload);
-    }
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
@@ -597,23 +580,6 @@ describe("gateway node command allowlist", () => {
       await expectConnectedCommands(fixture.displayName, []);
       await spoofClient.stopAndWait();
     }
-  });
-
-  test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
-    const fixture = nodeFixture("node-host-platform-upgrade", { platform: "darwin" });
-    const legacyClient = await connectNodeClientWithPairing(fixture);
-    await legacyClient.stopAndWait();
-    await expectConnectedNodeCount(0);
-    await connectNodeClient({ ...fixture, commands: ["system.run"], platform: "macos" });
-    await expect
-      .poll(
-        async () => (await findConnectedNodeByDisplayName(fixture.displayName))?.connected ?? false,
-        FAST_WAIT_OPTS,
-      )
-      .toBe(true);
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
-    const pending = await getPendingNodePairing(nodeId);
-    expect(pending?.commands).toEqual(["system.run"]);
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {

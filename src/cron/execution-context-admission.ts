@@ -327,7 +327,7 @@ export async function admitScheduledOccurrence(
     async mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
-        // Stored operator sources carry the owner decision frozen by their run admission.
+        // Stored operator sources carry the owner from their run admission's grant.
         // Other requesters use current config because run settings can predate a slot wait.
         const requesterOwner =
           !operatorSourceRequester && requester && requester.kind !== "operator-source"
@@ -346,7 +346,7 @@ export async function admitScheduledOccurrence(
           },
           parentRow,
           operatorSourceRequester
-            ? run.operatorAuthority?.requesterOwner === true
+            ? run.operatorAuthority?.grant.owner === true
             : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);

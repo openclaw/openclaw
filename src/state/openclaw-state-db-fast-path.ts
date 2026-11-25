@@ -86,7 +86,7 @@ function inspectStateSchemaRepair(
     admitStateSchemaFacts(database, pathname);
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
-      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION ||
       hasLegacyCronRunLogs(database) ||
       (scope === "doctor" && hasHistoricalImageReserveSnapshots(database));
     if (!needsRepair) {
@@ -148,7 +148,7 @@ export function isOpenClawStateSchemaFastPathEligible(
       database,
       () => {
         const userVersion = assertSupportedStateSchemaVersion(database, pathname);
-        if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+        if (readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION) {
           return false;
         }
         const schemaVersion = readSqliteSchemaCookie(database);

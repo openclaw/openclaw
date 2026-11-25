@@ -65,6 +65,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "admittedSessionId"
   | "resolvedThreadId"
   | "freshChildStorePath"
+  | "senderIsOwner"
 > & {
   sourceWork: Promise<void>;
   needsImageUnderstanding?: boolean;

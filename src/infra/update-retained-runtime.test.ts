@@ -173,7 +173,7 @@ it.for([false, true])(
       await expectBlocked(nativeEntered.promise, "native retirement");
       expect(reportRetained).not.toHaveBeenCalledWith(
         directory,
-        expect.stringContaining("worker generation settled; cleanup deferred"),
+        expect.stringContaining("worker generation settled; the next eligible openclaw update"),
       );
     } finally {
       release.resolve();
@@ -191,7 +191,7 @@ it.for([false, true])(
     expect(await contents(directory, "owner.json")).toContain(`"pid":${process.pid},`);
     expect(reportRetained).toHaveBeenCalledWith(
       directory,
-      expect.stringContaining("worker generation settled; cleanup deferred"),
+      expect.stringContaining("worker generation settled; the next eligible openclaw update"),
     );
     expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
     expect(assertResourcesSettled).toHaveBeenCalledOnce();

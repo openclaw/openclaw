@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-detail-config.js";
 import { isTestOnlyPath } from "./lib/changed-path-facts.mjs";
 
 type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;

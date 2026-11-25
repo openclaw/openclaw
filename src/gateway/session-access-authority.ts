@@ -196,7 +196,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   };
   assertRun();
   originalGrant?.assertCurrent();
-  originalRun?.assertCurrent();
   const projection = getSessionRowProjection(params.context);
   if (!projection) {
     denied("Session access is unavailable during Gateway startup; retry when it is ready.");
@@ -205,7 +204,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     assertPreparationSourceCurrent?.();
     assertRun();
     originalGrant?.assertCurrent();
-    originalRun?.assertCurrent();
     const currentActor = resolveGatewayOperatorRoleActor(client);
     if (
       params.hasCurrentClientAuthority?.() === false ||
@@ -228,13 +226,11 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     assertIngress();
     const profile = profileId ? await prepareUserProfileRoleAuthority(profileId) : undefined;
     assertIngress();
-    captured?.authority.assertCurrent();
     if (actor?.kind !== "system" && (!profile || profile.profileId !== profileId)) {
       denied("This operation requires a current authenticated profile.");
     }
     await projection.prepareMembership();
     assertIngress();
-    captured?.authority.assertCurrent();
     const query = { agentId: parsed.agentId, key: sessionKey };
     const original = projection.sharingTarget(query);
     if (!original?.entry.sessionId || original.canonicalKey !== sessionKey) {
@@ -315,7 +311,6 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         denied();
       }
       try {
-        captured?.authority.assertCurrent();
         originalGrant?.assertCurrent();
         if (profile && !profile.isCurrent()) {
           denied();
@@ -337,6 +332,9 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           {
             aliases: new Set(profile?.aliases ?? []),
             sessionCap: role?.sessions.others,
+            policy: role,
+            memberAccess: (row, identity) =>
+              projection.memberAccess(row.storePath, row.storeKey, identity),
             isMember: (row, identity) =>
               projection.hasMembership(row.storePath, row.storeKey, identity),
           },
@@ -349,7 +347,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
               expectedProfileId: profileId,
               isCreator: sharing.isCreator,
             })) ||
-          sharing.authorizeTarget(current)
+          sharing.authorizeTarget(current, undefined, false)
         ) {
           denied();
         }

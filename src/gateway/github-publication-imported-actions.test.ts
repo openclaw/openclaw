@@ -241,7 +241,7 @@ describe("actions on the imported original PR", () => {
         withGatewayToolCallerIdentity(caller, () =>
           createGitHubPublishTool().execute("native-read-control", { action: "edit" }),
         ),
-      ).rejects.toThrow("verified linked GitHub account");
+      ).rejects.toThrow("This channel cannot confirm who you are");
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
     } finally {
@@ -447,11 +447,8 @@ describe("actions on the imported original PR", () => {
   );
 
   it.each([
-    ["edit", "requester"],
     ["edit", "head"],
     ["edit", "title"],
-    ["request_review", "requester"],
-    ["request_review", "requester and transport"],
     ["request_review", "head"],
     ["request_review", "closed"],
     ["request_review", "author"],
@@ -460,12 +457,6 @@ describe("actions on the imported original PR", () => {
     let reads = 0;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (change === "requester" || change === "requester and transport") {
-          await f.revoke();
-          if (change === "requester and transport") {
-            throw new Error("Synthetic GitHub read failure");
-          }
-        }
         if (change === "head") {
           f.state.head.sha = "f".repeat(40);
         }
@@ -486,15 +477,13 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      change === "requester" || change === "requester and transport"
-        ? /role changed/
-        : change === "head"
-          ? /head changed/
-          : change === "closed"
-            ? /closed/
-            : change === "author"
-              ? /not authored/
-              : /metadata changed/,
+      change === "head"
+        ? /head changed/
+        : change === "closed"
+          ? /closed/
+          : change === "author"
+            ? /not authored/
+            : /metadata changed/,
     );
     expect(f.writes).toEqual([]);
   });
@@ -683,7 +672,6 @@ describe("actions on the imported original PR", () => {
           },
         });
       }),
-    requester: (f) => f.onRead(() => f.revoke()),
   };
   it.each(Object.entries(changes))("denies changed %s before any effect", async (_name, change) => {
     const f = await fixture();

@@ -22,10 +22,10 @@ import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
-import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatMoveToProjectEnglish } from "../../ui/src/i18n/locales/en-chat-move-to-project.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
@@ -37,7 +37,9 @@ import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-se
 import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-chat-system-notice.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolOperationsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-operations.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
+import { registerChatVoiceApiKeyEnglish } from "../../ui/src/i18n/locales/en-chat-voice-api-key.ts";
 import { registerChatWorktreeEnglish } from "../../ui/src/i18n/locales/en-chat-worktree.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
@@ -84,6 +86,7 @@ import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-rout
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
+import { registerSessionMenuPermissionsEnglish } from "../../ui/src/i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
@@ -150,6 +153,7 @@ const sourceFiles = [
   "en-board.ts",
   "en-browser.ts",
   "en-chat-camera.ts",
+  "en-chat-voice-api-key.ts",
   "en-chat-dictation.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
@@ -159,7 +163,7 @@ const sourceFiles = [
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
-  "en-chat-failed-message-edit.ts",
+  "en-chat-move-to-project.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
   "en-chat-public-qr.ts",
@@ -168,6 +172,7 @@ const sourceFiles = [
   "en-chat-system-notice.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-tool-operations.ts",
   "en-chat-tool-widgets.ts",
   "en-chat-welcome.ts",
   "en-templates.ts",
@@ -203,6 +208,7 @@ const sourceFiles = [
   "en-provider-usage.ts",
   "en-session-machine.ts",
   "en-session-menu.ts",
+  "en-session-menu-permissions.ts",
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
@@ -316,6 +322,17 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       }
     }
     appendSessionCopy(key, value);
+    if (key === "actionRequiresConnection") {
+      const { assignPermissionDenied, ...permissionCopy } =
+        registerSessionMenuPermissionsEnglish.catalog.sessionsView;
+      Object.assign(sessionsView, {
+        actionPermissionDenied: en.sessionsView.actionPermissionDenied,
+        ...permissionCopy,
+        movePermissionDenied: en.sessionsView.movePermissionDenied,
+        assignPermissionDenied,
+        createPermissionDenied: en.sessionsView.createPermissionDenied,
+      });
+    }
   }
   const sessionDetails: TranslationMap = {};
   for (const [key, value] of Object.entries(
@@ -493,6 +510,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(toolCards, widgetExports);
     }
   }
+  Object.assign(toolCards, registerChatToolOperationsEnglish.catalog.chat.toolCards);
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(registerBoardDocumentEnglish.catalog.board.widget)) {
     boardWidget[key] = value;
@@ -590,7 +608,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
-        ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
         workspaceConflict,
@@ -603,6 +620,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
+          moveToProject: registerChatMoveToProjectEnglish.catalog.chat.sessionHeader.moveToProject,
           continueInTerminal,
         },
         sessionSuggestions: {
@@ -658,6 +676,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
+    registerChatVoiceApiKeyEnglish.catalog,
     registerChatDictationEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,

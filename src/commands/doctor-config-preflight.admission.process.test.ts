@@ -17,7 +17,7 @@ import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -576,7 +576,7 @@ it.each<[string, string, boolean, string?]>([
     }
     expect(fs.readFileSync(legacyPath)).toEqual(before);
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest({ env })).toBe(false);
   },
   75_000,
 );

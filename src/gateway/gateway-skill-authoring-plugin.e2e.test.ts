@@ -207,9 +207,11 @@ function skillRefreshShape(
     .filter((item) => item.includes("System prompt update.") && item.includes(description));
   expect(updates).toHaveLength(1);
   const update = updates[0]!;
-  const catalog = (item: string) => item.match(/<available_skills>(.*?)<\/available_skills>/)?.[1];
+  const catalog = (item: string) =>
+    item.match(/<available_skills>([\s\S]*?)<\/available_skills>/)?.[1];
+  // The catalog lists one `- "name": description` line per skill.
   const entries = (item: string) =>
-    [...(catalog(item)?.matchAll(/<skill>.*?<\/skill>/g) ?? [])].map(([entry]) => entry);
+    (catalog(item) ?? "").split(/\\n|\n/).filter((line) => line.trimStart().startsWith("- "));
   const previous = [turnEnd.system, ...turnEnd.history].findLast((item) => catalog(item));
   const previousEntries = previous ? entries(previous) : [];
   const nextEntries = entries(update);

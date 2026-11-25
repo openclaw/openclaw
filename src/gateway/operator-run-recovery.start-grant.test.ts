@@ -1,5 +1,5 @@
-// Every saved-requester start needs its creation grant now: chat-like starts need write, scheduled
-// automations need cron or write. In-run continuations and channel senders need neither.
+// Every saved-requester start needs its creation grant now: chat needs write, Talk consults need
+// talk, and scheduled automations need cron or write. In-run continuations and channels need none.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { prepareInternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -16,6 +16,7 @@ import {
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
   restoreScheduledAutomationOperator,
+  restoreTalkConsultOperator,
 } from "./operator-run-recovery.js";
 import { recoveryFixture, type RecoveryFixture } from "./operator-run-recovery.test-support.js";
 
@@ -30,6 +31,7 @@ const roles = {
     writer: scope(["operator.read", "operator.write"]),
     reader: scope(["operator.read"]),
     scheduler: scope(["operator.cron"]),
+    talker: scope(["operator.read", "operator.talk"]),
   },
 } satisfies NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 type Role = keyof typeof roles.definitions;
@@ -37,14 +39,6 @@ type Start = (
   fixture: RecoveryFixture,
 ) => Promise<{ authority: { scopes: readonly string[] }; release: () => void }>;
 
-const cronSource = (fixture: RecoveryFixture) =>
-  ({
-    version: 1,
-    kind: "gateway",
-    agentId: fixture.target.agentId,
-    sourceRunId: "scheduled-source-run",
-    snapshot: fixture.snapshot,
-  }) as const;
 const queued = (fixture: RecoveryFixture) =>
   ({
     source: { kind: "gateway", snapshot: fixture.snapshot },
@@ -53,8 +47,7 @@ const queued = (fixture: RecoveryFixture) =>
     assertCurrent: () => {},
   }) as const;
 const chatStart: Start = (fixture) => restoreGatewayQueuedOperatorRecovery(queued(fixture));
-const automationStart: Start = (fixture) =>
-  restoreScheduledAutomationOperator({ ...queued(fixture), operatorSource: cronSource(fixture) });
+const automationStart: Start = (fixture) => restoreScheduledAutomationOperator(queued(fixture));
 
 // Each kind uses the entry its producer uses, with the saved-source shape it stores.
 const chatKinds: Array<[string, Start]> = [
@@ -68,9 +61,6 @@ const chatKinds: Array<[string, Start]> = [
       }),
   ],
   ["restart replay of a queued chat input", chatStart],
-  ["restart completion wake", chatStart],
-  ["system turn with a recorded requester", chatStart],
-  ["worker environment provision resume", chatStart],
   [
     "plugin service session work accepted in a chat turn",
     (fixture) =>
@@ -84,16 +74,6 @@ const chatKinds: Array<[string, Start]> = [
 ];
 const automationKinds: Array<[string, Start]> = [
   ["cron agent turn, command and script", automationStart],
-  ["cron conversation event", automationStart],
-  ["native stream source", automationStart],
-  [
-    "scheduled plugin command",
-    (fixture) =>
-      restoreScheduledAutomationOperator({
-        ...queued(fixture),
-        operatorSource: cronSource(fixture),
-      }),
-  ],
   [
     "plugin service session work accepted in a cron run",
     (fixture) => restoreScheduledAutomationOperator(queued(fixture)),
@@ -121,6 +101,7 @@ describe("saved requester start grant", () => {
     chatKinds.flatMap(([kind, start]) => [
       [kind, "reader", start] as const,
       [kind, "scheduler", start] as const,
+      [kind, "talker", start] as const,
     ]),
   )("refuses %s after the writer becomes %s", (_kind, role, start) =>
     withRequester("chat-start@example.test", "writer", async (fixture, setRole) => {
@@ -129,6 +110,21 @@ describe("saved requester start grant", () => {
       await expect(start(fixture)).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
     }),
   );
+
+  it("starts a queued Talk consult for a read and talk creator", () =>
+    withRequester("talk-start@example.test", "talker", async (fixture, setRole) => {
+      const start = () =>
+        restoreTalkConsultOperator({
+          ...queued(fixture),
+          source: captureQueuedOperatorRecoverySource(fixture.sourceAuthority),
+          liveAuthority: fixture.sourceAuthority,
+        });
+      const admitted = await start();
+      expect(admitted.authority.scopes).toEqual(["operator.read", "operator.talk"]);
+      admitted.release();
+      setRole("reader");
+      await expect(start()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+    }));
 
   it.each(automationKinds)("admits %s for a cron-only creator", (_kind, start) =>
     withRequester("cron-creator@example.test", "scheduler", async (fixture) => {

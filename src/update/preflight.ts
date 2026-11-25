@@ -25,7 +25,7 @@ import type { UpdateTarget } from "./target.js";
 export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
 
 /** Enumerate files without opening a database or admitting a schema migration. */
-export async function listStateDatabases(stateDir: string): Promise<string[]> {
+async function listStateDatabases(stateDir: string): Promise<string[]> {
   const files: string[] = [];
   const visited = new Set<string>();
   const walk = async (dir: string): Promise<void> => {
@@ -96,21 +96,6 @@ export async function preflight(params: {
   });
   let reason = "unsupported-install";
   try {
-    const containerMarker = await fs.access("/.dockerenv").then(
-      () => true,
-      (error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    );
-    if (containerMarker || env.container || env.DOCKER_CONTAINER || env.OPENCLAW_CONTAINER) {
-      return refuse(
-        "container-install",
-        "This installation belongs to a container image. Update the image instead.",
-      );
-    }
     const ancestor = await existingAncestor(params.prefix);
     const installPath =
       params.target.kind === "git"

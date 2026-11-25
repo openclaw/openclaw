@@ -42,7 +42,7 @@ export async function withReceiptFixture(
         VALUES ('agent:main:existing', 'existing', '{"sessionId":"existing","updatedAt":1}', 1);
         UPDATE session_nodes SET entry_valid = 1;
         DELETE FROM session_canonical_validation_pending;`);
-      invalidateOpenClawAgentDatabaseValidation(database.path);
+      invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
       closeOpenClawAgentDatabaseByPath(database.path);
       database = openOpenClawAgentDatabase(options);
       assertNativeAgentDatabase(database);
@@ -61,6 +61,7 @@ export function independentWorkerReceipt(database: OpenClawAgentDatabase) {
     ...receipt,
     receiptId: randomUUID(),
     valid: receipt.valid.slice(0),
+    revokedBy: receipt.revokedBy.slice(0),
     canonicalReady: receipt.canonicalReady.slice(0),
   };
 }

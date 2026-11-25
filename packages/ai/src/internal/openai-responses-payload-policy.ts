@@ -5,6 +5,7 @@ export {
   type OpenAIResponsesCompactionOutput,
 } from "../transports/openai-responses-compaction-window.js";
 export {
+  isOpenAIResponsesApi,
   normalizeOpenAIServiceTier,
   type OpenAIServiceTier,
   resolveOpenAIResponsesPayloadPolicy,

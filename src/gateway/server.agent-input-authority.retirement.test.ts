@@ -212,10 +212,6 @@ it("keeps admitted creation alive after Gateway retirement", async ({ signal }) 
     await expect(
       Promise.resolve().then(() => {
         createdSource.abortSignal.throwIfAborted();
-        expectDefined(
-          createdSource.sourceAdapter?.authority,
-          "accepted creation authority",
-        ).assertCurrent();
       }),
     ).resolves.toBeUndefined();
     expect(createdRecorder.getAdmissionReceipt()).toEqual(createdAdmission);

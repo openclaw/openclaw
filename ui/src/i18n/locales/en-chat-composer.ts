@@ -46,8 +46,6 @@ const catalog = {
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      compactingContext: "Compacting context",
-      contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
       modelRestoredEvent: "Returned to selected model: {from} → {to}",
@@ -349,6 +347,7 @@ const catalog = {
       failureFileTooLarge: "Too large to attach. Look for this file in Files.",
       findInFiles: "Find in Files",
       findInFilesFor: "Find {name} in Files",
+      showInChatFor: "Show {name} in chat",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

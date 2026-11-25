@@ -77,6 +77,41 @@ function requesterProfile(text: string) {
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each(["/new", "/stop", "/btw hello", "/model other/model", "/queue collect"])(
+    "keeps participating %s input literal and removes the requesting approval device",
+    (text) => {
+      const prepared = prepareTurn({
+        inputText: text,
+        request: {
+          inboundMessage: text,
+          participating: true,
+        },
+        attachments: { parsedMessage: text },
+        client: {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: createClientInfo(),
+            device: {
+              id: "guest-device",
+              publicKey: "key",
+              signature: "sig",
+              signedAt: 1,
+              nonce: "n",
+            },
+            scopes: ["operator.write"],
+          },
+        },
+      });
+      const ctx = finalizeInboundContext(prepared.ctx);
+      expect(ctx.agentText).toBe(text);
+      expect(ctx.CommandInterpretationSuppressed).toBe(true);
+      expect(ctx.CommandAuthorized).toBe(false);
+      expect(ctx.CommandTurn).toMatchObject({ kind: "normal", authorized: false });
+      expect(ctx).not.toHaveProperty("ApprovalReviewerDeviceId");
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
+    },
+  );
   it.each([
     { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
     { id: GATEWAY_CLIENT_IDS.WEBCHAT_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
@@ -165,14 +200,6 @@ describe("prepareChatSendUserTurn", () => {
         profileId: profile.id,
         context,
       });
-      const isCurrent = () => {
-        try {
-          admitted.authority.assertCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      };
       try {
         const client = createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -189,7 +216,11 @@ describe("prepareChatSendUserTurn", () => {
               requestHash: "request:queued-requester",
             },
             requestFingerprint: "queued-requester",
-            requesterProfile: { id: profile.id, displayName: profile.displayName, isCurrent },
+            requesterProfile: {
+              id: profile.id,
+              displayName: profile.displayName,
+              isCurrent: () => true,
+            },
           },
           () => {
             const wrongRun = prepareTurn({ client, session: { ...target, clientRunId: "other" } });
@@ -204,9 +235,6 @@ describe("prepareChatSendUserTurn", () => {
           display_name: "Queued Ada",
         });
         expect(readSessionInputProfileId(ctx)).toBe(profile.id);
-        admitted.release();
-        expect(getRequesterProfile(ctx)).toBeUndefined();
-        expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
       } finally {
         admitted.release();
       }

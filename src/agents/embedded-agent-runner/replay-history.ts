@@ -1,3 +1,4 @@
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -104,10 +105,7 @@ export async function sanitizeSessionHistory(
     provider: params.provider,
     policy,
   });
-  const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-chatgpt-responses" ||
-    params.modelApi === "azure-openai-responses";
+  const responsesApi = isOpenAIResponsesApi(params.modelApi);
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const snapshotState = hasSnapshot
     ? readModelSnapshotState(params.sessionManager)
@@ -134,7 +132,7 @@ export async function sanitizeSessionHistory(
       imageLimits: resolveImageSanitizationLimits(params.config),
       signedThinkingProvider,
       allowProviderOwnedThinkingReplay,
-      isOpenAIResponsesApi,
+      isOpenAIResponsesApi: responsesApi,
       latestModelSwitchTimestamp,
       preserveLatestAssistantThinking: params.preserveLatestAssistantThinking,
     },
@@ -167,7 +165,10 @@ export async function sanitizeSessionHistory(
       replaySession.close();
     }
   }
-  messages = sanitizeReplayHistoryAfterProviderHooks(messages, { isOpenAIResponsesApi, policy });
+  messages = sanitizeReplayHistoryAfterProviderHooks(messages, {
+    isOpenAIResponsesApi: responsesApi,
+    policy,
+  });
 
   if (currentSnapshot && (!priorSnapshot || modelChanged)) {
     try {
