@@ -13,8 +13,9 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 390, height: 844 }, hasTouch: true },
         async ({ page }) => {
-          if (surface === "embedded")
+          if (surface === "embedded") {
             await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+          }
           const methodResponses = createNativeEmbedLayoutMethodResponses();
           await installMockGateway(page, { methodResponses });
           await page.goto(new URL("settings/search", suite.server.baseUrl).href);
