@@ -40,20 +40,23 @@ function hasMixedAssistantTextPhases(message: Record<string, unknown>): boolean 
   return phases.size > 1;
 }
 
-/** Read one coherent conversation independently of the rendered history window. */
-export async function loadCompleteChatHistory({
-  client,
-  sessionKey,
-  sessionId,
-  agentId,
-  isCurrent,
-}: {
-  client: GatewayBrowserClient;
-  sessionKey: string;
-  sessionId?: string | null;
-  agentId?: string;
-  isCurrent: () => boolean;
-}): Promise<unknown[]> {
+/** Read one coherent conversation, recovering capped rows the caller needs in full. */
+export async function loadCompleteChatHistory(
+  {
+    client,
+    sessionKey,
+    sessionId,
+    agentId,
+    isCurrent,
+  }: {
+    client: GatewayBrowserClient;
+    sessionKey: string;
+    sessionId?: string | null;
+    agentId?: string;
+    isCurrent: () => boolean;
+  },
+  needsFullMessage: (message: unknown) => boolean,
+): Promise<unknown[]> {
   const pages: unknown[][] = [];
   const recovered = new Map<string, Record<string, unknown>>();
   const seenCounts = new Map<string, number>();
@@ -123,7 +126,10 @@ export async function loadCompleteChatHistory({
     const pageCounts = new Map<string, number>();
     const messages: unknown[] = [];
     for (const row of page.messages ?? []) {
-      const message = isTruncatedHistoryMessage(row) ? await recoverMessage(row, page) : row;
+      const message =
+        isTruncatedHistoryMessage(row) && needsFullMessage(row)
+          ? await recoverMessage(row, page)
+          : row;
       const identity = nativeHistoryMessageIdentity(message);
       if (identity) {
         const count = (pageCounts.get(identity) ?? 0) + 1;

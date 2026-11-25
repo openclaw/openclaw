@@ -147,6 +147,26 @@ it.each([131_072, 131_073])(
   },
 );
 
+it.each([
+  { role: "toolResult", toolCallId: "large-call", toolName: "read" },
+  { role: "assistant", toolCallId: "large-call" },
+  { role: "system" },
+])("exports the surrounding turns without recovering an omitted $role row", async (envelope) => {
+  const getFull = vi.fn(() => ({ ok: false, unavailableReason: "oversized" }));
+  const user = { role: "user", senderLabel: "You", content: "Read it." };
+  const host = fixture(
+    async () => page([user, { ...oversized, ...envelope }, message(3)]),
+    getFull,
+  );
+  const markdown = "# Chat with OpenClaw\n\n## You\n\nRead it.\n\n## OpenClaw\n\nMessage 3\n";
+
+  await expect(exportCurrentChat(host, () => true)).resolves.toBe("downloaded");
+  await expect(copyMarkdown(host)).resolves.toBe(true);
+  expect(downloadTextFile).toHaveBeenCalledWith(expect.any(String), markdown, "text/markdown");
+  expect(copyToClipboard).toHaveBeenCalledWith(markdown, expect.any(Function));
+  expect(getFull).not.toHaveBeenCalled();
+});
+
 it.each(["quota", "connection"] as const)(
   "publishes no partial Markdown on a %s failure",
   async (fault) => {
