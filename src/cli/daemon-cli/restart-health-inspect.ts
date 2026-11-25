@@ -190,6 +190,7 @@ export async function inspectGatewayRestart(params: {
   // find its owner, including before that owner can bind an HTTP listener.
   const unmanagedHealthy = healthy && !running;
   let hasOwner = false;
+  let fileOwnerPid: number | undefined;
   try {
     const identity = await read("state-owner", () =>
       readActiveGatewayLockIdentity({
@@ -202,6 +203,7 @@ export async function inspectGatewayRestart(params: {
     );
     if (identity && (identity.port === undefined || identity.port === params.port)) {
       hasOwner = true;
+      fileOwnerPid = identity.pid;
       if (portUsage.status === "free") {
         startupPhase ??= "startup migration";
       }
@@ -213,8 +215,18 @@ export async function inspectGatewayRestart(params: {
     signal?.throwIfAborted();
     startupPhase ??= "waiting for Gateway state ownership";
   }
+  // A stale-install refusal can outlive its native service. The profile-bound
+  // listener remains available to its recovery owner; other live owners stay protected.
+  const stoppedStaleOwner =
+    runtime.status === "stopped" &&
+    !runtime.inspectionFailure &&
+    !runtime.inspectionReason &&
+    Boolean(reachability?.staleConnection) &&
+    fileOwnerPid !== undefined &&
+    gatewayListeners.length > 0 &&
+    portUsage.listeners.every((listener) => listener.pid === fileOwnerPid);
   const staleGatewayPids =
-    unmanagedHealthy || hasOwner
+    unmanagedHealthy || (hasOwner && !stoppedStaleOwner)
       ? []
       : Array.from(
           new Set(

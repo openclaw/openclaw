@@ -59,6 +59,34 @@ describe("restart startup progress", () => {
     expect(readGatewayOwnerLease).not.toHaveBeenCalled();
   });
 
+  it("exposes a verified stale file owner to stopped-listener recovery without opening state", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    readActiveGatewayLockIdentity.mockResolvedValue({ pid: 8000, port: 18789, startTime: 123 });
+    callGateway.mockRejectedValue(
+      new Error("gateway install changed; run: openclaw gateway restart"),
+    );
+    const health = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+      expectedVersion: "2026.11.8",
+      timeoutMs: 1_000,
+    });
+    expect(health).toMatchObject({
+      healthy: false,
+      staleConnection: "installation-replaced",
+      staleGatewayPids: [8000],
+      waitOutcome: "stale-pids",
+    });
+    expect(readGatewayOwnerLease).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "advancing startup", advances: true, expected: "healthy", elapsedMs: 90_000 },
     { name: "stalled startup", expected: "still-starting", elapsedMs: 60_000 },
