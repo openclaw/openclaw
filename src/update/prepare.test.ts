@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import * as nodeService from "../daemon/node-service.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
+import * as gatewayService from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
@@ -545,15 +548,15 @@ describe("package release conversion", () => {
     { releaseAware: true, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: false, runtime: "node", adopt: false, readOnly: false },
     { releaseAware: true, runtime: "bun", adopt: false, readOnly: false },
-    { releaseAware: true, runtime: "node", adopt: true, readOnly: false },
+    { releaseAware: true, runtime: "node", adopt: true, readOnly: false, nodeOnly: true },
     { releaseAware: true, runtime: "node", adopt: true, readOnly: true },
     { releaseAware: false, runtime: "node", adopt: true, readOnly: false },
     // An explicit artifact rebuilt at the installed version is still a new release.
     { releaseAware: true, runtime: "node", build: "rebuilt" },
     { releaseAware: true, runtime: "node", build: "installed" },
   ])(
-    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build)",
-    async ({ releaseAware, runtime, adopt = false, readOnly = false, build }) => {
+    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build, deferred node-only=$nodeOnly)",
+    async ({ releaseAware, runtime, adopt = false, readOnly = false, build, nodeOnly }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningVersion = adopt ? "2026.11.20" : "2026.11.21";
       const runningRoot = adopt
@@ -682,6 +685,15 @@ if (process.argv[2] !== 'install') {
           code: "ENOENT",
         });
       });
+      // A converted deferred update keeps its owner even after only the node service remains.
+      if (nodeOnly) {
+        vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => false }),
+        );
+        vi.spyOn(nodeService, "resolveNodeService").mockReturnValue(
+          createMockGatewayService({ hasInstalledDefinition: async () => true }),
+        );
+      }
       if (readOnly) {
         const writeFile = fs.writeFile.bind(fs);
         vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {

@@ -38,6 +38,7 @@ import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
 import {
   checkUpdateInstallationSlot,
+  hasReleaseUpdateOwner,
   isNodeOnlyUpdateInstallation,
   resolveInstalledPackageFrontend,
 } from "./installation-identity.js";
@@ -171,12 +172,6 @@ export async function prepareUpdate(params: {
         );
       }
       await checkUpdateInstallationSlot(params.runningRoot, env);
-      if (await isNodeOnlyUpdateInstallation(env)) {
-        return await fail(
-          "package-installer-owned",
-          "No local Gateway can activate a release trial on this node-only installation. Nothing was staged. Rerun openclaw update to use its package installer.",
-        );
-      }
       await assertUpdateRecoveryAdmission({ env });
       const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
         timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
@@ -184,6 +179,16 @@ export async function prepareUpdate(params: {
       const install: InstallKind = missingGit
         ? { kind: "package" }
         : await detectInstall(params.runningRoot);
+      if (
+        install.kind === "package" &&
+        !(await hasReleaseUpdateOwner(env)) &&
+        (await isNodeOnlyUpdateInstallation(env))
+      ) {
+        return await fail(
+          "package-installer-owned",
+          "No local Gateway can activate a release trial on this node-only installation. Nothing was staged. Rerun openclaw update to use its package installer.",
+        );
+      }
       try {
         const ownership = {
           root: params.runningRoot,

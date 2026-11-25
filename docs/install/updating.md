@@ -173,14 +173,17 @@ installation through that other path.
 Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
 prepared-release behavior.
 
-A node-only installation with an installed node service, no Gateway service
-definition, and no live local Gateway stays with its package installer.
+Before conversion, a node-only installation with an installed node service, no
+Gateway service definition, and no live local Gateway stays with its package installer.
 `openclaw update` uses the existing package update flow for that installation;
 it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
 Its package result names the updated installation's `node install --force` and
 `node restart` commands. Wait for node work to become idle before using them;
 the package update does not claim to have replaced or restarted a retained node
 runtime.
+
+A previously converted installation keeps its resident release owner even if its
+Gateway service was removed; `--no-restart` can still prepare its next release.
 
 Before first conversion, a live foreground Gateway can lose its installation
 path from OS process inspection. With operator access, let that Gateway handle
