@@ -127,7 +127,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
 }
 
 // A manifestless load.paths file starts with the Gateway; a manifest beside it replaces that
-// intent, so an enabled file whose manifest omits onStartup starts only through another trigger.
+// intent, so an enabled file whose manifest declares no activation starts only if config does.
 function pushStandaloneFileStartupIntentDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -138,7 +138,9 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
   const policyId = normalizePluginPolicyId(record.id);
   if (
     record.origin !== "config" ||
-    record.activation?.onStartup !== undefined ||
+    Object.values(record.activation ?? {}).some((v) =>
+      Array.isArray(v) ? v.length > 0 : v !== undefined,
+    ) ||
     !params.explicitConfiguredFileSources.has(path.resolve(record.source)) ||
     isInactiveByPolicy(policyId, normalized) ||
     (normalized?.entries[policyId]?.enabled !== true && !normalized?.allow.includes(policyId))
@@ -150,7 +152,7 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
     pluginId: sanitizeForLog(record.id),
     source: sanitizeForLog(record.manifestPath),
     message:
-      "standalone plugin file has a manifest without activation.onStartup, so it starts with the Gateway only when another declared activation trigger matches (registering hooks is not one); set activation.onStartup to true to keep starting it with the Gateway, or false to keep it lazy",
+      "standalone plugin file has a manifest that declares no activation, so it starts with the Gateway only when its config activates it (registering hooks does not); set activation.onStartup to true to keep starting it with the Gateway, or false to keep it lazy",
   });
 }
 
