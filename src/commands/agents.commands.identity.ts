@@ -25,14 +25,14 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveFilesystemPath } from "../infra/home-dir.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 
-const normalizeWorkspacePath = (input: string) => path.resolve(expandHomePrefix(input));
+const normalizeWorkspacePath = (input: string) => resolveFilesystemPath(expandHomePrefix(input));
 
 export async function agentsSetIdentityCommand(opts: {
   agent?: string;

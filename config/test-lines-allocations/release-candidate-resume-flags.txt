@@ -1,2 +1,0 @@
-# Regression proof for #192564 resume discovery and one-pass candidate flags.
-103

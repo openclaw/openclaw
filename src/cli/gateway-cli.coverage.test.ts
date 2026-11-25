@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
+import { resetLogger } from "../logging/logger.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
@@ -136,8 +137,10 @@ async function expectJsonValidationFailure(args: string[], message: unknown) {
 
 describe("gateway-cli coverage", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(resetLogger);
 
   beforeEach(() => {
+    resetLogger();
     gatewayProgram = createGatewayProgram();
     work.signal = undefined;
     callGateway.mockReset();
@@ -511,6 +514,7 @@ describe("gateway-cli coverage", () => {
         OPENCLAW_TEST_FILE_LOG: "1",
       },
       async () => {
+        resetLogger();
         // A relative namespace suffix must not acquire the current home prefix.
         const cwd = vi.spyOn(process, "cwd").mockReturnValue(userProfile);
         try {
@@ -519,7 +523,32 @@ describe("gateway-cli coverage", () => {
             await runGatewayCommand(["diagnostics", "export", "--output", outputPath, "--json"]);
             const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
             const logs = await zip.file("logs/openclaw-sanitized.jsonl")?.async("string");
-            expect(logs).toBe(expected);
+            const diagnostics = JSON.parse(
+              (await zip.file("diagnostics.json")?.async("string")) ?? "{}",
+            ).logs;
+            let logContext: string | undefined;
+            if (logs !== expected) {
+              logContext = JSON.stringify({
+                iteration: filename === "first.zip" ? 1 : 2,
+                selectedConfiguredFile:
+                  diagnostics?.file === `$OPENCLAW_STATE_DIR${path.sep}input.log`,
+                lineCount:
+                  typeof diagnostics?.lineCount === "number" ? diagnostics.lineCount : null,
+                size: typeof diagnostics?.size === "number" ? diagnostics.size : null,
+                cursor: typeof diagnostics?.cursor === "number" ? diagnostics.cursor : null,
+                status:
+                  typeof diagnostics?.file !== "string"
+                    ? "missing-metadata"
+                    : diagnostics.file === "unavailable"
+                      ? "failed"
+                      : "included",
+              });
+            }
+            expect(
+              diagnostics?.file === `$OPENCLAW_STATE_DIR${path.sep}input.log`,
+              logContext,
+            ).toBe(true);
+            expect(logs, logContext).toBe(expected);
             if (logs === undefined) {
               throw new Error("Diagnostics export is missing sanitized logs");
             }
@@ -532,6 +561,7 @@ describe("gateway-cli coverage", () => {
           }
         } finally {
           cwd.mockRestore();
+          resetLogger();
         }
       },
     );

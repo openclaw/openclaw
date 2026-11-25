@@ -19,28 +19,17 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     onTestFinished(startOpenClawIdFeatureLifetime());
     const clawId = "removal-layout";
     const own = formatEd25519PublicKey((await ensureOwnerDeviceSigner(clawId)).publicKey);
+    const device = (devicePub: string, label: string, deviceFp: string, approvedBy = "root") => ({
+      devicePub,
+      label,
+      deviceFp,
+      peerKeys: [],
+      approvedBy,
+    });
     let ownerDevices = [
-      {
-        devicePub: own,
-        label: "This browser",
-        deviceFp: "fp:own",
-        peerKeys: [],
-        approvedBy: "root",
-      },
-      {
-        devicePub: `ed25519:${"11".repeat(32)}`,
-        label: "Chrome on Windows 11",
-        deviceFp: "fp:windows",
-        peerKeys: [],
-        approvedBy: "root",
-      },
-      {
-        devicePub: `ed25519:${"22".repeat(32)}`,
-        label: "Tablet",
-        deviceFp: "fp:tablet",
-        peerKeys: [],
-        approvedBy: "fp:windows",
-      },
+      device(own, "This browser", "fp:own"),
+      device(`ed25519:${"11".repeat(32)}`, "Chrome on Windows 11", "fp:windows"),
+      device(`ed25519:${"22".repeat(32)}`, "Tablet", "fp:tablet", "fp:windows"),
     ];
     const submission = Promise.withResolvers<void>();
     const done = showOwnerDevicesDialog({
@@ -69,15 +58,41 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     const row = remove.element().closest<HTMLElement>('[role="listitem"]')!;
     const label = row.querySelector<HTMLElement>(".openclaw-id-devices__text")!;
     const dialog = row.closest<HTMLElement>("openclaw-modal-dialog")!;
-    await vi.waitFor(() =>
-      expect(
-        dialog
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.pending || animation.playState === "running"),
-      ).toBe(false),
+    await Promise.allSettled(
+      dialog.getAnimations({ subtree: true }).map((animation) => animation.finished),
     );
-    const initial = label.getBoundingClientRect();
-    const initialRow = row.getBoundingClientRect();
+    const contentOffset = () => {
+      const rowBounds = row.getBoundingClientRect();
+      const labelBounds = label.getBoundingClientRect();
+      return [labelBounds.left - rowBounds.left, labelBounds.top - rowBounds.top];
+    };
+    const initialOffset = contentOffset();
+    const heightAnimations = new Map<Element, Animation>();
+    const rowOffsets: number[][] = [];
+    // Capture at the style-mutation checkpoint, before timers or the click RPC can resume.
+    // Finishing here forces the slow-observer case: live getAnimations() has already expired.
+    const observer = new MutationObserver(() => {
+      for (const animation of dialog.getAnimations({ subtree: true })) {
+        const effect = animation.effect;
+        if (
+          !(effect instanceof KeyframeEffect) ||
+          !effect.getKeyframes().some((frame) => frame.height !== undefined)
+        ) {
+          continue;
+        }
+        heightAnimations.set(effect.target!, animation);
+        if (effect.target === row && rowOffsets.length === 0) {
+          for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+            animation.currentTime = Number(effect.getTiming().duration) * progress;
+            rowOffsets.push(contentOffset());
+          }
+        }
+        animation.finish();
+      }
+    });
+    observer.observe(dialog, { subtree: true, attributes: true, attributeFilter: ["style"] });
+    onTestFinished(() => observer.disconnect());
+    const heightAnimation = (element: HTMLElement) => heightAnimations.get(element);
     await remove.click();
     const cancel = page.getByRole("button", { name: "Cancel", exact: true });
     const confirm = page.getByRole("button", {
@@ -85,25 +100,9 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
       exact: true,
     });
     await expect.element(cancel).toBeVisible();
-    const heightAnimation = (element: HTMLElement) =>
-      element
-        .getAnimations()
-        .find(
-          (animation) =>
-            animation.effect instanceof KeyframeEffect &&
-            animation.effect.getKeyframes().some((frame) => frame.height !== undefined),
-        );
     if (!reduced) {
       await vi.waitFor(() => expect(heightAnimation(row)).toBeDefined(), { interval: 5 });
-      while (heightAnimation(row)?.playState === "running") {
-        const movingRow = row.getBoundingClientRect();
-        const movingLabel = label.getBoundingClientRect();
-        expect(movingLabel.top - movingRow.top).toBe(initial.top - initialRow.top);
-        expect(movingLabel.left - movingRow.left).toBe(initial.left - initialRow.left);
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-      }
+      expect(rowOffsets).toEqual(Array.from({ length: 5 }, () => initialOffset));
     }
     await vi.waitFor(() => expect(row.style.height).toBe(""));
     const note = row.querySelector<HTMLElement>('[role="note"]')!.getBoundingClientRect();
@@ -119,19 +118,17 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
       Math.max(cancelBounds.top, confirmBounds.top),
     );
     expect(row.scrollWidth).toBe(row.clientWidth);
-    const current = label.getBoundingClientRect();
-    expect([current.left - bounds.left, current.top - bounds.top]).toEqual([
-      initial.left - initialRow.left,
-      initial.top - initialRow.top,
-    ]);
+    expect(contentOffset()).toEqual(initialOffset);
     const card = row.closest<HTMLElement>(".openclaw-id-devices")!;
     const security = page.getByRole("button", { name: "Security details", exact: true });
     const section = document.getElementById(security.element().getAttribute("aria-controls")!)!;
     for (const open of [true, false]) {
+      heightAnimations.clear();
       await security.click();
       if (!reduced) {
         await vi.waitFor(() => expect(heightAnimation(section)).toBeDefined(), { interval: 5 });
         expect(heightAnimation(card)).toBeDefined();
+        expect(heightAnimation(section)?.playState).toBe("finished");
       }
       await vi.waitFor(() => expect(section.style.height).toBe(""));
       expect(section.hidden).toBe(!open);
@@ -143,6 +140,7 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     await confirm.click();
     expect(row.isConnected).toBe(true);
     expect(tabletElement.isConnected).toBe(true);
+    heightAnimations.clear();
     submission.resolve();
     if (!reduced) {
       await vi.waitFor(
@@ -159,3 +157,54 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     expect(document.querySelectorAll('[role="listitem"]')).toHaveLength(1);
   },
 );
+
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)("offers the loader approval route to a remote owner (%s %s)", async (theme, width) => {
+  await page.viewport(width, 900);
+  document.documentElement.dataset.theme = theme;
+  onTestFinished(startOpenClawIdFeatureLifetime());
+  const own = `ed25519:${"11".repeat(32)}`;
+  const done = showOwnerDevicesDialog({
+    client: {
+      request: async (method: string) =>
+        method === "openclawId.people"
+          ? {
+              link: {
+                linked: true,
+                clawId: "remote-owner-proof",
+                seq: 1,
+                rootPub: own,
+                ownerDevices: [
+                  {
+                    devicePub: own,
+                    deviceFp: "fp:owner",
+                    peerKeys: [],
+                    label: "Safari on iOS",
+                    approvedBy: "root",
+                  },
+                ],
+              },
+            }
+          : { channel: "tunnel", owner: true },
+    } as unknown as GatewayBrowserClient,
+  });
+  try {
+    const action = page.getByRole("link", { name: "Approve a new device", exact: true });
+    await expect.element(action).toBeVisible();
+    await expect.element(action).toHaveAttribute("href", "/_loader/?stay=1&view=approve");
+    await Promise.allSettled(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished),
+    );
+    await page.screenshot({ path: `./.vitest/ocf551/remote-owner-devices-${theme}-${width}.png` });
+  } finally {
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await done;
+  }
+});

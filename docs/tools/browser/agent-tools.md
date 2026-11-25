@@ -42,6 +42,13 @@ How it maps:
   return a recovery error. Retry after the capture finishes. If it stays stuck,
   close and reopen the affected tab; other tabs remain available.
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.
+- `browser profiles` lists profiles on the selected route and adds `nodeRoutes`: connected
+  nodes advertising the approved browser proxy command, with explicit `target="node"`
+  and `node` selectors. Discovery does not attach to those browsers or prove account
+  access. `nodeRoutesUnavailable` reports blocked or failed discovery separately from
+  an empty list. A route-local attach/permission failure never replays the action on
+  a candidate. Select an authorized candidate explicitly, discover its profiles, then
+  verify fresh tabs and a snapshot of the intended account before acting.
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
   - `target` (`sandbox` | `host` | `node`) to select where the browser lives.

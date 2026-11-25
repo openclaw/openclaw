@@ -52,7 +52,10 @@ export function registerNodeCli(program: Command) {
   )
     .argument("<link>", "openclaw-node:// invitation link")
     .option("--service", "Install and run the node host as an OS service")
-    .option("--discovery-url <url>", "Discovery API origin (separate from the invitation link)")
+    .option(
+      "--discovery-url <url>",
+      "Discovery API origin (overrides the origin carried by the invitation link)",
+    )
     .option("--display-name <name>", "Override node display name")
     .action(async (link: string, opts, command: Command) => {
       try {

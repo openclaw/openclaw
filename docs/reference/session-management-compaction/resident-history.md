@@ -27,9 +27,9 @@ frozen payloads. Public getters detach the entries they expose while preserving
 local mutation behavior. This sharing is implemented; the bounded replacement
 and arbitrary-history acquisition design below remains proposed. Appends and complete
 history hydration can enlarge the resident view beyond its opening budget.
-The owners are `session-manager-core.ts`, `session-manager.ts`, and
-`session-accessor.sqlite-active-context.ts` under `src/agents/sessions/` and
-`src/config/sessions/` respectively.
+The owners are `session-manager-core.ts`, `session-manager-hydration.ts`,
+`session-manager.ts`, and `session-accessor.sqlite-active-context.ts` under
+`src/agents/sessions/` and `src/config/sessions/` respectively.
 
 The manager is legitimately retained by `AgentSession` and active-run callbacks.
 Reducing its working set complements correct run teardown; it does not replace

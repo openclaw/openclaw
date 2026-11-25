@@ -1,6 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createMemberWelcomeSlot } from "../../components/openclaw-id/member-welcome-slot.tsx";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -26,8 +28,10 @@ export function DraftWelcome(props: {
     const owner = source();
     return owner ? projectOwner(owner, (current) => current.state.result) : undefined;
   });
+  const application = useOptionalApplication();
+  const memberWelcome = createMemberWelcomeSlot(() => application);
   // Legacy render props can publish in-place edits; only selected fields gate work.
-  const options = () => props.options;
+  const options = () => memberWelcome.options(props.options);
   const scope = createMemo(
     () => ({
       sessionKey: options().sessionKey,
@@ -58,7 +62,7 @@ export function DraftWelcome(props: {
     <ChatWelcome
       {...options()}
       assistantNameControl={props.assistantNameControl}
-      composer={props.composer}
+      composer={memberWelcome.active() ? memberWelcome.step() : props.composer}
       preparedRecents={recents()}
     />
   );

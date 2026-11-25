@@ -105,7 +105,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     });
   });
 
-  it.each(["private-state", "unsafe-state", "coordination"] as const)(
+  it.each(["private-state", "captured-state", "unsafe-state", "coordination"] as const)(
     "handles a real writable temp ancestor with %s policy",
     async (fallback) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-temp-ancestor-"));
@@ -113,12 +113,16 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
       fs.mkdirSync(unsafe);
       fs.chmodSync(unsafe, 0o775);
       const state = path.join(fallback === "unsafe-state" ? unsafe : root, "state");
-      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      vi.stubEnv(
+        "OPENCLAW_STATE_DIR",
+        fallback === "captured-state" ? path.join(unsafe, "other-state") : state,
+      );
       const warn = vi.fn();
       const resolve = () =>
         resolvePreferredOpenClawTmpDir({
           preferredDir: path.join(unsafe, "openclaw"),
           tmpdir: () => unsafe,
+          ...(fallback === "captured-state" ? { stateDir: state } : {}),
           purpose: fallback === "coordination" ? "coordination" : "workspace",
           warn,
         });

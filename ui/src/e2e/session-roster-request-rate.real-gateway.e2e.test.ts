@@ -202,6 +202,7 @@ suite.define(() => {
             allOwners: { present: true, acknowledged: true },
           });
         await chooseSidebarOwner(page, "owner:" + viewerId);
+        // New chats have no Home parent (#203694), so the owner read is the only sidebar read.
         await expect
           .poll(() =>
             readStatus(
@@ -273,7 +274,8 @@ suite.define(() => {
           )
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
-        await sidebar.locator('[data-navigation-view="sessions"]').click();
+        // People opens Activity; going back returns to this page beside the Sessions list.
+        await page.goBack();
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);

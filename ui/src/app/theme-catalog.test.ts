@@ -149,14 +149,22 @@ it("publishes the catalog without reapplying a built-in palette", async () => {
   const palette = theme.appliedPalette;
   const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
   gateway.start();
-  current().request.mockResolvedValue(builtinCatalog());
+  current().request.mockImplementation(async (method) =>
+    method === "themes.get" ? catalog() : builtinCatalog(),
+  );
   current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   try {
-    await vi.waitFor(() => expect(theme.catalog?.themes).toContainEqual(descriptor));
+    await vi.waitFor(() =>
+      expect(theme.catalog?.palettes?.get(descriptor.id)?.dark.bg).toBe("#111122"),
+    );
     expect(theme.appliedPalette).toBe(palette);
     expect(styleWrites).not.toHaveBeenCalled();
     current().testOptions.onEvent?.(createGatewayEvent("plugins.changed"));
-    await vi.waitFor(() => expect(current().request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(
+        current().request.mock.calls.filter(([method]) => method === "themes.list"),
+      ).toHaveLength(2),
+    );
     expect(theme.appliedPalette).toBe(palette);
     expect(styleWrites).not.toHaveBeenCalled();
   } finally {
@@ -388,7 +396,7 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
   }
 });
 
-it("does not report a previous palette failure after a local theme switch", async () => {
+it("reports an unavailable preview without replacing the newly selected palette", async () => {
   const replacement: ThemeDescriptor = {
     ...descriptor,
     id: "space-pack/afterglow",
@@ -450,7 +458,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
     retired.reject(new Error("Previous palette is unavailable"));
     await retired.promise.catch(() => undefined);
     expect(document.documentElement.dataset.themeId).toBe(replacement.id);
-    expect(applicationTheme.catalog?.error).toBeNull();
+    expect(applicationTheme.catalog?.error).toBe("Previous palette is unavailable");
     expect(paletteReads).toBe(2);
   } finally {
     applicationTheme.dispose();
@@ -502,7 +510,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     const delayed = createDeferred<ThemesGetResult>();
     paletteResponse = delayed.promise;
     current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(2));
+    await vi.waitFor(() => expect(paletteReads).toBe(3));
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
     expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
       "--bg: #111122;",
@@ -518,7 +526,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     const failed = createDeferred<ThemesGetResult>();
     paletteResponse = failed.promise;
     current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(3));
+    await vi.waitFor(() => expect(paletteReads).toBe(4));
     failed.reject(new Error("Palette refresh temporarily failed"));
     await failed.promise.catch(() => undefined);
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
@@ -527,7 +535,7 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     );
     expect(applicationTheme.catalog?.error).toBe("Palette refresh temporarily failed");
     patchSettings({ textScale: 110 });
-    expect(paletteReads).toBe(3);
+    expect(paletteReads).toBe(4);
 
     paletteResponse = undefined;
     palette = createThemeDefinitionFixture({

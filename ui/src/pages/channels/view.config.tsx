@@ -158,7 +158,7 @@ export function ChannelConfigActions(params: { channelId: string; props: Channel
           class="btn btn--sm primary"
           type="submit"
           form={channelConfigFormId(params.channelId)}
-          disabled={!params.props.channels.connected || saving()}
+          disabled={!params.props.canAdmin || !params.props.channels.connected || saving()}
         >
           {saving() ? t("common.saving") : t("common.save")}
         </button>
@@ -188,7 +188,9 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
     params.props.savingChannel === params.channelId ||
     params.props.mutationBusy?.config ||
     params.props.config.configSaving;
-  const disabled = createMemo(() => saving() || params.props.config.configSchemaLoading);
+  const disabled = createMemo(
+    () => !params.props.canAdmin || saving() || params.props.config.configSchemaLoading,
+  );
   return (
     <Show
       when={!params.props.config.configSchemaLoading}
@@ -205,6 +207,9 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
           }
         }}
       >
+        <Show when={!params.props.canAdmin}>
+          <p class="settings-row__desc">{t("channels.hub.adminRequired")}</p>
+        </Show>
         <Show
           when={node()}
           fallback={

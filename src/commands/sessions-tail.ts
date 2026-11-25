@@ -146,7 +146,7 @@ async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
-): Promise<TailSelection[]> {
+): Promise<TailSelection[] | undefined> {
   if (opts.sessionKey || selections.length === 0) {
     return selections.filter((selection) => selection.key === opts.sessionKey);
   }
@@ -156,6 +156,7 @@ async function selectSessionsToTail(
   if (opts.store !== undefined) {
     runtime.log("explicit store: ordered by activity");
   } else {
+    const signal = getAsyncWorkSignal();
     try {
       const cfg = await captureRuntimeConfigAsyncReader()();
       const { sessions } = await callGatewayFromCliWithTransport<{
@@ -170,8 +171,11 @@ async function selectSessionsToTail(
           includeGlobal: true,
           includeUnknown: true,
         },
-        { progress: false },
+        { progress: false, signal },
       );
+      if (signal?.aborted) {
+        return undefined;
+      }
       const running = new Map(
         sessions
           .filter((row) => row.hasActiveRun && row.status !== "queued")
@@ -191,6 +195,9 @@ async function selectSessionsToTail(
         return active;
       }
     } catch (error) {
+      if (signal?.aborted) {
+        return undefined;
+      }
       if (!isGatewayRpcUnavailableError(error)) {
         throw error;
       }
@@ -316,6 +323,9 @@ export async function sessionsTailCommand(
     { ...opts, sessionKey: requestedKey },
     runtime,
   );
+  if (!selected) {
+    return;
+  }
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(

@@ -992,7 +992,7 @@ describe("post-activation failure settlement without inference", () => {
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();
         expect(report?.origin.nextAction).toContain("41001, 41002");
-        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
+        expect(report?.origin.nextAction).toContain("Once the recorded processes have stopped");
         expect(
           report?.steps.findLast((step) => step.step === "doctor process settlement"),
         ).toMatchObject({

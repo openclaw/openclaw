@@ -18,6 +18,7 @@ const commands = [
   command("system", "System tools (events, heartbeat, presence)"),
   command("models", "Model discovery, scanning, and configuration"),
   command("promos", "Discover and claim promotional model offers from ClawHub"),
+  command("tools", "Inspect and manage learned tool usage", { parentDefaultHelp: true }),
   command("telemetry", "Inspect and manage anonymous usage telemetry", { parentDefaultHelp: true }),
   command("infer", "Run provider-backed inference commands through a stable CLI surface"),
   command("capability", "Run provider capability commands (fallback alias: infer)"),

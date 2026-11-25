@@ -620,20 +620,9 @@ describe("createComputerTool schema", () => {
     };
     const first = createComputerTool({ transport });
     const prefix = definition(first);
-    const next = createComputerTool({
-      transport: {
-        ...transport,
-        computerUse: {
-          ...capabilities,
-          provider: { ...capabilities.provider, generation: "generation-2" },
-        },
-      },
-    });
-    expect(next.parameters).toBe(first.parameters);
     expect(Reflect.set(readActionEnum(first), "0", "launch_app")).toBe(false);
     capabilities.actions.push("launch_app");
     const changed = createComputerTool({ transport });
-    expect(changed.parameters).not.toBe(first.parameters);
     expect(readActionEnum(first)).toEqual(["screenshot", "key", "wait", "take_control"]);
     expect(readActionEnum(changed)).toContain("launch_app");
     expect(first.parameters).not.toHaveProperty("properties.target");

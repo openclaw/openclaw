@@ -6,6 +6,7 @@ import {
   fingerprint,
   generateInviteSecret,
   inviteSecretHash,
+  isNodeDiscoveryOrigin,
   type PublicKeyText,
 } from "@openclaw/openclaw-id-protocol";
 import { buildNodeJoinCommands } from "./node-commands.js";
@@ -16,6 +17,8 @@ type Request = <T = unknown>(method: string, params?: Record<string, unknown>) =
 export type CreatedNodeInvite = {
   inviteId: string;
   expiresAt: number;
+  /** Secret-bearing deep link; it stays in the creating browser dialog. */
+  joinLink: string;
   commands: ReturnType<typeof buildNodeJoinCommands>;
 };
 
@@ -32,14 +35,15 @@ export async function createNodeInvite(
   // Validate browser link inputs before registering an otherwise unusable invitation.
   // SAFETY: Gateway rootPub is a formatted public key; fingerprint validates its encoding.
   const rootFp = await fingerprint(link.rootPub as PublicKeyText);
-  const joinLink = buildNodeJoinLink({
+  const linkFields = {
     invite_id,
     secret,
     claw_id: link.clawId ?? "",
     root_fp: rootFp,
     hostname: link.hostname ?? "",
     relay_url: relayUrl,
-  });
+  };
+  buildNodeJoinLink(linkFields);
   const cap = await signAsOwner(link, "NodeInviteCap", {
     claw_id: link.clawId ?? "",
     invite_id,
@@ -52,9 +56,19 @@ export async function createNodeInvite(
     "openclawId.authority",
     { action: "register_node_invite", cap, proofKey: bytesToBase64url(proofKey) },
   );
+  // The link carries the Gateway's Discovery origin so a joining device needs no second input.
+  const discoveryUrl =
+    metadata.discoveryUrl && isNodeDiscoveryOrigin(metadata.discoveryUrl)
+      ? metadata.discoveryUrl
+      : undefined;
+  const joinLink = buildNodeJoinLink({
+    ...linkFields,
+    ...(discoveryUrl ? { discovery_url: discoveryUrl } : {}),
+  });
   return {
     inviteId: invite_id,
     expiresAt,
+    joinLink,
     commands: buildNodeJoinCommands({ joinLink, ...metadata }),
   };
 }

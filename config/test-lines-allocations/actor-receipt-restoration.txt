@@ -1,2 +1,0 @@
-# Restore compressed worker receipts in the existing transcript custody regression.
-4

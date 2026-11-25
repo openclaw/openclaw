@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { create } from "tar";
+import { create } from "tar/raw";
 import type { CommandFixture } from "../helpers/command-fixture.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 

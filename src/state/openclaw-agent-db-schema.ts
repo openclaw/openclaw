@@ -108,9 +108,17 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  migrateAgentMemberAccessInTransaction,
+} from "./openclaw-agent-member-access-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import {
+  AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
+  migrateAgentPendingInputEndingsInTransaction,
+} from "./openclaw-agent-pending-input-endings-schema.js";
 import { interruptHistoricalPendingInputs } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
@@ -120,6 +128,10 @@ import {
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { migrateAgentStorageInTransaction } from "./openclaw-agent-storage-migration.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  AGENT_TOOL_USAGE_SQL,
+} from "./openclaw-agent-tool-usage-schema.js";
 import {
   migrateAgentTrajectoryStorageInTransaction,
   withoutTrajectoryPayloadColumns,
@@ -191,7 +203,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     integrityCheck,
   );
   const startedAt = performance.now();
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
+  if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const boundedIndexes =
       runtimeAdmission && !verification && !reuseAdmission && integrityCheck !== "full"
         ? admitAgentDatabaseRuntimeStructure(database, pathname, agentId, diagnostics)
@@ -286,6 +298,11 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion > targetVersion) {
+        if (targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+          // A compatible newer writer owns its version and floor; runtime open must not rewrite either.
+          assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
+          return;
+        }
         throw new Error(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
@@ -386,6 +403,15 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION)) {
           db.exec(AGENT_ACTIVE_EVENT_FACTS_SQL);
         }
+        if (crossesVersion(AGENT_TOOL_USAGE_SCHEMA_VERSION)) {
+          db.exec(AGENT_TOOL_USAGE_SQL);
+        }
+        if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
+          migrateAgentPendingInputEndingsInTransaction(db);
+        }
+        if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
+          migrateAgentMemberAccessInTransaction(db);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -409,12 +435,16 @@ function ensureAgentSchema(
                   foundVersion: previousVersion,
                   supportedVersion: targetVersion,
                 }),
-                // The empty-table step adds one FK and cannot change existing relations.
-                // Earlier crossings and explicit FULL verification retain the global check.
-                ...(previousVersion === 40 &&
-                targetVersion === AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+                // These empty-table steps do not change existing relations. Only v41 adds a FK.
+                ...(previousVersion >= 40 &&
+                targetVersion <= AGENT_TOOL_USAGE_SCHEMA_VERSION &&
                 integrity.check === "quick"
-                  ? { foreignKeyTables: ["session_transcript_active_event_facts"] }
+                  ? {
+                      foreignKeyTables:
+                        previousVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
+                          ? ["session_transcript_active_event_facts"]
+                          : [],
+                    }
                   : {}),
               }
             : undefined,
@@ -704,7 +734,13 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const admittedDb = admitOpenClawAgentDatabaseSchema(db, { agentId, path: pathname });
   if (databaseOptions.register === true) {
-    registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env, admittedDb });
+    registerOpenClawAgentDatabase({
+      agentId,
+      path: pathname,
+      env: options.env,
+      admittedDb,
+      schemaVersion: readSqliteUserVersion(db),
+    });
   }
 }
 

@@ -289,6 +289,53 @@ it("keeps requester trailers in full and resumed backend prompt projections", as
   expect(envelope.transcriptCommandBody).not.toContain(trailer);
 });
 
+// Producer and consumer are the real ones: reply preparation builds the prefix, the
+// joiner and currentInboundContext, and the CLI runner (src/agents/cli-runner/prepare.ts)
+// renders the current turn with buildCurrentInboundPrompt, joining context.text and the
+// prompt with the joiner.
+async function projectQuotedTelegramTurn(body: string) {
+  const envelope = await envelopeFor(
+    context(body, {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      ReplyToId: "34971",
+      ReplyToQuoteText: " selected quote\n",
+      SenderName: "obviyus",
+      BodyForAgent: body,
+    }),
+  );
+  return {
+    cliPrompt: buildCurrentInboundPrompt({ context: envelope.currentInboundContext, prompt: body }),
+    carrier: (envelope.currentInboundContext?.fragments ?? [])
+      .map((fragment) => fragment.text)
+      .join("\n\n"),
+  };
+}
+
+it("states a quoted Telegram body exactly once in the CLI inline prompt", async () => {
+  const body = "What's the end result?";
+  const { cliPrompt, carrier } = await projectQuotedTelegramTurn(body);
+
+  expect(cliPrompt.split(body)).toHaveLength(2);
+  expect(cliPrompt.endsWith(`[Replying to: "selected quote"]\n#34974: ${body}`)).toBe(true);
+  // The separate carrier still states the body inside its own block.
+  expect(carrier).toContain(`Current message:\n[Replying to: "selected quote"]\n#34974: ${body}`);
+});
+
+it("keeps the complete formatted body in the CLI prompt and the sanitized one in the carrier", async () => {
+  const body = "Step one:\n\n  run `pnpm check`\nthen reply";
+  const sanitized = "Step one: run `pnpm check` then reply";
+  const { cliPrompt, carrier } = await projectQuotedTelegramTurn(body);
+
+  expect(cliPrompt.endsWith(`[Replying to: "selected quote"]\n#34974: ${body}`)).toBe(true);
+  expect(cliPrompt).not.toContain(sanitized);
+  expect(carrier).toContain(`[Replying to: "selected quote"]\n#34974: ${sanitized}`);
+  expect(carrier).not.toContain(body);
+});
+
 it.each([
   ["alice", false, true],
   ["bob", false, false],

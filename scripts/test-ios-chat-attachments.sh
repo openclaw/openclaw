@@ -53,11 +53,17 @@ run_test() {
   elif [[ "$stage" == after ]]; then
     tests+=(-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests -only-testing:OpenClawTests/OpenClawTypographyTests)
   fi
+  local test_action=test
+  local project_args=(-project "$tree/apps/ios/OpenClaw.xcodeproj")
+  if [[ "$stage" == after && "${IOS_TEST_BUILD_PREPARED:-false}" == true ]]; then
+    test_action=test-without-building
+    project_args+=(-clonedSourcePackagesDirPath "$root/apps/ios/build/SourcePackages")
+  fi
   # Keep Actions log backpressure outside the simulator, retaining complete logs and xcresults.
-  xcodebuild -project "$tree/apps/ios/OpenClaw.xcodeproj" -scheme "$scheme" \
+  xcodebuild "${project_args[@]}" -scheme "$scheme" \
     -configuration Debug -destination "platform=iOS Simulator,id=$simulator" \
     -testLanguage en -testRegion US -parallel-testing-enabled NO \
-    -resultBundlePath "$result" "${tests[@]}" test > "$log" 2>&1 || status=$?
+    -resultBundlePath "$result" "${tests[@]}" "$test_action" > "$log" 2>&1 || status=$?
   tail -c 8192 "$log"
   [[ -d "$result" ]] || return 1
   xcrun xcresulttool get test-results summary --path "$result" --compact > "$result.summary.json"
@@ -82,13 +88,17 @@ run_revision() {
   xcrun simctl boot "$simulator"
   xcrun simctl bootstatus "$simulator" -b
   xcrun simctl status_bar "$simulator" override --time 09:41 --batteryState charged --batteryLevel 100
-  (
-    cd "$tree"
-    ./scripts/ios-configure-signing.sh
-    ./scripts/ios-write-version-xcconfig.sh
-    node scripts/ios-write-swift-filelist.mjs
-    xcodegen generate --spec apps/ios/project.yml --project apps/ios
-  )
+  # Re-generating the candidate project would invalidate the prepared products.
+  # Baseline and standalone runs still configure and build their own revision.
+  if [[ "$stage" != after || "${IOS_TEST_BUILD_PREPARED:-false}" != true ]]; then
+    (
+      cd "$tree"
+      ./scripts/ios-configure-signing.sh
+      ./scripts/ios-write-version-xcconfig.sh
+      node scripts/ios-write-swift-filelist.mjs
+      xcodegen generate --spec apps/ios/project.yml --project apps/ios
+    )
+  fi
   node "$root/scripts/test-ios-shell-gateway.mjs" --attachments > "$output/Attachment-$stage-gateway.log" 2>&1 &
   fixture_pid=$!
   if [[ "$stage" == before ]]; then

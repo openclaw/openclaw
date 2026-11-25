@@ -2,7 +2,11 @@ import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtim
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -165,7 +169,6 @@ export function sideLoopRelayParams(
   overrides: Partial<SideQuestionParams> = {},
 ): SideQuestionParams {
   return sideParams({
-    cfg: { tools: { loopDetection: { enabled: true } } } as never,
     sessionKey: "agent:main:session-1",
     ...overrides,
   });
@@ -438,7 +441,13 @@ export async function runSideQuestionWithManagedWebSearchCall(
   return { forkConfig, result, toolResponse };
 }
 
-export function createPendingClient({ interrupt = true } = {}) {
+export function createPendingClient({ interrupt = true, policyRelay = false } = {}) {
+  if (policyRelay) {
+    // A pass-through before_tool_call policy is what installs the side thread's native hook relay.
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+  }
   const client = createFakeClient({ completeTurn: false });
   client.request.mockImplementation(async (method: string) =>
     interrupt && method === "turn/interrupt" ? {} : sideRequestResult(method),

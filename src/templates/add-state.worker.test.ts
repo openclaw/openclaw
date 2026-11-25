@@ -33,6 +33,8 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(() => vi.unstubAllEnvs());
 const bootstrapSeededAt = "2026-10-28T03:00:00.000Z";
 const nowMs = Date.parse(bootstrapSeededAt);
+const lease = (scope: string) =>
+  ({ scope, key: "bootstrap-worker", leaseMs: 60_000, waitMs: 0, heartbeat: "worker" }) as const;
 const bootstrapSha256 = "a".repeat(64);
 
 type Fixture = {
@@ -57,34 +59,18 @@ async function withAddLeases(run: (fixture: Fixture) => Promise<void>) {
   await withExistingOpenClawStateSchema({ path: database.path }, async () => {
     const context = captureOpenClawStateWorkerContext({ env });
     await withOpenClawStateLeaseAsync(
-      {
-        scope: "core:template-add-allocation",
-        key: "bootstrap-worker",
-        leaseMs: 60_000,
-        waitMs: 0,
-        heartbeat: "worker",
-      },
+      lease("core:template-add-allocation"),
       context,
       async (allocation) =>
-        withOpenClawStateLeaseAsync(
-          {
-            scope: "core:agent-deletion",
-            key: "bootstrap-worker",
-            leaseMs: 60_000,
-            waitMs: 0,
-            heartbeat: "worker",
-          },
-          context,
-          async (agent) => {
-            await Promise.all([allocation.assertOwned(), agent.assertOwned()]);
-            await run({
-              workspaceDir,
-              context,
-              leases: [allocation, agent],
-              read: () => readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true }),
-            });
-          },
-        ),
+        withOpenClawStateLeaseAsync(lease("core:agent-deletion"), context, async (agent) => {
+          await Promise.all([allocation.assertOwned(), agent.assertOwned()]);
+          await run({
+            workspaceDir,
+            context,
+            leases: [allocation, agent],
+            read: () => readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true }),
+          });
+        }),
     );
   });
 }
@@ -160,14 +146,12 @@ it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
         (scope, identities) => {
           const first = expectDefined(identities[0], "allocation identity");
           const second = expectDefined(identities[1], "agent identity");
-          const leases: readonly OpenClawStateLeaseIdentity[] | undefined =
-            mode === "missing"
-              ? undefined
-              : mode === "mismatched"
-                ? [second, first]
-                : mode === "duplicate"
-                  ? [first, first]
-                  : [{ ...first, owner: "retired-owner" }, second];
+          const leases: readonly OpenClawStateLeaseIdentity[] | undefined = {
+            missing: undefined,
+            mismatched: [second, first],
+            duplicate: [first, first],
+            stale: [{ ...first, owner: "retired-owner" }, second],
+          }[mode];
           return scope.execute({
             type: "templates.add.mergeBootstrapSetupState",
             input: {
@@ -202,10 +186,7 @@ it.each(["seed", "rollback"] as const)(
           bootstrapSeededAt,
           bootstrapSha256,
           nowMs,
-          {
-            stateMode: "worker",
-            leaseSet: fixture,
-          },
+          { stateMode: "worker", leaseSet: fixture },
         );
       }
       let current = true;

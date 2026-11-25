@@ -1,5 +1,5 @@
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
@@ -16,17 +16,20 @@ export function resolveHeartbeatAutomationModel(cfg: OpenClawConfig, agentId: st
     cfg,
     agentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
   });
   const selected = resolveAllowedModelRefCore({
     cfg,
     agentId,
     catalog: [],
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     defaultModel,
     raw: model,
   });
   if ("error" in selected && selected.error.startsWith("model not allowed:")) {
+    if (!defaultModel) {
+      // A disallowed selector with no configured model has nothing allowed to fall back to.
+      return {};
+    }
     const profile = splitTrailingAuthProfile(
       resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
     ).profile;

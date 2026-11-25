@@ -30,6 +30,34 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: [input],
   })),
+  {
+    // A Node-only suite must execute, not silently skip, when its runtime policy changes.
+    testFile: "src/infra/git-release.test.ts",
+    watchGlobs: ["scripts/lib/ci-test-runtime.mts"],
+  },
+  {
+    // Scenario coverage and taxonomy are filesystem inventories, not imports.
+    testFile: "extensions/qa-lab/src/coverage-report.test.ts",
+    watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
+  },
+  {
+    // Copilot consumes this shared replay contract through the SDK facade (three hops).
+    testFile: "extensions/github-copilot/replay-policy.test.ts",
+    watchGlobs: ["src/plugins/provider-replay-helpers.ts"],
+  },
+  {
+    // Match the native scanner's source roots, not all Apple/Android build inputs.
+    testFile: "test/scripts/native-app-i18n.test.ts",
+    watchGlobs: [
+      "apps/ios/**/*.{swift,plist}",
+      "apps/macos/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      "apps/android/app/src/{main,play,thirdParty}/**/*.{kt,kts}",
+      "apps/android/app/src/{main,play,thirdParty}/**/res/values/*.xml",
+      "apps/android/wear/src/main/res/values/*.xml",
+    ],
+  },
   // Copied release fixtures need the complete helper closure beyond the hub cutoff.
   ...[
     "test/scripts/ocm-npm-workspace-deps.test.ts",
@@ -46,6 +74,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     // The node-host integration proves the official-plugin version floor through a facade.
     testFile: "src/node-host/codex-node-plugin.integration.test.ts",
     watchGlobs: ["src/plugins/official-runtime-plugins.ts"],
+  },
+  {
+    // Catalog artwork is read from every bundled manifest's package directory.
+    testFile: "src/plugins/bundled-plugin-icons.test.ts",
+    watchGlobs: [
+      "extensions/*/openclaw.plugin.json",
+      "extensions/*/assets/{icon.png,activity.svg}",
+    ],
+  },
+  {
+    testFile: "src/plugins/bundled-plugin-categories.test.ts",
+    watchGlobs: ["extensions/*/openclaw.plugin.json"],
   },
   {
     // YAML code/docs references are not import edges. A removed path can be
@@ -100,6 +140,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/eager-import-closure.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
+    // Bundles each standalone worker at test time: one new edge can pull the Gateway graph
+    // into a private worker build, which only release packaging measures otherwise.
+    "test/scripts/runtime-process-build-graph.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     sourceOnly: true,
@@ -223,6 +266,23 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
   },
   {
+    // Late shutdown imports fail only after an in-place update; the preload sees them first.
+    testFile: "test/scripts/gateway-shutdown-late-imports.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server{,-close,-close.runtime,-lifecycle,-shutdown,-shutdown.runtime}.ts",
+      "src/cli/gateway-cli/run-loop*.ts",
+      "src/cli/one-shot-exit.ts",
+      "src/infra/sqlite-worker-store.ts",
+      "src/state/openclaw-state.worker.ts",
+      "src/plugins/plugin-source-capture-directory.ts",
+      "src/process/supervisor/{supervisor,released-processes}.ts",
+      "extensions/memory-core/{index,src/memory/manager-runtime-loader,src/memory/search-manager}.ts",
+      "src/cron/store/dispatch.worker.ts",
+      "test/helpers/gateway-late-import-probe.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
   },
@@ -342,16 +402,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/codex/src/session-catalog-native-performance.test.ts",
     watchGlobs: ["pnpm-lock.yaml"],
   },
-  ...[
-    "extensions/copilot/src/attempt-transcript-journal.test.ts",
-    "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-    ],
-  })),
+  ...["extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "extensions/diffs/src/store.test.ts",
     "extensions/diffs/src/tool.test.ts",
@@ -403,10 +462,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
-  })),
   {
     testFile: "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
     watchGlobs: [
@@ -428,13 +483,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "src/agents/agent-harness-completion-delivery.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  {
     testFile: "src/agents/auth-profiles/store-owner-publication.test.ts",
     watchGlobs: [
       "src/agents/auth-profiles/store-scope-cwd.test-support.ts",
@@ -443,11 +491,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.foreground.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
@@ -818,6 +863,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-agent-execution.worker.ts",
     ],
+  },
+  {
+    // The test loads the packaged worker through its runtime entrypoint.
+    testFile: "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
   },
   ...[
     "src/config/sessions/session-accessor.sqlite-transcript-suffix.test.ts",
@@ -1256,6 +1306,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
+    // The rollback fixture loads this worker through factory-created descriptors.
+    testFile: "src/cli/update-cli/update-command-database-rollback.test.ts",
+    watchGlobs: ["src/infra/update-physical-database-generations.ts"],
+  },
+  {
     testFile: "src/node-host/node-worker-workspace-retention.test.ts",
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
@@ -1633,7 +1688,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
   },
   ...[
-    "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
     "src/gateway/session-message-events.test.ts",
@@ -1691,7 +1745,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/config/sessions/session-accessor.sqlite-archive-session.test.ts",
     "src/config/sessions/session-history-budget-owner.test.ts",
     "src/config/sessions/session-history-eviction.test.ts",
   ].map((testFile): PolicyTestWatch => ({

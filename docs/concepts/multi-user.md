@@ -92,7 +92,7 @@ There are four separate pieces:
 Open **Settings → Profile → Connected accounts**, select **Add account**, then choose a provider and sign-in method. Adding an account needs an identified connection with `operator.write`.
 
 - **Anthropic** accepts an API key for personal setup, not a Claude subscription token.
-- **OpenAI** offers API key, ChatGPT/Codex browser sign-in, and device-code sign-in.
+- **OpenAI** offers API key, Codex login (device code), and Sign in with ChatGPT.
 - **Grok (xAI)** offers API key and device sign-in.
 
 The chooser shows only provider methods enabled for personal accounts on that Gateway. Follow its instructions and use the protected input for credentials or authorization codes. A browser callback can finish while an input is open. Keep the Profile connection open until it reports the result. Saving credentials is separate from verifying a successful model request.
@@ -170,7 +170,9 @@ The card shows how long the person has been continuously connected, their report
 
 People presence is shared with operators who have read access (`operator.read`, also implied by `operator.write` or `operator.admin`). Those readers may see other people's online and activity timing and reported time zone whether or not the person is watching a session. Node and pairing-only connections receive neither the presence inventory nor its activity-driven events. This does not change cross-reader IP visibility or provide isolation for all Gateway metadata. See [Who can see presence](/concepts/presence#who-can-see-presence).
 
-**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents; it includes active sessions only. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents. It includes only active sessions and omits system sessions, including helpers that publish pull requests to GitHub. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+
+The card shows **No recent visible sessions** only after the list loads successfully. If the first read fails, the card shows that recent sessions are unavailable; reopen it to try again.
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 
@@ -207,7 +209,7 @@ does not retain their delivered channel message IDs. See
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
 
-In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The picker lists people who have sent messages in the current chat first, newest sender first, followed by members who have not sent a message. Other eligible people use the stable online-first, alphabetical order. Search still filters by display name or verified GitHub handle; message recency from other chats does not affect this chat’s ranking. People without a display name appear under a linked verified GitHub handle when available; otherwise, they keep a neutral person label rather than exposing an email address. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The picker lists people who have sent messages in the current chat first, newest sender first, followed by members who have not sent a message. Other eligible people use the stable online-first, alphabetical order. Search still filters by display name or verified GitHub handle; message recency from other chats does not affect this chat’s ranking. People without a display name appear under a linked verified GitHub handle when available; otherwise, they keep a neutral person label rather than exposing an email address. Selected recipients appear as inline person references; queued messages show **Notify or invite**. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. Deleting an inline mention removes that recipient selection; queued-message editing also offers **Remove mention** without removing the message text.
 
 Use Up/Down to move through people, Home/End to jump to the first or last result,
 and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
@@ -224,12 +226,26 @@ matches, and **Retry** if a search without usable cached results fails temporari
 Permission, profile-verification, and unsupported-conversation rejections clear
 cached people and show guidance instead of Retry. Follow that guidance to restore
 your access or choose a supported conversation.
-**Will notify** reuses the selected person's photo, with initials while it loads or
+**Notify or invite** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
 Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. The Gateway rechecks the recipient's current access when creating and displaying it.
+
+For roles with `sessions.others: "invited"`, the creator or an administrator can
+also select people who are not yet session members. Sending that selected
+@mention grants membership when the original human message is committed.
+Plain text, assistant output, and mentions removed by approval do not grant access.
+Other participants cannot invite new members. Draft and incognito restrictions
+remain in force, and mentions never change the session's visibility.
+
+Remove a person from session members to revoke invitation access. An old message
+retry cannot restore it, even after a restart. A new selected mention from the
+creator or an administrator can invite them again. Access is committed with the message. If the later Inbox notification fails,
+the sender receives a notice that the message was posted but notifications failed.
+Membership does not grant broader operator scopes. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 A message that starts with a selected person is addressed to them, not to the agent. The Gateway posts it to the transcript and notifies the recipients, but the agent does not reply, steer its current run, or queue a turn; it reads the message as context on its next turn. To involve the agent in the same message, name it in the text using its identity name (or a configured `mentionPatterns` entry), for example `@Bob look at this. Robo, put them on one sheet.` A selected person's own token is never treated as naming the agent. Mentions elsewhere in a request, such as `Please make poster previews. cc @Bob`, notify the person without suppressing the agent turn.
 

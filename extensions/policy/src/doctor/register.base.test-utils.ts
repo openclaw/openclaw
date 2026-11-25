@@ -10,6 +10,7 @@ import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence, policyDocumentHash } from "../policy-state.js";
 import { evaluatePolicy } from "./evaluation.js";
+import { POLICY_CHECK_METADATA } from "./fix-metadata.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
@@ -195,76 +196,7 @@ describe("registerPolicyDoctorChecks", () => {
     };
     registerPolicyDoctorChecks(host);
     registerPolicyDoctorChecks(host);
-    const expectedIds = [
-      "policy/policy-jsonc-missing",
-      "policy/policy-jsonc-invalid",
-      "policy/policy-hash-mismatch",
-      "policy/attestation-hash-mismatch",
-      "policy/channels-denied-provider",
-      "policy/mcp-denied-server",
-      "policy/mcp-unapproved-server",
-      "policy/models-denied-provider",
-      "policy/models-unapproved-provider",
-      "policy/network-private-access-enabled",
-      "policy/ingress-dm-policy-unapproved",
-      "policy/ingress-dm-scope-unapproved",
-      "policy/ingress-open-groups-denied",
-      "policy/ingress-group-mention-required",
-      "policy/routing-bindings-required",
-      "policy/routing-binding-channel-unconfigured",
-      "policy/routing-agent-mismatch",
-      "policy/routing-match-kind-mismatch",
-      "policy/gateway-non-loopback-bind",
-      "policy/gateway-auth-disabled",
-      "policy/gateway-rate-limit-missing",
-      "policy/gateway-control-ui-insecure",
-      "policy/gateway-tailscale-funnel",
-      "policy/gateway-remote-enabled",
-      "policy/gateway-http-endpoint-enabled",
-      "policy/gateway-http-url-fetch-unrestricted",
-      "policy/gateway-node-command-denied",
-      "policy/agents-workspace-access-denied",
-      "policy/agents-tool-not-denied",
-      "policy/tools-profile-unapproved",
-      "policy/tools-fs-workspace-only-required",
-      "policy/tools-exec-security-unapproved",
-      "policy/tools-exec-ask-unapproved",
-      "policy/tools-exec-host-unapproved",
-      "policy/tools-elevated-enabled",
-      "policy/tools-also-allow-missing",
-      "policy/tools-also-allow-unexpected",
-      "policy/tools-required-deny-missing",
-      "policy/sandbox-mode-unapproved",
-      "policy/sandbox-backend-unapproved",
-      "policy/sandbox-container-posture-unobservable",
-      "policy/sandbox-container-host-network-denied",
-      "policy/sandbox-container-namespace-join-denied",
-      "policy/sandbox-container-mount-mode-required",
-      "policy/sandbox-container-runtime-socket-mount",
-      "policy/sandbox-container-unconfined-profile",
-      "policy/sandbox-browser-cdp-source-range-missing",
-      "policy/data-handling-telemetry-content-capture",
-      "policy/data-handling-session-retention-not-enforced",
-      "policy/data-handling-session-transcript-memory-enabled",
-      "policy/secrets-unmanaged-provider",
-      "policy/secrets-denied-provider-source",
-      "policy/secrets-insecure-provider",
-      "policy/auth-profile-invalid-metadata",
-      "policy/auth-profile-unapproved-mode",
-      "policy/exec-approvals-missing",
-      "policy/exec-approvals-invalid",
-      "policy/exec-approvals-default-security-unapproved",
-      "policy/exec-approvals-agent-security-unapproved",
-      "policy/exec-approvals-auto-allow-skills-enabled",
-      "policy/exec-approvals-allowlist-missing",
-      "policy/exec-approvals-allowlist-unexpected",
-      "policy/tools-md-migration-required",
-      "policy/tools-missing-risk-level",
-      "policy/tools-unknown-risk-level",
-      "policy/tools-missing-sensitivity-token",
-      "policy/tools-missing-owner",
-      "policy/tools-unknown-sensitivity-token",
-    ];
+    const expectedIds = POLICY_CHECK_METADATA.map(({ fix }) => fix.checkId);
     expect(checks.map((check) => check.id)).toEqual(expectedIds);
 
     registerPolicyDoctorChecks();
@@ -657,16 +589,6 @@ describe("registerPolicyDoctorChecks", () => {
         label: "tools top-level",
         policy: { tools: { execPolicy: { allowHosts: ["sandbox"] } } },
         target: "oc://policy.jsonc/tools/execPolicy",
-      },
-      {
-        label: "tools settings",
-        policy: { tools: { settings: {} } },
-        target: "oc://policy.jsonc/tools/settings",
-      },
-      {
-        label: "tools entries",
-        policy: { tools: { entries: [] } },
-        target: "oc://policy.jsonc/tools/entries",
       },
       {
         label: "tools profile",

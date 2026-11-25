@@ -1,2 +1,0 @@
-123
-# Selected/unselected in-place editing, save/cancel/blur, immutable identity, live permission retirement, rejected-draft recovery, and native editing context menus.

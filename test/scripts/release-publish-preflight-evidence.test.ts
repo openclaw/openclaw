@@ -13,9 +13,11 @@ import {
   type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import * as releaseEvidence from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +31,7 @@ const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("protected tooling tag resolution", () => {
@@ -251,6 +254,12 @@ function coreEvidenceFixture(sdkEntry?: string) {
     mode: constants.COPYFILE_FICLONE,
   });
   const { targetSha } = sourceTemplate;
+  const candidate = candidatePublicationFixture({
+    candidateSha: targetSha,
+    candidateVersion: version,
+  });
+  // Replace external evidence reads, not the admission/authentication owners.
+  vi.spyOn(releaseEvidence, "createReleaseEvidenceClient").mockReturnValue(candidate.client);
   const artifacts = tempDirs.make("publish-preflight-artifacts-");
   const writeArtifact = (name: string, bytes: string | Uint8Array) =>
     writeFileSync(join(artifacts, name), bytes);
@@ -267,7 +276,7 @@ function coreEvidenceFixture(sdkEntry?: string) {
       tarballSha256: sha256(bytes),
     };
   });
-  const rootBytes = Buffer.from("synthetic immutable openclaw");
+  const rootBytes = Buffer.from(candidate.npmBytes);
   writeArtifact("openclaw.tgz", rootBytes);
   writeArtifact(
     "core-packages-SHA256SUMS",
@@ -275,7 +284,7 @@ function coreEvidenceFixture(sdkEntry?: string) {
   );
   const payload = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
   const manifest = {
-    version: 1,
+    ...candidate.npmManifest,
     releaseTag: `v${version}`,
     releaseSha: targetSha,
     packageVersion: version,
@@ -293,7 +302,22 @@ function coreEvidenceFixture(sdkEntry?: string) {
     }),
   };
   const manifestPath = join(artifacts, "preflight-manifest.json");
-  const writeManifest = () => writeJsonFile(manifestPath, manifest);
+  const writeManifest = () => {
+    writeJsonFile(manifestPath, manifest);
+    candidate.npmQualified.manifestSha256 = sha256(readFileSync(manifestPath));
+    const archive = makeStoredZip(
+      Object.fromEntries(
+        readdirSync(artifacts)
+          .filter((name) => name !== "bin")
+          .map((name) => [name, readFileSync(join(artifacts, name))]),
+      ),
+    );
+    candidate.npmArtifact.id = 90;
+    candidate.npmArtifact.digest = `sha256:${sha256(archive)}`;
+    candidate.npmArtifact.size_in_bytes = archive.length;
+    candidate.npmQualified.artifact.id = "90";
+    candidate.npmQualified.artifact.digest = sha256(archive);
+  };
   writeManifest();
   let downloadedArtifacts: unknown[] = [];
   if (sdkEntry) {
@@ -317,7 +341,9 @@ function coreEvidenceFixture(sdkEntry?: string) {
       return {
         id: index + 90,
         name:
-          index === 0 ? "openclaw-npm-preflight-v" + version : "plugin-sdk-api-release-diff-2-1",
+          index === 0
+            ? "openclaw-npm-preflight-v" + version
+            : `plugin-sdk-api-release-diff-${candidate.runId}-1`,
         expired: false,
         size_in_bytes: bytes.length,
         digest:
@@ -343,22 +369,10 @@ function coreEvidenceFixture(sdkEntry?: string) {
         total_count: downloadedArtifacts.length,
       });
     }
-    if (args[1]?.includes("/compare/")) {
-      return JSON.stringify({ status: "identical" });
+    if (args[1] === "repos/openclaw/openclaw/actions/artifacts/90") {
+      return JSON.stringify(candidate.npmArtifact);
     }
-    if (args[1] === "repos/openclaw/openclaw/actions/runs/2") {
-      return JSON.stringify({
-        id: 2,
-        path: ".github/workflows/openclaw-npm-release.yml",
-        status: "completed",
-        conclusion: "success",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: targetSha,
-        run_attempt: 1,
-      });
-    }
-    throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+    return candidate.runGh(args);
   };
   return {
     writeArtifact,
@@ -371,11 +385,12 @@ function coreEvidenceFixture(sdkEntry?: string) {
           repo: "openclaw/openclaw",
           tag: `v${version}`,
           targetSha,
-          toolingSha: targetSha,
-          workflowRef: `release-publish/${targetSha.slice(0, 12)}-123`,
+          toolingSha: candidate.p,
+          workflowRef: candidate.publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
           npmDistTag: "latest",
-          preflightRunId: "2",
-          fullReleaseValidationRunId: "1",
+          preflightRunId: candidate.runId,
+          fullReleaseValidationRunId: candidate.runId,
+          fullManifest: candidate.manifest,
           fullReleaseValidationRunAttempt: "1",
           pluginSdkApiAcknowledgement: "",
           currentSelectorRef: `v${version}`,

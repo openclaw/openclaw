@@ -142,11 +142,13 @@ describe("remote skill discovery", () => {
     ] as const) {
       await writeNamedSkill(dir, name, description);
     }
-    sources.entries = readWorkspaceSkillSources({
-      sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-      limits: resolveSkillDiscoveryLimits(),
-      additionalBins: [],
-    }).entries;
+    sources.entries = (
+      await readWorkspaceSkillSources({
+        sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
+        limits: resolveSkillDiscoveryLimits(),
+        additionalBins: [],
+      })
+    ).entries;
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     bind(loadSkills);
     const params = { ...options, config, agentId: "main" };

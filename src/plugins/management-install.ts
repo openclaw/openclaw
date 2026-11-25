@@ -244,12 +244,7 @@ type ManagedPluginSourceInstallParams = {
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  | "request"
-  | "snapshot"
-  | "acknowledgeCapabilities"
-  | "enable"
-  | "requireCapabilityConsent"
-  | "requireClawHubTrust"
+  "request" | "snapshot" | "acknowledgeCapabilities" | "enable" | "requireClawHubTrust"
 > & {
   /** The enclosing Template coordinator owns its package lease and adoption record. */
   templateManaged?: boolean;

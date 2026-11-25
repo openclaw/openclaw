@@ -34,7 +34,7 @@ import {
 } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
-import { runClassifiedGitStep } from "./update-runner-git-steps.js";
+import { runClassifiedGitStep, runGitConfigReadStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -437,10 +437,10 @@ export async function fetchGitUpdateTarget(params: {
     return result(false);
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
-  const tracked = await runStep(
+  const tracked = await runGitConfigReadStep(
     step("git-config-update-upstream", "config", "--get", `branch.${DEV_BRANCH}.remote`),
   );
-  if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
+  if (isFailedUpdateStep(tracked)) {
     return result(false);
   }
   const trackedRemote = (tracked.stdoutTail ?? "").trim();
@@ -467,7 +467,8 @@ export async function fetchGitUpdateTarget(params: {
           ? remotes[0]
           : undefined;
   const readGit = async (...args: string[]) => {
-    const probe = await runStep(step("git-config-update-upstream", ...args));
+    const options = step("git-config-update-upstream", ...args);
+    const probe = await (args[0] === "config" ? runGitConfigReadStep(options) : runStep(options));
     return !isFailedUpdateStep(probe) ? (probe.stdoutTail?.trim() ?? "") : null;
   };
   devSource =
@@ -497,9 +498,11 @@ export async function fetchGitUpdateTarget(params: {
             : remotes;
   const fetchConfigKey = `remote.${devSource?.remote}.fetch`;
   const exclusions = devSource
-    ? await runStep(step("git-config-update-upstream", "config", "--get-all", fetchConfigKey))
+    ? await runGitConfigReadStep(
+        step("git-config-update-upstream", "config", "--get-all", fetchConfigKey),
+      )
     : undefined;
-  if (exclusions && isFailedUpdateStep(exclusions) && exclusions.exitCode !== 1) {
+  if (exclusions && isFailedUpdateStep(exclusions)) {
     return result(false);
   }
   const negatives = (exclusions?.stdoutTail ?? "").split("\n").filter((ref) => ref.startsWith("^"));

@@ -71,14 +71,16 @@ export async function deliverPendingDeliveryNotice(
   const { entry, notice, idempotencyKey } = pending;
   const outcome = await pending.delivery;
   let delivered: boolean;
-  if (outcome) {
-    delivered = !outcome.suppressed;
+  if (outcome?.suppressed === false) {
+    delivered = true;
   } else {
+    // A retained completed intent suppresses replay after a lost ACK reply.
+    // Its receipt still permits recording the notice and clearing its debt.
     const owner = await findDeliveryIntentOwner(idempotencyKey);
-    if (owner?.status !== "completed" && owner?.status !== "failed") {
+    if (!outcome && owner?.status !== "completed" && owner?.status !== "failed") {
       return;
     }
-    delivered = owner.status === "completed";
+    delivered = owner?.status === "completed";
   }
   if (
     delivered &&

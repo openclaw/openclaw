@@ -120,7 +120,7 @@ export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 /** Raw maintenance writers revoke admitted facts before changing stored bytes. */
 export function invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname: string): void {
   maintenanceAuthority.getStore()?.authority.assertOwned();
-  invalidateOpenClawAgentDatabaseValidation(pathname);
+  invalidateOpenClawAgentDatabaseValidation(pathname, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(pathname);
 }
 
@@ -355,7 +355,12 @@ export function releaseOpenClawAgentDatabaseLease(
           path: held?.path,
           leaseId,
           receipt,
+          pid: process.pid,
+          threadId,
           ...(phases ? { close: phases } : {}),
+          ...(receipt === "checkpoint-incomplete" && timing?.checkpoint
+            ? { checkpoint: timing.checkpoint }
+            : {}),
           blockingLease: blockingLease && {
             leaseId: blockingLease.lease_id,
             ownerPid: blockingLease.owner_pid,
@@ -441,7 +446,7 @@ export function recordOpenClawAgentDatabaseAdmission(
 function clearAgentDatabaseLeaseVerifications(database: EngineConnection, pathname: string): void {
   for (const held of new Set([pathname, ...agentDatabaseLeasePaths(database)])) {
     if (mayShareAgentDatabaseFile(held, pathname)) {
-      invalidateOpenClawAgentDatabaseValidation(held);
+      invalidateOpenClawAgentDatabaseValidation(held, "a lease release without a confirmed close");
       revokeSqliteDatabaseAdmissionsForPath(held);
     }
   }

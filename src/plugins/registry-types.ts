@@ -48,6 +48,7 @@ import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
   LearnContributionRegistration,
+  MemoryBackendRegistration,
   MemoryCorpusSupplementRegistration,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
@@ -266,6 +267,8 @@ export type PluginRecord = {
   uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
+  /** Operator opted this non-owner memory plugin in as a passive backend for the slot owner. */
+  memoryBackend?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
 
@@ -353,6 +356,7 @@ export type PluginRegistry = {
     handler: InternalHookHandler;
   }[];
   memoryCapabilities: MemoryPluginCapabilityRegistration[];
+  memoryBackends: MemoryBackendRegistration[];
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
   memoryPromptPreparations: MemoryPromptPreparationRegistration[];
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -25,6 +26,8 @@ import type { RemoteShellSandboxSession } from "./remote-shell-transport.js";
 
 type PendingExec = { session: RemoteShellSandboxSession; cleanup: () => Promise<void> };
 
+const remoteSkillsRefreshTails = new Map<string, Promise<void>>();
+
 type PreprovisionedRemoteWorkdir = { runtimeId: string; remoteWorkspaceDir: string };
 type ResolvedRemoteRuntimePaths = {
   runtimeId: string;
@@ -35,6 +38,7 @@ type ResolvedRemoteRuntimePaths = {
 };
 export type RemoteShellSandboxBackendOptions = {
   createSession: () => Promise<RemoteShellSandboxSession>;
+  prepareCurrent?: () => Promise<void>;
   backendId?: string;
   runtimeId?: string;
   configLabel?: string;
@@ -125,6 +129,7 @@ class RemoteShellSandboxBackendImpl {
             env: prepared.env,
             cwd: prepared.cwd,
             stdinMode: "pipe-open",
+            prepareCurrent: this.params.prepareCurrent,
             assertCurrent: this.params.createParams.assertRuntimeCurrent,
             finalizeToken,
           };
@@ -332,29 +337,36 @@ class RemoteShellSandboxBackendImpl {
     session: RemoteShellSandboxSession,
     signal?: AbortSignal,
   ): Promise<void> {
-    if (
-      this.params.preprovisionedWorkdir ||
-      this.params.createParams.cfg.workspaceAccess !== "rw" ||
-      !this.params.createParams.skillsWorkspaceDir
-    ) {
+    const { cfg, skillsWorkspaceDir } = this.params.createParams;
+    if (this.params.preprovisionedWorkdir || cfg.workspaceAccess !== "rw" || !skillsWorkspaceDir) {
       return;
     }
-    await this.clearRemoteDirectory(
-      session,
-      this.params.runtimePaths.remoteSkillsWorkspaceDir,
+    const { remoteSkillsWorkspaceDir, runtimeRootDir } = this.params.runtimePaths;
+    // Session handles may share a destination. Keep a clear from deleting files
+    // another handle is extracting, while keeping distinct provider leases independent.
+    await enqueueKeyedTask({
+      tails: remoteSkillsRefreshTails,
+      key: JSON.stringify([
+        this.params.backendId,
+        this.params.runtimeId ?? this.params.configLabel ?? cfg.ssh.target,
+        remoteSkillsWorkspaceDir,
+      ]),
       signal,
-    );
-    const hasSkills = await isExistingDirectory(this.params.createParams.skillsWorkspaceDir);
-    signal?.throwIfAborted();
-    if (!hasSkills) {
-      return;
-    }
-    this.params.createParams.assertRuntimeCurrent?.();
-    await session.uploadDirectory({
-      localDir: this.params.createParams.skillsWorkspaceDir,
-      remoteDir: this.params.runtimePaths.remoteSkillsWorkspaceDir,
-      remoteRootDir: this.params.runtimePaths.runtimeRootDir,
-      signal,
+      task: async () => {
+        await this.clearRemoteDirectory(session, remoteSkillsWorkspaceDir, signal);
+        const hasSkills = await isExistingDirectory(skillsWorkspaceDir);
+        signal?.throwIfAborted();
+        if (!hasSkills) {
+          return;
+        }
+        this.params.createParams.assertRuntimeCurrent?.();
+        await session.uploadDirectory({
+          localDir: skillsWorkspaceDir,
+          remoteDir: remoteSkillsWorkspaceDir,
+          remoteRootDir: runtimeRootDir,
+          signal,
+        });
+      },
     });
   }
 

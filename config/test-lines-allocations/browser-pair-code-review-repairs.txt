@@ -1,2 +1,0 @@
-# Browser pairing review repairs: withdrawal and identity-policy regressions, reconnect/remote-ingress UI coverage, and one real Gateway/browser lifecycle proof.
-505

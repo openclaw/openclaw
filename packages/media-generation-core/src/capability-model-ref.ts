@@ -25,7 +25,7 @@ function normalizeProviderForMatch(
 /** Orders configured provider defaults, keeping the preferred provider and aliases first. */
 export function buildCapabilityProviderDefaultRefs(params: {
   providers: readonly CapabilityModelProviderCandidate[];
-  preferredProvider: string;
+  preferredProvider: string | undefined;
   normalizeProviderId?: ProviderIdNormalizer;
 }): string[] {
   const defaults = new Map<string, { ref: string; aliases: readonly string[] }>();

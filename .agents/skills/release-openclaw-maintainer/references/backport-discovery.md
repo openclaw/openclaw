@@ -16,6 +16,29 @@ including carry-forward and sibling-release evidence; sync new findings and
 decisions back. Empty/incomplete records do not replace the pinned inventory
 or P0/P1 discovery below. Use local evidence when access is unavailable.
 
+## Select by release track
+
+All release channels backport applicable release-tooling and validation changes,
+regardless of P0/P1/P2 severity: workflows, release scripts, release tests,
+qualification harnesses, release policy, and release-skill guidance. These are
+not subject to the product-hotfix thresholds below or to shipped-package filters.
+Use the shared [release-process improvement rules](../SKILL.md#shared-release-boundaries)
+for branch backports and independently pinned Q/P tooling; preserve intake
+approval, frozen-candidate identity, and required requalification.
+
+The required [bundled Codex update](preparation.md#update-and-pin-bundled-codex-required) is not subject to these optional hotfix thresholds.
+
+For product hotfixes:
+
+- **Extended-stable:** generally take only P0 and P1 hotfixes.
+- **Stable:** also consider significant P2 fixes that are easy to port.
+- **Beta:** allow a broader P2 set when fixes are reasonably small, portable,
+  and low risk.
+
+Assess actual impact, dependency closure, and maintenance risk, not just labels.
+These are selection defaults, not permission to expand frozen intake, bypass
+approval, or weaken validation. Record exceptions and rationale in the ledger.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.
@@ -149,7 +172,8 @@ pnpm release:backport-companions -- \
 ```
 
 Disposition every reported later same-path commit, later mention of the
-selected PR number, existing neighbor test, selected-file reference/registry,
+selected PR number or commit SHA (whole 7–40-character tokens, case-insensitive),
+existing neighbor test, selected-file reference/registry,
 candidate file-set difference, and candidate content difference. A whole-file
 difference is inspection evidence, not a failure: a release adaptation or the
 final selected companion sequence can differ legitimately. This scan is
@@ -197,7 +221,7 @@ broad redesigns unless a maintainer explicitly approves their inclusion. Do not
 substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
-explicitly asks for it in that release. After dispatch, only confirmed release
+explicitly asks for it in that release. After intake freezes, only confirmed release
 blockers qualify, each named in the handoff record, unless the operator explicitly
 reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
 That decision invalidates affected evidence; it never authorizes publication of
@@ -208,7 +232,9 @@ proposed set for maintainer approval unless selection authority was explicitly
 delegated. During open preparation, a maintainer may instead approve an exact,
 dependency-closed group while independent discovery continues. Record that
 approval and the unfinished audit scope; do not call the full inventory complete
-or advance its scan cursor until every entry is accounted for. Follow the
+or advance its scan cursor until every entry is accounted for. Freezing with an
+unfinished inventory is the operator's call; say how much is still unreviewed
+first. Follow the
 [owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
 ready approved groups without waiting for unrelated audit lanes.
 
@@ -229,9 +255,9 @@ and share one host, so run at most eight concurrent writing workers, and do not
 launch or resume workers close to a session usage limit. A worker does not
 spawn its own agents unless its brief allows it. A 17-lane porting wave on
 2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
-hit. The lead keeps a watcher on every worker and never ends a turn waiting on
-one; once the required fixes and P0s are integrated, push and dispatch
-validation, and add stragglers in a later cycle.
+hit. The lead watches every worker and pushes approved groups as they land.
+Follow the [release owner's intake decision](release-owner.md#prepare-and-admit-hotfixes)
+for early diagnostics and the final qualification dispatch.
 
 Every porting brief contains these steps for each pick, in order:
 
@@ -243,9 +269,12 @@ Every porting brief contains these steps for each pick, in order:
 2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
    before porting.
 3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
-   `Release adaptation:` in the commit body.
-4. Run targeted tests and typechecks for the touched owners only. Wrap every
-   local command in `timeout`; full local gates are not a worker's job.
+   `Release adaptation:` in the commit body. Immediately update the shared
+   [hotfix assessment](hotfix-ledger-management.md) after every adaptation;
+   record newly discovered validation errors and subsequent repairs as they
+   occur, not only when the pick or batch is finished.
+4. Run focused checks for the touched owners and [report what passed](validation.md#hand-off-a-release-fix).
+   Wrap each local command in `timeout`.
 5. Commit, then append the pick's result to the lane report before the next
    pick. Time-box a pick to about 40 minutes and report it as blocked rather
    than continuing past that.

@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  claimConversationProviderState,
+  type ProviderStateScope,
+} from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { assertRequiredWorkerSelection } from "../../../config/required-worker-profile.js";
@@ -32,6 +36,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import { readSessionDelegatedParticipation } from "../../../gateway/session-delegated-operator-source.js";
 import {
   emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
@@ -45,12 +50,17 @@ import { getReplyOperationSessionReader } from "../../../sessions/session-contro
 import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  readAdmittedRunOperatorAuthority,
+  readPreparedRunOperatorAuthority,
+} from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
+import { intersectParticipationCeilings } from "../../participation-ceiling.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -497,6 +507,17 @@ export async function assertAgentHarnessRunAdmission(
     runtimeTarget?: SessionTranscriptRuntimeTarget,
   ) => {
     assertCurrent();
+    const childCeiling = readSessionDelegatedParticipation(entry);
+    if (childCeiling) {
+      const authority =
+        readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
+        readPreparedRunOperatorAuthority(params.preparedRunAdmission);
+      if (!authority?.participationCeiling?.source) {
+        throw new Error("Participant child requires current original-source admission.");
+      }
+      authority.signal?.throwIfAborted();
+      intersectParticipationCeilings(childCeiling, authority.participationCeiling);
+    }
     const admissionError = resolveAgentHarnessRunAdmissionError({
       agentHarnessId: params.agentHarnessId,
       entry,
@@ -649,4 +670,16 @@ export async function claimAgentSessionWriter(
 ): Promise<AgentSessionWriterFence | undefined> {
   const snapshot = await assertAgentHarnessRunAdmission(params);
   return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
+}
+
+/**
+ * The run that writes the conversation owns its provider state (continuation, pooled sockets).
+ * Detached runs (forks, memory flush) share its affinity but never write, so they own none.
+ */
+export function claimRunProviderState(
+  params: Pick<RunEmbeddedAgentParams, "sessionId" | "sessionPersistence">,
+): ProviderStateScope | undefined {
+  return params.sessionPersistence === "detached"
+    ? undefined
+    : claimConversationProviderState(params.sessionId);
 }

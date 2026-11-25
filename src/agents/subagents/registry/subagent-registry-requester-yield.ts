@@ -38,7 +38,11 @@ import {
   isSameSubagentRunOwner,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isRequesterSettleMemberReady,
+  isRetainedUnendedSubagentRun,
+} from "./subagent-run-liveness.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 /** Accepted steering keeps the child's execution and transfers only its requester-turn claim. */
@@ -77,10 +81,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
               entry.requesterSettleWake.batchRunIds[0] === entry.runId) &&
           (entry.requesterSettleWake?.requesterYieldBatch !== true ||
             entry.requesterSettleWake.rearmGeneration !== undefined) &&
-          (entry.delivery?.status === "pending" || entry.delivery?.status === "failed") &&
-          entry.delivery.disposition !== "permanent_failure" &&
-          (entry.delivery.disposition !== "intentional_non_delivery" ||
-            entry.requesterSettleWake !== undefined)
+          (entry.delivery?.status === "pending" || entry.delivery?.status === "failed")
         )
       ) {
         return { value: undefined };
@@ -164,7 +165,7 @@ export async function commitRequesterTransfer(
           postimages.set(draft.runId, draft);
         }
       }
-      return { value: drafts, postimages };
+      return { value: drafts, postimages, removalReason: "requester_transfer" };
     },
     {
       runs: options.runs,
@@ -560,14 +561,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           const completionEnded = typeof entry.execution.endedAt === "number";
           // An in-progress delivery may already target the requester run being aborted.
           // Re-arm it like a delivered result so that completion cannot die with that turn.
-          if (completionEnded && entry.delivery?.status !== "delivered") {
-            // The persisted yielded batch now owns terminal delivery. Mark the old
-            // per-child attempt terminal so it cannot keep the batch unsettled.
-            entry.delivery = {
-              ...(entry.delivery ?? { status: "pending" }),
-              disposition: "intentional_non_delivery",
-            };
-          }
           entry.requesterSettleWake = {
             ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
             status: "pending",
@@ -681,13 +674,19 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           params.schedule(entry.runId, entry, "completion");
         }
       }
-      // Active children keep the frozen batch; their normal completion owner schedules it.
+      // A result that finished before the yield wakes the requester now. Members still
+      // working keep the frozen batch; their normal completion owner schedules it.
+      if (rearmGeneration !== undefined) {
+        const ready = entries.find(isRequesterSettleMemberReady);
+        if (ready) {
+          params.schedule(ready.runId, ready, "settle");
+        }
+        return;
+      }
       if (!entries.every((entry) => typeof entry.execution.endedAt === "number")) {
         return;
       }
-      if (rearmGeneration !== undefined) {
-        params.schedule(entries[0]!.runId, entries[0]!, "settle");
-      } else if (!params.requesterYielded) {
+      if (!params.requesterYielded) {
         // A terminal child cannot wake while its requester still owns the turn.
         // Once a normal parent response settles, resume its original per-child delivery.
         for (const entry of entries) {

@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Reply attribution" });
@@ -117,7 +118,7 @@ suite.define(() => {
               : "Control+f",
           );
           await page
-            .getByRole("textbox", { name: "Search messages", exact: true })
+            .getByRole("textbox", { name: "Search loaded messages", exact: true })
             .fill("looks good");
           expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
           await expect
@@ -155,7 +156,7 @@ suite.define(() => {
         "assistant",
         "The checklist is ready to share.",
         { runId: "announce:review-complete" },
-        { phase: "final_answer", stopReason: "stop" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
       ),
     ]);
     await suite.withPage(
@@ -170,7 +171,7 @@ suite.define(() => {
         const work = page.locator(".chat-work-group");
         await line.waitFor();
         await work.waitFor();
-        await answerGroup.locator(".chat-avatar:visible").waitFor();
+        await answerGroup.getByRole("img", { name: "OpenClaw", exact: true }).waitFor();
         await page
           .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
           .waitFor();

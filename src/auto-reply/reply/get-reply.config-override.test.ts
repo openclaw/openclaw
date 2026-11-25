@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
@@ -174,22 +174,24 @@ describe("getReplyFromConfig configOverride", () => {
   });
 
   it("rejects forged operator authority at the public SDK reply entry", async () => {
-    const assertCurrent = vi.fn();
-    const plain = { profileId: "guest", scopes: ["operator.admin"], assertCurrent };
-    const issued = createAdmittedRunOperatorAuthority(plain);
+    const plain = {
+      canonicalIdentity: null,
+      profileId: "guest",
+      scopes: ["operator.admin"],
+    };
+    const issued = createTestOperatorAuthority(plain);
     for (const operatorAuthority of [plain, { ...issued }]) {
       const options = { runId: "forged-operator", operatorAuthority };
       await expect(getReplyFromConfig(buildCtx(), options, {})).rejects.toThrow(
         "operator run authority must be issued by the host",
       );
     }
-    expectCallCounts(0, assertCurrent, loadConfig, mocks.initSessionState, runReply);
+    expectCallCounts(0, loadConfig, mocks.initSessionState, runReply);
   });
   it("pins the issued operator source once through public reply option copies", async () => {
-    const issued = createAdmittedRunOperatorAuthority({
+    const issued = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     let reads = 0;
     const options = {

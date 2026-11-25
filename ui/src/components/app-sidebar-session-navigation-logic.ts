@@ -10,9 +10,9 @@ import {
   SIDEBAR_NAV_ROUTES,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { pluginTabKey } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
-import { listSelectableAgents } from "../lib/agents/display.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
@@ -26,8 +26,7 @@ import { resolveSessionRenameValue } from "../lib/session-rename.ts";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
   compareSessionRowsByActivity,
-  compareSessionRowsByUpdatedAt,
-  filterVisibleSessionRows,
+  type filterVisibleSessionRows,
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/navigation.ts";
@@ -39,14 +38,12 @@ import {
   isSubagentSessionKey,
   isPinnableUiSessionRow,
   isUiGlobalScopeConfigured,
-  normalizeAgentId,
   readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
-import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -220,14 +217,6 @@ export function buildSidebarSessionNavigationState(input: {
       ],
       () => {
         const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
-        let runtimeSampledAt = row.runtimeSampledAt;
-        if (row.runtimeMs != null && runtimeSampledAt == null) {
-          runtimeSampledAt = input.rowProjection.runtimeSampledAtByRow.get(row);
-          if (runtimeSampledAt == null) {
-            runtimeSampledAt = Date.now();
-            input.rowProjection.runtimeSampledAtByRow.set(row, runtimeSampledAt);
-          }
-        }
         return {
           key: row.key,
           agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
@@ -252,6 +241,7 @@ export function buildSidebarSessionNavigationState(input: {
           isRunVisuallyActive,
           gatewayHasActiveRun: row.hasActiveRun,
           backgroundProcessCount: row.backgroundProcessCount,
+          subagentRunState: row.subagentRunState,
           hasActiveSubagentRun: row.hasActiveSubagentRun,
           activeRunIds: row.archived === true ? undefined : row.activeRunIds,
           modelSelectionLocked: row.modelSelectionLocked === true,
@@ -320,8 +310,6 @@ export function buildSidebarSessionNavigationState(input: {
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
           endedAt: row.endedAt,
-          runtimeMs: row.runtimeMs,
-          runtimeSampledAt,
           childSessionKeys:
             row.archived === true
               ? []
@@ -479,16 +467,16 @@ export function handleSidebarSessionRowClick(
   }
   if (!session.isChild && event.shiftKey) {
     event.preventDefault();
-    selection.extend(session.key, session.selectionKey);
+    selection.extend(session.key);
     return;
   }
   if (!session.isChild && event.altKey) {
     event.preventDefault();
-    selection.toggle(session.key, session.selectionKey);
+    selection.toggle(session.key);
     return;
   }
   event.preventDefault();
-  selection.clear(session.selectionKey ?? session.key);
+  selection.clear(session.key);
   selectSession(session.key);
 }
 
@@ -503,7 +491,7 @@ export function createSidebarSessionSelection(
     get selectedKeys() {
       return selectedKeys;
     },
-    toggle(key: string, selectionKey = key) {
+    toggle(key: string) {
       const next = new Set(selectedKeys);
       if (next.has(key)) {
         next.delete(key);
@@ -511,18 +499,18 @@ export function createSidebarSessionSelection(
         next.add(key);
       }
       selectedKeys = next;
-      anchor = next.has(key) ? selectionKey : null;
+      anchor = next.has(key) ? key : null;
       publish();
     },
-    extend(key: string, selectionKey = key) {
+    extend(key: string) {
       const rows = readRows();
       const active = rows.find((row) => row.visuallyActive || row.active);
-      anchor ??= active?.selectionKey ?? active?.key ?? selectionKey;
-      const anchorIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === anchor);
-      const targetIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === selectionKey);
+      anchor ??= active?.key ?? key;
+      const anchorIndex = rows.findIndex((row) => row.key === anchor);
+      const targetIndex = rows.findIndex((row) => row.key === key);
       if (anchorIndex === -1 || targetIndex === -1) {
         selectedKeys = new Set([key]);
-        anchor = selectionKey;
+        anchor = key;
       } else {
         const [start, end] =
           anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
@@ -530,55 +518,14 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear(this: void, selectionKey: string | null = null) {
-      anchor = selectionKey;
+    clear(this: void, key: string | null = null) {
+      anchor = key;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
         publish();
       }
     },
   };
-}
-
-export function resolveActiveSidebarAgent(input: {
-  activeId: string;
-  roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]>["agents"];
-  identities: ReturnType<ApplicationContext["agentIdentity"]["entries"]>;
-}) {
-  const identities = new Map(
-    input.identities.map((identity) => [identity.agentId, identity] as const),
-  );
-  return {
-    activeId: input.activeId,
-    agent: input.roster.find((entry) => normalizeAgentId(entry.id) === input.activeId),
-    agents: listSelectableAgents(input.roster),
-    identity: identities.get(input.activeId) ?? null,
-    identities,
-  };
-}
-
-export function resolveLatestSidebarAgentSession(input: {
-  agentId: string;
-  result: SessionsListResult | null;
-  context: ApplicationContext | undefined;
-}): SessionRow | null {
-  const normalized = normalizeAgentId(input.agentId);
-  // Unprefixed keys belong to the system default agent. Keeping them for
-  // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(input.result?.sessions ?? [], {
-    agentId: normalized,
-    defaultAgentId: resolveUiDefaultAgentId({
-      agentsList: input.context?.agents.state.agentsList,
-      hello: input.context?.gateway.snapshot.hello,
-    }),
-    filterByAgent: true,
-    archivedFilter: "active",
-  });
-  return visible.reduce<SessionRow | null>(
-    (latest, row) =>
-      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
-    null,
-  );
 }
 
 export function collectSidebarSessionRowsByKey(input: {

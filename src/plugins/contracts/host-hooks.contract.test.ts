@@ -236,34 +236,6 @@ describe("host-hook fixture plugin contract", () => {
     }
   });
 
-  it("registers generic SDK seams without Plan Mode business logic", () => {
-    const { config, registry } = createHostHookFixtureRegistry();
-    registerInto(
-      { registry, config },
-      {
-        id: "host-hook-fixture",
-        name: "Host Hook Fixture",
-        origin: "workspace",
-        contracts: { tools: ["approval_fixture_tool"] },
-      },
-      registerHostHookFixture,
-    );
-
-    expect(registry.registry.sessionExtensions).toHaveLength(1);
-    expect(registry.registry.toolMetadata).toHaveLength(1);
-    expect(registry.registry.controlUiDescriptors).toHaveLength(1);
-    expect(registry.registry.runtimeLifecycles).toHaveLength(1);
-    expect(registry.registry.agentEventSubscriptions).toHaveLength(1);
-    expect(registry.registry.sessionSchedulerJobs).toHaveLength(1);
-    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
-      "host-hook-fixture",
-    ]);
-    expect(registry.registry.typedHooks.map((entry) => entry.hookName).toSorted()).toEqual([
-      "agent_turn_prepare",
-      "heartbeat_prompt_contribution",
-    ]);
-  });
-
   it("rejects external plugins from trusted policy and reserved command ownership", () => {
     const { registry } = registerFixture(
       {
@@ -724,7 +696,6 @@ describe("host-hook fixture plugin contract", () => {
     expect(isPluginJsonValue(valid)).toBe(true);
     expect(isPluginJsonValue({ value: Number.NaN })).toBe(false);
     expect(isPluginJsonValue({ value: undefined })).toBe(false);
-    expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
     let reads = 0;

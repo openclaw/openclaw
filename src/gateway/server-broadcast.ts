@@ -12,7 +12,7 @@ import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
-import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
 import { SerializedGatewayFrame } from "./serialized-json.js";
 import {
@@ -23,10 +23,12 @@ import {
 import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPublicationTransportEventAllowed,
   isPlainEventPayload,
   isSessionReadInvalidation,
   isTargetedTranscriptionEvent,
-  modelMetadataInvalidationFragment,
+  metadataInvalidationFragment,
+  resolveBroadcastSessionScope,
 } from "./server-broadcast-scopes.js";
 import type {
   SessionEventProjection,
@@ -64,7 +66,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "socket.drain",
 ]);
 
-type EncodedSessionPayload = readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+type EncodedSessionPayload = readonly Buffer[];
 type FramePayload = string | Buffer | EncodedSessionPayload;
 type RecipientFrames = Map<string | undefined, Map<number, SerializedGatewayFrame>>;
 
@@ -72,13 +74,13 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
 function serializeFrameField(
   name: "payload",
   value: unknown,
-  serializeSession: (() => string) | undefined,
+  serializeSession: (() => Buffer) | undefined,
   serializeMessage?: () => Buffer,
 ): string | EncodedSessionPayload;
 function serializeFrameField(
   name: "payload" | "stateVersion",
   value: unknown,
-  serializeSession?: () => string,
+  serializeSession?: () => Buffer,
   serializeMessage?: () => Buffer,
 ): string | EncodedSessionPayload {
   // The projection owns a fresh envelope; encode its large fields separately.
@@ -86,7 +88,7 @@ function serializeFrameField(
   const envelope = serializeSession ? (value as Record<string, unknown>) : undefined;
   const projected =
     envelope && !("toJSON" in envelope) && !("toJSON" in Object.prototype) ? envelope : undefined;
-  const sessionJSON = projected ? serializeSession?.() : undefined;
+  const sessionBytes = projected ? serializeSession?.() : undefined;
   const messageBytes = projected ? serializeMessage?.() : undefined;
   const session = projected?.session;
   const message = projected?.message;
@@ -107,47 +109,16 @@ function serializeFrameField(
       }
     }
   }
-  if (projected) {
+  if (projected && sessionBytes) {
     const separator = fieldJSON.endsWith("{}}") ? "" : ",";
     const prefix = `,${fieldJSON.slice(1, -2)}${separator}`;
-    const suffix = `"session":${sessionJSON}}`;
     // Keep the message's byte identity so compression can reuse its deflated segment.
     return messageBytes
-      ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
-      : [Buffer.from(`${prefix}${suffix}`)];
+      ? [Buffer.from(prefix), messageBytes, sessionBytes]
+      : [Buffer.from(prefix), sessionBytes];
   }
   const fragment = fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
   return serializeSession ? [Buffer.from(fragment)] : fragment;
-}
-
-function resolveBroadcastSessionScope(
-  payload: unknown,
-  explicit: readonly string[] | undefined,
-  explicitAgentId: string | undefined,
-): { sessionKeys: readonly string[]; agentId?: string } {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {
-      sessionKeys: explicit ?? [],
-      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
-    };
-  }
-  const record = payload as {
-    sessionKey?: unknown;
-    agentId?: unknown;
-    suggestion?: { sessionKey?: unknown; agentId?: unknown };
-    request?: { sessionKey?: unknown; agentId?: unknown };
-  };
-  const source = [record, record.suggestion, record.request].find(
-    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
-  );
-  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
-  const agentId =
-    explicitAgentId ??
-    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
-  return {
-    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
-    ...(agentId ? { agentId } : {}),
-  };
 }
 
 type FrameFields = {
@@ -186,15 +157,7 @@ function frameWithSequence(
     return new SerializedGatewayFrame([base.prefix, payload, suffix]);
   }
   const chunks = typeof payload === "string" ? ([Buffer.from(payload)] as const) : payload;
-  if (chunks.length === 1) {
-    return new SerializedGatewayFrame([base.prefix, chunks[0], suffix]);
-  }
-  // Preserve compression boundaries while copying the already encoded recipient envelope.
-  return new SerializedGatewayFrame([
-    Buffer.concat([base.prefix, chunks[0]]),
-    chunks[1],
-    Buffer.concat([chunks[2], suffix]),
-  ]);
+  return new SerializedGatewayFrame([base.prefix, ...chunks, suffix]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -274,6 +237,13 @@ export function createGatewayBroadcaster(params: {
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
+    const outputOnly =
+      (event === "agent" || event === "session.tool") &&
+      isPlainEventPayload(payload) &&
+      payload.stream === "tool" &&
+      isPlainEventPayload(payload.data) &&
+      payload.data.phase === "update" &&
+      payload.data.outputOnly === true;
     const subscriptionRequired = event === "session.typing" || sessionSubscriptionVerified;
     let sessionSubscriberConnIdsByKey: ReadonlySet<string>[] | undefined;
     let recipientConnIds = targetConnIds;
@@ -300,8 +270,7 @@ export function createGatewayBroadcaster(params: {
       // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
       event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
     // The bounded signal has no caller-provided serialization or model/config data.
-    const metadataInvalidation =
-      event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
+    const metadataInvalidation = metadataInvalidationFragment(event, payload);
     // Older Control UI builds cannot render an unknown status phase.
     const modelWaitStatus =
       event === "chat" &&
@@ -317,7 +286,7 @@ export function createGatewayBroadcaster(params: {
           (params.canReceiveSessionEvent !== undefined &&
             sessionKeys.length > 0 &&
             sessionKeys.every((key) => key.trim().length > 0)) ||
-          metadataInvalidation !== undefined ||
+          metadataInvalidation != null ||
           isSessionReadInvalidation(event, payload, isTargeted)));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
@@ -343,7 +312,7 @@ export function createGatewayBroadcaster(params: {
       payloadFragment: presencePayload
         ? ""
         : Buffer.from(
-            value === payload && metadataInvalidation !== undefined
+            value === payload && metadataInvalidation != null
               ? metadataInvalidation
               : serializeFrameField("payload", value),
           ),
@@ -366,20 +335,26 @@ export function createGatewayBroadcaster(params: {
       ) {
         continue;
       }
+      if (!isPublicationTransportEventAllowed(c, event, payload, opts?.stateVersion)) {
+        continue;
+      }
       const questionRecipient =
         event === "question.requested" || event === "question.resolved"
           ? opts?.questionRecipient
           : undefined;
-      const ownRunQuestion =
-        questionRecipient !== undefined &&
-        !operatorScopeSatisfied(QUESTIONS_SCOPE, c.connect.scopes ?? []);
-      if (!hasEventScope(c, event, explicitPluginScope, ownRunQuestion, hasSessionReadContext)) {
+      const approvalRecipient = isTargeted ? opts?.participationApprovalRecipient : undefined;
+      if (
+        !hasEventScope(c, event, explicitPluginScope, {
+          ownRunQuestion: questionRecipient !== undefined,
+          hasSessionReadContext,
+          participationApprovalRecipient: approvalRecipient,
+        })
+      ) {
         continue;
       }
       if (
-        event === "chat.metadata.changed" &&
-        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? []) &&
-        metadataInvalidation === undefined
+        metadataInvalidation === null &&
+        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? [])
       ) {
         continue;
       }
@@ -411,6 +386,14 @@ export function createGatewayBroadcaster(params: {
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
         !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
+      ) {
+        continue;
+      }
+      // Capability and run targeting do not express current stdout interest.
+      // Recheck the subscription owner even for retained/verified deliveries.
+      if (
+        outputOnly &&
+        !sessionKeys.some((key) => sessionMessageSubscribers?.getLiveToolOutput(key).has(c.connId))
       ) {
         continue;
       }
@@ -691,6 +674,9 @@ export function createGatewayBroadcaster(params: {
           code: 4001,
           message: "gateway policy changed",
         });
+        continue;
+      }
+      if (approvalRecipient && !isCurrent(() => approvalRecipient(c))) {
         continue;
       }
       clientSeq.set(c, nextSeq);

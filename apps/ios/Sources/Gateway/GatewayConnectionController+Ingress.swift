@@ -45,17 +45,10 @@ extension GatewayConnectionController {
         guard let appModel, appModel.gatewayConnectGeneration == expectedGeneration else { return }
         if error is CancellationError {
             // The ingress owner retains sign-in guidance; cancellation is not a network failure.
-            appModel.gatewayStatusText = "Offline"
+            appModel.setGatewayConnectionProgress(nil)
             return
         }
-        let problem = GatewayConnectionProblemMapper.map(error: error) ?? GatewayConnectionProblem(
-            kind: .unknown,
-            owner: .network,
-            title: "Connection check failed",
-            message: error.localizedDescription,
-            actionLabel: "Retry",
-            retryable: true,
-            pauseReconnect: false)
+        let problem = GatewayConnectionProblemMapper.map(error: error) ?? .unmapped(error)
         appModel.failGatewayPreconnectVerification(
             problem, stableID: stableID, host: url.host, expectedGeneration: expectedGeneration)
     }

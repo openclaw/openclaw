@@ -1,0 +1,4 @@
+# Retain real sidebar, Chat header, and Sessions appearance dispatch regressions,
+# cross-user/read-only and captured-identity checks, plus linked-account browser proof.
+# Full change adds 547 net test lines; allocate only the 147 above the default 400.
+147

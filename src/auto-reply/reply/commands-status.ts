@@ -1,4 +1,5 @@
 /** Builds /status replies using the command's authorized channel context. */
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logError } from "../../logger.js";
@@ -11,8 +12,10 @@ import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
-type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
+type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel" | "model"> & {
   command: CommandContext;
+  /** Undefined when nothing configured or selected a model. */
+  model: string | undefined;
 };
 
 function markStatusReply(payload: ReplyPayload): ReplyPayload {
@@ -29,9 +32,17 @@ export async function buildStatusReply(
     return undefined;
   }
 
+  const { model } = params;
+  if (!model) {
+    // Status is how a new user finds out what is missing, so it reports the absent model.
+    return markStatusReply({
+      text: `🦞 Status\nModel: not configured\n\n${NO_MODEL_CONFIGURED_MESSAGE}`,
+    });
+  }
   try {
     const { text, presentation } = await buildStatusReplyParts({
       ...params,
+      model,
       statusChannel: command.channel,
       statusAccountId: command.accountId,
     });

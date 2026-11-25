@@ -6,6 +6,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { isSandboxKeyringQuotaError, sandboxKeyringQuotaError } from "./container-keyring.js";
@@ -15,6 +16,7 @@ export type ExecContainerRawOptions = {
   input?: Buffer | string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  prepareCurrent?: () => Promise<void>;
 };
 
 export type SandboxContainerEngine = {
@@ -24,6 +26,7 @@ export type SandboxContainerEngine = {
   globalArgs?: readonly string[];
   /** A captured transport must not follow later ambient Docker context changes. */
   baseEnv?: NodeJS.ProcessEnv;
+  stateGuard?: WorkspaceStateGuard;
 };
 
 export type SandboxContainerEngineTarget = {
@@ -96,6 +99,9 @@ export async function execContainerRaw(
   try {
     const baseEnv = { ...(engine.baseEnv ?? process.env) };
     stripGatewayAllocatorEnv(baseEnv);
+    if (opts?.assertCurrent) {
+      await (opts.prepareCurrent ?? engine.stateGuard?.prepareHost)?.();
+    }
     opts?.assertCurrent?.();
     result = await spawnCommand(buildSandboxContainerEngineArgv(engine, args), {
       baseEnv,

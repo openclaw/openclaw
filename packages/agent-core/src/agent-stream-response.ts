@@ -28,6 +28,7 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
+import type { ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -37,7 +38,6 @@ import type {
   AgentToolCall,
   AgentToolResult,
   StreamFn,
-  ToolLoopIntervention,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -55,8 +55,8 @@ export type ExecutedToolCallBatch = {
   terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
-  terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
+  /** The repeat guard capped this batch; the turn ends with `tool_repeat_limit`. */
+  repeatStop?: ToolRepeatVerdict;
   fatal?: { error: unknown };
 };
 
@@ -217,16 +217,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
-  let repeatedToolErrorTerminated = false;
+  let toolRepeatStopped = false;
   const onTerminalLoop = () => {
     // Stop sampling before ordered publication waits for already-started effects.
-    repeatedToolErrorTerminated = true;
+    toolRepeatStopped = true;
     modelAbort.abort(new Error("Tool batch terminated"));
   };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
-      !repeatedToolErrorTerminated &&
+      !toolRepeatStopped &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -298,9 +298,8 @@ export async function streamAgentResponse(
       .then(async () => {
         // Later queued batches complete as unstarted calls without cancelling active work.
         let batchSignal = executionSignal;
-        if (repeatedToolErrorTerminated) {
-          batchSignal = AbortSignal.abort(new Error("Tool-loop recovery ended"));
-          // Suppressed batches skip admission and its lifecycle publication barrier.
+        if (toolRepeatStopped) {
+          batchSignal = AbortSignal.abort(new Error("Tool repeat limit reached"));
           // Sampling already stopped; keep their synthetic results behind earlier work.
           await previousExecutions;
         }
@@ -311,11 +310,8 @@ export async function streamAgentResponse(
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (
-          batch.fatal ||
-          (batch.terminateRun && batch.intervention?.detector !== "repeated_tool_error")
-        ) {
-          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
+        if (batch.fatal) {
+          executionAbort.abort(batch.fatal.error);
         }
       })
       .catch((error: unknown) => {

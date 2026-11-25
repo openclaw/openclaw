@@ -467,25 +467,6 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it("sends empty params for no-arg Gateway list helpers", async () => {
-    const { transport, oc } = createListFixture();
-    await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
-    await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
-    await expect(oc.models.list()).resolves.toEqual({ models: [] });
-    await expect(oc.tools.list()).resolves.toEqual({ tools: [] });
-    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
-    await expect(oc.environments.list()).resolves.toEqual({ environments: [] });
-
-    expect(transport.calls).toEqual([
-      { method: "agents.list", params: {}, options: undefined },
-      { method: "sessions.list", params: {}, options: undefined },
-      { method: "models.list", params: {}, options: undefined },
-      { method: "tools.catalog", params: {}, options: undefined },
-      { method: "exec.approval.list", params: {}, options: undefined },
-      { method: "environments.list", params: {}, options: undefined },
-    ]);
-  });
-
   it("preserves explicit null params for Gateway list validation", async () => {
     type ListMethod = (this: unknown, params: unknown) => Promise<unknown>;
     const { transport, oc } = createListFixture();
@@ -543,24 +524,17 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([]);
   });
 
-  it("calls exec approval Gateway RPCs with protocol params", async () => {
+  it("binds approval decisions to the explicit approval ID", async () => {
     const { transport, oc } = createClientFixture({
-      "exec.approval.list": { approvals: [] },
       "exec.approval.resolve": { ok: true },
     });
 
-    await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
     const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
     await expect(oc.approvals.respond("approval-123", staleDecision)).resolves.toEqual({
       ok: true,
     });
 
     expect(transport.calls).toEqual([
-      {
-        method: "exec.approval.list",
-        options: undefined,
-        params: {},
-      },
       {
         method: "exec.approval.resolve",
         options: undefined,

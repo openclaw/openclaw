@@ -22,7 +22,11 @@ import {
 } from "./dispatcher-workspace.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
-import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
+import {
+  workboardBoardOwnerSlotLimit,
+  workboardCardConsumesOwnerSlot,
+  workboardCardSlotOwner,
+} from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -148,7 +152,14 @@ async function runWorkboardDispatch(
   const cards = await params.store.list();
   const candidates = directCard ? [directCard] : await params.store.list({ boardId });
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
-  const startedOwners = new Set<string>();
+  const { boards } = await params.store.listBoards();
+  const boardsById = new Map(boards.map((board) => [board.id, board]));
+  const ownerSlotLimit = (card: WorkboardCard) =>
+    workboardBoardOwnerSlotLimit(boardsById.get(cardBoardId(card)));
+  // Owner capacity is shared across boards; each card's board sets how much of it may be used.
+  const activeByOwner = new Map<string, number>();
+  const ownerHasRoom = (owner: string, card: WorkboardCard) =>
+    (activeByOwner.get(owner) ?? 0) < ownerSlotLimit(card);
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
   let attemptedStarts = 0;
@@ -158,12 +169,12 @@ async function runWorkboardDispatch(
     if (maxStarts <= 0) {
       return { cards: [] };
     }
-    const runningOwners = new Set<string>();
     for (const card of cards) {
       if (!workboardCardConsumesOwnerSlot(card, now)) {
         continue;
       }
-      runningOwners.add(workboardCardSlotOwner(card));
+      const owner = workboardCardSlotOwner(card);
+      activeByOwner.set(owner, (activeByOwner.get(owner) ?? 0) + 1);
     }
     const selected: WorkboardCard[] = [];
     const fallback: WorkboardCard[] = [];
@@ -182,8 +193,8 @@ async function runWorkboardDispatch(
                 card.status !== "todo" &&
                 card.status !== "ready"
               ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-              : runningOwners.has(owner)
-                ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
+              : !ownerHasRoom(owner, card)
+                ? `Owner ${owner} already has ${activeByOwner.get(owner)} active Workboard card(s); this board allows ${ownerSlotLimit(card)}. Complete or stop one before starting another card.`
                 : undefined;
       if (rejection !== undefined) {
         if (mode === "exact") {
@@ -212,7 +223,7 @@ async function runWorkboardDispatch(
     if (started.length >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
-    if (startedOwners.has(ownerId)) {
+    if (!ownerHasRoom(ownerId, card)) {
       continue;
     }
     const sessionKey = workboardSessionKeyForCard(card);
@@ -529,7 +540,7 @@ async function runWorkboardDispatch(
             execution: acceptedExecution,
           })
           .catch(() => undefined)) ?? acceptedCard;
-      startedOwners.add(ownerId);
+      activeByOwner.set(ownerId, (activeByOwner.get(ownerId) ?? 0) + 1);
       started.push({
         cardId: updated.id,
         title: updated.title,

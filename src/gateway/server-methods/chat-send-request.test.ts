@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { applyChatSendParticipation, normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = GatewayRequestHandlerOptions["client"];
@@ -53,6 +53,55 @@ async function expectError(
 ) {
   expect(await normalize(overrides, client)).toEqual({ ok: false, error });
 }
+
+const participationCeiling = {
+  kind: "send" as const,
+  profileId: "guest",
+  sessionKey: "agent:main:main",
+};
+it.each(["/stop", "/btw hello", "/model other/model", "/queue steer"])(
+  "attaches host participation to literal %s without accepting a public ceiling",
+  async (message) => {
+    const request = await normalizeValue({ message, queueMode: "steer" });
+    expect(applyChatSendParticipation(request)).toMatchObject({
+      ok: true,
+      value: {
+        participating: true,
+        suppressCommandInterpretation: true,
+        stopCommand: false,
+        turnKind: "main",
+      },
+    });
+    expect(request.inboundMessage).toBe(message);
+    expect(await normalize({ message, participationCeiling })).toMatchObject({ ok: false });
+  },
+);
+it.each([
+  { deliver: true },
+  { originatingChannel: "webchat", originatingTo: "elsewhere" },
+  { thinking: "high" },
+  { fastMode: true },
+  { fastAutoOnSeconds: 30 },
+  { intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 } },
+])("rejects participating runtime/route override %j", async (overrides) => {
+  const client = humanClient();
+  client.connect.scopes = ["operator.admin"];
+  const request = await normalizeValue(overrides, client);
+  expect(applyChatSendParticipation(request)).toMatchObject({
+    ok: false,
+  });
+  expect(request.participating).toBeUndefined();
+});
+it("rejects participating tool bindings and public model overrides", async () => {
+  const request = await normalizeValue(
+    { toolBindings: { browser: {} } },
+    copilotClient(["run-tool-bindings"]),
+  );
+  expect(applyChatSendParticipation(request)).toMatchObject({
+    ok: false,
+  });
+  expect(await normalize({ model: "other/model" })).toMatchObject({ ok: false });
+});
 
 const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
 const mention = (start: number, end: number, profileId = "bob") => ({ profileId, start, end });
@@ -195,6 +244,18 @@ it("keeps ordinary typed @names inert and fingerprints only explicit selections"
   expect(first.requestIdentity).toBe((await fingerprint("alex-one")).requestIdentity);
 });
 
+it.each(["openclaw-macos", "openclaw-linux", "openclaw-ios", "openclaw-android"] as const)(
+  "accepts signed-in native UI mention input from %s",
+  async (id) => {
+    const client = humanClient();
+    client.connect.client.id = id;
+    client.connect.client.mode = "ui";
+    expect((await normalize({ message: "@Bob hello", mentions: [mention(0, 4)] }, client)).ok).toBe(
+      true,
+    );
+  },
+);
+
 it("requires authenticated human ingress and rejects unsupported mention modes", async () => {
   const mentions = [mention(0, 4)];
   const unqualified = humanClient();
@@ -323,3 +384,26 @@ it("retains App attachment receipts without changing model text and binds them t
   await expectRejected({ message: "/stop", appContext });
   await expectRejected({ appContext: [{ title: "x".repeat(201) }] });
 });
+
+it.each([
+  [undefined, "off", false],
+  ["other-tool", "off", false],
+  ["openclaw_agent_consult", undefined, false],
+  ["openclaw_agent_consult", "off", true],
+] as const)(
+  "normalizes only explicit trusted Talk preferences (%s, %s)",
+  async (sourceTool, thinking, expected) => {
+    const result = await normalizeChatSendRequest({
+      params: requestParams({
+        ...(thinking ? { thinking } : {}),
+        ...(sourceTool ? { systemInputProvenance: { kind: "internal_system", sourceTool } } : {}),
+      }),
+      client: null,
+      trustedSystemInput: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.normalizeThinkingLevelOverride).toBe(expected);
+    }
+  },
+);

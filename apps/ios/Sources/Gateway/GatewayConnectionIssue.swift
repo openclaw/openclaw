@@ -68,53 +68,25 @@ enum GatewayConnectionIssue: Equatable {
             return .none
         }
     }
+}
 
-    static func detect(from statusText: String) -> Self {
-        let trimmed = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .none }
-        let lower = trimmed.lowercased()
-
-        if lower.contains("pairing required") || lower.contains("not_paired") || lower.contains("not paired") {
-            return .pairingRequired(requestId: self.extractRequestId(from: trimmed))
-        }
-        if lower.contains("gateway token missing") {
-            return .tokenMissing
-        }
-        if lower.contains("gateway password missing") {
-            return .passwordMissing
-        }
-        if lower.contains("unauthorized") {
-            return .unauthorized
-        }
-        if lower.contains("connection refused") ||
-            lower.contains("timed out") ||
-            lower.contains("network is unreachable") ||
-            lower.contains("cannot find host") ||
-            lower.contains("could not connect")
-        {
-            return .network
-        }
-        if lower.hasPrefix("gateway error:") {
-            return .unknown(trimmed)
-        }
-        return .none
-    }
-
-    private static func extractRequestId(from statusText: String) -> String? {
-        let marker = "requestId:"
-        guard let range = statusText.range(of: marker) else { return nil }
-        let suffix = statusText[range.upperBound...]
-        let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let end = trimmed.firstIndex(where: { ch in
-            ch == ")" || ch.isWhitespace || ch == "," || ch == ";"
-        }) ?? trimmed.endIndex
-        let id = String(trimmed[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return id.isEmpty ? nil : id
+extension GatewayConnectionProblem {
+    /// An error the mapper does not recognize still shows its cause; the connect retries without pausing.
+    static func unmapped(_ error: Error) -> Self {
+        GatewayConnectionProblem(
+            kind: .unknown,
+            owner: .network,
+            title: "Connection check failed",
+            message: error.localizedDescription,
+            actionLabel: "Retry",
+            retryable: true,
+            pauseReconnect: false)
     }
 }
 
 extension GatewayConnectionIssue {
     static let tailscaleSetupURL = URL(string: "https://tailscale.com/docs/install/ios")!
+    static let tailscaleServeDocsURL = URL(string: "https://docs.openclaw.ai/gateway/tailscale")!
 
     /// These addresses suggest Tailscale, not proof of VPN state or permission to use plaintext.
     static func isTailnetEndpoint(_ host: String) -> Bool {
@@ -145,20 +117,75 @@ extension GatewayConnectionIssue {
         return false
     }
 
+    /// A refusal means the host answered and nothing accepts connections on the port: a wrong port,
+    /// such as a gateway behind Tailscale Serve dialed on its own loopback port. On a tailnet host
+    /// Tailscale is working, so its install advice would send the user the wrong way.
+    static func refusedMessage(host: String, port: Int?) -> String {
+        var message = if let port {
+            String(
+                format: String(localized: "%@ refused the connection: nothing accepts connections on that port."),
+                "\(host):\(port)")
+        } else {
+            String(localized: "The gateway host was reachable, but it refused the connection.")
+        }
+        message += "\n\n" + (self.isTailnetEndpoint(host)
+            ? String(localized: """
+            Tailscale is connected: the gateway's host answered. If the gateway uses Tailscale Serve, \
+            connect to its Tailscale HTTPS name (ending in .ts.net) without a port, or scan a new setup \
+            code from the gateway.
+            """)
+            : String(localized: "Check the port, or scan a new setup code from the gateway."))
+        return message
+    }
+
+    /// A new setup code carries the gateway's working route.
+    static let refusedActionCommand = "openclaw qr"
+
+    static func refusedDocsURL(host: String) -> URL? {
+        self.isTailnetEndpoint(host) ? self.tailscaleServeDocsURL : nil
+    }
+
+    /// Gives transport failures the route context the user needs. `port` comes from the dialed URL;
+    /// the mapper's generic text names no address. The result is verbatim, so a second pass, or a
+    /// problem the TLS probe built with its address and remedy, is left unchanged.
     static func addingEndpointGuidance(
         to problem: GatewayConnectionProblem,
-        host: String?) -> GatewayConnectionProblem
+        host: String?,
+        port: Int? = nil) -> GatewayConnectionProblem
     {
-        guard let host, self.isTailnetEndpoint(host),
-              [.timeout, .connectionRefused, .reachabilityFailed].contains(problem.kind),
-              problem.docsURL != self.tailscaleSetupURL
+        guard let host, [.timeout, .connectionRefused, .reachabilityFailed].contains(problem.kind)
         else { return problem }
-        let guidance = String(localized: """
-        If this gateway uses Tailscale, install or open Tailscale on this device, \
-        sign in to the same tailnet, and connect. Check that the gateway is online \
-        and accessible to your device, then retry.
-        """)
-        let message = problem.localizedMessage + "\n\n" + guidance
+        let generic = if case .localized = problem.messagePresentation {
+            true
+        } else {
+            false
+        }
+        let message: String
+        let docsURL: URL?
+        var actionCommand = problem.actionCommand
+        if problem.kind == .connectionRefused {
+            guard generic, port != nil || self.isTailnetEndpoint(host) else { return problem }
+            message = self.refusedMessage(host: host, port: port)
+            docsURL = self.refusedDocsURL(host: host) ?? problem.docsURL
+            actionCommand = actionCommand ?? self.refusedActionCommand
+        } else {
+            let address = generic ? port.map { "\(host):\($0)" } : nil
+            let tailnet = self.isTailnetEndpoint(host) && problem.docsURL != self.tailscaleSetupURL
+            guard address != nil || tailnet else { return problem }
+            var text = problem.localizedMessage
+            if let address {
+                text += "\n\n" + String(format: String(localized: "Address: %@"), address)
+            }
+            if tailnet {
+                text += "\n\n" + String(localized: """
+                If this gateway uses Tailscale, install or open Tailscale on this device, \
+                sign in to the same tailnet, and connect. Check that the gateway is online \
+                and accessible to your device, then retry.
+                """)
+            }
+            message = text
+            docsURL = tailnet ? self.tailscaleSetupURL : problem.docsURL
+        }
         return GatewayConnectionProblem(
             kind: problem.kind,
             owner: problem.owner,
@@ -167,8 +194,8 @@ extension GatewayConnectionIssue {
             actionLabel: "Retry",
             titlePresentation: problem.titlePresentation,
             messagePresentation: .verbatim(message),
-            actionCommand: problem.actionCommand,
-            docsURL: self.tailscaleSetupURL,
+            actionCommand: actionCommand,
+            docsURL: docsURL,
             requestId: problem.requestId,
             retryable: problem.retryable,
             pauseReconnect: problem.pauseReconnect,

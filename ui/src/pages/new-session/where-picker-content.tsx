@@ -1,13 +1,4 @@
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  For,
-  Loading,
-  onSettled,
-  Show,
-} from "solid-js";
+import { action, createMemo, createOptimistic, For, Loading, Show, useContext } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
 import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
@@ -23,6 +14,8 @@ import {
   environmentPlacementRuntime,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
+import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
+import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import { DevicePoolIcon, EnvironmentDeviceIcon } from "./where-chip-icons.tsx";
 import type { WhereChipProps } from "./where-chip.tsx";
@@ -35,21 +28,6 @@ function ConnectDeviceIcon() {
     </StrokeIcon>
   );
 }
-function renderEnvironmentSkeletons(section: "devices" | "cloud") {
-  return (
-    <div
-      class="new-session-page__environment-skeletons"
-      role="status"
-      aria-label={t("common.loading")}
-      aria-busy="true"
-      data-section={section}
-    >
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-    </div>
-  );
-}
-
 function EnvironmentHeading(props: {
   label: string;
   action: "connect-machine" | "manage-cloud-workers";
@@ -64,7 +42,7 @@ function EnvironmentHeading(props: {
         <Show when={props.onAction}>
           <button
             type="button"
-            class="new-session-page__connect-device"
+            class="oc-menu-heading__action"
             data-action={props.action}
             aria-label={t(
               props.action === "connect-machine"
@@ -82,14 +60,10 @@ function EnvironmentHeading(props: {
   );
 }
 
-export function WherePickerContent(
-  props: Omit<WhereChipProps, "ref"> & {
-    onReady: (search: HTMLElement) => void;
-  },
-) {
-  let search!: HTMLElement;
-  onSettled(() => props.onReady(search));
-  const [searching, setSearching] = createSignal(false);
+export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
+  const navigation = useContext(PickerNavigation);
+  const autoRef = pickerOptionRef();
+  const setupRef = pickerOptionRef();
   const [saving, setSaving] = createOptimistic(false);
   const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
     if (request.isCurrent()) {
@@ -216,6 +190,10 @@ export function WherePickerContent(
       busy,
     };
   });
+  const scrollRef = createPickerScrollRef(
+    () => props.params.place.browser.popoverOpen("where"),
+    view,
+  );
   const busy = () => saving() || view().busy;
   function CloudHeading(heading: { pending?: boolean }) {
     return (
@@ -235,21 +213,24 @@ export function WherePickerContent(
     );
   }
   return (
-    <div class="new-session-page__environment-layout">
+    <div class="new-session-page__environment-layout new-session-page__picker-navigation">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
         <HeaderSearch
-          title={t("newSession.where")}
           label={t("newSession.environmentSearchPlaceholder")}
           query={props.params.place.browser.environmentQuery}
-          open={searching() || Boolean(props.params.place.browser.environmentQuery)}
+          autofocus="popover"
           disabled={busy()}
-          toggleRef={(element) => {
-            search = element;
+          inputRef={(node) => navigation?.inputRef(node)}
+          onInputKeyDown={(event) => navigation?.keydown(event)}
+          onQueryChange={(query) => {
+            navigation?.clear();
+            props.params.place.browser.changeEnvironmentQuery(query);
           }}
-          onOpenChange={setSearching}
-          onQueryChange={(query) => props.params.place.browser.changeEnvironmentQuery(query)}
         />
-        <div class="new-session-page__environment-list">
+        <div
+          class="new-session-page__environment-list new-session-page__picker-scroll"
+          ref={scrollRef}
+        >
           <Show when={view().showLocal || view().devices.length || view().showAuto}>
             <EnvironmentHeading
               label={t("newSession.yourDevices")}
@@ -271,7 +252,10 @@ export function WherePickerContent(
                   busy() ||
                   (!props.params.place.autoDevice && Boolean(props.state.autoDeviceDisabledReason))
                 }
-                ref={nativeListener("click", () => props.params.place.selectDevice("", true))}
+                ref={[
+                  autoRef,
+                  nativeListener("click", () => props.params.place.selectDevice("", true)),
+                ]}
               >
                 <span class="session-menu__icon" aria-hidden="true">
                   <DevicePoolIcon />
@@ -344,9 +328,9 @@ export function WherePickerContent(
           <Loading
             on={cloudProfilesCompletion()}
             fallback={
-              props.params.place.canWrite() && view().devices.length === 0
-                ? renderEnvironmentSkeletons("devices")
-                : undefined
+              props.params.place.canWrite() && view().devices.length === 0 ? (
+                <PickerSkeleton section="devices" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}
@@ -379,12 +363,11 @@ export function WherePickerContent(
             </For>
           }
           {view().showHostedSetup && view().hostedLoading ? (
-            <div role="status" class="new-session-page__environment-empty">
-              {t("common.loading")}
-            </div>
+            <PickerSkeleton />
           ) : view().showHostedSetup && !view().hosted.some((entry) => entry.id === "agentsapi") ? (
             <a
               class="session-menu__item new-session-page__environment-option"
+              ref={setupRef}
               href="https://docs.openclaw.ai/plugins/agentsapi"
               target="_blank"
               rel="noreferrer"
@@ -459,9 +442,9 @@ export function WherePickerContent(
             fallback={
               props.params.place.isAdmin() &&
               props.params.place.canWrite() &&
-              view().cloudProfiles.length === 0
-                ? renderEnvironmentSkeletons("cloud")
-                : undefined
+              view().cloudProfiles.length === 0 ? (
+                <PickerSkeleton section="cloud" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}

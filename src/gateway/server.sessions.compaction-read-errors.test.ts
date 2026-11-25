@@ -6,8 +6,8 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 // Install the mocked readers before the Gateway loads its accessor graph.
-import "../config/sessions/session-transcript-hydration.js";
 import "../config/sessions/session-transcript-stats.js";
+import "../config/sessions/session-transcript-worker-readers.js";
 import * as settlementOwner from "./server-methods/session-run-settlement.js";
 import { embeddedRunMock, rpcReq } from "./test-helpers.js";
 import {
@@ -22,22 +22,44 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-type PrepareTranscriptHydration =
-  (typeof import("../config/sessions/session-transcript-hydration.js"))["prepareSessionTranscriptHydration"];
-
 type ReadTranscriptStats =
   (typeof import("../config/sessions/session-transcript-stats.js"))["readTranscriptStatsAsync"];
 
 const transcriptReads = vi.hoisted(() => ({
-  hydration: vi.fn<PrepareTranscriptHydration>(),
+  failedPreflightSessionId: undefined as string | undefined,
+  failedPreflights: vi.fn(),
   stats: vi.fn<ReadTranscriptStats>(),
 }));
 
-vi.mock("../config/sessions/session-transcript-hydration.js", async (importOriginal) => {
+vi.mock("../config/sessions/session-transcript-worker-readers.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../config/sessions/session-transcript-hydration.js")>();
-  transcriptReads.hydration.mockImplementation(actual.prepareSessionTranscriptHydration);
-  return { ...actual, prepareSessionTranscriptHydration: transcriptReads.hydration };
+    await importOriginal<
+      typeof import("../config/sessions/session-transcript-worker-readers.js")
+    >();
+  return {
+    ...actual,
+    createSessionHistoryWorkerReaders: (
+      ...args: Parameters<typeof actual.createSessionHistoryWorkerReaders>
+    ) => {
+      const readers = actual.createSessionHistoryWorkerReaders(...args);
+      return {
+        ...readers,
+        readPreparedCompaction: async (
+          ...params: Parameters<typeof readers.readPreparedCompaction>
+        ) => {
+          const [input] = params;
+          if (
+            input.target.sessionId === transcriptReads.failedPreflightSessionId &&
+            input.operation.kind === "preflight"
+          ) {
+            transcriptReads.failedPreflights(input);
+            throw transcriptReadError();
+          }
+          return readers.readPreparedCompaction(...params);
+        },
+      };
+    },
+  };
 });
 
 vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal) => {
@@ -61,10 +83,10 @@ async function compact(key = "main", maxLines?: number) {
   }
 }
 
-const realHydration = expectDefined(transcriptReads.hydration.getMockImplementation(), "hydration");
 const realStats = expectDefined(transcriptReads.stats.getMockImplementation(), "transcript stats");
 beforeEach(() => {
-  transcriptReads.hydration.mockReset().mockImplementation(realHydration);
+  transcriptReads.failedPreflightSessionId = undefined;
+  transcriptReads.failedPreflights.mockClear();
   transcriptReads.stats.mockReset().mockImplementation(realStats);
 });
 
@@ -102,20 +124,9 @@ const transcriptReadError = () =>
   new Error("SQLITE_IOERR: failed to read session transcript storage");
 
 // Background reads must not consume the failure intended for the compaction RPC.
-function failTranscriptReadForSession(sessionId: string, reader: "hydration" | "stats"): void {
-  if (reader === "hydration") {
-    transcriptReads.hydration.mockImplementation((...params) => {
-      const prepared = realHydration(...params);
-      return {
-        ...prepared,
-        read: async (options) => {
-          if (params[0].sessionId === sessionId && options?.compaction) {
-            throw transcriptReadError();
-          }
-          return prepared.read(options);
-        },
-      };
-    });
+function failTranscriptReadForSession(sessionId: string, reader: "prepared" | "stats"): void {
+  if (reader === "prepared") {
+    transcriptReads.failedPreflightSessionId = sessionId;
   } else {
     transcriptReads.stats.mockImplementation(async (scope) => {
       if (scope.sessionId !== sessionId) {
@@ -132,7 +143,8 @@ test.each(["legacy", "native", "maxLines"])(
     const sessionId = `sess-${stage}-read-failure`;
     const maxLines = stage === "maxLines" ? 50 : undefined;
     await seedCompactionSession(sessionId, stage === "native");
-    failTranscriptReadForSession(sessionId, stage === "legacy" ? "hydration" : "stats");
+    failTranscriptReadForSession(sessionId, stage === "legacy" ? "prepared" : "stats");
+    const callsBefore = embeddedRunMock.compactEmbeddedAgentSession.mock.calls.length;
     expect(await compact("main", maxLines)).toMatchObject({
       ok: false,
       error: {
@@ -140,6 +152,15 @@ test.each(["legacy", "native", "maxLines"])(
         message: expect.stringContaining("failed to read session transcript storage"),
       },
     });
+    expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls).toHaveLength(callsBefore);
+    if (stage === "legacy") {
+      expect(transcriptReads.failedPreflights).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          target: expect.objectContaining({ sessionId }),
+          operation: { kind: "preflight" },
+        }),
+      );
+    }
   },
 );
 
@@ -150,7 +171,7 @@ test.each([false, true])(
 
     expect(await compact()).toMatchObject({
       ok: true,
-      payload: { ok: true, compacted: false, reason: "no transcript" },
+      payload: { ok: true, compacted: false, reason: "No chat history to compact." },
     });
   },
 );

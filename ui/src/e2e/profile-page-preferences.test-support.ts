@@ -1,5 +1,6 @@
 import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
@@ -102,7 +103,11 @@ export function defineProfilePreferenceTests({
           await gateway.setMethodResponse("users.self", { profile });
           const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
           const prefMatch = {
-            keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+            keys: [
+              GIT_COAUTHOR_PREFERENCE_KEY,
+              "github.prAttribution.enabled",
+              GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+            ],
           };
           const prefsBeforeRefresh = (
             await gateway.getRequests("users.prefs.get", prefMatch, { exactParams: true })
@@ -142,6 +147,7 @@ export function defineProfilePreferenceTests({
           const prefSet = await gateway.waitForRequest("users.prefs.set");
           expect(prefSet.params).toEqual({
             entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
+            expectedEntries: { [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: null },
           });
           await expect(toggle).toBeChecked();
           await screenshot(page, "10-git-coauthor-enabled.png");

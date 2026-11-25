@@ -13,9 +13,16 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 export { defaultTitle, normalizeToolDisplayName } from "./tool-display-name.js";
 
+type ToolDisplayProgressSpec = {
+  label: string;
+  detailKeys: string[];
+  referenceKey?: string;
+};
+
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
+  progress?: ToolDisplayProgressSpec;
 };
 
 export type ToolDisplaySpec = {
@@ -23,6 +30,8 @@ export type ToolDisplaySpec = {
   label?: string;
   detailKeys?: string[];
   actions?: Record<string, ToolDisplayActionSpec>;
+  /** Concise operation context; diagnostic detail keys stay available separately. */
+  progress?: ToolDisplayProgressSpec;
 };
 
 type CoerceDisplayValueOptions = {

@@ -33,7 +33,10 @@ import {
   resolveCodexPromptContinuity,
   selectCodexStaleBindingDelta,
 } from "./run-attempt-prompt-continuity.js";
-import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
+import {
+  bindCodexFrozenPrompt,
+  resolveCodexShiftedPromptRanges,
+} from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
@@ -80,6 +83,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const collaboration = buildTurnCollaborationMode(params).settings;
   const isTelegram = (params.messageChannel ?? params.messageProvider) === "telegram";
   const usesSelectedHistory = Boolean(
     activeContextEngine ||
@@ -222,7 +226,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               ? [replacedSystemPromptForBudget]
               : [openClawBaseInstructions, baseDeveloperInstructions]),
             refreshableInstructions,
-            buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+            collaboration.developer_instructions ?? undefined,
             JSON.stringify(toolBridge.specs),
           ),
           prompt: joinPresentSections(
@@ -385,13 +389,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
       continuity: (reportedContinuity = resolveContinuity()),
     });
+  const applyFrozenPrompt = bindCodexFrozenPrompt(params);
   const decorateCodexTurnPromptText = (
-    promptBuildResult: {
-      prompt: string;
-      promptInputRange?: { start: number; end: number };
-    },
+    promptBuild: Parameters<typeof applyFrozenPrompt>[1],
     includeWorkspaceReferences = true,
   ) => {
+    const promptBuildResult = applyFrozenPrompt(promptState.promptText, promptBuild);
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
       buildOpenClawPromptContext(includeWorkspaceReferences),
@@ -402,10 +405,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
     );
     const projectedRanges = resolveCodexShiftedPromptRanges({
-      prompt: promptBuildResult.prompt,
-      promptInputRange: promptBuildResult.promptInputRange,
+      ...promptBuildResult,
       turnPromptText,
-      promptText: promptState.promptText,
       promptContextRange: promptState.promptContextRange,
     });
     const preservedRange =
@@ -456,29 +457,27 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   let inferenceInstructions: string | undefined;
+  let threadDeveloperInstructions: string | undefined;
   let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
   // native/provider prompt. Reuse registered relay text so diagnostics include every
   // relay component. Hook context is already in that text, so only native policy
   // precedes it. These projections must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
-    inferenceInstructions !== undefined
-      ? joinPresentSections(
-          renderCodexThreadPolicy(
-            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
-            turnState.promptBuild.threadDeveloperInstructions ??
-              turnState.promptBuild.developerInstructions,
-          ),
-          inferenceInstructions,
-        )
-      : joinPresentSections(
-          renderCodexThreadPolicy(
-            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
-            turnState.promptBuild.developerInstructions,
-            refreshableInstructions,
-          ),
-          buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
-        );
+    joinPresentSections(
+      renderCodexThreadPolicy(
+        baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+        threadDeveloperInstructions ??
+          (inferenceInstructions !== undefined
+            ? (turnState.promptBuild.threadDeveloperInstructions ??
+              turnState.promptBuild.developerInstructions)
+            : joinPresentSections(
+                turnState.promptBuild.developerInstructions,
+                refreshableInstructions,
+              )),
+      ),
+      inferenceInstructions ?? collaboration.developer_instructions ?? undefined,
+    );
   // Reports, hooks, trajectory, and history budgets also count the pinned base. The
   // rotation fuse does not: native token counts already include it. Until the thread
   // lifecycle reports the base it placed, this is the pre-startup estimate.
@@ -703,6 +702,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         Object.assign(systemPromptReport, buildSystemPromptReport(!include));
         workspaceReferencesIncluded = include;
       }
+    },
+    setThreadDeveloperInstructions: (instructions: string) => {
+      threadDeveloperInstructions = instructions;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     setInferenceInstructions: (instructions: string) => {
       inferenceInstructions = instructions;

@@ -169,7 +169,7 @@ if (
 }
 type Scenario = {
   id: string;
-  routeId?: RouteId | "claws";
+  routeId?: RouteId;
   selector: string;
   shortcut?: string;
   trigger?: string;
@@ -179,13 +179,9 @@ const allScenarios: Scenario[] = [
     id: routeId,
     routeId,
     selector:
-      routeId === "templates"
-        ? ".templates-catalog-header"
-        : routeId === "activity"
-          ? "openclaw-activity-page .content-header"
-          : routeId === "dashboards"
-            ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
-            : `openclaw-${routeId}-page`,
+      routeId === "dashboards"
+        ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
+        : `openclaw-${routeId}-page`,
   })),
   {
     id: "new-session",
@@ -398,30 +394,29 @@ async function prepareTarget(
   if (scenario.routeId === "new-session") {
     return { scenario, target: page.locator(".sidebar-rail .sidebar-new-session") };
   }
-  const catalog = scenario.routeId === "templates";
-  const target = page.locator(
-    catalog
-      ? '.sidebar-pages :is([data-sidebar-entry="route:templates"], [data-sidebar-entry="route:claws"]) a'
-      : `.sidebar-pages [data-sidebar-entry="route:${scenario.routeId}"] a`,
-  );
+  const target = page.locator(`.sidebar-pages [data-sidebar-entry="route:${scenario.routeId}"] a`);
   if (!(await target.isVisible())) {
     await page
       .locator("openclaw-app-sidebar")
       .getByRole("button", { name: "Pages", exact: true })
       .click();
   }
-  await target.waitFor({ state: "visible" });
-  if (
-    catalog &&
-    (await target.evaluate((element) =>
-      element.closest("[data-sidebar-entry]")?.getAttribute("data-sidebar-entry"),
-    )) === "route:claws"
-  ) {
-    return {
-      scenario: { ...scenario, routeId: "claws", selector: ".claws-catalog-header" },
-      target,
-    };
+  if (scenario.routeId === "sessions") {
+    // Historical bundles list Sessions in Pages; current bundles open it from its sidebar.
+    await page.locator(".sidebar-pages:visible").waitFor();
+    if ((await target.count()) === 0) {
+      await page.keyboard.press("Escape");
+      const filter = page.locator(".sidebar-session-toolbar .sidebar-session-sort");
+      if (!(await filter.isVisible())) {
+        await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+      }
+      await filter.click();
+      const sessions = page.locator('.sidebar-session-filter-footer[href$="/sessions"]');
+      await sessions.waitFor({ state: "visible" });
+      return { scenario, target: sessions };
+    }
   }
+  await target.waitFor({ state: "visible" });
   return { scenario, target };
 }
 

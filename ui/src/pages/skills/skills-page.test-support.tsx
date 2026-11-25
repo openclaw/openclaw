@@ -117,7 +117,20 @@ export function mountSkills(
       undefined,
       { requireConfiguredAgent: true },
     ),
-    navigate: vi.fn(),
+    // Skill pages are addresses: navigation moves the fixture router like the app's.
+    navigate: vi.fn(
+      (routeId: "skills" | "skill-settings", options?: { pathname?: string; search?: string }) =>
+        void router.navigate(
+          routeId,
+          context,
+          {},
+          {
+            pathname: options?.pathname ?? (routeId === "skills" ? "/skills" : "/settings/skills"),
+            search: options?.search ?? "",
+            hash: "",
+          },
+        ),
+    ),
   } as unknown as ApplicationContext;
   const selection =
     surface === "settings" ? context.settingsAgentSelection : context.agentSelection;

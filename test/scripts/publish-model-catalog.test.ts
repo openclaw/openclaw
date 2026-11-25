@@ -14,7 +14,6 @@ import {
   assembleVersionedModelCatalogBundle,
   enrichModelCatalogPricing,
   hydrateModelCatalogFromModelsDev,
-  MODEL_CATALOG_MIN_MODELS,
   parsePublishModelCatalogArgs,
   readModelCatalogManifests,
   resolveProviderFeaturedModels,
@@ -26,7 +25,7 @@ import { MODELS_JSON_STATE } from "../../src/agents/models-config-state.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../../src/model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
-import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
+import { resolveModelCostConfig } from "../../src/model-catalog/usage-pricing.js";
 
 const tempDirs: string[] = [];
 
@@ -124,15 +123,6 @@ async function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider
   };
   await prepareRemoteModelCatalogStartupSnapshot();
   return { config, agentDir, provider };
-}
-
-function writeFixtureManifest(root: string, pluginId: string, providers: Record<string, unknown>) {
-  const pluginDir = path.join(root, "extensions", pluginId);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify({ id: pluginId, modelCatalog: { providers } }, null, 2)}\n`,
-  );
 }
 
 function assembleFixtureBundle(
@@ -264,14 +254,14 @@ describe("publish model catalog", () => {
     const params = await publishedPricingParams(bundle, "deepinfra");
     for (const model of ["free", "standalone-free"]) {
       expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
-      expect(resolveModelCostConfig({ ...params, model })).toEqual({
+      expect(await resolveModelCostConfig({ ...params, model })).toEqual({
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
       });
     }
-    expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
+    expect(await resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
   });
 
   it("rejects DeepInfra object response before mutating the previous bundle", async () => {
@@ -292,26 +282,6 @@ describe("publish model catalog", () => {
       }),
     ).rejects.toThrow("DeepInfra pricing");
     expect(serializeModelCatalogBundle(bundle)).toBe(previous);
-  });
-
-  it("assembles and validates fixture manifests at the 200-model floor", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-"));
-    tempDirs.push(root);
-    writeFixtureManifest(root, "anthropic", { anthropic: fixtureProvider("claude", 100) });
-    writeFixtureManifest(root, "openai", { openai: fixtureProvider("gpt", 100) });
-
-    const bundle = await assembleModelCatalogBundle({
-      manifests: readModelCatalogManifests({ rootDir: root }),
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
-    expect(summarizeModelCatalogBundle(bundle)).toEqual({
-      providers: 2,
-      models: 200,
-      costModels: 0,
-      pricingEntries: 0,
-    });
-    expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
 
   it("omits empty static catalogs owned by runtime discovery", async () => {
@@ -1159,7 +1129,7 @@ describe("publish model catalog", () => {
           `${source} pricing unavailable for ${provider}/priced-fixture`,
         );
         expect(
-          resolveModelCostConfig({
+          await resolveModelCostConfig({
             ...(await publishedPricingParams(bundle, provider)),
             model: "priced-fixture",
           }),

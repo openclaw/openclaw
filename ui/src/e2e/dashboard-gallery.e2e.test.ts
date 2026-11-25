@@ -90,6 +90,71 @@ async function searchDashboards(gallery: Locator, query: string) {
   await field.fill(query);
 }
 suite.define(() => {
+  it("keeps enlarged read failures legible inside a dashboard grid preview", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await seedChatSettings(page, suite.server.baseUrl, { textScale: 140 });
+        const sessions = [{ ...dashboardRows[0]!, hasBoard: true }];
+        await installMockGateway(page, {
+          sessions,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                responseCase(
+                  { hasBoard: true },
+                  {
+                    ts: now,
+                    path: "",
+                    count: 1,
+                    defaults: { contextTokens: null, model: null, modelProvider: null },
+                    sessions,
+                  },
+                ),
+              ],
+            },
+            "board.get": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Dashboard storage is temporarily unavailable",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const card = page.locator("[data-dashboard-session]").first(),
+          notice = card.locator(".board-document__state--error");
+        await notice.waitFor();
+        expect(await notice.textContent()).toBe("Dashboard storage is temporarily unavailable");
+        const inside = await notice.evaluate((el) => {
+          const preview = el.closest(".dashboard-preview")!.getBoundingClientRect(),
+            sheet = el.closest(".dashboard-preview__sheet")!.getBoundingClientRect(),
+            range = document.createRange();
+          range.selectNodeContents(el);
+          const rects = [...range.getClientRects()];
+          return (
+            rects.length > 0 &&
+            rects.every(
+              (r) =>
+                r.left >= sheet.left &&
+                r.right <= sheet.right &&
+                r.top >= sheet.top &&
+                r.bottom <= Math.min(sheet.bottom, preview.bottom),
+            )
+          );
+        });
+        expect(inside).toBe(true);
+        await card.getByRole("link", { name: "Release health" }).focus();
+        expect(
+          await card
+            .getByRole("link", { name: "Release health" })
+            .evaluate((el) => el === document.activeElement),
+        ).toBe(true);
+      },
+    );
+  });
+
   it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     const emptyKey = "agent:main:dashboard:empty";
@@ -305,6 +370,9 @@ suite.define(() => {
           await gallery.locator("[data-dashboard-session]").first().waitFor();
           await gallery.locator("[data-dashboard-session]").waitFor();
           const loaded = await geometry();
+          const entry = (await gallery.locator("[data-dashboard-session]").boundingBox())!;
+          const search = (await gallery.locator(".dashboards-search").boundingBox())!;
+          expect(Math.abs(search.x - entry.x)).toBeLessThanOrEqual(1);
           console.log("phone gallery geometry", view, { loading, loaded });
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({
@@ -318,6 +386,47 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps the remove button reachable for a long dashboard author on a phone", async () => {
+    const author = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+    const rows = dashboardRows.slice(0, 2).map((row, index) =>
+      Object.assign({}, row, {
+        hasBoard: true,
+        createdActor: index === 0 ? { ...row.createdActor, label: author } : row.createdActor,
+      }),
+    );
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, { sessions: rows });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const gallery = page.locator("openclaw-dashboards-page");
+        const cards = gallery.locator("[data-dashboard-session]");
+        await expect.poll(() => cards.count()).toBe(2);
+        await gallery.getByRole("button", { name: "Filter by author", exact: true }).tap();
+        await page
+          .locator("#dashboards-author-filter")
+          .getByRole("checkbox", { name: new RegExp(author) })
+          .check();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => cards.count()).toBe(1);
+        const remove = gallery.getByRole("button", { name: "Remove author filter" });
+        expect(
+          await remove.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return (
+              box.right <= innerWidth &&
+              button.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              )
+            );
+          }),
+        ).toBe(true);
+        await remove.tap();
+        await expect.poll(() => cards.count()).toBe(2);
+      },
+    );
+  });
 
   it("bounds mounted dashboards across list and small author groups", async () => {
     const rows = Array.from({ length: 1_000 }, (_, index) => ({
@@ -376,11 +485,20 @@ suite.define(() => {
           '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
         );
         const third = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-2"] a');
+        const secondActions = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] button[aria-label="Dashboard actions"]',
+        );
         await second.focus();
-        await page.keyboard.press("Tab");
-        expect(await third.evaluate((element) => element.matches(":focus"))).toBe(true);
-        await page.keyboard.press("Shift+Tab");
-        expect(await second.evaluate((element) => element.matches(":focus"))).toBe(true);
+        // Each entry's actions menu follows its link in the tab order.
+        for (const [key, target] of [
+          ["Tab", secondActions],
+          ["Tab", third],
+          ["Shift+Tab", secondActions],
+          ["Shift+Tab", second],
+        ] as const) {
+          await page.keyboard.press(key);
+          expect(await target.evaluate((element) => element.matches(":focus"))).toBe(true);
+        }
         await page.locator(".content").evaluate((element) => {
           element.scrollTop = element.scrollHeight / 2;
         });
@@ -418,6 +536,50 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([2, 64])(
+    "keeps a long author heading on one line above its first dashboard (%i dashboards)",
+    async (count) => {
+      const name = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
+      const rows = Array.from({ length: count }, (_, index) => ({
+        ...dashboardRows[0]!,
+        key: "agent:main:dashboard:edition-" + index,
+        displayName: "Edition " + index,
+        hasBoard: true,
+        createdActor: { type: "human", id: "studio", label: name },
+      }));
+      await suite.withPage(
+        { viewport: { width: 390, height: 844 }, hasTouch: true },
+        async ({ page }) => {
+          await installMockGateway(page, { sessions: rows });
+          await page.goto(suite.server.baseUrl + "dashboards");
+          const gallery = page.locator("openclaw-dashboards-page");
+          await gallery.getByRole("button", { name: "Display", exact: true }).tap();
+          await page.locator("#dashboards-display").getByLabel("Grouping").selectOption("author");
+          await page.keyboard.press("Escape");
+          const heading = gallery.getByRole("heading", { name: new RegExp(name) });
+          await heading.waitFor();
+          const label = heading.locator(":scope > span");
+          expect(await label.textContent()).toBe(name);
+          expect(await label.getAttribute("title")).toBe(name);
+          const measured = await label.evaluate((el) => ({
+            clipped: el.scrollWidth > el.clientWidth,
+            overflow: getComputedStyle(el).textOverflow,
+            height: el.getBoundingClientRect().height,
+            line: Number.parseFloat(getComputedStyle(el).lineHeight),
+          }));
+          expect(measured.clipped).toBe(true);
+          expect(measured.overflow).toBe("ellipsis");
+          expect(measured.height).toBeCloseTo(measured.line, 0);
+          const first = gallery.locator("[data-dashboard-session]").first();
+          const bounds = (await heading.boundingBox())!;
+          await expect
+            .poll(async () => (await first.boundingBox())!.y)
+            .toBeGreaterThanOrEqual(bounds.y + bounds.height);
+        },
+      );
+    },
+  );
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
@@ -521,7 +683,10 @@ suite.define(() => {
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
         );
-        await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
+        // The pages menu closed on the choice; its Dashboards item no longer reads as current.
+        await page
+          .locator('a.nav-item[href="/dashboards"]:not([aria-current])')
+          .waitFor({ state: "attached" });
         await noteInput.waitFor();
         expect(await noteInput.inputValue()).toBe(notes);
         expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);
@@ -580,6 +745,24 @@ suite.define(() => {
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
         await page.keyboard.press("Escape");
+        // Closing the menu returns the phone keyboard outline to the trailing action.
+        expect(
+          await display.evaluate((button) => {
+            const header = button.closest<HTMLElement>(".dashboards-header")!;
+            const rightEdge =
+              getComputedStyle(header).overflowX === "visible"
+                ? document.documentElement.clientWidth
+                : header.getBoundingClientRect().right;
+            const style = getComputedStyle(button);
+            const ring =
+              Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+            return (
+              button.matches(":focus-visible") &&
+              ring > 0 &&
+              button.getBoundingClientRect().right + ring <= rightEdge
+            );
+          }),
+        ).toBe(true);
         await page.reload();
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);

@@ -1,6 +1,6 @@
 // `openclaw id`: OpenClaw ID remote access of the Gateway on this machine. `rebind`
-// moves the claw to new machine keys with its recovery kit; the Gateway accepts it only
-// from a direct-loopback client, never over the tunnel.
+// moves the claw to new machine keys with its recovery kit and `unlink` ends its link for
+// good; the Gateway accepts both only from a direct-loopback client, never over the tunnel.
 import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -14,8 +14,11 @@ import {
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
+import { describePendingUnlinks, runUnlink } from "./id-cli-unlink.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -46,7 +49,11 @@ const authority = (opts: IdCliOpts, params: Record<string, unknown>) =>
 
 type KeysStatus = {
   status?: { state?: string; key?: string; reason?: string };
-  link?: { linked?: boolean; hostname?: string };
+  link?: {
+    linked?: boolean;
+    hostname?: string;
+    pendingUnlinks?: Array<{ hostname: string; refused?: string }>;
+  };
 };
 type PeopleLink = {
   binding?: {
@@ -67,12 +74,15 @@ type PeopleLink = {
   };
 };
 
-async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> {
+async function readPeopleLink(
+  opts: IdCliOpts,
+  signal?: AbortSignal,
+): Promise<PeopleLink | undefined> {
   const raw = await callGatewayFromCli(
     "openclawId.people",
     opts,
     {},
-    { scopes: ["operator.admin"] },
+    { scopes: ["operator.admin"], signal },
   );
   // SAFETY: openclawId.people answers { link } with the owner link view (owner-link-view.ts).
   const result = raw as { link?: PeopleLink };
@@ -95,7 +105,7 @@ function parseBindingSeq(value: string | undefined): number | undefined {
   }
   const seq = Number(value);
   if (!Number.isSafeInteger(seq) || seq < 1) {
-    throw new Error("--binding-seq must be a positive whole number.");
+    throwExpectedCliError("--binding-seq must be a positive whole number.");
   }
   return seq;
 }
@@ -106,7 +116,7 @@ async function readLinkCode(opts: RebindOpts): Promise<string> {
     return opts.code.trim();
   }
   if (opts.kitStdin) {
-    throw new Error("--kit-stdin needs --code <link-code> from your OpenClaw ID account.");
+    throwExpectedCliError("--kit-stdin needs --code <link-code> from your OpenClaw ID account.");
   }
   const code = await password({
     message: "Link code from your OpenClaw ID account (Add a claw page, claws.<domain>/link)",
@@ -150,20 +160,21 @@ function write(opts: IdCliOpts, json: unknown, text: string) {
   process.stdout.write(opts.json ? `${JSON.stringify(json, null, 2)}\n` : `${text}\n`);
 }
 
-async function runStatus(opts: IdCliOpts) {
+async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
   const raw = await callGatewayFromCli(
     "openclawId.status",
     opts,
     {},
-    { scopes: ["operator.read"] },
+    { scopes: ["operator.read"], signal },
   );
   // SAFETY: openclawId.status answers the status shape KeysStatus reads a subset of.
   const status = raw as KeysStatus;
-  const link = status.link?.linked ? await readPeopleLink(opts) : undefined;
+  const link = status.link?.linked ? await readPeopleLink(opts, signal) : undefined;
   const lines = [describeKeysState(status.status)];
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);
   }
+  lines.push(...describePendingUnlinks(status.link?.pendingUnlinks ?? []));
   if (link?.binding) {
     lines.push(
       `Binding: ${link.binding.bindingSeq} (Discovery has ${link.binding.publishedBindingSeq})`,
@@ -189,7 +200,9 @@ async function runStatus(opts: IdCliOpts) {
       `Publication: ${link.publication.state}${link.publication.code ? ` (${link.publication.code})` : ""}`,
     );
   }
-  write(opts, { ...status, people: link ?? null }, lines.join("\n"));
+  if (!signal?.aborted) {
+    write(opts, { ...status, people: link ?? null }, lines.join("\n"));
+  }
 }
 
 async function waitForPublication(opts: IdCliOpts, bindingSeq: number) {
@@ -236,7 +249,9 @@ async function runRebind(opts: RebindOpts) {
     return;
   }
   if (opts.yes && !opts.kitStdin) {
-    throw new Error("--yes needs --kit-stdin: type the recovery kit at the prompt otherwise.");
+    throwExpectedCliError(
+      "--yes needs --kit-stdin: type the recovery kit at the prompt otherwise.",
+    );
   }
   const bindingSeq = parseBindingSeq(opts.bindingSeq);
   const code = await readLinkCode(opts);
@@ -244,7 +259,7 @@ async function runRebind(opts: RebindOpts) {
   const prep = (await authority(opts, { action: "rebind_prepare", code })) as RebindPreparation;
   const signed = await signRebind(prep, await readKit(opts.kitStdin === true), { bindingSeq });
   if (!signed.ok) {
-    throw new Error(describeSignRefusal(signed, prep.hostname));
+    throwExpectedCliError(describeSignRefusal(signed, prep.hostname));
   }
   if (!opts.yes) {
     process.stdout.write(`${await describeRebind(prep, signed.binding)}\n`);
@@ -291,7 +306,16 @@ export function registerIdCli(program: Command) {
 
   addIdGatewayOptions(
     id.command("status").description("Show remote access, the claw's keys and publication"),
-  ).action(async (opts: IdCliOpts) => await runStatus(opts));
+  ).action(async (opts: IdCliOpts) => {
+    const signal = getAsyncWorkSignal();
+    try {
+      await runStatus(opts, signal);
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+    }
+  });
 
   addIdGatewayOptions(
     id
@@ -319,6 +343,18 @@ export function registerIdCli(program: Command) {
     });
     write(opts, result, JSON.stringify(result));
   });
+
+  addIdGatewayOptions(
+    id
+      .command("unlink")
+      .description(
+        "Unlink this claw from OpenClaw ID for good: members are removed and the name is retired (on this machine only)",
+      )
+      .option("--yes", "Skip the confirmation", false),
+  ).action(
+    async (opts: IdCliOpts & { yes?: boolean }) =>
+      await runUnlink(opts, (json, text) => write(opts, json, text)),
+  );
 
   applyParentDefaultHelpAction(id);
 }

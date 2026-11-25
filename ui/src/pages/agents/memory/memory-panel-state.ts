@@ -663,10 +663,12 @@ export function createAgentMemory(
   };
   const statusDataRead = createMemo(() => {
     config.read();
-    const status = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
+    const result = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
       .engineOff
-      ? null
-      : resourceReads.dreamingStatus().value;
+      ? { value: null }
+      : resourceReads.dreamingStatus();
+    // Retain accepted status after refresh failures, not invented empty lists after a first failure.
+    const status = result.value ?? readResource(result);
     return {
       shortTermCount: status?.shortTermCount ?? 0,
       promotedCount: status?.promotedToday ?? 0,

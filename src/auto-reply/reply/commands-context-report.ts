@@ -16,6 +16,7 @@ import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-re
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../../agents/model-catalog-view.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -91,7 +92,7 @@ async function buildTranscriptCompactabilityLines(
   targetSessionEntry: SessionEntry | undefined,
 ): Promise<string[]> {
   if (!targetSessionEntry?.sessionId?.trim()) {
-    return ["Compactable transcript: unavailable (no active transcript session)"];
+    return ["Compactable chat history: unavailable (no active session)"];
   }
 
   const isRealConversation = createRealConversationClassifier();
@@ -104,11 +105,11 @@ async function buildTranscriptCompactabilityLines(
     }
   }
   if (!totalMessages) {
-    return ["Compactable transcript: unavailable (no transcript messages found)"];
+    return ["Compactable chat history: unavailable (no messages found)"];
   }
 
   return [
-    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} transcript message(s)`,
+    `Compactable chat history: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} history entries`,
     ...(realConversationMessages === 0
       ? [
           "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
@@ -167,7 +168,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "",
         "Try:",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
         "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
@@ -176,6 +177,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
+  const model = params.model;
+  if (!model) {
+    return { text: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const agentId = resolveContextReportAgentId(params);
   const runtime = resolveEffectiveAgentRuntime({
@@ -184,7 +189,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sessionKey: params.sessionKey,
     sessionEntry: targetSessionEntry,
     provider: params.provider,
-    modelId: params.model,
+    modelId: model,
   });
   const { getPreparedModelCatalogSnapshot } =
     await import("../../agents/prepared-model-catalog.js");
@@ -194,7 +199,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
-  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, params.model);
+  const entry = findModelInCatalog(catalog?.entries ?? [], params.provider, model);
   const modelEntry = entry
     ? selectModelCatalogRuntimeEntry({
         entry,
@@ -211,12 +216,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
               : ["openclaw", "auto", candidate.provider].includes(runtime),
           ),
           params.provider,
-          params.model,
+          model,
         );
   const modelContext = resolveModelContextTokenProjection({
     cfg: params.cfg,
     provider: params.provider,
-    model: params.model,
+    model,
     modelContextTokens: modelEntry?.contextTokens,
     modelContextWindow: resolveModelContextWindowProfile({
       catalogEntry: modelEntry,
@@ -233,7 +238,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       resolveProjectedSessionContextTokens({
         entry: targetSessionEntry,
         provider: params.provider,
-        model: params.model,
+        model,
         agentHarnessId: runtime,
         resolvedContextTokens: modelContext.contextTokens,
         authoredContextTokens: modelContext.authoredContextTokens,

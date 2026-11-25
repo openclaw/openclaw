@@ -46,6 +46,11 @@ that onboarding.
 When OpenClaw has recorded a file as generated, an unchanged copy of that starter
 file keeps onboarding pending even if an update changes the bundled template.
 
+Once setup is recorded as complete, the main conversation's system prompt
+replaces the bootstrap instructions with a short note that setup finished and
+that the missing `BOOTSTRAP.md` is expected. The note reports OpenClaw's recorded
+state; it does not verify each bootstrap step.
+
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at
 [BOOTSTRAP.md template](/reference/templates/BOOTSTRAP).

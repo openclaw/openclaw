@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { Worker } from "node:worker_threads";
 import type { CodexStdioChild } from "../../extensions/codex/src/app-server/stdio-worker.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -267,8 +268,6 @@ async function measureSample() {
       assert(workerMetrics, "Worker metrics/preload did not arrive");
     }
     const profile = await inspector?.post("HeapProfiler.stopSampling");
-    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-      node.selfSize + node.children.reduce((total, entry) => total + sum(entry), 0);
     console.log(
       JSON.stringify({
         owner: values.sample,
@@ -286,7 +285,7 @@ async function measureSample() {
         mainHeapInitialBytes: initialHeap,
         mainHeapPeakBytes: peakHeap,
         mainHeapFinalBytes: process.memoryUsage().heapUsed,
-        mainSampledAllocationBytes: profile ? sum(profile.profile.head) : null,
+        mainSampledAllocationBytes: profile ? sumSampledHeapBytes(profile.profile.head) : null,
         worker: workerMetrics ?? null,
         mainNativeSpawnCalls: probe.calls,
         responsive: values.sample === "native" || coldGapMs < 150,

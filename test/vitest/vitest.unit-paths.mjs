@@ -74,6 +74,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
+  "src/node-host/node-worker-publication-merge.test.ts",
   ...bundledPluginDependentUnitTestFiles,
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",

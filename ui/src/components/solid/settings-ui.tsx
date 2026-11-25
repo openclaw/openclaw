@@ -107,21 +107,25 @@ export function SettingsPageHeader(props: {
   let heading!: HTMLHeadingElement;
   // Resolve once: actions may own a portal, which a second read would mount again.
   const actions = children(() => props.actions);
+  const subtitle = children(() => props.subtitle);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
       <section
         class={[
           "content-header content-header--settings",
-          { "content-header--stacked": props.stacked },
+          {
+            "content-header--stacked": props.stacked,
+            "content-header--intro": Boolean(subtitle()),
+          },
         ]}
       >
         <div>
           <h1 class="page-title" ref={(element) => (heading = element)}>
             {props.title}
           </h1>
-          <Show when={props.subtitle}>
-            <div class="page-subtitle">{props.subtitle}</div>
+          <Show when={subtitle()}>
+            <div class="page-subtitle">{subtitle()}</div>
           </Show>
         </div>
         <Show when={actions()}>
@@ -292,6 +296,7 @@ export function SettingsNavRow(
 export function SettingsToggle(
   props: SettingsToggleControl & {
     ariaLabel: string;
+    ariaDescription?: string;
     size?: SwitchSize;
     inputRef?: (element: HTMLInputElement) => void;
   },
@@ -307,6 +312,7 @@ export function SettingsToggleRow(
     description?: JSX.Element;
     /** Secondary actions beside the switch, such as opening related settings. */
     actions?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -330,7 +336,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
           {...props}
@@ -627,8 +633,6 @@ export function SettingsSecretInput(props: {
   placeholder?: string;
   visible: boolean;
   disabled?: boolean;
-  showLabel: string;
-  hideLabel: string;
   toggleLabel: string;
   onInput: (next: string) => void;
   onToggle: () => void;
@@ -646,18 +650,16 @@ export function SettingsSecretInput(props: {
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
-      <openclaw-tooltip prop:content={props.visible ? props.hideLabel : props.showLabel}>
-        <button
-          type="button"
-          class="settings-secret__toggle"
-          aria-label={props.toggleLabel}
-          aria-pressed={props.visible ? "true" : "false"}
-          disabled={props.disabled}
-          onClick={() => props.onToggle()}
-        >
-          <Icon name={props.visible ? "eye" : "eyeOff"} />
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="settings-secret__toggle"
+        aria-label={props.toggleLabel}
+        aria-pressed={props.visible ? "true" : "false"}
+        disabled={props.disabled}
+        onClick={() => props.onToggle()}
+      >
+        <Icon name={props.visible ? "eye" : "eyeOff"} />
+      </button>
     </span>
   );
 }

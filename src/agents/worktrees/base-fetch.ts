@@ -1,8 +1,11 @@
-import { gitNullConfigPath, requireGitCommandOutput } from "../../infra/git-exec.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { quoteGitConfig, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { withGitObjectStoreTransport } from "../../infra/git-object-store-transport.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { commandError, requireGit, runGit } from "./git.js";
 
@@ -173,14 +176,20 @@ export async function withIsolatedWorktreeGitTransport<T>(
   // Resolve conditional includes against the transport before changing Git metadata.
   const config = await requireGit(
     transportRoot,
-    ["config", "--null", "--list", "--includes"],
+    [
+      "config",
+      "--null",
+      "--includes",
+      "--get-regexp",
+      `^((core|extensions|url|http|credential|protocol|fetch|transfer|ssh|pack|index|fsck)\\.|safe\\.directory$|remote\\.${escapeRegExp(remote)}\\.)`,
+    ],
     options,
   );
   const entries: [string, string][] = [];
   for (const field of config.split("\0").filter(Boolean)) {
     const separator = field.indexOf("\n");
     const key = separator < 0 ? field : field.slice(0, separator);
-    if (/^(?:include(?:if)?\.|core\.(?:bare|worktree)$|extensions\.refstorage$)/iu.test(key)) {
+    if (/^(?:core\.(?:bare|worktree)|extensions\.refstorage)$/iu.test(key)) {
       continue;
     }
     entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
@@ -196,6 +205,18 @@ export async function withIsolatedWorktreeGitTransport<T>(
     transportRoot,
     (cwd, command) => requireGit(cwd, command, options),
     async (staging, objects) => {
+      // Keep resolved transport policy in protected config scope, never proportional-size env.
+      const configPath = path.join(staging, "transport.config");
+      await fs.writeFile(
+        configPath,
+        entries
+          .map(([key, value]) => {
+            const [, section, subsection, name] = /^([^.]+)\.(?:(.*)\.)?([^.]+)$/u.exec(key)!;
+            return `[${section}${subsection === undefined ? "" : ` ${quoteGitConfig(subsection)}`}]\n${name}=${quoteGitConfig(value)}\n`;
+          })
+          .join(""),
+        { mode: 0o600 },
+      );
       const transport = {
         ...options,
         refMutationDirectory: staging,
@@ -206,12 +227,15 @@ export async function withIsolatedWorktreeGitTransport<T>(
             GIT_COMMON_DIR: staging,
             GIT_WORK_TREE: repoRoot,
             GIT_OBJECT_DIRECTORY: objects,
-            GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+            GIT_CONFIG_GLOBAL: configPath,
             GIT_CONFIG_NOSYSTEM: "1",
             GIT_CONFIG_PARAMETERS: undefined,
             GIT_CONFIG_COUNT: "0",
           },
-          [...entries, ["core.bare", "true"], ["core.alternateRefsCommand", "true"]],
+          [
+            ["core.bare", "true"],
+            ["core.alternateRefsCommand", "true"],
+          ],
         ),
       };
       return await run(transport);

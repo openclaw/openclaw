@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/cron/store/save.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceCronRuntimeAuthorityRows"],
+        evidence:
+          "Moved unchanged from runtime-authority-store.ts. Save calls run in save.worker.ts and guarded-mutation.worker.ts; native callers retain Doctor store-repair transactions and the heartbeat task/cadence migration owners.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/transcript-payload.ts",
     [
       {
@@ -450,6 +461,32 @@ const reviewedOperations = new Map([
         operations: ["clearSessionTranscriptActiveFacts"],
         evidence:
           "Cold navigation retention calls this only from session-cold-storage-worker.ts. Exact-row rewrites run in session-message-rewrite.worker.ts, media maintenance, or the native message/correction adapters whose callers require !isMainThread. createTranscriptPayloadUpdater is consumed only by updateSqliteTranscriptEventJsonInTransaction, called by Doctor transcript-label repair and transcript-directives migration. These invalidation callers have no plugin-SDK value export; other payload operations retain their mixed classification.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/tool-usage.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readAgentToolUsageStateInDatabase",
+          "writeState",
+          "readAgentToolUsageLiveRunsInDatabase",
+          "retainLiveRun",
+          "pruneAgentToolUsageInDatabase",
+          "readAgentToolUsageInDatabase",
+          "mergeRows",
+          "resetAgentToolUsageInDatabase",
+        ],
+        evidence:
+          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
+      },
+      {
+        tier: "T3",
+        operations: ["deleteAgentToolUsageInDatabase"],
+        evidence:
+          "Only commitSessionAgentPurgeInDatabase calls this deleter, from session-agent-purge.worker.ts or session-agent-purge.ts's native branch, which shares the purge kernels' worker or maintenance custody.",
       },
     ],
   ],
@@ -680,6 +717,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-cold-storage-navigation.ts",
     [
+      {
+        tier: "T3",
+        operations: ["retainSessionColdNavigationInTransaction"],
+        evidence:
+          "Runtime callers execute in session-cold-storage-worker.ts under the archive mutation worker. The only direct non-worker caller is scripts/perf/restart-resume-measure.ts preparing its explicitly selected synthetic fixture before measurement; no Gateway call bypasses the worker owner.",
+      },
       {
         tier: "T3",
         operations: ["backfillSessionColdNavigationInTransaction"],
@@ -1030,7 +1073,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearPersistedCurrentConversationBindingsForTests"],
         evidence:
-          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/registry-session-binding.ts inside the contract test body. No production binding cleanup calls it.",
       },
     ],
   ],
@@ -1453,6 +1496,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-transcript-anchor.ts",
     [
+      {
+        tier: "T3",
+        operations: ["readActivePathNavigationMovedFromProjection"],
+        evidence:
+          "Only session-transcript-anchor-read.kernel.ts reads this fact, beside the active-path relation it already resolves there; that kernel is reached by entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts registered in execution.worker.ts. chat-send admission consumes the prepared boolean, never this query, and the incognito route resolves it in the memory actor before SQLite opens.",
+      },
       {
         tier: "T3",
         operations: ["readActiveTranscriptEntryIdentityInSnapshot"],
@@ -1921,7 +1970,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        operations: ["readCursor", "readMaterialCursors", "writeMaterialCursors"],
         evidence:
           "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
@@ -2090,13 +2139,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],
@@ -3416,7 +3466,6 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "resolveUserProfileGitHubAttributionInDatabase",
           "selectUserProfileRoleAuthority",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
@@ -3426,6 +3475,17 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-git-attribution.read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readUserProfileGitAttribution"],
+        evidence:
+          "Only readUserProfileGitHubCommand in user-profile-github-identity.ts calls this reader; user-profile-read.worker.ts dispatches that command in the shared-state read worker.",
       },
     ],
   ],
@@ -3499,9 +3559,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["appendSqliteTrajectoryRuntimeEventsWithWriter"],
+        operations: [
+          "appendSqliteTrajectoryRuntimeEventsWithWriter",
+          "prepareSqliteTrajectoryRuntimeWindow",
+        ],
         evidence:
-          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
+          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Its append kernel is the sole caller of the private window preparation helper. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
       },
       {
         tier: "T3",
@@ -3529,6 +3592,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-message-cut-in-place.kernel.ts", // session-message-cut.worker.ts owns both callers: commitSessionMessageCut installs the cut inside its write transaction, and preflightSessionMessageCut reads through session.messageCut.preflight. The remaining native caller in session-accessor.sqlite-message-cut.ts runs only when agent-database execution is unavailable (worker thread or unserved store) and passes its own handle.
+  "src/config/sessions/session-transcript-active-path-repoint.ts", // Only session-message-cut-in-place.kernel.ts plans and applies the repoint, inside the message-cut write transaction; the full-rebuild owner shares its projection fact columns by type.
   "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
@@ -3547,6 +3612,7 @@ const workerModules = new Set([
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
   "src/config/sessions/session-reaction-store.read.ts", // Only the history worker reader calls reaction SQL; synchronous test inspection lives in test support.
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.
+  "src/config/sessions/session-participation-queue.kernel.ts", // Only session-sharing-store.native.ts revokes queued input inside the sharing worker's membership transaction; the host facade imports its mutation signatures by type.
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
@@ -3575,6 +3641,7 @@ const workerModules = new Set([
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/skills/workshop-changes/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
   "src/skills/runtime/skill-usage.kernel.ts", // skill-usage.worker.ts owns read/record SQL; host imports are type-only.
+  "src/config/sessions/tool-usage-read.worker.ts", // Only session-history-read-operation.worker.ts imports this module, for agent-tool-usage and agent-tool-usage-import reads.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
@@ -3584,6 +3651,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-index-metadata.ts", // Only the SQLite/PostgreSQL publication worker adapters write metadata and promote legacy cache identities.
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-embedding-cache-retire.ts", // cache.retire only: called by manager-publication.worker.ts and its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-rebuild-embeddings.ts", // Only manager-index-read.ts calls this lookup, from manager-search.worker.ts, manager-publication.worker.ts, or its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
@@ -3662,6 +3730,7 @@ const workerModules = new Set([
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
+  "src/infra/session-cost-usage-worker-refresh.ts", // Usage worker and worker-report callers run only under session-transcript.worker.ts.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-database-restore-source.ts", // Sole caller: update-candidate-state.worker database-restore-preparation; private output, parent retains native exclusions.
@@ -3729,6 +3798,10 @@ const cliModules = new Map([
   [
     "scripts/perf/session-cold-navigation.ts",
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
+  ],
+  [
+    "scripts/perf/session-cold-writer.mjs",
+    "Explicit developer-only writer-hold and restore benchmark on synthetic state; no runtime imports or Gateway callers",
   ],
   [
     "scripts/perf/session-cold-selection.ts",
@@ -3988,8 +4061,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -4239,11 +4317,23 @@ function render(rows) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+  const snapshot = args.length === 2 && args[0] === "--json" && args[1] === "--snapshot";
+  if (!snapshot && (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0]))) {
+    console.error(
+      "Usage: node scripts/database-worker-inventory.mjs --write|--check|--json [--snapshot]",
+    );
     process.exitCode = 2;
   } else {
-    const rows = inventory();
+    /** @type {{ root: string; ref: string; staged: boolean; sources: [string, string][]; trace: boolean } | undefined} */
+    const request = snapshot ? JSON.parse(fs.readFileSync(0, "utf8")) : undefined;
+    const rows = request
+      ? inventory(request.root, request.ref, request.staged, new Map(request.sources), {
+          observer: request.trace
+            ? (phase, facts) =>
+                console.error("[inventory-phase] " + JSON.stringify({ phase, facts }))
+            : undefined,
+        })
+      : inventory();
     if (args[0] === "--json") {
       console.log(
         JSON.stringify(
