@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type { PwAiModule } from "./pw-ai-module.js";
 import {
   installRemoteProfileTestLifecycle,
   loadRemoteProfileTestDeps,
@@ -35,17 +36,25 @@ const permissiveRemoteCdpPolicy = {
 };
 
 describe("browser remote profile tab ops via Playwright", () => {
-  it("resolves explicit tabs by listing even when the CDP health probe times out", async () => {
-    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+  it("resolves explicit tabs over the open session when the CDP health probe times out", async () => {
+    vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+    const listPagesViaPlaywright = vi.fn(async () => [page("T1")]);
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
-      listPagesViaPlaywright: vi.fn(async () => [page("T1")]),
+      listPagesViaPlaywright,
     } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    let sessionOpen = true;
+    vi.spyOn(deps.pwAiModule, "getLoadedPwAiModule").mockReturnValue({
+      hasCachedPlaywrightBrowserConnection: () => sessionOpen,
+    } as unknown as PwAiModule);
     const { state } = deps.createRemoteRouteHarness();
     const remote = deps.createBrowserRouteContext({ getState: () => state }).forProfile("remote");
 
     await expect(remote.ensureTabAvailable("T1")).resolves.toMatchObject({ targetId: "T1" });
     await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
-    expect(healthProbe).not.toHaveBeenCalled();
+    sessionOpen = false;
+    listPagesViaPlaywright.mockClear();
+    await expect(remote.ensureTabAvailable("T1")).rejects.toThrow(/is not running/);
+    expect(listPagesViaPlaywright).not.toHaveBeenCalled();
   });
 
   it("uses Playwright tab operations when available", async () => {

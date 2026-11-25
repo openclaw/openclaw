@@ -84,37 +84,6 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(deps.chromeModule.launchOpenClawChrome).not.toHaveBeenCalled();
   });
 
-  it("resolves a named tab on a loopback attach-only CDP before the health probe", async () => {
-    const state = deps.makeState("openclaw");
-    state.resolved.profiles.openclaw = {
-      cdpPort: 18800,
-      attachOnly: true,
-      color: "#FF4500",
-    };
-    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
-    globalThis.fetch = withBrowserFetchPreconnect(
-      vi.fn(
-        deps.createJsonListFetchMock([
-          {
-            id: "T1",
-            title: "Tab 1",
-            url: "https://example.com",
-            webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/T1",
-            type: "page",
-          },
-        ]),
-      ),
-    );
-    const attached = deps
-      .createBrowserRouteContext({ getState: () => state })
-      .forProfile("openclaw");
-    expect(attached.profile.cdpIsLoopback).toBe(true);
-    expect(attached.profile.attachOnly).toBe(true);
-
-    await expect(attached.ensureTabAvailable("T1")).resolves.toMatchObject({ targetId: "T1" });
-    expect(healthProbe).not.toHaveBeenCalled();
-  });
-
   it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {
     const { remote } = rawList([
       rawTab("OMNI", "chrome://omnibox-popup.top-chrome/"),
