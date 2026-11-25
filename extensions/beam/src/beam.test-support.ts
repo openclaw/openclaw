@@ -92,14 +92,27 @@ export async function persistentBeamTestStore() {
     },
     { assertCurrent() {} },
   );
+  const imageStore = createPluginStateKeyedStoreV2ForTests(
+    "beam",
+    {
+      namespace: "publication-images",
+      maxEntries: BEAM_MAX_SESSIONS,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env,
+    },
+    { assertCurrent() {} },
+  );
   const store = createBeamStore({
     state: {
       openKeyedStoreV2: ({ namespace }: { namespace: string }) =>
-        namespace === "handoffs"
-          ? handoffStore
-          : namespace === "publication-requests"
-            ? writeStore
-            : keyedStore,
+        namespace === "publication-images"
+          ? imageStore
+          : namespace === "handoffs"
+            ? handoffStore
+            : namespace === "publication-requests"
+              ? writeStore
+              : keyedStore,
     },
   } as unknown as PluginRuntime);
   const close = async () => {
@@ -107,7 +120,7 @@ export async function persistentBeamTestStore() {
     resetPluginStateStoreForTests();
     await state.cleanup();
   };
-  return { keyedStore, handoffStore, writeStore, store, close };
+  return { keyedStore, handoffStore, writeStore, imageStore, store, close };
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");

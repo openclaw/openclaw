@@ -7,6 +7,7 @@ import {
   publishSqliteDatabaseAdmission,
 } from "../sqlite-database-admission.js";
 import { postgresReadSnapshots } from "../sqlite-schema-scope.js";
+import { StartupMaintenanceRequiredError } from "../startup-maintenance-required.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresPhysicalFactsKey as admissionKey,
@@ -56,15 +57,27 @@ export function admitPostgresPhysicalFacts(params: {
   preserveSchemaSeal?: boolean;
   requireSealedSchema?: boolean;
 }): PostgresPhysicalFacts {
+  const readerVersion = params.schema?.version ?? params.version;
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
     if (
-      retained.version !== params.version ||
+      retained.version < params.version ||
       retained.storeId !== params.storeId ||
       retained.namespace !== params.namespace ||
       retained.store !== params.store
     ) {
       throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+    }
+    if (retained.minReader > readerVersion) {
+      throw new StartupMaintenanceRequiredError(
+        "newer-schema",
+        `PostgreSQL ${params.store} schema ${retained.version} requires minimum reader ${retained.minReader}; this build supports ${readerVersion}. Use a compatible binary or reverse-port before downgrading.`,
+      );
+    }
+    if (params.schema && retained.version > readerVersion && !retained.schemaHash) {
+      throw new Error(
+        `Compatible newer PostgreSQL schema requires a matching installed schema seal. ${recovery}`,
+      );
     }
     if (params.requireSealedSchema) {
       const schema = params.schema;
@@ -73,11 +86,12 @@ export function admitPostgresPhysicalFacts(params: {
       if (
         !schema ||
         !retained.schemaHash ||
-        retained.schemaHash !==
-          postgresSchemaHash(
-            { ...schema, searchExtensions: admitted?.searchExtensions },
-            retained.catalog,
-          )
+        (retained.version === readerVersion &&
+          retained.schemaHash !==
+            postgresSchemaHash(
+              { ...schema, searchExtensions: admitted?.searchExtensions },
+              retained.catalog,
+            ))
       ) {
         throw new Error(
           `Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`,
@@ -94,8 +108,14 @@ export function admitPostgresPhysicalFacts(params: {
     throw new Error(`Cannot read PostgreSQL catalog or metadata. ${recovery}`, { cause: error });
   }
   const { metadata: row, catalog } = snapshot;
-  if (row.version !== params.version || row.store_id !== params.storeId) {
+  if (row.version < params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+  }
+  if (snapshot.minReader > readerVersion) {
+    throw new StartupMaintenanceRequiredError(
+      "newer-schema",
+      `PostgreSQL ${params.store} schema ${row.version} requires minimum reader ${snapshot.minReader}; this build supports ${readerVersion}. Use a compatible binary or reverse-port before downgrading.`,
+    );
   }
   let schemaHash: string | undefined;
   if (params.schema) {
@@ -121,6 +141,7 @@ export function admitPostgresPhysicalFacts(params: {
     namespace: params.namespace,
     storeId: row.store_id,
     version: row.version,
+    minReader: snapshot.minReader,
     schemaHash,
     capabilities,
     catalog,

@@ -408,6 +408,38 @@ describe("full-release-validation-at-sha", () => {
     expect(fixture.gitCalls().some((args) => args.includes("update-ref"))).toBe(false);
   });
 
+  it("rescans the active inventory before dispatching when a page changes", () => {
+    const fixture = createDispatchFixture({ activeInventory: "short-once" });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      fixture.calls("GET").filter((args) => ghField(args, "status") === "requested"),
+    ).toHaveLength(2);
+    expect(fixture.dispatches()).toHaveLength(1);
+  });
+
+  it.each([
+    ["short-always", false, 3, "pagination changed or is incomplete"],
+    ["short-once", true, 2, "Same-concurrency-group Full Release Validation is already active"],
+    ["short-invalid-row", false, 1, "Active run inventory contains invalid or repeated runs"],
+    ["malformed", false, 1, "Active run inventory is incomplete or exceeds its bound"],
+  ] as const)(
+    "refuses %s with incumbent %s before mutation",
+    (activeInventory, activeConcurrencyRun, scans, message) => {
+      const fixture = createDispatchFixture({ activeInventory, activeConcurrencyRun });
+      const result = fixture.run();
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(
+        fixture.calls("GET").filter((args) => ghField(args, "status") === "requested"),
+      ).toHaveLength(scans);
+      expect(fixture.calls("POST")).toEqual([]);
+      expect(fixture.gitCalls().some((args) => args.includes("update-ref"))).toBe(false);
+    },
+  );
+
   it("ignores completed workflow history when checking active concurrency", () => {
     const fixture = createDispatchFixture({ completedConcurrencyHistory: 2500 });
     const result = fixture.run();
@@ -855,6 +887,12 @@ describe("full-release-validation-at-sha", () => {
       marker: undefined,
       input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
       error: "Automatic test retries are disabled",
+    },
+    {
+      name: "preflight first",
+      marker: "FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT",
+      input: "preflight_first=true",
+      error: "does not support preflight_first",
     },
   ])(
     "refuses unsupported $name controls before creating refs or dispatching",

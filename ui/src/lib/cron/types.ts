@@ -35,6 +35,7 @@ export type CronFormState = {
   eventArguments: string;
   eventSource: string;
   scheduleAt: string;
+  originalScheduleAt?: { at: string; local: string };
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;

@@ -102,3 +102,8 @@ export type OperatorToolGatewayAuthority = {
   /** Pure input policy; applies at effects, never settled results or cleanup. */
   assertInputCommitAllowed?: () => void;
 };
+
+/** Private continuation constraints captured by the accepting host owner. */
+export type OperatorContinuationOptions = {
+  retainRequester?: true;
+};

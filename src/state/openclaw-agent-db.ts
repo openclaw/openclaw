@@ -103,6 +103,7 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertCanonicalAgentPersistenceVersion,
   assertCurrentAgentSchemaMetadata,
@@ -110,10 +111,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import {
-  agentDatabaseIntegrityBeforeMutationSteps,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
 import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
@@ -536,6 +534,7 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
+          schemaVersion: readExistingAgentSchemaMeta(selected)?.schemaVersion ?? undefined,
           // Bounded admission retains process proof without minting a FULL receipt or seal.
           // Temporary QUICK repair handles still cannot publish runtime admission.
           admittedDb:

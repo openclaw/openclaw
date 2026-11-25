@@ -43,6 +43,7 @@ export type SessionSharingReadProjection = Pick<
   | "sharingTargetState"
   | "readSource"
   | "readMembership"
+  | "memberAccess"
   | "needsMembershipPreparation"
   | "prepareMembership"
 >;
@@ -130,6 +131,14 @@ export async function prepareSessionSharingRead(params: {
           target,
           sourcePath: captured.readSource.path,
           sourceAgentId: captured.readSource.agentId,
+          memberAccess: Object.fromEntries(
+            [
+              ...(projection.readMembership({ ...query, storePath: target.storePath }) ?? []),
+            ].flatMap((id) => {
+              const level = projection.memberAccess(target.storePath, target.storeKey, id);
+              return level ? [[id, level]] : [];
+            }),
+          ),
           membership:
             projection.readMembership({ ...query, storePath: target.storePath }) ??
             new Set<string>(),

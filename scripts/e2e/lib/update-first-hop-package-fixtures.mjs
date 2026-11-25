@@ -428,7 +428,7 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
 
 export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
-    method: "candidate-without-admission-marker-fixture",
+    method: "candidate-without-update-admission-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
       const manifestPath = path.join(root, "package.json");
       const manifest = readJson(manifestPath);
@@ -437,6 +437,26 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
       }
       delete manifest.openclaw.updateAdmissionProtocol;
       writeJson(manifestPath, manifest);
+      // Frozen legacy updaters use the marker. The release-aware updater checks
+      // for candidate-side command modules instead and refuses this target.
+      const paths = resolveFixturePaths(root);
+      const removed = new Set();
+      for (const file of fs.readdirSync(path.join(root, "dist"))) {
+        if (/^check-release(?:-[\w-]+)?\.m?js$/u.test(file)) {
+          const relative = "dist/" + file;
+          fs.rmSync(path.join(root, relative));
+          removed.add(relative);
+        }
+      }
+      if (removed.size > 0) {
+        writeJson(
+          paths.inventory,
+          readJson(paths.inventory).filter((entry) => !removed.has(entry)),
+        );
+        updateFixtureContentInventory(paths, (entries) =>
+          entries.filter((entry) => !removed.has(entry.path)),
+        );
+      }
       stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
     }),
   };

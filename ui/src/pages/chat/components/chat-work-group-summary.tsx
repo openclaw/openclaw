@@ -1,6 +1,5 @@
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
@@ -8,7 +7,6 @@ import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 type WorkGroupSummaryItem = {
   key: string;
   durationMs: number | null;
-  groups?: readonly MessageGroup[];
 };
 type WorkGroupSummaryOptions = {
   expanded: boolean;
@@ -53,18 +51,12 @@ function WorkGroupSummaryBody(props: { label: string; options: WorkGroupSummaryO
   );
 }
 
-/** Keep elapsed time and recorded compaction visible in either disclosure state. */
 export function WorkGroupSummary(props: {
   item: WorkGroupSummaryItem;
   options: WorkGroupSummaryOptions;
 }) {
   const label = createMemo(() => {
     const duration = formatDurationCompact(props.item.durationMs);
-    if (props.item.groups?.some((group) => group.compaction?.phase === "complete")) {
-      return duration
-        ? t("chat.workRun.workedForAndCompacted", { duration })
-        : t("chat.workRun.workedAndCompacted");
-    }
     return duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   });
   return (

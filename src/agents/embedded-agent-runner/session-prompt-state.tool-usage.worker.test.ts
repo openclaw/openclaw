@@ -4,6 +4,7 @@ import {
   flushAgentToolUsage,
   importAgentToolUsage,
   readAgentToolUsage,
+  readAgentToolUsageForRanking,
 } from "../../config/sessions/tool-usage.js";
 import { seedAgentToolUsageRunForTest } from "../../config/sessions/tool-usage.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -117,14 +118,18 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
         surface: "tools",
       });
       let reads = 0;
-      const readRankedIds = async () => {
+      const readUsage = async (sightings: Record<string, number>) => {
         reads++;
-        return (await readAgentToolUsage(options))
-          .toSorted(
-            (a, b) =>
-              decayToolUsage(b, now) - decayToolUsage(a, now) || a.toolId.localeCompare(b.toolId),
-          )
-          .map((row) => row.toolId);
+        const usage = await readAgentToolUsageForRanking({ ...options, sightings });
+        return {
+          rankedIds: usage.rows
+            .toSorted(
+              (a, b) =>
+                decayToolUsage(b, now) - decayToolUsage(a, now) || a.toolId.localeCompare(b.toolId),
+            )
+            .map((row) => row.toolId),
+          firstSeen: usage.firstSeen,
+        };
       };
       const lease = retainEmbeddedSessionPromptState("usage-worker-prefix");
       const input = {
@@ -134,7 +139,7 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
         enabled: true,
         catalogIds: catalog.map((entry) => entry.id),
         now,
-        readRankedIds,
+        readUsage,
       };
       try {
         const snapshot = await prepareSessionToolUsageRanking(input);
@@ -182,6 +187,68 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
       } finally {
         lease[Symbol.dispose]();
       }
+    },
+  );
+});
+
+it("ages newcomers from the agent's first sight of a tool, not each fresh session", async () => {
+  await withOpenClawTestState(
+    { label: "usage-ranked-first-seen", scenario: "minimal" },
+    async ({ env }) => {
+      const day = 24 * 60 * 60 * 1000;
+      const start = Date.UTC(2026, 10, 1);
+      const old = "openclaw:core:old";
+      const added = "openclaw:core:added";
+      const late = "openclaw:core:late";
+      const route = (model: string) =>
+        buildSystemPromptRouteKey({ provider: "synthetic", model, harness: "openclaw" });
+      const prepare = async (
+        state: ReturnType<typeof retainEmbeddedSessionPromptState>["state"],
+        now: number,
+        catalogIds: string[],
+        model = "fixture",
+      ) =>
+        (
+          await prepareSessionToolUsageRanking({
+            state,
+            routeKey: route(model),
+            entries: [],
+            enabled: true,
+            catalogIds,
+            now,
+            readUsage: async (sightings) => ({
+              rankedIds: [],
+              firstSeen: (
+                await readAgentToolUsageForRanking({ agentId: "main", env, now, sightings })
+              ).firstSeen,
+            }),
+          })
+        )?.newcomers;
+      const fresh = async (id: string, now: number, catalogIds: string[]) => {
+        using lease = retainEmbeddedSessionPromptState(id);
+        return await prepare(lease.state, now, catalogIds);
+      };
+      // Tools present when tracking starts are not new.
+      expect(await fresh("first-seen-a", start, [old])).toEqual({ [old]: 0 });
+      expect(await fresh("first-seen-b", start + day, [old, added])).toEqual({
+        [old]: 0,
+        [added]: start + day,
+      });
+      // A later fresh session keeps the original sighting, so the window can expire.
+      expect(await fresh("first-seen-c", start + 20 * day, [old, added])).toEqual({
+        [old]: 0,
+        [added]: start + day,
+      });
+      // A tool admitted by a mid-series catalog refresh keeps that sighting at the next boundary.
+      using long = retainEmbeddedSessionPromptState("first-seen-long");
+      await prepare(long.state, start + 20 * day, [old, added]);
+      expect((await prepare(long.state, start + 21 * day, [old, added, late]))?.[late]).toBe(
+        start + 21 * day,
+      );
+      await prepare(long.state, start + 30 * day, [old, added, late], "changed");
+      expect((await fresh("first-seen-d", start + 31 * day, [old, added, late]))?.[late]).toBe(
+        start + 21 * day,
+      );
     },
   );
 });

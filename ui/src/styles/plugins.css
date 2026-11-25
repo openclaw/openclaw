@@ -2007,6 +2007,48 @@
   margin-inline-start: 0;
 }
 
+/* Skills and Templates share the card surface, but only plugin entries pair a
+   package name and badge with a separately actionable publisher handle. */
+.plugin-catalog-entry {
+  .plugin-catalog-row__main {
+    flex-wrap: wrap;
+  }
+
+  .plugin-catalog-row__text {
+    flex-basis: 9em;
+  }
+
+  .plugin-card-title-row {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    line-height: calc(20px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-row__name {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+
+    /* Names such as “Workspace Synchronization Amber” differ at the end. */
+    h3 {
+      direction: rtl;
+      text-align: match-parent;
+    }
+  }
+
+  .plugin-card-title-row .plugin-card-author {
+    flex: none;
+    margin-inline-start: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-card__action {
+    margin-inline-start: auto;
+  }
+}
+
 .settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
   height: 28px;
   min-height: 28px;
@@ -2377,7 +2419,7 @@
   align-self: center;
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon {
   flex: 0 0 36px;
   border: 0;
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
@@ -2385,7 +2427,7 @@
   color: var(--muted-strong);
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon svg {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon svg {
   width: 16px;
   height: 16px;
 }

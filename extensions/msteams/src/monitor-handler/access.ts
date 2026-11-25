@@ -33,9 +33,8 @@ const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
 const MSTEAMS_CONVERSATION_ID_KIND = "plugin:msteams-conversation-id" as const;
 const msteamsIngressIdentity = {
   key: "sender-id",
-  // Bot Framework authenticates the connector and vouches for the activity, without this
-  // plugin independently proving exact ownership of every from.id representation.
-  authentication: "asserted",
+  // The Teams SDK validates the Bot Framework JWT before dispatch; the connector supplies from.id.
+  authentication: "verified",
   normalize: normalizeIngressValue,
   aliases: [
     {

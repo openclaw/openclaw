@@ -119,6 +119,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+With Tool Search or Code Mode active, `computer` and the yielding
+`github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
+series.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
@@ -763,7 +770,10 @@ inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
 user-role note. Tools change only at a rebuild point or a tool configuration
-change.
+change. Reordering existing `##` sections also appends an update, even when their
+text is unchanged. That update includes the complete current prompt in its new
+order; ordinary text edits still send only the changed sections. The pinned
+prefix and earlier messages remain unchanged.
 
 The session prompt rebuilds only at these points:
 

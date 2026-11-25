@@ -878,10 +878,10 @@ describe("remote Control UI ingress production composition", () => {
             expect(recovered.authority.scopes).not.toContain("operator.admin");
           } else {
             // A read-only requester's saved source starts no new work.
-            await expect(restore()).rejects.toThrow("no longer allows sending messages");
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
           }
           resumable = false;
-          await expect(restore()).rejects.toThrow("original ingress grant");
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
           resumable = true;
           await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
             "operator.admin",

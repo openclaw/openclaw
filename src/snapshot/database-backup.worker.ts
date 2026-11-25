@@ -15,7 +15,6 @@ import {
   inspectPostgresUpgradeInWorker,
   preflightPostgresUpgradeInWorker,
   clonePostgresUpgradeInWorker,
-  validatePostgresUpgradeInWorker,
   retirePostgresUpgradeInWorker,
   type BackupTask,
   type BackupReply,
@@ -32,9 +31,6 @@ serveWorkerTasks<BackupReply, BackupTask>((task, _channel, control) => {
     return control.runNativeSection(() =>
       clonePostgresUpgradeInWorker({ ...task.params, assertCurrent: control.throwIfCancelled }),
     );
-  }
-  if (task.operation === "validate-upgrade") {
-    return control.runNativeSection(() => validatePostgresUpgradeInWorker(task.params));
   }
   if (task.operation === "retire-upgrade") {
     return control.runNativeSection(() => retirePostgresUpgradeInWorker(task.params));

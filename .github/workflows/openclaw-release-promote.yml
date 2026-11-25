@@ -87,7 +87,8 @@ jobs:
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.request != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # Covers the 330-minute publisher wait in openclaw-release-ready.mjs verify.
+    timeout-minutes: 350
     permissions:
       actions: read
       contents: read

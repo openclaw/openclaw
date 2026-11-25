@@ -1,6 +1,7 @@
 import { redo, undo } from "@codemirror/commands";
 import { StateEffect } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -14,6 +15,11 @@ import {
   syncComposerInput,
 } from "../../lib/composer-input.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
+import {
+  composerFixture,
+  mention,
+  resetMentionComposerFixture,
+} from "./chat-composer-mentions.test-support.ts";
 import { mountMentionComposerEditor } from "./components/composer-editor-mentions.tsx";
 import { mountComposerEditor } from "./components/composer-editor-view.tsx";
 
@@ -101,6 +107,40 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
       expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 1, end: 6 }]);
     },
   );
+
+  it.each([false, true])("restores an emoji completion with Caps Lock %s", async (capsLock) => {
+    const f = fixture(kind, "@Alex ", 230, [{ profileId: "alex-one", start: 0, end: 5 }]);
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, 6, 6);
+    await userEvent.keyboard("arrives :smi");
+    f.view.dispatch({
+      changes: { from: 14, to: 18, insert: "😄" },
+      userEvent: "input.complete",
+    });
+    const historyKey = (shiftKey: boolean) =>
+      f.content.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: capsLock !== shiftKey ? "Z" : "z",
+          code: "KeyZ",
+          keyCode: 90,
+          ctrlKey: historyModifier === "Control",
+          metaKey: historyModifier === "Meta",
+          shiftKey,
+          modifierCapsLock: capsLock,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    expect(f.raw()).toBe("@Alex arrives 😄");
+    historyKey(false);
+    expect(f.raw()).toBe("@Alex arrives :smi");
+    historyKey(true);
+    expect(f.raw()).toBe("@Alex arrives 😄");
+    expect(f.inputEvents.at(-1)?.inputType).toBe("historyRedo");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
+    historyKey(true);
+    expect(f.raw()).toBe("@Alex arrives 😄");
+  });
 
   it("reuses mapped mention state on owner echoes while refreshing changed avatars", async () => {
     const avatarUrls = new Map<string, string>();
@@ -642,6 +682,56 @@ it("wraps a name wider than the composer and keeps a short chip on the text line
   const inside = short.content.querySelector(".chat-composer-mention")!.lastChild!;
   expect(Math.abs(textBottom(inside) - textBottom(line.firstChild!))).toBeLessThan(1);
   expect(line.getBoundingClientRect().height).toBe(20);
+});
+
+describe("mention completion history", () => {
+  afterEach(resetMentionComposerFixture);
+
+  it.each(["@", "@Bea "])("keeps both recipients after redoing completion of %j", async (typed) => {
+    const first = mention("ira", 0, 4);
+    const second = mention("bea", 5, 9);
+    const view = composerFixture("chat", "@Ira  notes", [first]);
+    vi.useRealTimers();
+    view.request.mockResolvedValue({
+      users: [{ profileId: "bea", displayName: "Bea", online: true }],
+      truncated: false,
+    });
+    await expect.poll(() => view.query("[data-composer-editor]")).not.toBeNull();
+    const input = expectDefined(
+      view.query<HTMLTextAreaElement>("textarea"),
+      "expected a composer textarea",
+    );
+    focusComposerInput(input);
+    selectComposerInput(input, 5, 5);
+    await userEvent.keyboard(typed);
+    view.refresh();
+    // Selecting from inside the fully typed name leaves only its identity to change.
+    selectComposerInput(input, 6, 6);
+    input.dispatchEvent(new Event("pointerup", { bubbles: true }));
+    await expect
+      .poll(() => document.querySelector('[role="option"]')?.textContent)
+      .toContain("Bea");
+    await userEvent.keyboard("{Tab}");
+    view.refresh();
+    const completed = "@Ira @Bea  notes";
+    view.expectValue(completed, [first, second]);
+
+    await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
+    view.refresh();
+    view.expectValue(`@Ira ${typed} notes`, [first]);
+    await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/${historyModifier}}`);
+    view.refresh();
+    view.expectValue(completed, [first, second]);
+    const caret = input.selectionStart;
+    expect(input.selectionEnd).toBe(caret);
+    expect([second.start, second.end, second.end + 1]).toContain(caret);
+
+    await userEvent.keyboard("!");
+    view.refresh();
+    const edited = completed.slice(0, caret) + "!" + completed.slice(caret);
+    const start = edited.indexOf("@Bea");
+    view.expectValue(edited, [first, mention("bea", start, start + 4)]);
+  });
 });
 
 it("does not seed undo with a native snapshot the selection did not replace", () => {

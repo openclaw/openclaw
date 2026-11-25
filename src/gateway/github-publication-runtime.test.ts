@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
@@ -65,6 +66,10 @@ function createRuntime() {
 function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
   useMixedAgentPair(engine, engine);
   installGitHubPublicationTestHarness();
+  beforeEach(() => {
+    vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+    vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it.each([false, true])(
@@ -450,7 +455,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     );
     const runtime = createRecoveryRuntime();
     await runtime.ready;
-    const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(true);
+    const lowMemory = vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(true);
     const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
     const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     const transport = githubPublicationTestMocks().runCommand;
