@@ -5,12 +5,15 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { TestUserConfig } from "vitest/config";
 import { resolveConfig } from "vitest/node";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { createBoundaryVitestConfig } from "./vitest/vitest.boundary.config.ts";
 import { createE2EVitestConfig } from "./vitest/vitest.e2e.config.ts";
 import liveConfig from "./vitest/vitest.live.config.ts";
+import { markdownTestFiles } from "./vitest/vitest.markdown-paths.mjs";
 import { tuiPtyTestFiles } from "./vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiPtyVitestConfig } from "./vitest/vitest.tui-pty.config.ts";
 import { createUiE2eVitestConfig } from "./vitest/vitest.ui-e2e.config.ts";
+import { createUnitVitestConfigWithOptions } from "./vitest/vitest.unit.config.ts";
 
 const candidateFiles = [
   "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
@@ -46,6 +49,61 @@ function discover(
 }
 
 describe("specialized Vitest discovery", () => {
+  it("keeps explicit empty native includes distinct from derived sibling skips", async () => {
+    const argv = ["node", "vitest", "run", "ui/src/outside.test.ts"];
+    for (const config of [
+      createBoundaryVitestConfig({}, argv),
+      createUnitVitestConfigWithOptions({}, { argv }),
+    ]) {
+      const { test } = await resolveConfig({ config: false, include: [] }, config);
+      expect(test.include).toEqual([]);
+      expect(test.passWithNoTests).toBeUndefined();
+    }
+  });
+
+  it.each([
+    ["tui", createTuiPtyVitestConfig, "src/tui", true],
+    ["unit", createUnitVitestConfigWithOptions, "src/selection", false],
+    ["boundary", createBoundaryVitestConfig, "src/infra", false],
+  ] as const)(
+    "preserves inherited negatives in the %s owner",
+    async (_name, create, prefix, srcDir) => {
+      const root = tempDirs.make("specialized-negative-");
+      const keep = `${prefix}/keep.test.ts`;
+      const blocked = `${prefix}/blocked.test.ts`;
+      writeTestFiles(root, [keep, blocked]);
+      const includeFile = path.join(root, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify([`${prefix}/*.test.ts`, `!${blocked}`]));
+      const config = create({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile });
+      const dir = srcDir ? path.join(root, "src") : root;
+      const { test } = await resolveConfig({ config: false, root, dir }, config);
+      expect(test.include.every((pattern) => !pattern.startsWith("!"))).toBe(true);
+      const relative = (file: string) =>
+        path.relative(dir, path.join(root, file)).split(path.sep).join("/");
+      expect(discover(test, dir)).toEqual([relative(keep)]);
+      // New files must satisfy the same emitted include/exclude facts.
+      writeTestFiles(root, [`${prefix}/new.test.ts`]);
+      expect(discover(test, dir)).toEqual([keep, `${prefix}/new.test.ts`].map(relative).toSorted());
+    },
+  );
+
+  it("preserves inherited exclusions in the Markdown inventory", async () => {
+    const root = tempDirs.make("openclaw-markdown-selection-");
+    const includeFile = path.join(root, "include.json");
+    const excluded = "packages/markdown-core/src/chunk-text.test.ts";
+    fs.writeFileSync(
+      includeFile,
+      JSON.stringify(["packages/markdown-core/src/**/*.test.ts", `!${excluded}`]),
+    );
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
+    vi.resetModules();
+    const { default: config } = await import("./vitest/vitest.markdown.config.ts");
+    const resolved = await resolveConfig({ config: false }, config);
+    expect(discover(resolved.test, resolved.test.dir)).toEqual(
+      markdownTestFiles.filter((file) => file !== excluded).toSorted(),
+    );
+  });
+
   it.each(["directory", "explicit"])(
     "keeps candidate tests out of %s tooling selections",
     async (selection) => {
@@ -77,6 +135,24 @@ describe("specialized Vitest discovery", () => {
       expect(discover(test, test.dir || test.root)).toEqual(ordinary);
     },
   );
+
+  it("lets explicit TUI CLI selections override the local default gate", async () => {
+    const local = tuiPtyTestFiles.find((file) => file.endsWith("tui-pty-local.e2e.test.ts"));
+    assert(local, "Expected the local PTY inventory entry");
+    const originalArgv = process.argv;
+    try {
+      for (const selection of [[], [local]]) {
+        process.argv = ["node", "vitest", "run", ...selection];
+        const { test } = await resolveConfig({ config: false }, createTuiPtyVitestConfig({}));
+        const expected = selection.length
+          ? selection
+          : tuiPtyTestFiles.filter((file) => file !== local);
+        expect(test.include).toEqual(expected.map((file) => file.replace(/^src\//u, "")));
+      }
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
 
   it("preserves dedicated E2E, live, and TUI inventories", async () => {
     const root = tempDirs.make("openclaw-specialized-owners-");

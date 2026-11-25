@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { globSync as nativeGlobSync } from "tinyglobby";
+import { playwright } from "@vitest/browser-playwright";
+import { convertPathToPattern, globSync as nativeGlobSync } from "tinyglobby";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ViteUserConfig } from "vitest/config";
 import { resolveConfig, type BrowserProviderOption } from "vitest/node";
@@ -84,6 +85,165 @@ describe("ui package vitest config", () => {
     expect(result.code, result.stdout + result.stderr).toBe(0);
     return result;
   }
+
+  it("preserves native browser instances, options and caller-owned providers", async () => {
+    const resolveChromium = vi.fn(() => {
+      throw new Error("caller provider must not probe Chromium");
+    });
+    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
+      resolvePlaywrightChromiumExecutablePath: resolveChromium,
+    }));
+    const { createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
+    const provider = playwright({});
+    const prewarm = provider.prewarm;
+    const custom = {
+      browser: "chromium" as const,
+      name: "custom-browser",
+      include: ["src/custom/*.browser.test.ts"],
+      exclude: ["src/custom/blocked.browser.test.ts"],
+      viewport: { width: 512, height: 640 },
+      isolate: true,
+      provider,
+    };
+    const config = createUiBrowserVitestConfig({});
+    expect(config.test?.browser?.provider).toBeUndefined();
+    const { test } = await resolveConfig(
+      {
+        config: false,
+        browser: { provider, instances: [custom] },
+      },
+      config,
+    );
+    expect(test.browser.instances.find((instance) => instance.name === custom.name)).toMatchObject(
+      custom,
+    );
+    expect(provider.prewarm).toBe(prewarm);
+    expect(resolveChromium).not.toHaveBeenCalled();
+    const { test: empty } = await resolveConfig(
+      { config: false, include: [], exclude: [], browser: { provider } },
+      createUiBrowserVitestConfig({}),
+    );
+    expect(
+      empty.resolvedProjects
+        .filter((entry) => !entry.hidden)
+        .every(({ projectConfig }) => projectConfig.include.length === 0),
+    ).toBe(true);
+    const { test: overriddenEmpty } = await resolveConfig(
+      { config: false, include: [], exclude: [], browser: { provider, instances: [custom] } },
+      createUiBrowserVitestConfig({}),
+    );
+    expect(
+      overriddenEmpty.browser.instances.find((instance) => instance.name === custom.name),
+    ).toMatchObject(custom);
+    const dir = tempDirs.make("ui-moved-discovery-");
+    const isolated = path.resolve("ui/src/pages/chat/chat-pane-inline-output.browser.test.tsx");
+    const { test: moved } = await resolveConfig(
+      { config: false, dir, include: [convertPathToPattern(isolated)], browser: { provider } },
+      createUiBrowserVitestConfig({}),
+    );
+    const owners = moved.resolvedProjects.filter(
+      ({ hidden, projectConfig }) =>
+        !hidden &&
+        globTestFiles(projectConfig.include, {
+          cwd: projectConfig.dir || projectConfig.root,
+          exclude: projectConfig.exclude,
+        }).some((file) => path.resolve(projectConfig.dir || projectConfig.root, file) === isolated),
+    );
+    expect(owners.map(({ projectConfig }) => [projectConfig.name, projectConfig.isolate])).toEqual([
+      ["chromium-mock-registry", true],
+    ]);
+  });
+
+  it.each(["native", "include-file"] as const)(
+    "preserves %s selection negatives across browser instance overrides",
+    async (source) => {
+      const blocked = [
+        "src/pages/apps/apps-page.browser.test.tsx",
+        "src/pages/chat/chat-pane-inline-output.browser.test.tsx",
+      ];
+      const keep = "src/components/settings-ui.browser.test.tsx";
+      const nodeFile = "src/components/form-controls.browser.test.ts";
+      const patterns = ["src/**/*.browser.test.tsx", ...blocked.map((file) => `!${file}`)];
+      const directory = tempDirs.make("ui-instance-selection-");
+      const includeFile = path.join(directory, "include.json");
+      const runtimeFile = path.join(directory, "runtime.json");
+      writeJson(includeFile, [
+        "ui/src/**/*.browser.test.tsx",
+        ...blocked.map((file) => `!ui/${file}`),
+      ]);
+      writeJson(
+        runtimeFile,
+        blocked.map((file) => `ui/${file}`),
+      );
+      const env = {
+        OPENCLAW_VITEST_INCLUDE_FILE: source === "include-file" ? includeFile : undefined,
+        OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: runtimeFile,
+      };
+      const options = source === "native" ? { include: patterns } : {};
+      const resolveChromium = vi.fn(() => {
+        throw new Error("excluded files must not probe Chromium");
+      });
+      vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
+        resolvePlaywrightChromiumExecutablePath: resolveChromium,
+      }));
+      const { createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
+      const { test } = await resolveConfig(
+        { config: false, ...options },
+        createUiBrowserVitestConfig(env),
+      );
+      const files = test.resolvedProjects
+        .filter((entry) => !entry.hidden)
+        .flatMap(({ projectConfig }) =>
+          globTestFiles(projectConfig.include, {
+            cwd: projectConfig.dir || projectConfig.root,
+            exclude: projectConfig.exclude,
+          }),
+        );
+      expect(files).toContain(keep);
+      for (const file of blocked) expect(files).not.toContain(file);
+      expect(test.browser.provider?.prewarm).toBeUndefined();
+      expect(resolveChromium).not.toHaveBeenCalled();
+
+      const provider = playwright({});
+      const { test: overridden } = await resolveConfig(
+        {
+          config: false,
+          ...options,
+          browser: {
+            provider,
+            instances: [
+              { browser: "chromium", name: "own-selection", include: blocked },
+              {
+                browser: "chromium",
+                name: "own-both",
+                include: [...blocked, keep, nodeFile],
+                exclude: [keep],
+              },
+              { browser: "chromium", name: "own-exclude", exclude: [keep] },
+            ],
+          },
+        },
+        createUiBrowserVitestConfig(env),
+      );
+      const instanceFiles = (name: string) =>
+        overridden.resolvedProjects
+          .filter((entry) => entry.projectConfig.name === name)
+          .flatMap(({ projectConfig }) =>
+            globTestFiles(projectConfig.include, {
+              cwd: projectConfig.dir || projectConfig.root,
+              exclude: projectConfig.exclude,
+            }),
+          )
+          .toSorted();
+      expect(instanceFiles("own-selection")).toEqual(blocked.toSorted());
+      expect(instanceFiles("own-both")).toEqual([...blocked, nodeFile].toSorted());
+      const inherited = instanceFiles("own-exclude");
+      expect(inherited).toContain("src/components/select-picker.browser.test.tsx");
+      for (const file of [...blocked, keep]) expect(inherited).not.toContain(file);
+    },
+  );
 
   it("partitions runtimes after native UI sharding without changing ownership or dropping files", ({
     signal,

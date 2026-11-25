@@ -264,7 +264,9 @@ describe("TSX discovery", () => {
         [`ui/src/**/*.test.${extension}`],
         matchesVitestGlob,
       )!;
-      expect(filterFilesByPatterns(files, selected, [], matchesVitestGlob)).toEqual(
+      expect(
+        filterFilesByPatterns(files, selected.include, selected.exclude, matchesVitestGlob),
+      ).toEqual(
         files
           .slice(0, 2)
           .filter((file) => extension === "{ts,tsx}" || file.endsWith(`.${extension}`))
@@ -326,18 +328,15 @@ describe("TSX discovery", () => {
       ),
     ).toEqual(["ui/src/**/*.test.ts"]);
     expect(
-      intersectIncludePatterns(
-        ["ui/src/**/*.test.ts"],
-        ["ui/src/**/*.test.tsx"],
-        matchesVitestGlob,
-      ),
+      intersectIncludePatterns(["ui/src/**/*.test.ts"], ["ui/src/**/*.test.tsx"], matchesVitestGlob)
+        ?.include,
     ).toEqual([]);
     expect(
       intersectIncludePatterns(
         ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"],
         ["ui/src/**/*.test.{ts,tsx}"],
         matchesVitestGlob,
-      ),
+      )?.include,
     ).toEqual(["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"]);
   });
 

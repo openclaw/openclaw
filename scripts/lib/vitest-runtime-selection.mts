@@ -3,6 +3,7 @@ import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-w
 import {
   loadPatternListFromEnv,
   matchesVitestCliSelection,
+  matchesNativeVitestGlob,
 } from "../../test/vitest/vitest.pattern-file.ts";
 import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
@@ -300,7 +301,15 @@ export function resolveVitestRuntimeCliSelections(
     configs,
     matchesFile: (file, included, includePatterns) =>
       file === scopedFile &&
-      matchesVitestCliSelection(file, included ? [file] : [], args, dir, env, includePatterns),
+      matchesVitestCliSelection(
+        file,
+        included ? [file] : [],
+        args,
+        dir,
+        env,
+        includePatterns,
+        matchesNativeVitestGlob,
+      ),
   }));
 }
 
@@ -345,13 +354,29 @@ export function shouldPrepareVitestCoreWorkers(
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>
-      matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+      matchesVitestCliSelection(
+        file,
+        [file],
+        args,
+        "",
+        env,
+        includePatterns,
+        matchesNativeVitestGlob,
+      ),
     ) ||
     // These focused startup selections need native stores before their watchdog starts.
     // Match their project directory so basename filters and exclusions keep working.
     (includesRuntimeConfig(configs, "test/vitest/vitest.gateway-server.config.ts") &&
       gatewayStartupWorkers.some((file) =>
-        matchesVitestCliSelection(file, [file], args, "src/gateway", env, includePatterns),
+        matchesVitestCliSelection(
+          file,
+          [file],
+          args,
+          "src/gateway",
+          env,
+          includePatterns,
+          matchesNativeVitestGlob,
+        ),
       )) ||
     ((includesRuntimeConfig(configs, agentVitestProjectOwners.core.config) ||
       includesRuntimeConfig(configs, agentVitestProjectOwners.all.config)) &&
@@ -362,6 +387,7 @@ export function shouldPrepareVitestCoreWorkers(
         agentVitestProjectOwners.core.dir,
         env,
         includePatterns,
+        matchesNativeVitestGlob,
       ))
   );
 }

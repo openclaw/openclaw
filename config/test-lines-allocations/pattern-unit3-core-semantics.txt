@@ -1,0 +1,4 @@
+# Native selector grammar, coordinate, override, and transport regressions.
+# Current stack adds 1017 Unit3 test lines beyond the 1226-line parent stack.
+# Parent credit covers 826; allowance remains 400. Recompute on base changes.
+1017

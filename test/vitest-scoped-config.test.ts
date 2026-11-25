@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { minimatch } from "minimatch";
-import { globSync } from "tinyglobby";
+import { convertPathToPattern, globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ViteUserConfig } from "vitest/config";
-import { resolveConfig } from "vitest/node";
+import { parseCLI, resolveConfig } from "vitest/node";
 import { withEnvAsync } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
@@ -33,6 +33,10 @@ import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
 import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
+import {
+  createScopedVitestPatternPlugin,
+  resolveScopedVitestPatterns,
+} from "./vitest/vitest.scoped-patterns.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
@@ -69,6 +73,230 @@ async function expectForkedNonIsolatedRunner(
 }
 
 describe("createScopedVitestConfig", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("preserves native escapes while projecting classifier inputs and physical results", () => {
+    const root = tempDirs.make("native[scope]-");
+    const effectiveDir = path.join(root, "selection");
+    const file = "nested/a[1].test.ts";
+    const encoded = convertPathToPattern(file);
+    const patterns = resolveScopedVitestPatterns(
+      ["**/*.test.ts"],
+      {
+        root,
+        effectiveDir,
+        env: {},
+        argv: ["node", "vitest", "run"],
+        externalInclude: [encoded],
+        excludeUnitFastTests: false,
+        selectOwnedInclude: (inputs, ownerRoot) => {
+          expect(ownerRoot).toBe(root);
+          expect(inputs).toEqual([`selection/${encoded}`]);
+          return [`selection/${file}`];
+        },
+        intersectIncludeFile: true,
+      },
+      [],
+    );
+    expect(patterns.scopedInclude).toEqual([encoded]);
+  });
+
+  it("resolves relative native dir from invocation cwd and keeps fallback exclusions with it", async () => {
+    const root = tempDirs.make("native-relative-dir-");
+    const projectRoot = path.join(root, "project");
+    const directory = path.join(root, "selection");
+    fs.mkdirSync(projectRoot);
+    fs.mkdirSync(directory);
+    for (const file of ["ordinary.test.ts", "ignored.e2e.test.ts"]) {
+      fs.writeFileSync(path.join(directory, file), "");
+    }
+    const config = createScopedVitestConfig(["src/cli/**/*.test.ts"], {
+      dir: "src/cli",
+      env: {},
+      argv: ["node", "vitest", "run"],
+      excludeUnitFastTests: false,
+    });
+    const { test } = await resolveConfig(
+      {
+        config: false,
+        root: projectRoot,
+        dir: path.relative(process.cwd(), directory),
+      },
+      config,
+    );
+    expect(path.resolve(test.dir || test.root)).toBe(directory);
+    expect(globSync(test.include, { cwd: test.dir || test.root, ignore: test.exclude })).toEqual([
+      "ordinary.test.ts",
+    ]);
+  });
+
+  it("moves root-only UI fallback exclusions with their native include basis", async () => {
+    const root = tempDirs.make("native-ui-root-");
+    const directory = path.join(root, "alternate-ui");
+    fs.mkdirSync(path.join(directory, "src"), { recursive: true });
+    for (const file of ["ordinary.test.ts", "ignored.e2e.test.ts"]) {
+      fs.writeFileSync(path.join(directory, "src", file), "");
+    }
+    const { test } = await resolveConfig(
+      { config: false },
+      {
+        root: directory,
+        plugins: [
+          createScopedVitestPatternPlugin(
+            ["ui/src/**/*.test.ts"],
+            {
+              root,
+              dir: "ui",
+              env: {},
+              argv: ["node", "vitest", "run"],
+              excludeUnitFastTests: false,
+            },
+            ["ui/**/*.e2e.test.ts"],
+          ),
+        ],
+        test: {},
+      },
+    );
+    expect(test.root).toBe(directory);
+    expect(globSync(test.include, { cwd: test.dir || test.root, ignore: test.exclude })).toEqual([
+      "src/ordinary.test.ts",
+    ]);
+  });
+
+  it("keeps fallback exclusions on the native directory for mixed absolute selections", async () => {
+    const root = tempDirs.make("native-mixed-dir-");
+    const directory = path.join(root, "selection");
+    fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(root, "anchor.test.ts"), "");
+    for (const file of ["ordinary.test.ts", "ignored.e2e.test.ts"])
+      fs.writeFileSync(path.join(directory, file), "");
+    const { test } = await resolveConfig(
+      { config: false, root, dir: directory },
+      createScopedVitestConfig(
+        ["src/cli/**/*.test.ts", convertPathToPattern(path.join(root, "anchor.test.ts"))],
+        {
+          dir: "src/cli",
+          env: {},
+          argv: ["node", "vitest", "run"],
+          excludeUnitFastTests: false,
+        },
+      ),
+    );
+    expect(
+      globSync(test.include, { cwd: test.dir, ignore: test.exclude })
+        .map((file) => path.basename(file))
+        .toSorted(),
+    ).toEqual(["anchor.test.ts", "ordinary.test.ts"]);
+  });
+
+  it("projects classified unit-fast exclusions from the native root into a moved directory", async () => {
+    const root = tempDirs.make("native-fast-dir-");
+    const directory = path.join(root, "src");
+    fs.mkdirSync(path.join(directory, "infra"), { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "infra", "fast.test.ts"),
+      'import { it } from "vitest"; it("fast", () => {});',
+    );
+    fs.writeFileSync(
+      path.join(directory, "infra", "ordinary.test.ts"),
+      'import fs from "node:fs"; export const exists = fs.existsSync(".");',
+    );
+    const config = createScopedVitestConfig(["src/cli/**/*.test.ts"], {
+      dir: "src/cli",
+      env: {},
+      argv: ["node", "vitest", "run"],
+    });
+    const { test } = await resolveConfig({ config: false, root, dir: directory }, config);
+    expect(globSync(test.include, { cwd: test.dir || test.root, ignore: test.exclude })).toEqual([
+      "infra/ordinary.test.ts",
+    ]);
+  });
+
+  it("distinguishes equal-valued and empty native overrides from owner defaults", async () => {
+    const includeFile = path.join(tempDirs.make("native-pattern-overrides-"), "include.json");
+    fs.writeFileSync(includeFile, JSON.stringify(["test/one.test.ts"]));
+    const config = createScopedVitestConfig(["test/**/*.test.ts"], {
+      dir: "test",
+      env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      argv: ["node", "vitest", "run"],
+      intersectIncludeFile: true,
+    });
+    expect(config.test?.include).toBeUndefined();
+    expect(config.test?.exclude).toBeUndefined();
+    for (const include of [["**/*.test.ts"], []]) {
+      const { test } = await resolveConfig({ config: false, include, exclude: [] }, config);
+      expect(test.include).toEqual(include);
+      expect(test.exclude).toEqual([]);
+      expect(test.passWithNoTests).toBeUndefined();
+    }
+  });
+
+  it("retains unit-fast exclusions when a final plugin leaf adds its own exclusions", async () => {
+    const config = createPluginsVitestConfig({});
+    const ordinary = await config.test?.projects?.[0];
+    if (!ordinary || typeof ordinary !== "object") throw new Error("missing ordinary plugin leaf");
+    const { test } = await resolveConfig({ config: false }, ordinary);
+    expect(test.exclude).toContain("min-host-version.test.ts");
+  });
+
+  it("intersects inherited paths after programmatic directory overrides and preserves exclusions", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-effective-patterns-"));
+    try {
+      const owner = ["test/scripts/keep.test.ts", "test/scripts/blocked.test.ts"];
+      for (const file of owner) {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), "");
+      }
+      const includeFile = path.join(root, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(["*.test.ts", "!blocked.test.ts"]));
+      const config = createScopedVitestConfig(
+        owner.map((file) => convertPathToPattern(path.join(root, file))),
+        {
+          env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+          argv: ["node", "vitest", "run"],
+          intersectIncludeFile: true,
+          excludeUnitFastTests: false,
+        },
+      );
+      for (const dir of [path.join(root, "test/scripts"), root, path.join(root, "test/scripts")]) {
+        const resolved = await resolveConfig({ config: false, dir }, config);
+        const actual = globSync(resolved.test.include, {
+          cwd: resolved.test.dir,
+          absolute: true,
+          ignore: resolved.test.exclude,
+        });
+        expect(actual).toEqual(
+          dir === root ? [] : [path.join(root, owner[0]!).split(path.sep).join("/")],
+        );
+      }
+      const beforeArgv = [...process.argv];
+      const native = parseCLI([
+        "vitest",
+        "run",
+        "--dir",
+        path.join(root, "test/scripts"),
+        "--exclude",
+        "keep.test.ts",
+      ]);
+      const resolved = await resolveConfig({ ...native.options, config: false }, config);
+      expect(
+        globSync(resolved.test.include, {
+          cwd: resolved.test.dir,
+          ignore: resolved.test.exclude,
+        }),
+      ).toEqual([]);
+      expect(
+        resolved.test.exclude.some((pattern) =>
+          path.matchesGlob(path.join(root, "test/scripts/blocked.test.ts"), pattern),
+        ),
+      ).toBe(true);
+      expect(resolved.test.exclude).toContain("keep.test.ts");
+      expect(process.argv).toEqual(beforeArgv);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("narrows package CLI directories within their owner", async () => {
     const config = createScopedVitestConfig(["packages/**/*.test.ts"], {
       argv: ["vitest", "run", "packages/normalization-core"],
@@ -79,6 +307,28 @@ describe("createScopedVitestConfig", () => {
 
     expect((await requireTestConfig(config)).include).toEqual(["normalization-core/**/*.test.ts"]);
   });
+
+  it.each([undefined, "test"])(
+    "preserves native overrides on their own directory basis (%s)",
+    async (dir) => {
+      const config = createScopedVitestConfig(["test/**/*.test.ts"], {
+        dir,
+        env: {},
+        argv: ["node", "vitest", "run"],
+        excludeUnitFastTests: false,
+      });
+      const { test } = await resolveConfig(
+        {
+          config: false,
+          include: ["test/selected.test.ts"],
+          exclude: ["test/blocked.test.ts"],
+        },
+        config,
+      );
+      expect(test.include).toEqual(["test/selected.test.ts"]);
+      expect(test.exclude).toEqual(["test/blocked.test.ts"]);
+    },
+  );
 
   it.each([
     {
