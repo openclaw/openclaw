@@ -4839,9 +4839,10 @@ jobs:
     timeout-minutes: ${{ matrix.shard == 'pg16-smoke' && 15 || 30 }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Let every PR row, including the separate PG16 smoke, start in the same wave.
+      max-parallel: 7
       matrix:
-        shard: [1/4, 2/4, 3/4, 4/4, pg16-smoke]
+        shard: [1/6, 2/6, 3/6, 4/6, 5/6, 6/6, pg16-smoke]
         exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"shard":"pg16-smoke"}]') }}
     steps:
       - *linux_node_checkout_step

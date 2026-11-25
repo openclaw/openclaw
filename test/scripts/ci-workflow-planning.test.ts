@@ -132,19 +132,27 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
-  it("runs four balanced shards independently under the existing aggregate gate", () => {
+  it("lets every PR conformance row run in parallel under the existing aggregate gate", () => {
     const workflow = readCiWorkflow();
     const job = workflow.jobs["postgres-conformance"];
     expect(job.strategy["fail-fast"]).toBe(false);
-    expect(job.strategy["max-parallel"]).toBe(4);
-    expect(job.strategy.matrix.shard).toEqual(["1/4", "2/4", "3/4", "4/4", "pg16-smoke"]);
+    expect(job.strategy["max-parallel"]).toBeGreaterThanOrEqual(job.strategy.matrix.shard.length);
+    expect(job.strategy.matrix.shard).toEqual([
+      "1/6",
+      "2/6",
+      "3/6",
+      "4/6",
+      "5/6",
+      "6/6",
+      "pg16-smoke",
+    ]);
     expect(evaluateWorkflow(job.strategy.matrix.exclude)).toEqual([]);
     for (const eventName of ["push", "schedule", "workflow_dispatch"] as const) {
       expect(evaluateWorkflow(job.strategy.matrix.exclude, { eventName })).toEqual([
         { shard: "pg16-smoke" },
       ]);
     }
-    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "1/4" } })).toBe(30);
+    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "1/6" } })).toBe(30);
     expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "pg16-smoke" } })).toBe(15);
     expect(evaluateWorkflow(job["runs-on"])).toBe("ubuntu-24.04");
     const conformance = requiredWorkflowStep(job.steps, "Run PostgreSQL conformance");
@@ -3926,7 +3934,7 @@ describe("ci workflow guards", () => {
         },
         { eventName: "pull_request" },
       );
-      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(5);
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(7);
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 

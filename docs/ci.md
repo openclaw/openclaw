@@ -93,7 +93,7 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs, scheduled main runs, and manual CI validations include four hosted PostgreSQL 17
+Storage-engine PRs, scheduled main runs, and manual CI validations include six PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 They run in parallel with separate databases and unchanged three-worker test limits,
 with a 30-minute job budget each. The conformance runner models sequential configuration processes, three parallel file
@@ -102,11 +102,10 @@ Committed `config/postgres-conformance-timings.json` measurements price file wor
 configuration startup, and preparation; they never select the test inventory.
 Cold file scheduling follows Vitest's file-size order. The allocator minimizes
 predicted tail time, then total work, so preparation consumers can share one job.
-Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
-including its second worker preparation and service lifecycle. All callers use
-the same deterministic assignment, including runs without that extra smoke.
+The PR-only PostgreSQL 16 Gateway cron smoke runs in its own row, in parallel
+with the six PostgreSQL 17 shards. It does not affect their assignment.
 Unknown targets retain a default weight. Inspect any assignment with
-`--shard 1/4 --list` (or `2/4`, `3/4`, `4/4`). Refresh measurements from successful natural
+`--shard 1/6 --list` (through `6/6`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
@@ -117,12 +116,12 @@ The combined inventory matches the local full suite; a failure in one shard leav
 the others running and fails the aggregate gate.
 
 The PostgreSQL Scheduled Qualification workflow (`postgres-conformance-weekly.yml`) runs
-the same four conformance shards on main with digest-pinned images: PostgreSQL 17 daily
+the same conformance inventory in four shards on main with digest-pinned images: PostgreSQL 17 daily
 at 07:17 UTC, and PostgreSQL 16 and 18 every Monday at 06:43 UTC. Manual dispatch accepts
 `versions=all` (the default), `pg16`, `pg17`, or `pg18`. PostgreSQL 17 uses the same image
 pin as PR CI. The daily run adds four hosted jobs; Monday's weekly run retains eight jobs. All runs use the same
 measured shard allocator with a 50-minute job budget and at most four jobs running at once.
-PR CI keeps its existing path selection and four PostgreSQL 17 shards.
+PR CI keeps its existing path selection and uses six PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
 Scheduled failures are visible in Actions through the workflow's failed jobs, with no additional notifications;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
