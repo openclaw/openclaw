@@ -44,14 +44,16 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testDrawerGroupHeaderControls() throws {
-        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
+    /// User-made session groups live on the Sessions screen (the drawer lists sessions without group headers
+    /// since the prototype snapshot). The header is the shared fold control; its actions sit on a long press.
+    func testSessionsGroupHeaderControls() throws {
+        self.launchApp(for: Self.controlScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
         let app = try XCTUnwrap(self.app)
-        self.tapSidebarReveal(in: app)
-        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
-        self.attachScreenshot(named: "drawer-groups-landing")
+        let header = app.buttons["SessionGroup.Header.Projects"]
         XCTAssertTrue(header.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "drawer-groups-expanded")
+        let projectNotes = app.buttons["SessionDashboard.Session.agent:main:dashboard:fixture-project"]
+        XCTAssertTrue(projectNotes.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "sessions-groups-landing")
         header.press(forDuration: 0.8)
         for item in [
             "New Session in This Group",
@@ -66,99 +68,57 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         XCTAssertFalse(app.buttons["Move Up"].isEnabled)
         XCTAssertTrue(app.buttons["Move Down"].isEnabled)
-        self.attachScreenshot(named: "drawer-groups-menu")
+        self.attachScreenshot(named: "sessions-groups-menu")
         app.buttons["New Session Defaults…"].tap()
         XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["/work/repo"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.switches["Separate working copy"].exists)
-        self.attachScreenshot(named: "drawer-groups-defaults")
+        self.attachScreenshot(named: "sessions-groups-defaults")
         app.buttons["Cancel"].tap()
-        let caret = app.buttons["SessionGroup.Caret.Projects"]
-        XCTAssertTrue(caret.waitForExistence(timeout: 5))
-        self.assertMinimumTouchTarget(caret)
-        XCTAssertGreaterThan(caret.frame.minX, header.frame.maxX - 1, "Drawer caret must trail the group name")
-        XCTAssertNotEqual(caret.value as? String, "1", "Expanded group must hide its count")
-        let expandedCaretFrame = caret.frame
-        caret.tap()
-        XCTAssertEqual(caret.label, "Expand Group")
-        XCTAssertEqual(caret.value as? String, "1", "Collapsed group must show its session count")
-        XCTAssertEqual(caret.frame.minX, expandedCaretFrame.minX, accuracy: 1, "Count must keep its layout space")
-        XCTAssertFalse(app.staticTexts["Project notes"].exists)
-        XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "Caret must not open the context menu")
-        self.attachScreenshot(named: "drawer-groups-collapsed")
-        caret.tap()
-        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
-        XCTAssertNotEqual(caret.value as? String, "1")
-        self.attachScreenshot(named: "drawer-groups-reexpanded")
+
+        // A tap folds and unfolds the group; it never opens the menu.
+        XCTAssertEqual(header.value as? String, "Expanded")
         header.tap()
-        XCTAssertEqual(caret.value as? String, "1", "A tap on the header must fold the group")
-        XCTAssertFalse(app.staticTexts["Project notes"].exists, "A folded group must hide its sessions")
+        XCTAssertEqual(header.value as? String, "Collapsed")
+        XCTAssertTrue(projectNotes.waitForNonExistence(timeout: 5), "A folded group must hide its sessions")
         XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "A header tap must not open the context menu")
+        self.attachScreenshot(named: "sessions-groups-collapsed")
         header.tap()
-        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(projectNotes.waitForExistence(timeout: 5))
+
         header.press(forDuration: 0.8)
         app.buttons["Move Down"].tap()
         let pending = app.descendants(matching: .any)["SessionGroup.Pending.Projects"].firstMatch
         XCTAssertTrue(pending.waitForExistence(timeout: 4), "Group mutation must show a pending spinner")
-        self.attachScreenshot(named: "drawer-groups-pending")
+        self.attachScreenshot(named: "sessions-groups-pending")
         XCTAssertTrue(pending.waitForNonExistence(timeout: 10))
-        let research = app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch
+        let research = app.buttons["SessionGroup.Header.Research"]
         XCTAssertTrue(research.waitForExistence(timeout: 5))
         XCTAssertLessThan(research.frame.minY, header.frame.minY)
-        self.attachScreenshot(named: "drawer-groups-reordered")
+        self.attachScreenshot(named: "sessions-groups-reordered")
+
         header.press(forDuration: 0.8)
         app.buttons["New Session in This Group"].tap()
-        if app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 2) {
-            self.tapSidebarReveal(in: app)
-        }
-        XCTAssertTrue(app.staticTexts["New grouped session"].waitForExistence(timeout: 5))
-        self.attachScreenshot(named: "drawer-groups-new-session")
-        let allSessions = app.buttons["RootTabs.Sidebar.ViewAllSessions"]
-        XCTAssertTrue(allSessions.waitForExistence(timeout: 5))
-        if !allSessions.isHittable { app.swipeUp() }
-        allSessions.tap()
-        XCTAssertTrue(app.buttons["Sessions.StatusScope"].waitForExistence(timeout: 8))
-        let sessionsHeader = try XCTUnwrap(app.descendants(matching: .any)
-            .matching(identifier: "SessionGroup.Header.Projects").allElementsBoundByIndex
-            .filter(\.isHittable).max { $0.frame.minX < $1.frame.minX })
-        sessionsHeader.press(forDuration: 0.8)
-        XCTAssertTrue(app.buttons["New Session Defaults…"].waitForExistence(timeout: 4))
-        self.attachScreenshot(named: "sessions-groups-menu")
-        app.buttons["New Session Defaults…"].tap()
-        XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
-        self.attachScreenshot(named: "sessions-groups-defaults")
-        app.buttons["Cancel"].tap()
-        let sessionsCaret = try XCTUnwrap(app.buttons.matching(identifier: "SessionGroup.Caret.Projects")
-            .allElementsBoundByIndex.filter(\.isHittable)
-            // The drawer can remain hittable behind this tab on iPhone; select this header's leading control.
-            .filter { $0.frame.maxX <= sessionsHeader.frame.minX + 1 }
-            .max { $0.frame.minX < $1.frame.minX })
-        XCTAssertLessThan(
-            sessionsCaret.frame.maxX,
-            sessionsHeader.frame.minX + 1,
-            "Sessions tab must keep its leading caret")
-        let projectRows = app.staticTexts.matching(identifier: "Project notes").count
-        sessionsCaret.tap()
-        XCTAssertLessThan(app.staticTexts.matching(identifier: "Project notes").count, projectRows)
-        self.attachScreenshot(named: "sessions-groups-collapsed")
+        // Creating the session in this group opens it.
+        let created = app.otherElements["chat-agent-identity"]
+        XCTAssertTrue(created.waitForExistence(timeout: 8))
+        XCTAssertTrue(created.label.hasSuffix("New grouped session"), created.label)
+        self.attachScreenshot(named: "sessions-groups-new-session")
     }
 
-    func testDrawerGroupHeaderFailedMutationKeepsError() throws {
-        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+    func testSessionsGroupHeaderFailedMutationKeepsError() throws {
+        self.launchApp(for: Self.controlScreenshotTarget, additionalArguments: [
             "--openclaw-group-controls-fixture", "--openclaw-failed-group-change-fixture",
         ])
         let app = try XCTUnwrap(self.app)
-        self.tapSidebarReveal(in: app)
-        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
+        let header = app.buttons["SessionGroup.Header.Projects"]
         XCTAssertTrue(header.waitForExistence(timeout: 8))
         header.press(forDuration: 0.8)
         app.buttons["Move Down"].tap()
         XCTAssertTrue(app.staticTexts["Fixture group mutation rejected"].waitForExistence(timeout: 5))
-        XCTAssertLessThan(
-            header.frame.minY,
-            app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch.frame.minY)
+        XCTAssertLessThan(header.frame.minY, app.buttons["SessionGroup.Header.Research"].frame.minY)
         XCTAssertFalse(app.descendants(matching: .any)["SessionGroup.Pending.Projects"].exists)
-        self.attachScreenshot(named: "drawer-groups-failed-mutation")
+        self.attachScreenshot(named: "sessions-groups-failed-mutation")
     }
 
     func testReleaseControlScreenshot() {

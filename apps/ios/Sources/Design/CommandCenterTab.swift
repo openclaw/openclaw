@@ -506,8 +506,11 @@ struct CommandSessionsScreen: View {
                 Button(action: self.retry) {
                     Text(String(localized: "Try again"))
                         .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.textStrong)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
             }
             .padding(.horizontal, 10)

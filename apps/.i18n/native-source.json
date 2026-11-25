@@ -832,6 +832,7 @@
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.222a42ea8b6f19e5","source":"Sessions"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.aa0a122ae54b2612","source":"Settings"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ce80e245c76764e9","source":"Show Sub-sessions"},
+    {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d4d40add2415ce06","source":"Try again"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ee7b9cdb241fc8a3","source":"Unread"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4f1fd62b6796831b","source":"View all"},
     {"path":"apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8dba5cf06f450dab","source":"Allow"},

@@ -281,11 +281,26 @@ struct RootSidebar: View {
                 Text(verbatim: failure).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
             }
             if let sessionErrorText = self.model.sessionErrorText {
-                Text(verbatim: sessionErrorText)
-                    .font(OpenClawType.captionMedium)
-                    .foregroundStyle(OpenClawBrand.warn)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
+                // The notice says "Try again", so the sidebar offers it: the same reload as the Sessions screen.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: sessionErrorText)
+                        .font(OpenClawType.captionMedium)
+                        .foregroundStyle(OpenClawBrand.warn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        Task { await self.model.refreshSessions(appModel: self.appModel) }
+                    } label: {
+                        Text(String(localized: "Try again"))
+                            .font(OpenClawType.captionSemiBold)
+                            .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.model.isRefreshing)
+                    .accessibilityIdentifier("RootTabs.Sidebar.SessionsRetry")
+                }
+                .padding(.horizontal, 10)
             }
             HStack(spacing: 0) {
                 self.sessionSectionHeader(
