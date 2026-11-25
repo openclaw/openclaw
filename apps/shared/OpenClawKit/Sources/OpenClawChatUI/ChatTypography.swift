@@ -114,7 +114,8 @@ enum OpenClawChatTypography {
         size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle, textScale: CGFloat = 1) -> Font
     {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: self.scaled(size) * textScale, relativeTo: textStyle).weight(weight)
+        Font.custom(self.displayPostScriptName, size: self.scaled(size) * textScale, relativeTo: textStyle)
+            .weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else

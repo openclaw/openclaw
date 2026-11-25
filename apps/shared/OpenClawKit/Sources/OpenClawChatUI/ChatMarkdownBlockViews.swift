@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
+    @Environment(\.openClawChatTextScale) private var textScale
 
     var body: some View {
         #if os(iOS) || os(macOS)
@@ -38,7 +39,7 @@ struct ChatCodeBlockView: View {
             .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
+                    .font(OpenClawChatTypography.mono(size: 13 * self.textScale, relativeTo: .footnote))
                     .foregroundStyle(OpenClawChatTheme.assistantText)
                     .lineSpacing(2)
                     .textSelection(.enabled)
@@ -68,6 +69,7 @@ struct ChatCodeBlockView: View {
 struct ChatMathBlockView: View {
     let block: ChatMathBlock
     let textColor: Color
+    @Environment(\.openClawChatTextScale) private var textScale
 
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
 
@@ -78,7 +80,7 @@ struct ChatMathBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 ChatMathPlatformView(
                     latex: self.block.latex,
-                    fontSize: self.fontSize,
+                    fontSize: self.fontSize * self.textScale,
                     textColor: self.textColor)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
