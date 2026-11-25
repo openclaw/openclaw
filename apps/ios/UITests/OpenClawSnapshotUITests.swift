@@ -920,7 +920,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-no-sign-in-row")
         modelMenu.tap()
-        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        XCTAssertTrue(self.pickerSignInRow(in: app).exists)
         self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
         self.assertModelSignInSheetOpens(in: app)
     }
@@ -974,12 +974,12 @@ extension OpenClawSnapshotUITests {
         modelMenu.tap()
         let choice = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
         XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
-        app.buttons["chat-model-picker-back"].tap()
+        // The provider page is a system push; its back button is the first one in the bar.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
     }
 
     func assertModelSignInSheetOpens(in app: XCUIApplication) {
-        let signIn = app.buttons["chat-model-sign-in"]
-        XCTAssertTrue(signIn.waitForExistence(timeout: 3))
+        let signIn = self.pickerSignInRow(in: app)
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
         XCTAssertTrue(app.staticTexts[
@@ -1008,7 +1008,7 @@ extension OpenClawSnapshotUITests {
             XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
             let note = app.descendants(matching: .any)["chat-composer-model-selection-target"]
             let assertNote = {
-                XCTAssertTrue(app.buttons["chat-model-picker-provider-anthropic"].waitForExistence(timeout: 3))
+                XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
                 if let disclosure {
                     XCTAssertTrue(note.exists, target)
                     XCTAssertEqual(note.label, disclosure)

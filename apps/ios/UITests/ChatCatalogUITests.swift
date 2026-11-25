@@ -25,7 +25,7 @@ final class ChatCatalogUITests: XCTestCase {
         modelPicker.tap()
         self.capture(app, named: "opened-model-menu")
         // Search reaches every provider's models without opening each provider.
-        let search = app.textFields["chat-model-picker-search"]
+        let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 10), app.debugDescription)
         search.tap()
         search.typeText("fixture")
@@ -37,7 +37,7 @@ final class ChatCatalogUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", "chat-model-picker-model-anthropic/claude-fixture")).firstMatch
         XCTAssertTrue(authRequiredRow.waitForExistence(timeout: 10))
         XCTAssertFalse(authRequiredRow.isEnabled)
-        app.buttons["Clear search"].tap()
+        search.buttons["Clear text"].tap()
         search.typeText(model.id)
         let modelRow = app.buttons["chat-model-picker-model-\(model.provider)/\(model.id)"]
         XCTAssertTrue(modelRow.waitForExistence(timeout: 10), app.debugDescription)

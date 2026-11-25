@@ -682,6 +682,25 @@ extension OpenClawSnapshotUITests {
         }
     }
 
+    /// The picker sheet opens at its medium detent; drag its title bar up to the large one.
+    func expandModelPickerSheet(in app: XCUIApplication) {
+        let bar = app.navigationBars["Model"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 3), app.debugDescription)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 0.1,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
+    }
+
+    /// Model sign-in is the picker's last row; at the medium detent it can sit below the fold.
+    func pickerSignInRow(in app: XCUIApplication) -> XCUIElement {
+        let signIn = app.buttons["chat-model-sign-in"]
+        if !signIn.waitForExistence(timeout: 2) {
+            self.expandModelPickerSheet(in: app)
+        }
+        XCTAssertTrue(signIn.waitForExistence(timeout: 3), app.debugDescription)
+        return signIn
+    }
+
     /// The phone composer shows its model and effort chips while the draft is focused.
     func inlineModelChip(in app: XCUIApplication) -> XCUIElement {
         let input = self.chatMessageInput(in: app)
@@ -693,6 +712,9 @@ extension OpenClawSnapshotUITests {
     /// Opens a provider in the model picker card and returns one of its model rows.
     func pickerModelRow(_ selectionID: String, provider: String, in app: XCUIApplication) -> XCUIElement {
         let providerRow = app.buttons["chat-model-picker-provider-\(provider)"]
+        if !providerRow.waitForExistence(timeout: 2) {
+            self.expandModelPickerSheet(in: app)
+        }
         XCTAssertTrue(providerRow.waitForExistence(timeout: 3), app.debugDescription)
         providerRow.tap()
         let row = app.buttons["chat-model-picker-model-\(selectionID)"]
