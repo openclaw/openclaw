@@ -361,24 +361,22 @@ export function loadControlUiSourceCatalog(): TranslationMap {
                 "contextAvailableOnDemand",
                 "contextDeferredEstimate",
               ]
-            : name === "contextSystem"
-              ? ["contextFree"]
-              : name === "contextOffline"
-                ? ["contextUnavailable", "contextReserve"]
-                : name === "contextExactCount"
-                  ? [
-                      "contextFreeShort",
-                      "contextReserveShort",
-                      "contextInputShort",
-                      "contextOutputShort",
-                      "contextSearch",
-                      "contextSearchCount",
-                      "contextSearchSkills",
-                      "contextSearchFiles",
-                      "contextSearchTools",
-                      "contextShowAll",
-                    ]
-                  : [];
+            : name === "contextOffline"
+              ? ["contextUnavailable", "contextReserve"]
+              : name === "contextExactCount"
+                ? [
+                    "contextFreeShort",
+                    "contextReserveShort",
+                    "contextInputShort",
+                    "contextOutputShort",
+                    "contextSearch",
+                    "contextSearchCount",
+                    "contextSearchSkills",
+                    "contextSearchFiles",
+                    "contextSearchTools",
+                    "contextShowAll",
+                  ]
+                : [];
         for (const inspectorKey of inspectorKeys) {
           sessionDetails[inspectorKey] = inspectorCopy[inspectorKey];
         }
@@ -463,11 +461,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     const hotKeys: Array<keyof typeof panelCopy> =
       key === "nativeStatus"
         ? ["title"]
-        : key === "desktopCloseSearch"
+        : key === "desktopFilter"
           ? ["desktopWorking"]
           : key === "mobileFinished"
             ? ["stopConfirmTitle", "stopConfirmMessage", "stopConfirmAction", "back"]
-            : key === "refresh"
+            : key === "noRunning"
               ? ["stop", "stopping"]
               : [];
     for (const name of hotKeys) {
