@@ -298,16 +298,110 @@ describe("startup retained deletion", () => {
           upgradeShared ? { status: "upgraded", mode: "chain" } : { status: "current" },
         );
         expect(await isStateUpgradePending(env)).toBe(false);
+        expect(fs.readFileSync(retainedPath)).toEqual(bytes);
+        expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
       } else {
-        await expect(upgrade).rejects.toThrow("no such module: vec0");
+        await expect(upgrade).resolves.toMatchObject({
+          status: "upgraded",
+          mode: "fallback",
+          failedStep: "agent-schema",
+          pinned: true,
+        });
         expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("failed at agent-schema"));
-        expect(await isStateUpgradePending(env)).toBe(true);
+        expect(await isStateUpgradePending(env)).toBe(false);
+        const preserved = fs
+          .readdirSync(retainedDir)
+          .find((entry) => entry.startsWith("openclaw-agent.sqlite.pre-"));
+        expect(preserved).toBeDefined();
+        expect(fs.readFileSync(path.join(retainedDir, preserved!))).toEqual(bytes);
       }
-      expect(fs.readFileSync(retainedPath)).toEqual(bytes);
-      expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
       expect(fs.readFileSync(activePath)).toEqual(activeBytes);
     },
   );
+
+  it("upgrades an active agent database with a vec0 memory index in fallback mode", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-active-vec0-"));
+    dirs.push(stateDir);
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const agentPath = path.join(agentDir, "openclaw-agent.sqlite");
+    for (const file of [statePath, agentPath]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    }
+    {
+      using state = new DatabaseSync(statePath);
+      state.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    }
+    {
+      using agent = new DatabaseSync(agentPath, { allowExtension: true });
+      agent.exec(
+        fs.readFileSync(
+          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      agent.exec(`PRAGMA user_version = 26;
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 26, 'main', '2026.9.9', 1, 1);
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:main:main', 'active-session', '{"sessionId":"active-session"}', 1);
+        INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', 'clean');
+        INSERT INTO memory_index_chunks (
+          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
+          1, 'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'h1', 'test-model', 'active memory', X'00', 1
+        );`);
+      loadSqliteVec(agent);
+      agent.exec(`CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding float[3]
+        );
+        INSERT INTO memory_index_chunks_vec(id, embedding) VALUES ('chunk-1', '[1, 0, 0]');`);
+    }
+    const before = fs.readFileSync(agentPath);
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const result = await upgradeStateDirectory({
+      env,
+      log,
+      runChain: async () => {
+        throw new ChainStepError("agent-schema", "simulated chain failure");
+      },
+    });
+    expect(result).toMatchObject({
+      status: "upgraded",
+      mode: "fallback",
+      failedStep: "agent-schema",
+      pinned: true,
+    });
+    expect(await isStateUpgradePending(env)).toBe(false);
+    const preserved = fs
+      .readdirSync(agentDir)
+      .find((entry) => entry.startsWith("openclaw-agent.sqlite.pre-"));
+    expect(preserved).toBeDefined();
+    expect(fs.readFileSync(path.join(agentDir, preserved!))).toEqual(before);
+    using upgraded = new DatabaseSync(agentPath, { readOnly: true });
+    expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    expect(
+      upgraded
+        .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:main"),
+    ).toEqual({ current_session_id: "active-session" });
+    expect(upgraded.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+      { id: "chunk-1", text: "active memory" },
+    ]);
+    expect(
+      upgraded
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'memory_index_chunks_vec%'")
+        .all(),
+    ).toEqual([]);
+  });
 });
 
 describe("upgradeStateDirectory version zero", () => {

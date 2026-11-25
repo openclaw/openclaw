@@ -117,8 +117,10 @@ function readTables(db: DatabaseSync): Map<string, TableInfo> {
     if (row.name.startsWith("sqlite_")) {
       continue;
     }
+    // Virtual-table modules such as sqlite-vec may not be loaded on the swap connection;
+    // virtual tables are never copied directly and are rebuilt on demand.
     const columns =
-      row.type === "shadow"
+      row.type === "shadow" || row.type === "virtual"
         ? []
         : readSqliteRows<{
             name: string;
@@ -596,7 +598,7 @@ function buildSqliteByCopy(
       if (sourceTable.type === "shadow" || sourceTable.type === "view") {
         continue;
       }
-      // Older SQLite libraries list FTS shadow tables as ordinary tables.
+      // Older SQLite libraries and unloaded virtual-table modules list shadow tables as ordinary tables.
       if (shadowOwners.some((prefix) => sourceTable.name.startsWith(prefix))) {
         continue;
       }
@@ -605,7 +607,12 @@ function buildSqliteByCopy(
         continue;
       }
       const targetTable = targetTables.get(name);
-      if (!targetTable || targetTable.type === "shadow" || targetTable.type === "virtual") {
+      if (
+        sourceTable.type === "virtual" ||
+        !targetTable ||
+        targetTable.type === "shadow" ||
+        targetTable.type === "virtual"
+      ) {
         droppedTables.push(sourceTable.name);
         if (sourceTable.type === "table" && !target.map.retired?.[sourceTable.name]) {
           // A table this build no longer has keeps its rows as set-aside data.

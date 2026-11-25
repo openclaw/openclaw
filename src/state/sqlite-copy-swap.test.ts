@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fileTransfer from "../infra/file-descriptor.js";
 import * as sqliteFilesystem from "../infra/sqlite-wal-filesystem.js";
@@ -359,6 +360,70 @@ describe("generic rebuild data rules", () => {
     const mapped = build(sql, renamed, { columns: { "t.title": "name" } });
     expect(mapped.rows).toEqual([{ id: "a", name: "kept" }]);
     expect(droppedUserColumns(source, mapped.report)).toEqual([]);
+  });
+
+  it("drops runtime vec0 virtual tables and their shadow tables without loading sqlite-vec", () => {
+    const dir = tempDir();
+    const source = path.join(dir, "agent.sqlite");
+    const db = new DatabaseSync(source, { allowExtension: true });
+    try {
+      db.exec(
+        fs.readFileSync(
+          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      db.exec(`PRAGMA user_version = 26;
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 26, 'main', '2026.9.9', 1, 1);
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:main:main', 's1', '{"sessionId":"s1"}', 1);
+        INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', 'clean');
+        INSERT INTO memory_index_chunks (
+          chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
+          1, 'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'h1', 'test-model', 'hello memory', X'00', 1
+        );`);
+      loadSqliteVec(db);
+      db.exec(`CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding float[3]
+        );
+        INSERT INTO memory_index_chunks_vec(id, embedding) VALUES ('chunk-1', '[1, 0, 0]');`);
+    } finally {
+      db.close();
+    }
+    const out = path.join(dir, "next.sqlite");
+    const { report, foldInFailures } = buildAgentDatabaseByCopy("main", source, out, dir);
+    expect(foldInFailures).toEqual([]);
+    expect(report.conservationMismatches).toEqual([]);
+    expect(
+      report.setAside.filter(
+        (row) => row.table.startsWith("memory_index_chunks_vec") || row.reason === "table removed",
+      ),
+    ).toEqual([]);
+    expect(report.droppedTables).toContain("memory_index_chunks_vec");
+    const built = new DatabaseSync(out, { readOnly: true });
+    try {
+      expect(
+        built
+          .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+          .get("agent:main:main"),
+      ).toEqual({ current_session_id: "s1" });
+      expect(built.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+        { id: "chunk-1", text: "hello memory" },
+      ]);
+      expect(
+        built
+          .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
+          .get("memory_vector_rebuild_v1"),
+      ).toEqual({ value: "clean" });
+      const vecTables = built
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'memory_index_chunks_vec%'")
+        .all();
+      expect(vecTables).toEqual([]);
+    } finally {
+      built.close();
+    }
   });
 });
 
