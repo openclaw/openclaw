@@ -858,6 +858,46 @@ it.each([32, 128, 512])("prepares literal membership once for %i include paths",
 });
 
 it.each([
+  ["{ts,tsx}", "tsx", ["tsx"]],
+  ["tsx", "{ts,tsx}", ["tsx"]],
+  ["{ts,tsx}", "ts", ["ts"]],
+  ["ts", "{ts,tsx}", ["ts"]],
+  ["ts", "tsx", []],
+] as const)("intersects recursive browser extensions %s with %s", (owner, requested, expected) => {
+  const pattern = (extension: string) => `ui/src/**/*.browser.test.${extension}`;
+  expect(intersect([pattern(owner)], [pattern(requested)])).toEqual(expected.map(pattern));
+});
+
+it("preserves recursive browser origins and negatives without hiding ambiguous owners", () => {
+  const root = tempDirs.make("browser-template-");
+  const absolute = (pattern: string) => cli.resolveNativeVitestPattern(pattern, root);
+  const selected = cliPatterns.intersectIncludePatterns(
+    [absolute("ui/src/**/*.browser.test.{ts,tsx}"), "!ui/src/owner-blocked.browser.test.tsx"],
+    ["src/**/*.browser.test.tsx", "!src/caller-blocked.browser.test.tsx"],
+    cli.matchesNativeVitestGlob,
+    root,
+    path.join(root, "ui"),
+    cli.resolveNativeVitestPattern,
+  );
+  expect(selected).toEqual({
+    include: [absolute("ui/src/**/*.browser.test.tsx")],
+    exclude: [
+      absolute("ui/src/owner-blocked.browser.test.tsx"),
+      "src/caller-blocked.browser.test.tsx",
+    ],
+  });
+  expect(intersect(["other/**/*.browser.test.tsx"], ["ui/src/**/*.browser.test.tsx"])).toEqual([]);
+  for (const owners of [
+    ["ui/src/**/*.browser.test.ts", "ui/src/**/nested/*.browser.test.tsx"],
+    ["ui/src/**/nested/*.browser.test.tsx", "ui/src/**/*.browser.test.ts"],
+  ]) {
+    expect(() => intersect(owners, ["ui/src/**/*.browser.test.{ts,tsx}"])).toThrow(
+      "cannot safely intersect",
+    );
+  }
+});
+
+it.each([
   ["ui/src/**/*.e2e.test.ts", "ui/src/e2e/*.e2e.test.ts"],
   ["ui/src/**/prefix" + cliPatterns.nonBrowserTestBasenamePattern, "ui/src/**/*.test.ts"],
   ["src/logging/**/*.test.ts", "src/@(logging|shared)/redact*.test.ts"],
