@@ -237,6 +237,34 @@ trial exits 78 and the launcher restores the previous release. Ordinary non-tria
 starts, including manual package upgrades, keep their existing migration-on-open
 behavior: a store's size alone never prevents that Gateway from starting.
 
+The candidate also publishes write-ahead restore intent at
+`<prefix>/releases/<target-release-id>/.restore`: `{v:1,runId,files:[{live,preimage}]}`.
+The launcher's selected target owns that prepared release directory, so even a
+retry from an older preparer cannot reuse another release's receipt. Paths are
+absolute; a null pre-image means remove that file on rollback. The complete
+manifest and images are durable before the replayable swap plan or any
+schema/config publication. Retries reuse their immutable originals rather than
+re-imaging changed state. A known no-upgrade trial records an empty plan.
+
+Under exclusive native-store custody, SQLite originals are checkpointed and
+closed before their main files are hard-linked as adjacent
+`*.pre-restore-<runId>` images. The checkpoint changes physical representation,
+not logical contents. The subsequent swap renames a different prepared inode
+over the live path, leaving the image immutable. WAL, SHM, journal and seal paths
+are explicit removals because committed frames are already in the main image.
+This hard-link rule is for rename-based publication, not in-place migration.
+Ordinary files and leaf symlinks retain their original contents and link targets.
+If the filesystem cannot create a hard link, preparation logs the byte-copy
+fallback and its cause; normal adjacent images need no additional database copy.
+
+Legacy `*.pre-<generation>` recovery remains unchanged while the launcher moves
+to the manifest reader. External-path restrictions above therefore still apply.
+After confirmed committed IPC, the candidate removes only images from the
+manifest its own process captured, not pinned legacy recovery. It never rereads
+a global slot or matches run IDs during cleanup. The receipt stays with its
+prepared release. Cleanup failures are advisory and name retained recovery
+files; an older receipt cannot block the next release's preparation.
+
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
 copies, indexes, WAL, temporary work, and retained recovery generations. Keep namespace
