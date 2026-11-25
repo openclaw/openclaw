@@ -90,7 +90,8 @@ struct ChatComposerAddSheet: View {
             .listStyle(.insetGrouped)
             // The photo row has no header; it sits under the title like the rows under it.
             .listSectionSpacing(.compact)
-            .contentMargins(.top, 4, for: .scrollContent)
+            // The first card sits under the title as in the model sheet and the system's own sheets.
+            .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
             .contentMargins(.bottom, 8, for: .scrollContent)
             // The list's insets carry the bar and the home indicator.
             .onScrollGeometryChange(for: CGFloat.self) {
@@ -491,6 +492,7 @@ private struct ChatComposerSkillsPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
         .navigationTitle(Text("Use a skill"))
         .navigationBarTitleDisplayMode(.inline)
@@ -634,6 +636,7 @@ private struct ChatComposerSkillSwitchesPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
         .navigationTitle(Text("Skills"))
         .navigationBarTitleDisplayMode(.inline)
@@ -687,6 +690,7 @@ private struct ChatComposerConnectorsPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text("Connectors"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -759,6 +763,7 @@ private struct ChatComposerConnectorPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text(verbatim: self.name))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -806,6 +811,7 @@ private struct ChatComposerBranchesPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text("Branches"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
