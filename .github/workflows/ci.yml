@@ -5625,7 +5625,8 @@ jobs:
         if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build:ci-artifacts
+        # Recovery stages a runtime-only package; build-artifacts still checks SDK declarations.
+        run: pnpm build:runtime
 
       - name: Prove bundled app recovery and relaunch
         id: bundled-recovery
