@@ -1882,7 +1882,11 @@ final class TalkModeManager {
             return
         }
         guard self.isCurrentTranscriptProcessing(generation) else { return }
-        let prompt = self.buildPrompt(transcript: transcript)
+        // The message is what the person said and nothing else: chat history shows it as their turn on every
+        // client. chat.send has no per-turn instruction field, so the spoken-style note and the interruption
+        // point stay off the wire (as in the Control UI's Talk) until the Gateway can carry them separately.
+        self.lastInterruptedAtSeconds = nil
+        let prompt = transcript
 
         do {
             let startedAt = Date().timeIntervalSince1970
@@ -2734,15 +2738,6 @@ final class TalkModeManager {
             paramsJSON: json,
             timeoutSeconds: 10,
             ifCurrentRoute: owner.route)
-    }
-
-    private func buildPrompt(transcript: String) -> String {
-        let interrupted = self.lastInterruptedAtSeconds
-        self.lastInterruptedAtSeconds = nil
-        return TalkPromptBuilder.build(
-            transcript: transcript,
-            interruptedAtSeconds: interrupted,
-            includeVoiceDirectiveHint: false)
     }
 
     private nonisolated static func matchesChatEvent(_ event: EventFrame, runId: String) -> Bool {
