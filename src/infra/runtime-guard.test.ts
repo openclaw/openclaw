@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
+import { emitNodeSecurityWarning, PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -91,6 +91,35 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it("warns once across launcher and runtime admission for a certificate-only gap", async () => {
+    const runtime = createRuntime();
+    const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+    const globals = globalThis as unknown as Record<symbol, unknown>;
+    const prior = globals[warningKey];
+    delete globals[warningKey];
+    try {
+      const details = runtimeDetails("node", {
+        version: "24.21.0",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      });
+      await assertSupportedRuntime(runtime, details, undefined, false);
+      expect(runtime.error).not.toHaveBeenCalled();
+      await assertSupportedRuntime(runtime, details);
+      emitNodeSecurityWarning(details.version, runtime.error);
+      await assertSupportedRuntime(runtime, details);
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("SECURITY WARNING"),
+      );
+    } finally {
+      if (prior === undefined) {
+        delete globals[warningKey];
+      } else {
+        globals[warningKey] = prior;
+      }
+    }
+  });
+
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = createRuntime();
     const details = runtimeDetails("node", { version: "22.23.2", sqliteVersion: null });
@@ -327,10 +356,12 @@ describe("runtime-guard", () => {
       }),
     ),
     runtimeDetails("bun"),
-  ])("returns silently when $kind runtime meets requirements", async (details) => {
+  ])("admits $kind silently during the preliminary runtime check", async (details) => {
     state.initializeSqlite.mockClear();
     const runtime = createRuntime();
-    await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
+    await expect(
+      assertSupportedRuntime(runtime, details, undefined, false),
+    ).resolves.toBeUndefined();
     if (details.kind === "node") {
       expect(state.initializeSqlite).not.toHaveBeenCalled();
     }
@@ -428,22 +459,32 @@ describe("runtime failure diagnostics", () => {
 
 describe("sealed worker runtime", () => {
   let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
+  const warningKey = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  let priorWarning: unknown;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
   beforeEach(() => {
+    priorWarning = globals[warningKey];
+    delete globals[warningKey];
     vi.resetModules();
     state.error.mockClear();
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
-    process.exitCode = undefined;
+    process.exitCode = 0;
     state.releaseStdin.mockClear();
     // The executable owns IPC, not the test runner's real transport.
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
   afterEach(() => {
+    if (priorWarning === undefined) {
+      delete globals[warningKey];
+    } else {
+      globals[warningKey] = priorWarning;
+    }
     process.argv = originalArgv;
-    process.exitCode = originalExitCode;
+    process.exitCode = originalExitCode ?? 0;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -460,12 +501,18 @@ describe("sealed worker runtime", () => {
     state.lossless = supported;
     const stderr = supported ? undefined : vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
-    expect(process.exitCode).toBe(supported ? undefined : 1);
+    expect(process.exitCode).toBe(supported ? 0 : 1);
     expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledTimes(supported ? 1 : 0);
     if (supported) {
-      expect(state.error).not.toHaveBeenCalled();
+      if (version === "24.16.0" || version === "26.1.0") {
+        expect(state.error).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("SECURITY WARNING"),
+        );
+      } else {
+        expect(state.error).not.toHaveBeenCalled();
+      }
     } else {
       expect(stderr).toHaveBeenCalledExactlyOnceWith("exit 1\n");
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));

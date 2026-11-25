@@ -1,2 +1,0 @@
-88
-# Compact mapped-result, read-failure and post-stat filesystem mutation contracts.

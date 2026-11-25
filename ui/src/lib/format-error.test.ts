@@ -26,6 +26,28 @@ describe("formatUiError", () => {
       `Couldn’t complete this request. Ask an admin to grant ${access}.`,
     );
   });
+
+  it("keeps permission guidance when a denial only has the legacy message", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "INVALID_REQUEST",
+      message: "missing scope: operator.write",
+    });
+
+    expect(formatUiError(error)).toBe(
+      "Couldn’t complete this request. Ask an admin to grant write access.",
+    );
+  });
+
+  it("does not turn malformed permission details into access guidance", () => {
+    const error = new GatewayProtocolRequestError({
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details: { code: "MISSING_SCOPE", missingScope: "operator.read", requiredScopes: [] },
+    });
+
+    expect(formatUiError(error)).toBe("permission denied");
+  });
+
   it.each([
     ["Camera access is blocked.", "Camera access is blocked."],
     ["OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],

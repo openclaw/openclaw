@@ -49,7 +49,11 @@ export type BridgeCommand =
       reconnectIfIdle?: boolean;
       validateIfIdle?: boolean;
     };
-export type BridgeRequest = BridgeCommand & { id: number };
+export type BridgeRequest = BridgeCommand & {
+  id: number;
+  /** Time left before the host resets this connection's I/O service. */
+  deadlineMs: number;
+};
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }
   | { generation: string; inTransaction: boolean }
@@ -64,6 +68,7 @@ export type BridgeWorkerData = {
   connectTimeoutMs: number;
   lockTimeoutMs: number;
   statementTimeoutMs: number;
+  readOnly?: boolean;
 };
 
 /** Prepare bindings and mutation hints without interpreting quoted text as SQL. */
@@ -242,6 +247,14 @@ export function decodePostgresError(data: PostgresErrorData): Error {
   const cause = Object.assign(new Error(data.message), data);
   if (data.code === "57014") {
     cause.name = POSTGRES_QUERY_CANCELED_ERROR_NAME;
+  }
+  // Expose transient transaction failures to the existing BUSY handlers. Keep
+  // the server SQLSTATE as the cause, as with constraint errors below.
+  if (data.code === "55P03" || data.code === "40P01" || data.code === "40001") {
+    return Object.assign(new Error(data.message, { cause }), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
   }
   const constraints: Record<string, [number, string]> = {
     "23505": [2067, "UNIQUE"],

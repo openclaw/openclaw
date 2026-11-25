@@ -562,7 +562,8 @@ describe("external restart handoff", () => {
     expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     expect(fixture.consume()).toEqual({
       ok: false,
-      error: "gateway terminal persistence is still pending",
+      error:
+        'gateway terminal persistence is still pending: {"count":1,"oldestAgeMs":null,"runIds":[]}',
     });
     expect(fixture.consume()).toEqual({ ok: true, value: false });
     expect(fixture.arm().ok).toBe(false);

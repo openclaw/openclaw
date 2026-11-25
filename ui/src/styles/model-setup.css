@@ -4,6 +4,10 @@
   gap: 18px;
 }
 
+openclaw-model-setup-page > .content-header {
+  padding-inline: 0;
+}
+
 .model-setup__intro {
   display: flex;
   align-items: flex-start;
@@ -16,7 +20,8 @@
   font-size: 20px;
 }
 
-.model-setup-wizard h2 {
+.model-setup-wizard .oc-dialog__title,
+.model-setup-wizard .model-setup-wizard__success-title {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
 }
@@ -46,10 +51,6 @@
 
 .model-setup__loading-section--sign-in .model-setup__loading-row {
   min-height: 68px;
-}
-
-.model-setup__loading-intro {
-  margin: 0 0 12px;
 }
 
 .model-setup__loading-icon,
@@ -120,10 +121,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.model-setup__empty > p {
-  margin: 0 0 12px;
 }
 
 .model-setup__recommendations {
@@ -237,6 +234,10 @@
   max-height: min(420px, 58dvh);
 }
 
+.model-setup-discovery .model-setup-provider-select__menu {
+  --oc-overlay-max-width: anchor-size(width);
+}
+
 .model-setup-provider-select__trigger {
   display: flex;
   align-items: center;
@@ -279,11 +280,6 @@
   flex: 1;
   min-width: 0;
   gap: 2px;
-}
-
-.model-setup-provider-select__copy strong,
-.model-setup-provider-select__copy span,
-.model-setup-provider-select__copy small {
   overflow-wrap: anywhere;
 }
 
@@ -407,12 +403,17 @@
   outline: none;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body {
+.model-setup-wizard--auth .model-setup-wizard__body,
+.model-setup-wizard--auth .wizard-step__form {
   display: flex;
   flex-direction: column;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body > .wizard-step__actions:last-child {
+.model-setup-wizard--auth .wizard-step__form {
+  flex: 1;
+}
+
+.model-setup-wizard--auth .wizard-step__actions:last-child {
   margin-top: auto;
 }
 

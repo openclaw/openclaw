@@ -4,7 +4,6 @@ import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-
 import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as pathExistence from "../infra/path-existence.js";
 import * as sqliteIdentity from "../infra/sqlite-worker-identity.js";
@@ -352,9 +351,14 @@ it("reads newly created state without blocking warm reads or allocating absent-s
 it("refuses an absent result when its owner closes during the filesystem probe", async () => {
   const { options, pathname } = source();
   const probing = createDeferredCore<undefined>();
-  using probe = vi.spyOn(pathExistence, "statIfExists").mockReturnValueOnce(probing.promise);
+  const entered = createDeferredCore();
+  using probe = vi.spyOn(pathExistence, "statIfExists").mockImplementationOnce(() => {
+    entered.resolve();
+    return probing.promise;
+  });
   const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   void reading.catch(() => {});
+  await entered.promise;
   const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
   try {
     expect(probe).toHaveBeenCalledExactlyOnceWith(pathname);
@@ -437,37 +441,10 @@ function captureCase<T extends OpenClawStateReadCommand>(
   bytes: number,
   options: {
     prepared?: boolean;
-    queued?: () => void;
     checkFreshAdmission?: boolean;
-    mutateWhenQueued?: boolean;
   } = {},
 ) {
-  return { command, reply, bytes, mutate: () => mutateInput(command), ...options };
-}
-
-// Mutate nested selectors in place and grow every array after capture.
-function mutateInput(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      value[index] = mutateInput(item);
-    });
-    value.push(structuredClone(value[0]));
-  } else if (isRecord(value)) {
-    for (const [key, item] of Object.entries(value)) {
-      if (key !== "type") {
-        value[key] = mutateInput(item);
-      }
-    }
-  } else {
-    return typeof value === "string"
-      ? "changed"
-      : typeof value === "number"
-        ? 999
-        : typeof value === "boolean"
-          ? !value
-          : value;
-  }
-  return value;
+  return { command, reply, bytes, ...options };
 }
 
 const selector = "租户🦞".repeat(512);
@@ -507,12 +484,27 @@ const metadataEntries = [
 ];
 const captures = [
   captureCase(
+    {
+      type: "subagents.runs",
+      scope: {
+        kind: "descendants",
+        sessionKeys: ["agent:main:cron:parent"],
+        liveTopology: [
+          { childSessionKey: "agent:main:child", requesterSessionKey: "agent:main:cron:parent" },
+        ],
+      },
+    },
+    { ok: true, sourceAdmitted: true, type: "subagents.runs", runs: new Map() },
+    0,
+    { prepared: true },
+  ),
+  captureCase(
     { type: "acpSessions.metadata", entries: metadataEntries },
     { ok: true, type: "acpSessions.metadata", sourceAdmitted: true, rows: [null, null] },
     Buffer.byteLength(
       "principal-根🦞second-principalrevision-根🦞session-根🦞entry-without-optionals",
     ) + 8,
-    { prepared: true, checkFreshAdmission: true, mutateWhenQueued: true },
+    { prepared: true, checkFreshAdmission: true },
   ),
   captureCase(
     {
@@ -539,18 +531,12 @@ const captures = [
     { type: "audit.run.inspect", input: inspectionInput },
     emptyReply,
     Buffer.byteLength("运行🦞") + Buffer.byteLength("游标🦞") + 32,
-    {
-      prepared: true,
-      queued: () => {
-        inspectionInput.now = 1234;
-        inspectionInput.decisionCursor = "changed while queued";
-      },
-    },
+    { prepared: true },
   ),
 ];
 
 it.each(captures)(
-  "captures $command.type selectors and byte charges before queued dispatch (%#)",
+  "preserves owned $command.type selectors and byte charges through queued dispatch (%#)",
   async (fixture) => {
     const { pathname, options } = source();
     const expected = structuredClone(fixture.command);
@@ -571,9 +557,6 @@ it.each(captures)(
     const baselineTransport = fixture.prepared
       ? captureOpenClawStateReadSource().createTransport({ type: "backup.runs" })
       : undefined;
-    if (transport && !fixture.mutateWhenQueued) {
-      fixture.mutate();
-    }
     const dispatch = createDeferredCore();
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
@@ -595,10 +578,6 @@ it.each(captures)(
           }),
         ]),
       ]);
-      if (!transport || fixture.mutateWhenQueued) {
-        fixture.mutate();
-      }
-      fixture.queued?.();
       options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
       expect(submitted.inputBytes).toBeGreaterThanOrEqual(

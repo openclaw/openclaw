@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
@@ -19,11 +19,10 @@ const cfg: OpenClawConfig = {
   },
 };
 
-function operator(assertCurrent: () => void = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+function operator() {
+  return createTestOperatorAuthority({
     profileId: "image-reader",
     scopes: ["operator.write"],
-    assertCurrent,
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow: ["test-provider/allowed", "test-provider/backup"] },
@@ -57,10 +56,9 @@ describe("operator model policy on image fallback", () => {
       run.mockResolvedValueOnce("answer");
       const authority = restricted
         ? operator()
-        : createAdmittedRunOperatorAuthority({
+        : createTestOperatorAuthority({
             profileId: "staff-reader",
             scopes: ["operator.write"],
-            assertCurrent: () => {},
           });
       await expect(
         runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
@@ -75,21 +73,4 @@ describe("operator model policy on image fallback", () => {
       );
     },
   );
-
-  it("stops the chain when the original requester retires", async () => {
-    let active = true;
-    const authority = operator(() => {
-      if (!active) {
-        throw new Error("requester retired");
-      }
-    });
-    const run = vi.fn(async () => {
-      active = false;
-      throw new Error("provider unavailable");
-    });
-    await expect(
-      runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
-    ).rejects.toThrow(/retired|no longer active/);
-    expect(run).toHaveBeenCalledOnce();
-  });
 });

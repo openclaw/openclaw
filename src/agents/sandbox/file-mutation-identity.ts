@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
 import { normalizeWindowsPathForComparison } from "../../infra/path-guards.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 

@@ -5,6 +5,7 @@ import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agen
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { LegacyHeartbeatSchema } from "../../doctor-heartbeat-legacy.js";
@@ -71,17 +72,17 @@ function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): void
 }
 
 /** Normalize pre-admission config through core, plugin setup, channel, and secret-ref migrations. */
-export function normalizeCompatibilityConfigValues(
+export async function normalizeCompatibilityConfigValues(
   raw: unknown,
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
   } = {},
-): {
+): Promise<{
   config: OpenClawConfigWithLegacyRoster;
   changes: string[];
   warnings?: string[];
-} {
+}> {
   if (!isRecord(raw)) {
     throw new TypeError("Compatibility config normalization requires an object");
   }
@@ -91,7 +92,7 @@ export function normalizeCompatibilityConfigValues(
   changes.push(...reserved.changes);
   // Account promotion creates the private candidate used by the mutable core passes.
   let next = seedMissingDefaultAccountsFromSingleAccountBase(reserved.config, changes);
-  const setup = runPluginSetupConfigMigrations({ config: next });
+  const setup = await runPluginSetupConfigMigrations({ config: next });
   next = setup.config;
   changes.push(...setup.changes);
   warnings.push(...(setup.warnings ?? []));
@@ -113,6 +114,7 @@ export function normalizeCompatibilityConfigValues(
   normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   normalizeLegacyMistralModelDefaults(next, changes);
   stripRetiredTuningKnobs(next, changes);
+  await preparePluginDoctorContractModules({ config: next, surfaces: ["configRepair"] });
   const channels = applyChannelDoctorCompatibilityMigrations(next, {
     historicalWebhookListeners: true,
   });

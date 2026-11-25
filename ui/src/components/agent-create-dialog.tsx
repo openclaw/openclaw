@@ -28,6 +28,7 @@ import {
 import { ModalDialog } from "./modal-dialog.tsx";
 import "../styles/agent-create-dialog.css";
 import { DialogHeader } from "./solid/dialog-header.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerAgentCreationEnglish();
 
@@ -182,9 +183,9 @@ export function AgentCreateDialog(props: {
           <Show when={!uploadBusy()}>
             <Errored
               fallback={(error) => (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               )}
             >
               {uploadOutcome()}

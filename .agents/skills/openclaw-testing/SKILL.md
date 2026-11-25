@@ -15,9 +15,9 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   to exact-head CI. Require its success before marking ready or merging. This
   changes proof timing only, not publication authority, source trust, credentials,
   owner approval, or merge gates.
-  Automatic CI skips drafts. For a trusted canonical branch, use the existing
-  `ci.yml` manual dispatch with `target_ref` set to the full pushed head SHA
-  (`ghx workflow run ci.yml --repo openclaw/openclaw --ref main -f target_ref=<sha>`).
+  Automatic CI skips drafts. For a trusted canonical PR targeting `main`, use
+  `scripts/pr ci-dispatch <PR>`. This maintainer-only route binds the pushed head
+  and selects PR-shaped CI through the existing workflow qualification.
   Verify the selected checkout SHA and successful `build-artifacts` job cover the
   required build. CI's `build:ci-artifacts` omits full declaration emission. Keep
   uncovered proof pending. A skipped job or workflow-ref SHA is not build proof.
@@ -64,7 +64,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   [release CI](../release-openclaw-ci/SKILL.md),
   [plugin release matrix](../release-openclaw-plugin-testing/SKILL.md),
   [Docker authoring](../openclaw-docker-e2e-authoring/SKILL.md), channel skill/
-  [Control UI E2E](../control-ui-e2e/SKILL.md).
+  [Control UI E2E](../control-ui-e2e/SKILL.md)/[iOS E2E](../ios-e2e/SKILL.md).
 - An isolated mock-Gateway harness is valid channel boundary proof; state live
   gaps. Prove user-visible behavior through the real flow when feasible;
   external APIs require live contract proof. Read the scoped channel/platform
@@ -108,14 +108,13 @@ decisions only when each entry is verified against source and the PR records its
 reason (for example, tool-owned metadata in an upgrade snapshot while user data
 stays exact). Never mask a real regression or user-data change. Blanket or
 unverified exceptions need approval. Exact shrink-only ratchet updates are
-maintenance. A fix PR may add a separate tracked
-`config/test-lines-allocations/<change>.txt` record for exactly its own justified
-net regression-test lines when the squash body states the reason. Keep the shared
-scalar unchanged so independent grants merge. The checker bounds effective
-ceiling growth against actual LF growth and preserves inherited debt. Other
-raises, including scalar-only reconciliation, need approval. See the
-[cost budget](../../../docs/help/testing/writing-tests.md#cost-budget) for record
-format and pruning.
+maintenance. A PR may add up to 400 net test lines without a record. Above
+that, add a `config/test-lines-allocations/<change>.txt` record that covers the
+excess and state the reason in the squash body. Required regression tests no
+longer need ledger records
+([#197519](https://github.com/openclaw/openclaw/pull/197519),
+[#197602](https://github.com/openclaw/openclaw/pull/197602)). See the
+[cost budget](../../../docs/help/testing/writing-tests.md#cost-budget).
 
 For module mocks, follow the
 [fixture contract](../../../docs/help/testing/fixtures.md#module-mocks-and-export-completeness).

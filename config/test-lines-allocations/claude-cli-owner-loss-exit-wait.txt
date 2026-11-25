@@ -1,0 +1,4 @@
+# PR #195082: regression proof that the Claude CLI transport's waitForExit settles
+# with an actionable error when the process owner is lost and never reports an
+# exit. Fails (times out) on the base transport; the reverted registry test is gone.
+38

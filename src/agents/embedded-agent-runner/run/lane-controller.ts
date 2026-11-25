@@ -14,11 +14,14 @@ import {
   getAgentRunContext,
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import {
+  transitionAdmissionPhase,
+  type AdmissionDiagnostics,
+} from "../../../infra/diagnostics-timeline.js";
 import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
   CommandLaneTaskTimeoutError,
   enqueueCommandInLane,
-  getCommandLaneSnapshot,
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";
 import type {
@@ -53,10 +56,9 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionLanePolicy,
-  shouldNoteLaneWait,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { claimAgentSessionWriter } from "./session-bootstrap.js";
+import { claimAgentSessionWriter, claimRunProviderState } from "./session-bootstrap.js";
 
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
@@ -303,20 +305,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     options.getParams().preparedRunAdmission?.assertSourceCurrent();
   };
 
-  const noteLaneWaitIfBusy = (lane: string) => {
-    const params = options.getParams();
-    if (!params.onLaneWait) {
-      return;
-    }
-    const snapshot = getCommandLaneSnapshot(lane);
-    if (shouldNoteLaneWait(snapshot)) {
-      params.onLaneWait({
-        waitMs: 0,
-        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
-        waiting: true,
-      });
-    }
-  };
   const enqueueGlobal = async (
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
@@ -337,6 +325,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       options.getParams().replyOperation?.markWaitingForGlobalLane();
       capacityWait = waitingWatchdog?.beginWait({
         kind: "global_capacity",
+        admission: queueOptions,
         isCurrent: () => waitingForGlobalLaneAdmission && !abortSignal.aborted,
       });
     };
@@ -345,6 +334,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         return;
       }
       waitingForGlobalLaneAdmission = false;
+      transitionAdmissionPhase(queueOptions);
       capacityWait?.close();
       if (ownsCapacityWait) {
         ownsCapacityWait = false;
@@ -379,19 +369,28 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
+      waitingWatchdog?.progress("transport", "session_writer:admission");
+      transitionAdmissionPhase(queueOptions, "writerMs");
       const writerClaim = await claimAgentSessionWriter(params);
+      params = {
+        ...params,
+        ...(writerClaim
+          ? {
+              sessionTarget: {
+                ...params.sessionTarget,
+                expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
+                expectedWriterRunId: writerClaim.expectedWriterRunId,
+              },
+            }
+          : {}),
+        providerStateScope: claimRunProviderState(params),
+      };
+      options.setParams(params);
       if (writerClaim) {
-        params = {
-          ...params,
-          sessionTarget: {
-            ...params.sessionTarget,
-            expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
-            expectedWriterRunId: writerClaim.expectedWriterRunId,
-          },
-        };
-        options.setParams(params);
         options.onSessionWriterClaimed?.(writerClaim.entry);
       }
+      waitingWatchdog?.progress("transport", "session_placement:admission");
+      transitionAdmissionPhase(queueOptions, "placementMs");
       const laneExecution = withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(
           {
@@ -459,30 +458,33 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         );
       return await laneExecution.finally(() => releaseTerminalProducerFence?.());
     };
+    // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
+    const queueOptions: CommandQueueAdmissionOptions & AdmissionDiagnostics = {
+      taskIdentity,
+      abortSignal,
+      maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
+      priority: isBackgroundWorkLane(options.globalLane)
+        ? "background"
+        : sessionLanePolicy.priority,
+      onQueued: (wait) => {
+        beginCapacityWait();
+        noteCapacityWait();
+        options
+          .getParams()
+          .onLaneWait?.({ waitMs: 0, queuedAhead: wait?.queuedAheadAtEnqueue ?? 0, waiting: true });
+        queueOptions.queueWait = wait;
+        transitionAdmissionPhase(queueOptions, "laneMs");
+        waitingWatchdog?.progress("transport", "global_lane:waiting");
+        opts?.onQueued?.(wait);
+      },
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+      warnAfterMs: opts?.warnAfterMs,
+    };
     try {
       const { enqueue } = options.getParams();
-      if (!enqueue) {
-        noteLaneWaitIfBusy(options.globalLane);
-      }
-      // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
-      const queueOptions: CommandQueueAdmissionOptions = {
-        taskIdentity,
-        abortSignal,
-        maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
-        priority: isBackgroundWorkLane(options.globalLane)
-          ? "background"
-          : sessionLanePolicy.priority,
-        onQueued: () => {
-          beginCapacityWait();
-          noteCapacityWait();
-          opts?.onQueued?.();
-        },
-        onWait: (waitMs, queuedAhead) => {
-          opts?.onWait?.(waitMs, queuedAhead);
-          options.getParams().onLaneWait?.({ waitMs, queuedAhead, waiting: true });
-        },
-        warnAfterMs: opts?.warnAfterMs,
-      };
       let started = false;
       const queuedRun = withReleasableExecutionCapacity(
         (ticket) => {

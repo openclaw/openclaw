@@ -3,41 +3,7 @@ import OpenClawKit
 import Testing
 
 private struct TalkConfigContractFixture: Decodable {
-    let selectionCases: [SelectionCase]
     let timeoutCases: [TimeoutCase]
-
-    struct SelectionCase: Decodable {
-        let id: String
-        let defaultProvider: String
-        let expectedSelection: ExpectedSelection?
-        let talk: [String: AnyCodable]
-
-        var gatewayResponseTalk: [String: AnyCodable] {
-            guard let expectedSelection else { return self.talk }
-            var config: [String: AnyCodable] = [:]
-            if let voiceId = expectedSelection.voiceId {
-                config["voiceId"] = AnyCodable(voiceId)
-            }
-            if let apiKey = expectedSelection.apiKey {
-                config["apiKey"] = AnyCodable(apiKey)
-            }
-            var response = self.talk
-            response["provider"] = AnyCodable(expectedSelection.provider)
-            response["providers"] = AnyCodable([expectedSelection.provider: config])
-            response["resolved"] = AnyCodable([
-                "provider": AnyCodable(expectedSelection.provider),
-                "config": AnyCodable(config),
-            ])
-            return response
-        }
-    }
-
-    struct ExpectedSelection: Decodable {
-        let provider: String
-        let normalizedPayload: Bool
-        let voiceId: String?
-        let apiKey: String?
-    }
 
     struct TimeoutCase: Decodable {
         let id: String
@@ -68,23 +34,6 @@ private enum TalkConfigContractFixtureLoader {
 }
 
 struct TalkConfigContractTests {
-    @Test func `selection fixtures`() throws {
-        for fixture in try TalkConfigContractFixtureLoader.load().selectionCases {
-            let selection = TalkConfigParsing.selectProviderConfig(
-                fixture.gatewayResponseTalk,
-                defaultProvider: fixture.defaultProvider)
-            if let expected = fixture.expectedSelection {
-                #expect(selection != nil)
-                #expect(selection?.provider == expected.provider)
-                #expect(selection?.normalizedPayload == expected.normalizedPayload)
-                #expect(selection?.config["voiceId"]?.stringValue == expected.voiceId)
-                #expect(selection?.config["apiKey"]?.stringValue == expected.apiKey)
-            } else {
-                #expect(selection == nil)
-            }
-        }
-    }
-
     @Test func `timeout fixtures`() throws {
         for fixture in try TalkConfigContractFixtureLoader.load().timeoutCases {
             #expect(

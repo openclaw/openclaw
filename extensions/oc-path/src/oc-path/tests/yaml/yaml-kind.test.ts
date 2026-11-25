@@ -37,9 +37,12 @@ describe("YAML", () => {
     expect(ast.raw).toBe(before);
   });
 
-  it("replaces the selected numeric source even when its rounded value is unchanged", () => {
+  it("replaces the selected numeric source and keeps an unterminated source unterminated", () => {
     const raw = "untouched: 9007199254740993\nselected: 1.0000000000000001\n";
     expect(set(raw, "selected", "1").raw).toBe("untouched: 9007199254740993\nselected: 1\n");
+    expect(set("name: old", "name", "new").raw).toBe("name: new");
+    expect(parseYaml(set("name: old", "name", "new\n\n").raw).doc.get("name")).toBe("new\n\n");
+    expect(set("count: 5\n", "count", "42").raw).toContain("count: 42");
   });
   it.each([
     [LOBSTER, "missing", "unresolved"],
@@ -93,10 +96,6 @@ describe("YAML", () => {
 
   it("resolveOcPath rejects insertion under scalar root", () => {
     expect(resolveOcPath(parseYaml("hello\n"), path("+"))).toBeNull();
-  });
-
-  it("setOcPath coerces numeric string to number for number leaf", () => {
-    expect(set("count: 5\n", "count", "42").raw).toContain("count: 42");
   });
 
   it.each([

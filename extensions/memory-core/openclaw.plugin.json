@@ -285,5 +285,10 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether this agent’s file-backed memory and search are ready.",
+    "Help me save a useful decision or preference in this agent’s memory.",
+    "Find a decision in this agent’s memory and cite the source without changing it."
+  ]
 }

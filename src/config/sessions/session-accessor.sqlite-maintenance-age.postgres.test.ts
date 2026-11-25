@@ -37,6 +37,107 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 describe.skipIf(!mixedAgentConnection)("PostgreSQL session maintenance age bounds", () => {
   useMixedAgentPair("postgres", "postgres");
 
+  it.each([
+    { name: "alias", protectedCount: 129 },
+    { name: "synthetic", protectedCount: 129 },
+    { name: "full-protected", protectedCount: 128 },
+    { name: "short-protected", protectedCount: 129 },
+    { name: "empty", protectedCount: 0 },
+    { name: "cutoff", protectedCount: 0 },
+  ])("bounds lazy age traversal for $name", ({ name, protectedCount }) => {
+    const options = { agentId: `after-${name}`, env: process.env };
+    const plannedAt = Date.UTC(2026, 10, 4, 12);
+    const minimum = plannedAt - 30 * DAY_MS - 1;
+    const tiedAt = plannedAt - 28 * DAY_MS;
+    const eligible = name === "alias" || name === "synthetic";
+    admit(() =>
+      runOpenClawAgentWriteTransaction((writer) => {
+        const write = (key: string, updatedAt: number, alias = false) =>
+          writeSessionEntry(
+            writer,
+            key,
+            { sessionId: key, updatedAt },
+            alias ? { allowStoredAliases: true, canonicalPreviousEntry: null } : undefined,
+          );
+        const protectedKeys = Array.from(
+          { length: protectedCount },
+          (_, index) =>
+            `agent:${options.agentId}:z-${String(index).padStart(4, "0")}:thread:é-🦊-\uffff`,
+        );
+        for (const key of protectedKeys) {
+          write(key, tiedAt);
+        }
+        if (eligible) {
+          write(
+            name === "alias"
+              ? `AGENT:${options.agentId.toUpperCase()}:ORDINARY`
+              : `agent:${options.agentId}:hook:synthetic:thread:done`,
+            tiedAt,
+            name === "alias",
+          );
+          // A later tail catches eager continuation after the owner has its first eligible row.
+          for (let index = 0; index < 129; index++) {
+            write(`agent:${options.agentId}:later-${index}`, plannedAt - DAY_MS);
+          }
+        }
+        if (name === "cutoff") {
+          write(`agent:${options.agentId}:equal`, minimum);
+          write(`agent:${options.agentId}:next`, minimum + 1);
+        }
+        if (!isPostgresSqlConnection(writer.db)) {
+          throw new Error("Expected PostgreSQL fixture");
+        }
+        const database = writer.db;
+        const query = database.query.bind(database);
+        const pages: string[][] = [];
+        const queried = vi.spyOn(database, "query").mockImplementation((sql, parameters) => {
+          const result = query(sql, parameters);
+          expect(result.columns.map((column) => column.name)).toEqual([
+            "session_key",
+            "updated_at",
+          ]);
+          pages.push(result.rows.map((row) => String(row.session_key)));
+          return result;
+        });
+        try {
+          const fact = recordSessionEntryMaintenanceAgeFact(
+            writer,
+            {
+              ...resolveMaintenanceConfigFromInput(),
+              pruneAfterMs: 30 * DAY_MS,
+              archiveDashboardAfterMs: null,
+              preserveRecentMs: null,
+            },
+            plannedAt,
+          );
+          expect(fact.next.at).toBe(
+            eligible ? plannedAt + 2 * DAY_MS + 1 : name === "cutoff" ? plannedAt + 1 : Infinity,
+          );
+        } finally {
+          queried.mockRestore();
+        }
+        const returned = pages.flat();
+        const candidates = protectedCount + (eligible ? 130 : name === "cutoff" ? 1 : 0);
+        expect(pages.length).toBeGreaterThan(0);
+        expect(pages.length).toBeLessThanOrEqual(Math.ceil(candidates / 64) + 1);
+        expect(pages.every((page) => page.length <= 64)).toBe(true);
+        expect(new Set(returned).size).toBe(returned.length);
+        expect(returned.length).toBeLessThanOrEqual(candidates);
+        if (eligible) {
+          expect(returned.length).toBeLessThanOrEqual(Math.ceil((protectedCount + 1) / 64) * 64);
+        } else {
+          expect(returned.length).toBe(candidates);
+        }
+        for (const key of protectedKeys) {
+          expect(readExactSessionEntryRow(writer, key)?.entry.updatedAt).toBe(tiedAt);
+        }
+        console.log(
+          "PG_AGE_PAGE_BUDGET " + JSON.stringify({ name, rows: pages.map((page) => page.length) }),
+        );
+      }, options),
+    );
+  });
+
   it.each(["dashboard", "recent"] as const)(
     "bounds %s reads while preserving aliases, timestamp ties, and protected rows",
     (kind) => {

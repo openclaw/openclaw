@@ -1,6 +1,6 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { createConfigIO } from "../config/io.factory.js";
+import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
@@ -9,7 +9,7 @@ import {
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -176,26 +176,6 @@ async function readConfigPreflightSnapshot(
   });
 }
 
-/** Resolve the final config target without observing or opening its storage. */
-export async function readConfigSnapshotBeforeEngineSelection(
-  env: NodeJS.ProcessEnv = process.env,
-  options: Pick<ConfigSnapshotReadOptions, "isolateEnv" | "onSourceEnvApplied"> = {},
-): Promise<ConfigFileSnapshot> {
-  const readEnv = options.isolateEnv === false ? env : cloneEnvWithPlatformSemantics(env);
-  const read = () =>
-    createConfigIO({
-      env: readEnv,
-      observe: false,
-      pluginValidation: "core-only",
-    }).readConfigFileSnapshot({ onSourceEnvApplied: options.onSourceEnvApplied });
-  let snapshot = await read();
-  // One-shot config env may select another target before storage becomes process-stable.
-  while (snapshot.path !== resolveConfigPath(readEnv)) {
-    snapshot = await read();
-  }
-  return snapshot;
-}
-
 /** Select storage and retain its routed environment for subsequent config and state reads. */
 export async function readConfigSnapshotForEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
@@ -302,8 +282,9 @@ export async function readAdmittedConfigSnapshot(params: {
                   measureDoctorConfigPreflightStep(
                     "admission.plugin-config",
                     async () => {
-                      const read = await params.readSnapshot(
-                        coreRecovery ? { isolateEnv: true } : undefined,
+                      const read = await withLiveStateReads(
+                        () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+                        { startupConfig: true },
                       );
                       metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
                       return read;
@@ -390,7 +371,7 @@ async function assertStartupStateReady(params: {
     () => import("../state/openclaw-database-preflight.js"),
   );
   const agentCount = listAgentIds(params.cfg).length;
-  const admissionMetrics: Record<string, number> = { agentCount };
+  const admissionMetrics: Record<string, number | string> = { agentCount };
   let registeredDatabases: readonly { agentId: string; path: string }[] = [];
   await measureDoctorConfigPreflightStep(
     "admission.database-readiness",
@@ -412,15 +393,11 @@ async function assertStartupStateReady(params: {
     undefined,
     () => admissionMetrics,
   );
-  const [
-    { assertSessionStoreMigrationComplete },
-    { resolveAllAgentSessionStoreCandidateTargetsSync },
-  ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
-    Promise.all([
-      import("../config/sessions/startup-migration.js"),
-      import("../config/sessions/targets.js"),
-    ]),
-  );
+  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
+    await measureDoctorConfigPreflightStep(
+      "admission.session-runtime-import",
+      () => import("../config/sessions/targets.js"),
+    );
   const targets = await measureDoctorConfigPreflightStep(
     "admission.session-targets",
     () =>
@@ -435,7 +412,17 @@ async function assertStartupStateReady(params: {
   );
   await measureDoctorConfigPreflightStep(
     "admission.session-readiness",
-    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    async () => {
+      // Clean profiles do not need the legacy source inspector and its schema graph.
+      if (!targets.some(({ storePath }) => isExistingLegacySessionStore(storePath))) {
+        return;
+      }
+      const { assertSessionStoreMigrationComplete } = await measureDoctorConfigPreflightStep(
+        "admission.session-migration-runtime-import",
+        () => import("../config/sessions/startup-migration.js"),
+      );
+      assertSessionStoreMigrationComplete({ ...params, targets });
+    },
     undefined,
     () => ({ targetCount: targets.length }),
   );

@@ -410,6 +410,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolver_id TEXT,
   consumed_at_ms INTEGER,
   consumed_by TEXT,
+  requested_by_profile_id TEXT,
   CHECK (expires_at_ms >= created_at_ms),
   CHECK (updated_at_ms >= created_at_ms),
   CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),
@@ -641,6 +642,20 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS device_pairing_browser_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  remote_ip TEXT,
+  user_agent TEXT,
+  origin TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  approved_token_sha256 TEXT,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -665,6 +680,7 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   updated_at INTEGER,
   attested_at_ms INTEGER,
   attestation_updated_at_ms INTEGER,
+  bootstrap_deferred INTEGER,
   CHECK (version IS NULL OR workspace_path IS NOT NULL)
 ) STRICT;
 
@@ -2003,7 +2019,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   last_error TEXT,
   shared_host INTEGER,
   resource_receipt_json TEXT,
-  retention_json TEXT
+  retention_json TEXT,
+  provision_source_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
@@ -2198,6 +2215,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   state_changed_at_ms INTEGER NOT NULL,
   terminal_reason TEXT,
   terminal_at_ms INTEGER,
+  confirmed_loss_recovery_json TEXT,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
+import { fingerprintConfigSnapshotAuthoredConfigReadOnlySync } from "../config/config-journal-snapshot.js";
 import { hashConfigRaw, parseConfigJson5 } from "../config/io.read-helpers.js";
 import {
   assertConfigFileWritePathSnapshot,
@@ -35,7 +35,7 @@ function fingerprint(raw: string, env: NodeJS.ProcessEnv): ConfigFingerprint {
     throw new Error("Immutable update requires a readable object-shaped config.");
   }
   const result = immutableConfigFingerprintSchema.safeParse(
-    fingerprintConfigSnapshotAuthoredConfig(parsed.parsed, { env, readOnly: true }),
+    fingerprintConfigSnapshotAuthoredConfigReadOnlySync(parsed.parsed, { env }),
   );
   if (!result.success) {
     throw new Error(

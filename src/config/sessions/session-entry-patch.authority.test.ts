@@ -1,13 +1,25 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
@@ -26,7 +38,10 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: History eviction is independent of the live mutation authority being tested.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 it.each([false, true])(
   "creates an entry and patches its admitted read target (creation witness: %s)",
@@ -54,16 +69,99 @@ it.each([false, true])(
         if (!target) {
           throw new Error("Session read did not return its admitted target");
         }
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        const admissionStats: number[] = [];
+        const createAdmission = admission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (callback, attachment) =>
+            createAdmission((request, grant) => {
+              stat.mockClear();
+              const result = callback(request, grant);
+              admissionStats.push(stat.mock.calls.length);
+              return result;
+            }, attachment),
+        );
         const updated = { sessionId: entry.sessionId, label: "updated through read target" };
         await expect(
           patchSessionEntryTarget(target, () => ({ label: updated.label }), {
             skipMaintenance: true,
           }),
         ).resolves.toMatchObject(updated);
+        expect(admissionStats.length).toBeGreaterThan(0);
+        expect(admissionStats.every((count) => count === 0)).toBe(true);
         await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(updated);
+        if (!target.readSource) {
+          throw new Error("Session read did not capture its physical source");
+        }
+        await expect(
+          patchSessionEntryTarget(
+            {
+              ...target,
+              readSource: {
+                ...target.readSource,
+                databaseBirthtime: `${target.readSource.databaseBirthtime}1`,
+              },
+            },
+            () => ({ label: "must not commit" }),
+            { skipMaintenance: true },
+          ),
+        ).rejects.toThrow();
       } finally {
         await creator.release();
       }
+    });
+  },
+);
+
+// Windows SQLite handles do not permit renaming an open database.
+it.skipIf(process.platform === "win32").each(["transaction", "commit"] as const)(
+  "refuses physical replacement while awaiting the native %s grant",
+  async (replaceAt) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const original = f.read();
+      const retiredPath = `${f.database.path}.retired`;
+      const replacement = Buffer.from("synthetic replacement must remain untouched");
+      let replaced = false;
+      const committed = vi.fn();
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) =>
+          createAdmission((request, grant) => {
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+            if (
+              !replaced &&
+              request.stage === replaceAt &&
+              isRecord(publication) &&
+              typeof publication.kind === "string" &&
+              publication.kind.startsWith("session-entry-patch-")
+            ) {
+              fs.renameSync(f.database.path, retiredPath);
+              fs.writeFileSync(f.database.path, replacement);
+              replaced = true;
+            }
+            return callback(request, grant);
+          }, attachment),
+      );
+      try {
+        await expect(
+          patchInternalSessionEntry(f.scope, () => ({ label: "must not commit" }), {
+            workerGuard: {},
+            skipMaintenance: true,
+            onCommitted: committed,
+          }),
+        ).rejects.toThrow();
+        expect(replaced).toBe(true);
+        expect(committed).not.toHaveBeenCalled();
+        expect(fs.readFileSync(f.database.path)).toEqual(replacement);
+      } finally {
+        if (replaced) {
+          fs.unlinkSync(f.database.path);
+          fs.renameSync(retiredPath, f.database.path);
+        }
+      }
+      expect(f.read()).toEqual(original);
     });
   },
 );
@@ -244,3 +342,96 @@ it.each([true, false])(
     });
   },
 );
+
+it("keeps updater context, FIFO and publication ordering while the host executes no session SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    try {
+      const f = fixture();
+      await readSessionEntryInWorker(f.scope);
+      const context = new AsyncLocalStorage<string>();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const events: string[] = [];
+      const stopRows = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === f.scope.sessionKey) {
+          events.push("row");
+        }
+      });
+      const stopIdentity = onSessionIdentityMutation((change) => {
+        if (change.kind !== "delete" && change.current.sessionKeys.includes(f.scope.sessionKey)) {
+          events.push(`identity:${change.current.sessionId}`);
+        }
+      });
+      const sql = observeHostDataSql();
+      using filesystem = observeMainThreadFs();
+      const first = context.run("first", () =>
+        patchInternalSessionEntry(
+          f.scope,
+          async () => {
+            events.push(`update:${context.getStore()}`);
+            entered.resolve();
+            await release.promise;
+            return { sessionId: "first" };
+          },
+          { workerGuard: {}, onCommitted: () => events.push(`commit:${context.getStore()}`) },
+        ),
+      );
+      let second: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(entered.promise, first, "Patch ended before its updater");
+        second = context.run("second", () =>
+          patchInternalSessionEntry(
+            f.scope,
+            (entry) => {
+              events.push(`update:${context.getStore()}:${entry.sessionId}`);
+              return { sessionId: "second" };
+            },
+            { workerGuard: {}, onCommitted: () => events.push(`commit:${context.getStore()}`) },
+          ),
+        );
+        expect(events).toEqual(["update:first"]);
+        release.resolve();
+        await Promise.all([first, second]);
+        expect(filesystem.stacks()).toEqual([]);
+        expect(events).toEqual([
+          "update:first",
+          "row",
+          "commit:first",
+          "identity:first",
+          "update:second:first",
+          "row",
+          "commit:second",
+          "identity:second",
+        ]);
+        expect(
+          sql.queries.filter((query) =>
+            /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+        sql.restore();
+        stopRows();
+        stopIdentity();
+      }
+      expect(f.read()?.sessionId).toBe("second");
+    } finally {
+      try {
+        await closeOpenClawAgentDatabasesAsync();
+      } finally {
+        gateway.release();
+      }
+    }
+  });
+});

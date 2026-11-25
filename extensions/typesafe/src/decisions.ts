@@ -1,4 +1,3 @@
-import { encodeSystemOneQuestions } from "openclaw/plugin-sdk/decisions";
 import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
@@ -6,9 +5,7 @@ import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-hea
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { hasCredentials, providerBaseUrl, type RuntimeConfig } from "./config.js";
-import { decodeTypeSafeDecisionResult, translateTypeSafeDecisionBatch } from "./decision-codec.js";
-import { decisionFailure } from "./errors.js";
-import type { Evaluation } from "./schema.js";
+import { translateTypeSafeDecisionBatch } from "./decision-codec.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 const models = manifest.modelCatalog.providers.typesafe.models;
@@ -180,7 +177,6 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       if (!request || (context.reasoning !== undefined && context.reasoning !== "auto")) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const nativeBatch = request.batch;
       if (
         request.assets &&
         !models.some(
@@ -190,88 +186,15 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const original = getConfig();
-      const providerConfig = original.providerConfig
-        ? {
-            ...original.providerConfig,
-            baseUrl: context.model.baseUrl ?? original.providerConfig.baseUrl,
-            headers:
-              omitNullRequestHeaders(context.model.headers) ?? original.providerConfig.headers,
-          }
-        : undefined;
-      const prepared: RuntimeConfig = {
-        ...original,
-        providerConfig,
-        apiKey:
-          original.baseUrl && !providerConfig
-            ? undefined
-            : context.auth.apiKey === "typesafe-local"
-              ? undefined
-              : context.auth.apiKey,
-      };
-      const readPreparedConfig = () => {
-        const current = getConfig();
-        // Reuse the exact prepared object only while the underlying config owner remains unchanged.
-        return current.baseUrl === original.baseUrl &&
-          current.providerConfig === original.providerConfig &&
-          current.apiKey === original.apiKey &&
-          current.credentialsUnavailable === original.credentialsUnavailable
-          ? prepared
-          : { ...current, credentialsUnavailable: true };
-      };
-      const model = context.model.id;
-      const { signal, deadlineMonotonicMs, isAdmissible } = context;
-      signal.throwIfAborted();
+      context.signal.throwIfAborted();
       // Registration and readiness do not need the transport or compiled validators.
-      // Sample configuration and the remaining deadline after the cold import settles.
-      const { evaluate: evaluateTypeSafe } = await loadClient();
-      signal.throwIfAborted();
-      const config = readPreparedConfig();
+      const { evaluateTypeSafeDecision } = await loadClient();
+      context.signal.throwIfAborted();
+      const config = getConfig();
       if (!hasCredentials(config)) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
-      const remaining = deadlineMonotonicMs - performance.now();
-      if (remaining <= 0) {
-        return { status: "unavailable", reason: "transport" };
-      }
-      const questions = encodeSystemOneQuestions(nativeBatch);
-      let evaluation: Evaluation;
-      try {
-        const response = await evaluateTypeSafe(
-          {
-            state:
-              nativeBatch.state.type === "text" ? nativeBatch.state.text : nativeBatch.state.value,
-            questions,
-            model,
-          },
-          { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
-          signal,
-          deadlineMonotonicMs,
-          () => {
-            if (!isAdmissible()) {
-              return false;
-            }
-            // DNS and capture admission may await; only the current owner may authorize egress.
-            const current = readPreparedConfig();
-            return (
-              current.baseUrl === config.baseUrl &&
-              current.providerConfig === config.providerConfig &&
-              current.apiKey === config.apiKey &&
-              !current.credentialsUnavailable
-            );
-          },
-          request.assets,
-        );
-        signal.throwIfAborted();
-        evaluation = response.evaluation;
-      } catch (error) {
-        signal.throwIfAborted();
-        return decisionFailure(error);
-      }
-      const result = decodeTypeSafeDecisionResult(nativeBatch, evaluation);
-      return result
-        ? { status: "ok", result }
-        : { status: "unavailable", reason: "invalid-response" };
+      return evaluateTypeSafeDecision(request.batch, request.assets, context, config);
     },
   };
 }

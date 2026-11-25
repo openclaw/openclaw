@@ -5,7 +5,7 @@ import {
   readTemplateInstallRecordFromDatabase,
   readTemplateInstallRecordsInDatabase,
   readTemplatePackageRefsInDatabase,
-} from "./provenance-read.kernel.js";
+} from "./provenance-read.worker.js";
 
 describe("historical Template provenance reads", () => {
   it("projects missing additive fields as absent provenance", () => {

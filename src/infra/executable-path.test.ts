@@ -17,6 +17,7 @@ import {
   resolveExecutable,
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
+  resolveExecutablePathAsync,
   resolveExecutablePathCandidate,
 } from "./executable-path.js";
 
@@ -138,6 +139,26 @@ describe("executable path helpers", () => {
       expect(statSpy.mock.calls.length).toBeGreaterThan(missProbeCount);
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "does not repopulate invalidated PATH facts after an async probe",
+    async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+        const executable = path.join(binDir, "runner");
+        await fs.writeFile(executable, "", { mode: 0o755 });
+        const access = fs.access;
+        using _ = vi.spyOn(fs, "access").mockImplementationOnce(async (...args) => {
+          await access(...args);
+          clearExecutablePathCache();
+          await fs.unlink(executable);
+        });
+        const env = { PATH: binDir };
+        expect(await resolveExecutablePathAsync("runner", { env })).toBe(executable);
+        expect(await resolveExecutablePathAsync("runner", { env })).toBeUndefined();
+        expect(resolveExecutablePath("runner", { env })).toBeUndefined();
+      });
+    },
+  );
 
   it("rechecks executable availability without replacing ordinary cached probes", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {

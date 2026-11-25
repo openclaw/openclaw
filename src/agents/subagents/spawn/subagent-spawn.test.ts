@@ -575,10 +575,14 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("rejects the collector lifetime cap with its config-key error", async () => {
     configureSwarm({ enabled: true, maxChildrenPerGroup: 1, maxTotalPerGroup: 2 });
-    hoisted.listSwarmRunsForGroupMock.mockReturnValueOnce([
-      { runId: "done", collect: true, collectorCompletion: { status: "done" } },
-      { runId: "failed", collect: true, collectorCompletion: { status: "failed" } },
-    ]);
+    hoisted.listSwarmRunsForGroupMock.mockReturnValue(
+      ["done", "failed"].map((status) => ({
+        runId: status,
+        collect: true,
+        execution: { status: "terminal" },
+        collectorCompletion: { status },
+      })),
+    );
     const totalRejected = await spawnCollector("third lifetime child", { groupId: "group" });
     expect(totalRejected.status).toBe("forbidden");
     expect(totalRejected.error).toContain("tools.swarm.maxTotalPerGroup");

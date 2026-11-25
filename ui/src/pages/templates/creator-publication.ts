@@ -1,7 +1,8 @@
 import type {
-  TemplateDraftReviewChoices,
+  TemplateDraftReviewItem,
   TemplatesDraftsPublishResult,
   TemplatesDraftsReviewResult,
+  TemplatesDraftsSignInResult,
 } from "@openclaw/gateway-protocol";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,32 +10,48 @@ import type { ApplicationContext } from "../../app/context.ts";
 
 // Dormant presentation and the cold implementation share a contract without
 // importing each other's modules or constructing the flow during chat boot.
+export type TemplatePackagePreview = { description?: string | null; content?: string };
+
+export type TemplateSignInPresentation =
+  | { status: "required" | "starting" | "expired" | "denied" | "cancelled" | "failed" }
+  | Extract<TemplatesDraftsSignInResult, { status: "pending" }>;
+
 export interface TemplateCreator {
   busy: "starting" | "reviewing" | "publishing" | null;
   review: TemplatesDraftsReviewResult | null;
-  reviewRead: { result: Promise<void> } | null;
   reviewCurrent: boolean;
-  choices: TemplateDraftReviewChoices | null;
-  modalOpen: boolean;
   publication: TemplatesDraftsPublishResult | null;
+  publicationIssue: "failed" | "unconfirmed" | null;
   error: string | null;
-  presentationLifetime: PromiseWithResolvers<void>;
+  readonly signIn: TemplateSignInPresentation | null;
+  startClawHubSignIn(): void;
+  cancelClawHubSignIn(): void;
   readonly hasActiveDraft: boolean;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly sessionKey: string | undefined;
+  inlineReview: boolean;
+  matches(target: TemplateReviewTarget): boolean;
+  hydrate(agentId: string, draftId: string, sessionKey: string): void;
   retirePresentation(): void;
   start(agentId: string): Promise<void>;
-  open(agentId: string, draftId: string): void;
-  updateChoices(next: TemplateDraftReviewChoices): void;
+  open(agentId: string, draftId: string, sessionKey?: string): void;
   publish(): Promise<void>;
-  close(): void;
-  reopen(): void;
+  checkPublication(): Promise<void>;
   retryReview(): void;
+  readPackagePreview(item: TemplateDraftReviewItem): Promise<TemplatePackagePreview | null>;
 }
 
-type PendingStart = { agentId: string; client: GatewayBrowserClient; revision: number };
+export type TemplateReviewTarget = { agentId: string; draftId: string; sessionKey: string };
+type PendingIntent = {
+  agentId: string;
+  client: GatewayBrowserClient;
+  revision: number;
+  review?: Omit<TemplateReviewTarget, "agentId">;
+};
 export type CreatorOwner = {
   flow: TemplateCreator | null;
-  pending: PendingStart | null;
+  inlineFlows?: Map<string, TemplateCreator>;
+  pending: PendingIntent | null;
   loading: boolean;
   subscribe: (listener: () => void) => () => void;
   publish: () => void;
@@ -46,7 +63,12 @@ const owners = new WeakMap<ApplicationContext, CreatorOwner>();
 export function templateCreatorOwner(context: ApplicationContext): CreatorOwner {
   let owner = owners.get(context);
   if (!owner) {
-    owner = { flow: null, pending: null, loading: false, ...createChangeListeners() };
+    owner = {
+      flow: null,
+      pending: null,
+      loading: false,
+      ...createChangeListeners(),
+    };
     owners.set(context, owner);
   }
   return owner;

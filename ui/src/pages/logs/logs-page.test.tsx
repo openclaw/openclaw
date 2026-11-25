@@ -335,7 +335,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     page.expectRows(["old"], true);
     expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing last known data");
   } else {
-    expect(page.text()).not.toContain("No log entries.");
+    expect(page.text()).not.toContain("No log entries yet.");
     context.gateway.publish({ ...context.gateway.snapshot });
     expect(request).toHaveBeenCalledOnce();
     expect(page.query(".logs-refresh-status button")).toBeNull();

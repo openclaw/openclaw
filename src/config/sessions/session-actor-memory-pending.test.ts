@@ -72,6 +72,7 @@ function fixture() {
     pending.mutate({
       ...owner,
       kind: "finish",
+      endCause: "failed",
       inputId: "input-1",
       requestHash,
       disposition: "cancelled",
@@ -125,6 +126,30 @@ describe("memory actor pending input custody", () => {
     );
   });
 
+  it.each(["accepted", "rejected", "indeterminate"] as const)(
+    "retains %s active-only source and final outcome without allowing restaging",
+    (status) => {
+      const { pending, stageInput, complete, finish } = fixture();
+      pending.mutate(stageInput());
+      const outcome = {
+        status: "error",
+        reason: "failed",
+        activeSteer: { runId: "native-run", status },
+      } as const;
+      expect(complete(outcome)).toEqual(outcome);
+      finish();
+      expect(
+        pending.read({ ...scope, kind: "source", pendingOnly: false, includeCompletion: true }),
+      ).toMatchObject({
+        pending: { state: "cancelled", message_json: JSON.stringify(message) },
+        completion: outcome,
+      });
+      expect(complete({ reason: "completed", status: "ok" })).toEqual(outcome);
+      const snapshot = pending.read({ ...scope, kind: "stage", trackCompletion: true });
+      expect(snapshot).toMatchObject({ previous: { outcome } });
+    },
+  );
+
   it("settles only the accepted owner and supplies current authority to admission", () => {
     const { state, pending, grants, stageInput, source, finish } = fixture();
     state.hot.members = [{ identityId: "person-1", addedAt: 1, addedBy: "person-1" }];
@@ -148,6 +173,33 @@ describe("memory actor pending input custody", () => {
     expect(finish()).toBe("input-1");
     expect(source()).toMatchObject({ pending: { state: "cancelled" } });
     expect(finish()).toBeUndefined();
+  });
+
+  it("rebinds a reopened cancelled input to the run that restaged it", () => {
+    const { pending, stageInput, source, finish } = fixture();
+    pending.mutate(stageInput());
+    expect(finish()).toBe("input-1");
+    const reopened = pending.mutate(stageInput({ runId: "run-2", inputId: "input-1" }));
+    expect(reopened.stagedInput).toMatchObject({
+      input_id: "input-1",
+      run_id: "run-2",
+      state: "queued",
+    });
+    expect(source()).toMatchObject({ pending: { run_id: "run-2", state: "queued" } });
+    expect(pending.receipts({ ...scope, runIds: ["run-1", "run-2"] })).toEqual([
+      { runId: "run-2", state: "pending" },
+    ]);
+  });
+
+  it("lets only one of two concurrent reopens rebind the cancelled input", () => {
+    const { pending, stageInput, source, finish } = fixture();
+    pending.mutate(stageInput());
+    finish();
+    const winner = stageInput({ runId: "run-2", inputId: "input-1" });
+    const loser = stageInput({ runId: "run-3", inputId: "input-1" });
+    pending.mutate(winner);
+    expect(() => pending.mutate(loser)).toThrow("Pending input changed before staging committed");
+    expect(source()).toMatchObject({ pending: { run_id: "run-2", state: "queued" } });
   });
 
   it("finds committed input when pending custody is absent and excludes other sessions", () => {

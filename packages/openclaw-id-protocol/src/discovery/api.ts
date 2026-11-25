@@ -9,9 +9,12 @@ import type { MailboxMessage, MailboxPayload, MailboxRecipient } from "./mailbox
  * - `user`: OpenClaw ID session (`Authorization: Bearer <id token>`).
  * - `device`: `user` plus an `OpenClaw-Signature` by a device key D bound to that account.
  * - `gateway`: `OpenClaw-Signature` by the claw's registered K_gw (no bearer secret).
+ * - `node`: W-signed request, no bearer; only node redemption mail and admitted-node descriptor reads.
  * - `relay`: the relay's static bearer token (iroh-relay `access.http`), relay address allowlisted.
+ * - `statement`: no bearer and no request signature; the signed statement in the body is the
+ *   credential, verified against the claw's current state (unlinkClaw).
  */
-export type DiscoveryAuth = "user" | "device" | "gateway" | "relay";
+export type DiscoveryAuth = "user" | "device" | "gateway" | "relay" | "node" | "statement";
 
 /** Every Discovery v1 endpoint. Paths use `{name}` placeholders. */
 export const DISCOVERY_ENDPOINTS = {
@@ -21,6 +24,13 @@ export const DISCOVERY_ENDPOINTS = {
   getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
+  getPublishedDescriptor: {
+    method: "POST",
+    path: "/v1/claws/{claw_id}/published-descriptor",
+    auth: "gateway",
+  },
+  getNodeDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/node/descriptor", auth: "node" },
+  sendNodeMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/node", auth: "node" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
   publishSnapshot: { method: "PUT", path: "/v1/claws/{claw_id}/snapshot", auth: "gateway" },
   getSnapshot: { method: "GET", path: "/v1/claws/{claw_id}/snapshot", auth: "user" },
@@ -32,6 +42,7 @@ export const DISCOVERY_ENDPOINTS = {
   receiveDeviceMail: { method: "GET", path: "/v1/claws/{claw_id}/mailbox/device", auth: "device" },
   ackMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/ack", auth: "gateway" },
   ackDeviceMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/device/ack", auth: "device" },
+  unlinkClaw: { method: "POST", path: "/v1/claws/{claw_id}/unlink", auth: "statement" },
   irohAdmit: { method: "POST", path: "/iroh/admit", auth: "relay" },
 } as const satisfies Record<string, { method: string; path: string; auth: DiscoveryAuth }>;
 
@@ -50,6 +61,7 @@ export const DISCOVERY_ERRORS = {
   stale_binding: 409,
   stale_snapshot: 409,
   code_invalid: 410,
+  unlinked: 410,
   payload_too_large: 413,
   rate_limited: 429,
   unavailable: 503,
@@ -58,9 +70,22 @@ export const DISCOVERY_ERRORS = {
 /** One of the {@link DISCOVERY_ERRORS} codes. */
 export type DiscoveryErrorCode = keyof typeof DISCOVERY_ERRORS;
 
-/** Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`. */
+/**
+ * Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`.
+ * A descriptor publish refused with `stale_binding` or `conflict` (its binding verified under
+ * the claw's root, signed by its K_gw) carries `binding`, the ServerBinding Discovery
+ * publishes: its owner verifies it to tell a superseded machine from an integrity error.
+ * `unlinked` (any request naming a claw id its owner unlinked) carries `unlink`, the ClawUnlink
+ * that ended the claw: a pinned client verifies it with `verifyClawUnlinkForPin`.
+ */
 export type DiscoveryErrorBody = {
-  error: { code: DiscoveryErrorCode; message: string; retry_after?: number };
+  error: {
+    code: DiscoveryErrorCode;
+    message: string;
+    retry_after?: number;
+    binding?: SignedStatement<"ServerBinding">;
+    unlink?: SignedStatement<"ClawUnlink">;
+  };
 };
 
 /** POST /v1/enrollment-codes: a one-time code that links a claw to the signed-in account. */
@@ -107,6 +132,14 @@ export type PublishDescriptorRequest = { descriptor: ClawDescriptor };
 /** Response of GET /v1/claws/{claw_id}/descriptor. */
 export type GetDescriptorResponse = { descriptor: ClawDescriptor };
 
+/** Admitted W only: descriptor plus its current-binding snapshot for client freshness verification. */
+export type GetNodeDescriptorResponse = GetDescriptorResponse & GetSnapshotResponse;
+/** Accountless pre-admission mail: request signer must be redemption W, recipient always Gateway. */
+export type SendNodeMailRequest = {
+  to: "gateway";
+  payload: { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> };
+};
+
 /**
  * PUT /v1/claws/{claw_id}/snapshot. Discovery checks the K_gw signature and that the snapshot is
  * newer than the stored one by (seq, issued_at): the Gateway re-signs the same seq at least every
@@ -151,9 +184,20 @@ export type ReceiveMailResponse = { messages: MailboxMessage[]; cursor: string }
 export type AckMailRequest = { cursor: string };
 
 /**
+ * POST /v1/claws/{claw_id}/unlink. The statement must verify against the claw's current binding
+ * (`verifyClawUnlink`); a refusal is `invalid_statement`. On success Discovery retires the
+ * hostname for good, deletes the claw with its member mirror and relay keys, empties its mailbox
+ * and closes its Gateway sockets. From then on every request naming the claw id is refused with
+ * `unlinked`, including a repeat of this one.
+ */
+export type UnlinkClawRequest = { unlink: SignedStatement<"ClawUnlink"> };
+/** Response to {@link UnlinkClawRequest}. */
+export type UnlinkClawResponse = { claw_id: string; hostname: string; unlinked_at: UnixSeconds };
+
+/**
  * POST /iroh/admit (iroh-relay `access.http`). Request header `X-Iroh-Endpoint-Id: <64 hex>`,
  * `Authorization: Bearer <relay token>`. Response body is exactly `true` or `false`.
- * Admits: K_srv of each claw's latest descriptor, and the owner and member peer keys listed in
+ * Admits: K_srv of each claw's latest descriptor, and the owner, member and node peer keys listed in
  * each claw's latest snapshot (current state only; a removed key is absent). Malformed ids -> `false`. Missing or
  * wrong bearer -> 401 (the relay fails closed).
  */

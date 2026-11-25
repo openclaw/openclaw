@@ -6,6 +6,8 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { scheduleDetachedLaunchdRestartHandoffSync } from "../daemon/launchd-restart-handoff.js";
+import { launchAgentNeedsReloadSync } from "../daemon/launchd-runtime.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -96,6 +98,15 @@ export function restartGatewayViaSupervisor(): RestartAttempt {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
+  if (launchAgentNeedsReloadSync(process.env)) {
+    const handoff = scheduleDetachedLaunchdRestartHandoffSync({
+      env: process.env,
+      mode: "reload",
+    });
+    return handoff.ok
+      ? { ok: true, method: "launchctl" }
+      : { ok: false, method: "launchctl", detail: handoff.error };
+  }
   const args = ["kickstart", "-k", target];
   const res = run("launchctl", args);
   if (!res.error && res.status === 0) {

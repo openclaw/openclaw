@@ -49,16 +49,14 @@ export function setMinimalCliPrepareDeps(
 }
 
 export async function connectPreparedCliTurn(context: PreparedCliRunContext, signal: AbortSignal) {
-  const { createCliRunCurrentAssertion } = await import("../agents/cli-runner/execution-target.js");
   const runtime = getActiveMcpLoopbackRuntime();
   const token = context.preparedBackend.env?.OPENCLAW_MCP_TOKEN;
   if (!runtime || !token) {
     throw new Error("Expected prepared CLI grant and MCP loopback runtime");
   }
   const captureKey = `capture-${context.params.runId}`;
-  context.preparedBackend.mcpClientGrantCapture?.activate(
-    captureKey,
-    createCliRunCurrentAssertion(context.params),
+  context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+    context.params.abortSignal?.throwIfAborted(),
   );
   return {
     token,
@@ -76,7 +74,12 @@ export async function connectPreparedCliTurn(context: PreparedCliRunContext, sig
 }
 
 export function scopedToolFixture<T>(tools: T[], workspaceDir: string) {
-  return { agentId: "main", workspaceDir, captureFinalCronCreatorTools: undefined, tools };
+  return {
+    agentId: "main",
+    workspaceDir,
+    captureFinalCronCreatorTools: undefined,
+    tools,
+  };
 }
 
 export function captureGrant(token: string, captureKey: string, runtimeOwnerToken: string) {
@@ -268,6 +271,7 @@ export function registerRequesterPolicyTests({
                 agentAccountId: "verified-account",
                 senderId: "verified-sender",
                 memberRoleIds: ["verified-role"],
+                trigger: "user",
                 ...(identity !== "unknown" ? { senderIsOwner: identity === "owner" } : {}),
               }
             : {}),
@@ -306,6 +310,7 @@ export function registerRequesterPolicyTests({
       expect(execute).toHaveBeenCalledTimes(identity === "owner" ? 1 : 0);
       const hookContext = beforeToolCall.mock.calls[0]?.[0].ctx;
       expect(hookContext?.agentId).toBe("main");
+      expect(hookContext?.trigger).toBe(hasSender ? "user" : undefined);
       expect(hookContext?.requester).toEqual(
         hasSender
           ? {

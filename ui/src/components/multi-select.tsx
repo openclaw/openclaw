@@ -2,6 +2,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
@@ -9,7 +10,6 @@ import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
 import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
-import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
 import "../styles/select-picker.css";
 import "../styles/multi-select.css";
@@ -225,7 +225,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
               <span class="chip multi-select__chip" data-value={value} title={value}>
                 <Show when={provider()}>
                   {(name) => (
-                    <ProviderBrandIcon provider={name()} class="multi-select__chip-icon" />
+                    <ModelProviderIcon provider={name()} class="multi-select__chip-icon" />
                   )}
                 </Show>
                 <span class="multi-select__chip-label">{chipLabel()}</span>
@@ -298,7 +298,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
               >
                 <Show when={row.provider}>
                   {(provider) => (
-                    <ProviderBrandIcon provider={provider()} class="multi-select__option-icon" />
+                    <ModelProviderIcon provider={provider()} class="multi-select__option-icon" />
                   )}
                 </Show>
                 <span class="picker-select__copy">

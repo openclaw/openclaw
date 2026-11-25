@@ -66,7 +66,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a long title whole at the narrowest phone", async () => {
+  it("keeps a long title whole without an empty action slot at the narrowest phone", async () => {
     await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "settings/cloud-workers");
@@ -79,6 +79,9 @@ suite.define(() => {
         false,
       );
 
+      const newSession = (await page.locator(".header-new-session").boundingBox())!;
+      expect(newSession.x - pill.x).toBeCloseTo(3);
+
       // The notice leaves the long title where it was.
       await gateway.setOnline(false);
       const notice = page.locator(".topbar .mobile-header__notices");
@@ -86,6 +89,13 @@ suite.define(() => {
       expect(await title.boundingBox()).toEqual(box);
       await gateway.setOnline(true);
       await expect.poll(() => notice.count()).toBe(0);
+
+      await page.goto(suite.server.baseUrl + "usage");
+      const action = page.locator(".topnav-shell__page-actions .usage-phone-actions__trigger");
+      await action.waitFor();
+      expect(await page.locator(".header-new-session").boundingBox()).toEqual(newSession);
+      const joinedPill = (await page.locator(".topnav-shell__actions").boundingBox())!;
+      expect((await action.boundingBox())!.x - joinedPill.x).toBeCloseTo(3);
     });
   });
 

@@ -14,6 +14,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -90,11 +91,22 @@ export type VoiceWakeEditorState =
   | { kind: "unavailable" }
   | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving" };
 
-function VoiceWakeSection(props: { notice?: JSX.Element; control?: JSX.Element }) {
+function VoiceWakeSection(props: {
+  notice?: JSX.Element;
+  status?: string | null;
+  control?: JSX.Element;
+}) {
   return (
     <SettingsSection title={t("configPage.deviceTalk.triggerWords")} notice={props.notice}>
       <SettingsRow
-        title={t("configPage.deviceTalk.triggerWords")}
+        title={
+          <span class="row">
+            {t("configPage.deviceTalk.triggerWords")}
+            <span class="settings-row__value" role="status">
+              {props.status}
+            </span>
+          </span>
+        }
         description={t("configPage.deviceTalk.triggerWordsHint")}
         stacked
         control={props.control}
@@ -137,6 +149,7 @@ function VoiceWakeReady(props: {
   };
   return (
     <VoiceWakeSection
+      status={ready() ? status() : null}
       notice={
         ready() && (
           <Show when={statusDraft()} keyed>
@@ -150,28 +163,17 @@ function VoiceWakeReady(props: {
         )
       }
       control={
-        <>
-          {ready() && (
-            <textarea
-              class="settings-input"
-              aria-label={t("configPage.deviceTalk.triggerWords")}
-              rows={4}
-              value={text()}
-              onInput={(event) => props.onInput(event.currentTarget.value)}
-            />
-          )}
-          {ready() ? (
-            <Show when={status()}>
-              {(label) => (
-                <span class="muted" role="status">
-                  {label()}
-                </span>
-              )}
-            </Show>
-          ) : (
-            <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
-          )}
-        </>
+        ready() ? (
+          <textarea
+            class="settings-input"
+            aria-label={t("configPage.deviceTalk.triggerWords")}
+            rows={4}
+            value={text()}
+            onInput={(event) => props.onInput(event.currentTarget.value)}
+          />
+        ) : (
+          <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
+        )
       }
     />
   );
@@ -195,18 +197,13 @@ export function VoiceWakeEditor(props: {
         fallback={
           <VoiceWakeSection
             control={
-              <>
-                <textarea
-                  class="settings-input"
-                  aria-label={t("configPage.deviceTalk.triggerWords")}
-                  aria-busy="true"
-                  rows={4}
-                  disabled
-                />
-                <span class="muted" role="status">
-                  {t("common.loading")}
-                </span>
-              </>
+              <textarea
+                class="settings-input"
+                aria-label={t("configPage.deviceTalk.triggerWords")}
+                aria-busy="true"
+                rows={4}
+                disabled
+              />
             }
           />
         }
@@ -342,7 +339,7 @@ function DeviceVoiceSettings(props: {
         />
       )}
       {locale()?.error && (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {locale()!.error}
           <button
             class="btn btn--sm"
@@ -361,7 +358,7 @@ function DeviceVoiceSettings(props: {
           >
             {t("common.retry")}
           </button>
-        </div>
+        </InlineAlert>
       )}
       {microphone() && (
         <SettingsRow

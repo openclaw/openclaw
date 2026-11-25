@@ -248,3 +248,38 @@ export function resolveSessionParentSessionKey(
   }
   return baseSessionKey ?? null;
 }
+
+/**
+ * The conversation an id belongs to without the channel's own topic or sender scope.
+ * Callers that already resolved the channel plugin pass it to skip a registry lookup.
+ */
+export function resolveBaseConversationId(
+  channel: string | undefined,
+  rawId: string,
+  plugin?: { messaging?: ChannelMessagingAdapter },
+): string {
+  const trimmed = rawId.trim();
+  if (!channel) {
+    return trimmed;
+  }
+  const owner = plugin ?? getLoadedChannelPlugin(normalizeResolvedChannel(channel));
+  const adapter = owner?.messaging;
+  if (adapter?.resolveSessionConversation) {
+    return (
+      normalizeSessionConversationResolution(
+        adapter.resolveSessionConversation({ kind: "group", rawId: trimmed }),
+      )?.baseConversationId || trimmed
+    );
+  }
+  // Deprecated numericTopicShorthand keeps its meaning for adapters that have not
+  // adopted resolveSessionConversation yet.
+  if (adapter?.numericTopicShorthand) {
+    return /^(-?\d+):\d+$/.exec(trimmed)?.[1] ?? trimmed;
+  }
+  // A loaded channel without its own grammar keeps the id opaque; otherwise the
+  // bundled session-key artifact may still describe it before registration.
+  return owner
+    ? trimmed
+    : resolveSessionConversation({ channel, kind: "group", rawId: trimmed })?.baseConversationId ||
+        trimmed;
+}

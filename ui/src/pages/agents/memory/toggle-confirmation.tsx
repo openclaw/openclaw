@@ -1,6 +1,7 @@
 import { action, createMemo, createOptimistic, Errored, Loading, onSettled, Show } from "solid-js";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import "../../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 
@@ -62,14 +63,17 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             onClose={handleCancel}
           />
           <div class="oc-dialog__body">
-            <Show when={props.enabling} fallback={<div class="callout warn">{detail()}</div>}>
+            <Show
+              when={props.enabling}
+              fallback={<InlineAlert tone="warning">{detail()}</InlineAlert>}
+            >
               <p class="oc-dialog__row-note">{detail()}</p>
             </Show>
             <Errored
               fallback={() => (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {t("dreaming.toggleConfirmation.failed")}
-                </div>
+                </InlineAlert>
               )}
             >
               <Loading>{result()}</Loading>
@@ -82,8 +86,12 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.disabled || saving()}
+              aria-busy={saving() ? "true" : undefined}
               onClick={confirm}
             >
+              <Show when={saving()}>
+                <span class="btn__spinner" aria-hidden="true" />
+              </Show>
               {saving() ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
             </button>
           </openclaw-modal-actions>

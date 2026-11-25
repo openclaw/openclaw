@@ -6,6 +6,10 @@ import {
   type JsonSchemaValidator,
   type jsonSchemaValidator,
 } from "@modelcontextprotocol/client";
+import {
+  publishRuntimeToolInputSchema,
+  wasToolSchemaTruncated,
+} from "@openclaw/ai/internal/tool-schema";
 
 type McpToolResultValidator = (result: CallToolResult) => void;
 
@@ -54,6 +58,18 @@ export function normalizeMcpToolCatalog(
     if (disposition === "exclude") {
       excludedTools.push(tool);
       continue;
+    }
+    const input = publishRuntimeToolInputSchema(tool.inputSchema, "inputSchema");
+    if (input.violations.length === 0 && !wasToolSchemaTruncated(input.schema)) {
+      // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+      tool.inputSchema = input.schema as Tool["inputSchema"];
+    }
+    if (tool.outputSchema) {
+      const output = publishRuntimeToolInputSchema(tool.outputSchema, "outputSchema");
+      if (output.violations.length === 0 && !wasToolSchemaTruncated(output.schema)) {
+        // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+        tool.outputSchema = output.schema as Tool["outputSchema"];
+      }
     }
     if (disposition === "include") {
       included.push(tool);

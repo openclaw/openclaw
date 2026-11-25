@@ -1,15 +1,10 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-const enMcp = {
+// Keep the composer form and runtime errors available without the Settings
+// catalog. Register the MCP page namespace here to preserve locale warm-up.
+export const mcpRuntimeCopy = {
   mcpServers: {
-    signIn: "Sign in",
-    signInNamed: "Sign in {name}",
-    authenticationSaved: "Authentication saved",
-    signInFailed: "Sign-in did not finish. Check the MCP server settings and try again.",
-    signInExpired: "This sign-in session ended. Close the dialog and sign in again.",
-    profileSignIn: "Sign in through the linked account in Models.",
-    requesterSignIn: "Each person signs in through this MCP server in chat.",
     add: "Add server",
     adding: "Adding…",
     nameLabel: "Name",
@@ -21,63 +16,31 @@ const enMcp = {
     nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
     targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
     sessionEnableFailed:
-      "The server was saved disabled globally, but enabling it for this session failed: {error}",
-    sessionChanged: "The active session changed before it could be enabled.",
-    sessionUnavailable: "The active session is unavailable; refresh and try again.",
+      "The server was saved but is still disabled. Couldn’t enable it for this session. {error}",
+    sessionChanged: "Couldn’t enable this server. The active session changed. Try again.",
+    sessionUnavailable: "Couldn’t open the active session. Refresh and try again.",
     nameTaken: "An MCP server named “{name}” already exists.",
-    missing: "MCP server “{name}” was not found in the configuration.",
-    missingTransport: "missing transport",
-    addedSuccess: "Added MCP server {name}.",
-    enabledSuccess: "Enabled MCP server {name}.",
-    disabledSuccess: "Disabled MCP server {name}.",
-    removedSuccess: "Removed MCP server {name}.",
-    configUnavailable: "Configuration is unavailable; refresh and try again.",
-    connectRequired: "Reconnect to change MCP servers.",
-    adminRequired: "MCP server changes require operator.admin access.",
-    removeNamed: "Remove {name}",
-    removeConfirmTitle: "Remove {name}?",
-    removeConfirmMessage:
-      "This deletes the server's saved configuration, such as its command or URL, arguments, headers, and environment. This cannot be undone.",
-    statusToolsListed: "Tools listed",
-    statusFailing: "Failing",
-    statusNoTools: "No tools",
-    statusPending: "Not connected yet",
-    pendingHint: "Connects the next time an agent uses it.",
-    noToolsHint: "No tools from this server in this session. It may be failing or have none.",
-    signInHint: "Connects the next time an agent uses it, once you have signed in.",
-    noToolsSignInHint:
-      "No tools from this server in this session. It may need sign-in, be failing, or have none.",
-    tools: "Tools",
-    fieldCommand: "Command",
-    fieldArgs: "Arguments",
-    fieldArgsHint: "One per line.",
-    fieldCwd: "Working directory",
-    fieldEnv: "Environment",
-    fieldUrl: "URL",
-    fieldHeaders: "Headers",
-    fieldOauth: "OAuth sign-in",
+    missing: "Couldn’t find MCP server “{name}” in the configuration. Refresh and try again.",
+    configUnavailable: "Couldn’t load settings. Refresh and try again.",
   },
   mcpPage: {
     servers: "Servers",
     settings: "Settings",
     apps: "MCP Apps",
-    noServers: "No MCP servers configured.",
-    setUpFirstServer: "Set up your first MCP server",
+    noServers: "No MCP servers yet.",
+    setUpFirstServer: "MCP server setup guide",
     operatorCommands: "Command line",
     operatorCommandsHint: "Status, diagnostics, and runtime reload.",
     serversHelp: "About MCP servers",
     runtimeHint: "With automatic reload enabled, connections rebuild on next use.",
-    toolFilter: "tool filter",
-    parallel: "parallel",
-    tlsVerifyOff: "TLS verify off",
+    toolFilter: "Tool filter",
+    parallel: "Parallel",
+    tlsVerifyOff: "TLS verification off",
     mtls: "mTLS",
   },
 } satisfies TranslationMap;
 
-export const registerMcpEnglish = Object.assign(
-  () => {
-    Object.assign(en.mcpServers, enMcp.mcpServers);
-    Object.assign(en.mcpPage, enMcp.mcpPage);
-  },
-  { catalog: enMcp },
-);
+export function registerMcpEnglish(): void {
+  Object.assign(en.mcpServers, mcpRuntimeCopy.mcpServers);
+  Object.assign(en.mcpPage, mcpRuntimeCopy.mcpPage);
+}

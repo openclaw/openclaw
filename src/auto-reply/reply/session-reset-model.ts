@@ -37,7 +37,7 @@ export async function applyResetModelOverride(params: {
   sessionKey?: string;
   storePath?: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   modelCatalog?: ModelCatalogEntry[];
 }): Promise<void> {
@@ -67,7 +67,9 @@ export async function applyResetModelOverride(params: {
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
-    defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
+    defaultModel: params.defaultModel
+      ? { provider: params.defaultProvider, model: params.defaultModel }
+      : undefined,
     agentId: params.agentId,
   });
   const allowedModelKeys = modelPolicy.allowedKeys;

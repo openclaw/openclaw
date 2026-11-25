@@ -42,7 +42,9 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { model: { primary: "anthropic/test-model" } } },
+    });
     fixture = state;
     return { state, setRuntimeConfigSnapshot };
   }

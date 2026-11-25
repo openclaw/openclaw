@@ -8,6 +8,7 @@ import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../lib/toast-host.tsx";
@@ -878,6 +879,7 @@ describe("workspace file tabs", () => {
                 title: "Parts tray",
                 toolName: "tray",
                 resourceUri: "ui://parts/tray",
+                icons: [{ src: "https://example.test/parts.svg", mimeType: "image/svg+xml" }],
                 entrypoint: { type: "thread" },
               },
             },
@@ -896,6 +898,12 @@ describe("workspace file tabs", () => {
       await panel.updateComplete;
       flush();
       editor.value = "Unsaved draft";
+      const { container: tabIcon } = mountSolid(
+        () => readPanelHostedTabs(panel)!.hostedTabs[0]!.icon,
+      );
+      expect(tabIcon.querySelector("img")?.getAttribute("src")).toBe(
+        "https://example.test/parts.svg",
+      );
 
       await panel.closeHostedTab("app");
       flush();

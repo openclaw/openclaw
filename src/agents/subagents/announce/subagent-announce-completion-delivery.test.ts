@@ -11,6 +11,7 @@ import {
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import {
+  getGatewayContextLifetime,
   getPluginRegistryForContext,
   withPluginRuntimeRegistryScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -20,7 +21,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -82,6 +83,7 @@ it("admits a requester continuation on the current generation after its producer
         onBeforeDispatch: async () => {
           entered.resolve();
           await resume.promise;
+          expect(sharedCallback()).toBe("shared");
         },
       }),
     );
@@ -101,31 +103,50 @@ it("admits a requester continuation on the current generation after its producer
   }
 });
 
-it("does not dispatch a private handoff after its caller has already cancelled", async () => {
-  const caller = new AbortController();
-  caller.abort(new Error("requester stopped"));
-  await expect(announce({ privateCompletion: true, signal: caller.signal })).rejects.toThrow(
-    "requester stopped",
-  );
-  expect(dispatch).not.toHaveBeenCalled();
-});
+it.each(["caller", "Gateway"] as const)(
+  "does not dispatch a private handoff after its %s has already cancelled",
+  async (source) => {
+    const resolveGatewayContext = () => undefined;
+    const caller =
+      source === "caller"
+        ? new AbortController()
+        : getGatewayContextLifetime(resolveGatewayContext);
+    const cancellation =
+      source === "caller" ? { signal: caller.signal } : { resolveGatewayContext };
+    caller.abort(new Error("requester stopped"));
+    await expect(announce({ privateCompletion: true, ...cancellation })).rejects.toThrow(
+      "requester stopped",
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
 
-it("keeps genuine cancellation attached after requester execution starts", async () => {
-  const caller = new AbortController();
-  const started = vi.fn();
-  dispatch.mockImplementation(async (_method, _params, options) => {
-    options?.onExecutionStarted?.();
-    return await new Promise((_resolve, reject) => {
-      options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
-        once: true,
+it.each(["caller", "Gateway"] as const)(
+  "keeps %s cancellation attached after requester execution starts",
+  async (source) => {
+    const resolveGatewayContext = () => undefined;
+    const caller =
+      source === "caller"
+        ? new AbortController()
+        : getGatewayContextLifetime(resolveGatewayContext);
+    const cancellation =
+      source === "caller" ? { signal: caller.signal } : { resolveGatewayContext };
+    const started = vi.fn();
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      options?.onAccepted?.({});
+      options?.onExecutionStarted?.();
+      return await new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
+          once: true,
+        });
       });
     });
-  });
-  const delivery = announce({ signal: caller.signal, onExecutionStarted: started });
-  expect(started).toHaveBeenCalledOnce();
-  caller.abort(new Error("requester stopped"));
-  await expect(delivery).rejects.toThrow("requester stopped");
-});
+    const delivery = announce({ ...cancellation, onExecutionStarted: started });
+    expect(started).toHaveBeenCalledOnce();
+    caller.abort(new Error("requester stopped"));
+    await expect(delivery).rejects.toThrow("requester stopped");
+  },
+);
 
 it.each([
   ["current", true],
@@ -134,10 +155,9 @@ it.each([
   "revalidates a %s continuation caller immediately before dispatch",
   async (_name, current) => {
     const route = Object.freeze({ channel: "discord", to: "channel:continuation" });
-    const ambientAuthority = createAdmittedRunOperatorAuthority({
+    const ambientAuthority = createTestOperatorAuthority({
       profileId: "previous-requester",
       scopes: ["operator.read"],
-      assertCurrent() {},
     });
     const input = reserveSessionControllerSource("agent:main:continuation", {
       target: captureSessionTarget({

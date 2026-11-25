@@ -1,4 +1,5 @@
 import { createMemo, For } from "solid-js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -17,9 +18,7 @@ export function EventSourceFields(props: CronProps) {
       {props.form.eventSource !== "mcp-events" ? (
         <p class="muted">{t("cron.events.readOnlySource", { source: props.form.eventSource })}</p>
       ) : !props.eventSource?.available ? (
-        <div class="cron-error-banner" role="status">
-          {t("cron.events.unavailable")}
-        </div>
+        <InlineAlert tone="warning">{t("cron.events.unavailable")}</InlineAlert>
       ) : (
         <>
           <CronSelect
@@ -33,7 +32,9 @@ export function EventSourceFields(props: CronProps) {
               ...serverOptions().map((value) => ({ value, label: value })),
             ]}
           />
-          {!serverOptions().length ? <p class="muted">{t("cron.events.noServers")}</p> : undefined}
+          {props.eventSource.servers !== null && !serverOptions().length ? (
+            <p class="muted">{t("cron.events.noServers")}</p>
+          ) : undefined}
           <CronSelect
             {...props}
             field="eventName"
@@ -63,14 +64,16 @@ export function EventSourceFields(props: CronProps) {
             >
               {t("cron.events.refresh")}
             </button>
-            {props.eventSource?.loading ? (
+            {props.eventSource?.loading ||
+            (props.eventSource.servers === null && !props.eventSource.serversError) ? (
               <span role="status">{t("cron.events.loading")}</span>
             ) : undefined}
           </div>
+          {props.eventSource.serversError ? (
+            <InlineAlert tone="danger">{props.eventSource.serversError}</InlineAlert>
+          ) : undefined}
           {props.eventSource?.error ? (
-            <div class="cron-error-banner" role="alert">
-              {props.eventSource.error}
-            </div>
+            <InlineAlert tone="danger">{props.eventSource.error}</InlineAlert>
           ) : undefined}
           {!props.eventSource?.loading &&
           !props.eventSource?.error &&
@@ -141,9 +144,7 @@ export function EventSourceFields(props: CronProps) {
             </div>
           ) : undefined}
           {props.eventSource?.statusError ? (
-            <div class="cron-error-banner" role="alert">
-              {props.eventSource.statusError}
-            </div>
+            <InlineAlert tone="danger">{props.eventSource.statusError}</InlineAlert>
           ) : undefined}
         </>
       )}

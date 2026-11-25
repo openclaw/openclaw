@@ -386,7 +386,9 @@ describe("meeting transcript library", () => {
     await waitForSolid(() => expect(page.textContent).toContain("Preparing download"));
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     download.reject(new Error("Export unavailable"));
-    await waitForSolid(() => expect(page.textContent).toContain("Download failed"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Couldn’t download the transcript."),
+    );
     page
       .querySelector(".transcripts-search")!
       .dispatchEvent(new Event("submit", { cancelable: true }));
@@ -597,8 +599,8 @@ describe("meeting transcript library", () => {
   });
 
   it.each([
-    ["empty", null, "Your meeting notes, together"],
-    ["failure", new Error("Archive unavailable"), "Could not load transcripts"],
+    ["empty", null, "No meetings yet."],
+    ["failure", new Error("Archive unavailable"), "Couldn’t load transcripts. Try again."],
     [
       "restricted",
       new GatewayRequestError({ code: "FORBIDDEN", message: "Shared archive is restricted" }),

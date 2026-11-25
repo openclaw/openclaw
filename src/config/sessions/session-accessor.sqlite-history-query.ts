@@ -18,7 +18,7 @@ import {
   type TranscriptRecentReadLimits,
 } from "../../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
-import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   TranscriptEvent,
@@ -203,7 +203,7 @@ function resolveRecentHistoryStart(
       }
       if (allowOversizedFirst && selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
         throw new Error(
-          `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+          `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
         );
       }
       if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {

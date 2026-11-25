@@ -24,7 +24,8 @@ export function createGatewayDeferredIntents(host: {
     if (intents.size && !releaseGuard) {
       releaseGuard = registerControlUiReloadGuard(
         () => intents.size === 0,
-        () => showToast({ message: t("connection.offlineChangesReloadBlocked") }),
+        () =>
+          showToast({ severity: "error", message: t("connection.offlineChangesReloadBlocked") }),
       );
       if (typeof window !== "undefined") {
         releaseBeforeUnload = listen(window, "beforeunload", (event) => {
@@ -66,6 +67,7 @@ export function createGatewayDeferredIntents(host: {
       return;
     }
     showToast({
+      severity: undefined,
       placement: "top-right",
       message: t("connection.offlineChangesDiscarded", { count: String(discarded.length) }),
     });

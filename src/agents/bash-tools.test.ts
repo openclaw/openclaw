@@ -23,7 +23,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
+import {
+  getFinishedSession,
+  processSessionInstanceId,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -194,6 +198,39 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("lets read-only process observe but never control an owner's existing command", async () => {
+  const observer = createProcessTool({ scopeKey, readOnly: true });
+  const completedId = await heldExit(async () => {
+    const id = await startBackground(
+      createTool({ notifyOnExit: false }),
+      shellEcho("owner output"),
+    );
+    expect((await observer.execute("list", { action: "list" })).details).toMatchObject({
+      sessions: [{ sessionId: id }],
+    });
+    for (const action of [
+      "write",
+      "send-keys",
+      "paste",
+      "submit",
+      "kill",
+      "clear",
+      "remove",
+    ] as const) {
+      expect(
+        text(await observer.execute(action, { action, sessionId: id, data: "echo injected\n" })),
+      ).toContain("can only list, poll, or log");
+    }
+    expect(text(await observer.execute("log", { action: "log", sessionId: id }))).toContain(
+      "owner output",
+    );
+    return id;
+  });
+  expect(
+    (await observer.execute("poll", { action: "poll", sessionId: completedId })).details,
+  ).toMatchObject({ status: "completed" });
+});
+
 it("yields a pollable process and releases foreground callbacks", async () => {
   const onUpdate = vi.fn();
   const abort = new AbortController();
@@ -242,7 +279,7 @@ it("awaits terminal shell results past the yield window without enabling notific
     expect(settled).toBe(false);
   });
   await expect(execution).resolves.toMatchObject({
-    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter\n" },
   });
   expect(peekSystemEvents(sessionKey)).toEqual([]);
   await expect(
@@ -270,13 +307,13 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it("reads the unbounded offset log window", async () => {
+it("reads the unbounded offset and clamped tail log windows", async () => {
   const sessionId = await startAndFinish(
     createTool(),
     Array.from({ length: 201 }, (_, i) => shellEcho(`line-${i + 1}`)).join("; "),
   );
   const log = await processAction({ action: "log", sessionId, offset: 30 });
-  expect(log.details).toMatchObject({ totalLines: 201 });
+  expect(text(await processAction({ action: "log", sessionId, limit: -5 }))).toMatch(/^line-201\n/);
   expect(text(log).split("\n")[0]).toBe("line-31");
   expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
@@ -346,23 +383,31 @@ describe("background completion notifications", () => {
   });
 
   it.each([
+    { name: "defaults to notifying a chat provider", chat: true, emits: true },
+    // Dashboard and API sessions have no chat provider; silent success still wakes them.
+    { name: "defaults to notifying a non-chat session", chat: false, emits: true },
     {
-      name: "defaults to notifying chat providers",
-      notifyOnExitEmptySuccess: undefined,
-      emits: true,
+      name: "honors an explicit silent override",
+      chat: true,
+      notifyOnExitEmptySuccess: false,
+      emits: false,
     },
-    { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
-  ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
+  ])("$name on empty success", async ({ chat, notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
       notifyTool({
-        messageProvider: " Telegram ",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
+        ...(chat
+          ? {
+              messageProvider: " Telegram ",
+              currentChannelId: "telegram:-100123:topic:47",
+              currentThreadTs: "47",
+            }
+          : {}),
         notifyOnExitEmptySuccess,
       }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    const finished = expectDefined(getFinishedSession(id), "finished process");
+    expect(finished).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
       const receipt = expectDefined(receipts[0], "completion receipt");
@@ -370,13 +415,15 @@ describe("background completion notifications", () => {
       expect(peekSystemEventEntries(sessionKey)).toContainEqual(
         expect.objectContaining({
           id: receipt.id,
-          contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
+          contextKey: `exec:${processSessionInstanceId(finished)}`,
+          deliveryContext: chat
+            ? {
+                channel: "telegram",
+                to: "telegram:-100123:topic:47",
+                threadId: "47",
+                accountId: undefined,
+              }
+            : undefined,
         }),
       );
       expect(
@@ -389,9 +436,13 @@ describe("background completion notifications", () => {
         }),
       ).toBeUndefined();
     }
-    expect(peekSystemEvents(sessionKey)).toEqual(
-      emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
-    );
+    const events = peekSystemEvents(sessionKey);
+    expect(events).toHaveLength(emits ? 1 : 0);
+    if (emits) {
+      expect(events[0]).toMatch(
+        new RegExp(`^Exec completed \\(${id.slice(0, 8)}, code 0, [^)]+\\) with no output\\.$`),
+      );
+    }
   });
 });
 

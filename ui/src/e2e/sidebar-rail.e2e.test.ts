@@ -1,5 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
@@ -35,7 +38,7 @@ const entries = [
 ];
 
 suite.define(() => {
-  it("opens a touch-held pin without navigating or collapsing, while taps still navigate", async () => {
+  it("opens a touch-held pin without navigating, while taps still navigate", async () => {
     await suite.withPage(
       { hasTouch: true, viewport: { width: 1280, height: 800 } },
       async ({ page }) => {
@@ -77,7 +80,6 @@ suite.define(() => {
         // PointerEvent dispatch does not synthesize the compatibility click.
         await pin.dispatchEvent("click", { ...touch, detail: 1 });
         expect(page.url()).toBe(initialUrl);
-        expect(await page.locator(".shell--nav-collapsed").count()).toBe(0);
         await page.keyboard.press("Escape");
         await menu.waitFor({ state: "hidden" });
 
@@ -107,7 +109,6 @@ suite.define(() => {
         expect(page.url()).toBe(initialUrl);
         await pin.tap();
         await expect.poll(() => page.url()).toContain("design");
-        await page.locator(".shell--nav-collapsed").waitFor();
         expect(await menu.count()).toBe(0);
       },
     );
@@ -130,7 +131,11 @@ suite.define(() => {
           },
           "users.prefs.get": {
             status: "ok",
-            entries: { "ui.railShortcuts": entries, "ui.themeMode": "dark" },
+            entries: {
+              "ui.railShortcuts": entries,
+              "ui.themeMode": "dark",
+              "new-session.migration.v1": true,
+            },
           },
           "users.prefs.set": { status: "ok" },
           "sessions.describe": {
@@ -162,12 +167,44 @@ suite.define(() => {
         // Post-commit profile reads must retain the accepted pin order.
         await gateway.setMethodResponse("users.prefs.get", {
           status: "ok",
-          entries: { "ui.railShortcuts": nextEntries, "ui.themeMode": "dark" },
+          entries: {
+            "ui.railShortcuts": nextEntries,
+            "ui.themeMode": "dark",
+            "new-session.migration.v1": true,
+          },
         });
         await gateway.resolveDeferred("users.prefs.set");
         committedEntries = nextEntries;
       };
-      await expect.poll(pinOrder).toEqual(entries);
+      try {
+        await expect.poll(pinOrder).toEqual(entries);
+      } catch (error) {
+        await withTimeout(
+          Promise.all([
+            evaluateControlUiContext(page, (context) => ({
+              pinBootstrapForegroundReady: context.connectionBootstrap.foregroundReady,
+            })),
+            Promise.all(
+              unloaded.map(
+                async (row) =>
+                  (await gateway.getRequests("sessions.describe", { key: row.key })).length,
+              ),
+            ),
+            pins.count(),
+          ]),
+          1_000,
+        )
+          .then(([facts, descriptorRequests, renderedPins]) =>
+            recordControlUiE2eFailureFacts(page, {
+              ...facts,
+              pinDescriptorRequests: descriptorRequests,
+              pinRenderedCount: renderedPins,
+              pinDiagnosticRead: true,
+            }),
+          )
+          .catch(() => recordControlUiE2eFailureFacts(page, { pinDiagnosticRead: false }));
+        throw error;
+      }
       for (const row of unloaded) {
         const link = rail.getByRole("link", { name: row.label, exact: true });
         await link.waitFor();
@@ -266,7 +303,8 @@ suite.define(() => {
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark", "new-session.migration.v1": true },
+            // A saved empty rail; without one the rail starts with the default pins.
+            { "ui.themeMode": "dark", "new-session.migration.v1": true, "ui.railShortcuts": [] },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
@@ -275,7 +313,7 @@ suite.define(() => {
         const rail = sidebar.locator(".sidebar-rail__pins");
         const source = sidebar.locator(`[data-session-key="${rows[0]!.key}"]`).first();
         await source.waitFor();
-        expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
+        await expect.poll(() => rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
         expect(await railWrites()).toEqual([]);

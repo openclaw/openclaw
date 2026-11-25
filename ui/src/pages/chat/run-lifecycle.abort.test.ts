@@ -108,6 +108,7 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host, { preserveDraft: false });
     expect(request).toHaveBeenCalledWith("sessions.abort", {
+      userInitiated: true,
       key: "agent:main",
       clearQueued: true,
     });
@@ -172,6 +173,7 @@ describe("handleAbortChat", () => {
     });
     await handleAbortChat(host, { preserveDraft: true });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.abort", {
+      userInitiated: true,
       key: "agent:main",
       runId: "run-embedded-finished",
     });
@@ -225,6 +227,7 @@ describe("handleAbortChat", () => {
           operation = handleAbortChat(host, { preserveDraft: true });
         }
         expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          userInitiated: true,
           sessionKey: "main",
           ...(mainSessionKey === "global" ? { agentId: "work" } : {}),
           runId: "finished-run",
@@ -267,6 +270,7 @@ describe("handleAbortChat", () => {
     });
     const stopped = handleAbortChat(host, { preserveDraft: true });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.abort", {
+      userInitiated: true,
       key: "global",
       agentId: "main",
     });
@@ -379,6 +383,7 @@ describe("abort rejection publication ownership", () => {
       try {
         expect(host.pendingAbort).toBeNull();
         expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          userInitiated: true,
           sessionKey: "global",
           agentId: "main",
           runId: "original-run",
@@ -443,6 +448,7 @@ it.each([false, true])(
     await operation;
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("chat.abort", {
+      userInitiated: true,
       sessionKey: "agent:main:main",
       runId: "run-1",
     });

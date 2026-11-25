@@ -19,8 +19,81 @@ defineDiscordVoiceTests((h) => {
     await h.startTranscripts(manager, sink);
     const entry = h.getSessionEntry(manager);
     const begin = () => h.handleSpeakingStart(manager, entry, "u1");
-    return { connection, entry, sink, begin, decode };
+    return { connection, entry, sink, begin, decode, manager };
   };
+  it.each(["missing-end", "leave", "error"] as const)(
+    "releases buffered audio after %s without an SDK close",
+    async (ending) => {
+      vi.useFakeTimers();
+      const { connection, entry, sink, begin, manager } = await recording();
+      const stream = new PassThrough({ objectMode: true });
+      connection.receiver.speaking.users.set("u1", Date.now());
+      connection.receiver.subscribe.mockReturnValueOnce(stream);
+      const receiving = begin();
+      try {
+        stream.write(Buffer.alloc(96_000));
+        await vi.advanceTimersByTimeAsync(1_500);
+        // Activity extends the deadline even if speaking-end was lost.
+        stream.write(Buffer.alloc(96_000));
+        connection.receiver.speaking.emit("start", "u1");
+        if (ending === "leave") {
+          await manager.handleVoiceStateUpdate({
+            guild_id: "g1",
+            user_id: "u1",
+            channel_id: null,
+            session_id: "session",
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_video: false,
+            suppress: false,
+            request_to_speak_timestamp: null,
+          });
+        } else if (ending === "error") {
+          stream.emit("error", new Error("receive failed without closing"));
+        }
+        await vi.advanceTimersByTimeAsync(1_500);
+        if (ending !== "error") {
+          expect(stream.destroyed).toBe(false);
+        }
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(stream.destroyed).toBe(true);
+        await receiving;
+        await entry.processingQueue;
+        expect(entry.capture.size).toBe(0);
+        expect(sink).toHaveBeenCalledTimes(ending === "error" ? 0 : 1);
+      } finally {
+        stream.destroy();
+        await receiving;
+        vi.useRealTimers();
+      }
+    },
+  );
+  it("keeps normal packets with a grace shorter than the SDK silence window", async () => {
+    vi.useFakeTimers();
+    const { connection, entry, begin } = await recording({ captureSilenceGraceMs: 10 });
+    const stream = new PassThrough({ objectMode: true });
+    connection.receiver.subscribe.mockReturnValueOnce(stream);
+    const receiving = begin();
+    try {
+      for (let frame = 0; frame < 10; frame++) {
+        stream.write(Buffer.alloc(3_840));
+        await vi.advanceTimersByTimeAsync(20);
+        expect(stream.destroyed).toBe(false);
+      }
+      connection.receiver.speaking.emit("end", "u1");
+      await vi.advanceTimersByTimeAsync(10);
+      await receiving;
+      await entry.processingQueue;
+      expect(entry.capture.size).toBe(0);
+    } finally {
+      stream.destroy();
+      await receiving;
+      vi.useRealTimers();
+    }
+  });
+
   it("retains the reservation until the SDK source closes after decoded EOF", async () => {
     const releaseClose = createDeferred<void>();
     const first = new PassThrough({

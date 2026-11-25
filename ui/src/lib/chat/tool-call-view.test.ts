@@ -34,6 +34,8 @@ it.each([
   ["edit", { oldText: "a", newText: "b" }, "generic"],
   ["apply_patch", {}, "generic"],
   ["fetch", {}, "generic"],
+  ["mcp__openclaw__apply_patch", { changes: [{ path: "a", kind: "update", diff: "+x" }] }, "edit"],
+  ["mcp__openclaw__tool_call", { id: "exec", args: { command: "ls" } }, "command"],
 ] as const)("classifies %s with args %o as %s", (name, args, kind) => {
   expect(resolve(name, args).kind).toBe(kind);
 });

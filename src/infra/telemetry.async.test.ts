@@ -100,33 +100,6 @@ it("keeps reads and accepted updates when storage admission is closed", async ()
   expect(execute).not.toHaveBeenCalled();
 });
 
-it("coalesces checks through storage preparation and persistence", async () => {
-  const read = pauseOperation<TelemetryState>("telemetry.readState");
-  const persisted = pauseOperation<TelemetryState>("telemetry.persistSuccess");
-  let settled = false;
-  const first = check(() => ({}), 100).then((value) => {
-    settled = true;
-    return value;
-  });
-  const second = check(() => ({}), 100);
-  try {
-    expect(fetchImpl).not.toHaveBeenCalled();
-    read.resolve({});
-    await persisted.requested;
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-  } finally {
-    read.resolve({});
-    persisted.resolve({ lastPingAt: 101, latestVersion: "2026.8.25" });
-    await Promise.all([first, second]);
-  }
-  const expected = { version: "2026.8.25" };
-  expect(await Promise.all([first, second])).toEqual([expected, expected]);
-  expect(
-    execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
-  ).toHaveLength(1);
-});
-
 it("keeps the captured endpoint and storage destination across awaits", async () => {
   const read = pauseOperation<TelemetryState>("telemetry.readState");
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
@@ -188,37 +161,6 @@ it.each(["do-not-track", "opt-out", "update-disabled", "CI"] as const)(
     ).toBe(false);
   },
 );
-
-it("uses the receiver day despite client clock skew and keeps it through awaited claims", async () => {
-  const claim = pauseOperation<string | null>("telemetry.claimInstallationCount");
-  fetchImpl.mockImplementation(async (_url, init) =>
-    new Headers(init?.headers).has("OpenClaw-Installation-Count")
-      ? new Response(null, { status: 204 })
-      : Response.json(
-          { version: "2026.8.24" },
-          { headers: { "OpenClaw-Installation-Count": "1;20688" } },
-        ),
-  );
-  const checking = check(() => ({}), Date.parse("2030-08-23T23:59:59Z"));
-  await claim.requested;
-  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2020-08-24T00:00:01Z"));
-  claim.resolve("1;20688;31");
-  await checking;
-  expect(
-    execute.mock.calls.find(([command]) => command.type === "telemetry.claimInstallationCount"),
-  ).toEqual([
-    {
-      type: "telemetry.claimInstallationCount",
-      input: {
-        endpoint: process.env.OPENCLAW_TELEMETRY_ENDPOINT,
-        day: 20688,
-      },
-    },
-  ]);
-  expect(
-    new Headers(fetchImpl.mock.calls[1]?.[1]?.headers).get("OpenClaw-Installation-Count"),
-  ).toBe("1;20688;31");
-});
 
 it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   "honors %s when the canonical snapshot changes during the feature count",

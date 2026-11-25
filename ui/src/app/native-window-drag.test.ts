@@ -4,7 +4,30 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
+import {
+  beginNativeWindowDrag,
+  beginNativeWindowDragFromTopInset,
+  beginNativeWindowDragFromTitlebar,
+} from "./native-window-drag.ts";
+
+it("drags blank native titlebar descendants but leaves controls and page content alone", () => {
+  const postMessage = installBridge();
+  vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", true);
+  document.documentElement.classList.add("openclaw-native-macos");
+  try {
+    const shell = document.body.appendChild(document.createElement("div"));
+    shell.style.setProperty("--openclaw-native-titlebar-height", "40px");
+    shell.addEventListener("mousedown", beginNativeWindowDragFromTitlebar);
+    const blank = shell.appendChild(document.createElement("span"));
+    const button = shell.appendChild(document.createElement("button"));
+    expect(mouseDown(blank, { clientY: 20 }).defaultPrevented).toBe(true);
+    expect(mouseDown(button, { clientY: 20 }).defaultPrevented).toBe(false);
+    expect(mouseDown(blank, { clientY: 60 }).defaultPrevented).toBe(false);
+    expect(postMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    document.documentElement.classList.remove("openclaw-native-macos");
+  }
+});
 
 afterEach(() => {
   document.body.replaceChildren();

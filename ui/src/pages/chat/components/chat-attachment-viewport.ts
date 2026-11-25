@@ -14,10 +14,6 @@ export function observeChatAttachmentViewport(
   onVisible: () => void,
   onHidden?: () => void,
 ): () => void {
-  if (typeof IntersectionObserver !== "function") {
-    onVisible();
-    return () => undefined;
-  }
   const stop = observeIntersection(
     [element],
     (entries) => {

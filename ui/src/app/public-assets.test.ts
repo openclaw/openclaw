@@ -18,9 +18,11 @@ const originalLocation = window.location.href;
 afterEach(() => window.history.replaceState(null, "", originalLocation));
 
 describe("controlUiPublicAssetPath", () => {
-  it("versions public assets with the document build while keeping the worker revalidating", () => {
+  it("versions public assets by content across builds while keeping the worker revalidating", () => {
     const attribute = "data-openclaw-control-ui-build-id";
-    document.documentElement.setAttribute(attribute, "build-a");
+    const firstHash = "a".repeat(64);
+    const secondHash = "b".repeat(64);
+    document.documentElement.setAttribute(attribute, `build-a-${firstHash}`);
     try {
       for (const asset of [
         "favicon.svg",
@@ -36,14 +38,24 @@ describe("controlUiPublicAssetPath", () => {
         "app-art/example.webp",
         "community-art/example.webp",
       ] as const) {
-        expect(controlUiPublicAssetPath(asset, "")).toBe(`/${asset}?v=build-a`);
-        expect(controlUiPublicAssetPath(asset, "/control/")).toBe(`/control/${asset}?v=build-a`);
+        expect(controlUiPublicAssetPath(asset, "")).toBe(`/${asset}?v=${firstHash}`);
+        expect(controlUiPublicAssetPath(asset, "/control/")).toBe(
+          `/control/${asset}?v=${firstHash}`,
+        );
       }
       expect(controlUiPublicAssetPath("sw.js", "/control")).toBe("/control/sw.js");
-      document.documentElement.setAttribute(attribute, "build-b");
+      document.documentElement.setAttribute(attribute, `build-b-${firstHash}`);
       expect(
         withConfiguredBasePath("/control", () => inferControlUiPublicAssetPath("fonts/lora.css")),
-      ).toBe("/control/fonts/lora.css?v=build-b");
+      ).toBe(`/control/fonts/lora.css?v=${firstHash}`);
+      document.documentElement.setAttribute(attribute, `build-c-${secondHash}`);
+      expect(controlUiPublicAssetPath("fonts/lora.css", "")).toBe(
+        `/fonts/lora.css?v=${secondHash}`,
+      );
+      document.documentElement.setAttribute(attribute, "fixture-build");
+      expect(controlUiPublicAssetPath("fonts/lora.css", "")).toBe(
+        "/fonts/lora.css?v=fixture-build",
+      );
     } finally {
       document.documentElement.removeAttribute(attribute);
     }

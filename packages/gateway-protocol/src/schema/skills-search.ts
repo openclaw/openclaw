@@ -6,19 +6,42 @@ import { NonEmptyString } from "./primitives.js";
 /** Wire copy of the core trust state; this package intentionally depends on typebox only. */
 const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
 
-/** Searches the skill registry. */
+const SkillCategorySlug = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-z][a-z0-9-]*$",
+});
+const BrowseCursor = Type.String({ minLength: 1, maxLength: 4096 });
+
+export const SkillsCategoriesParamsSchema = closedObject({});
+export const SkillsCategoriesResultSchema = closedObject({
+  categories: Type.Array(
+    closedObject({
+      slug: SkillCategorySlug,
+      label: NonEmptyString,
+      description: Type.Optional(NonEmptyString),
+      icon: Type.Optional(NonEmptyString),
+    }),
+  ),
+});
+
+/** Searches the skill registry, or browses a page when query is omitted. */
 export const SkillsSearchParamsSchema = closedObject({
   query: Type.Optional(NonEmptyString),
+  category: Type.Optional(SkillCategorySlug),
+  cursor: Type.Optional(BrowseCursor),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 
 /** Ranked skill registry search results. */
 export const SkillsSearchResultSchema = closedObject({
+  nextCursor: Type.Optional(BrowseCursor),
   results: Type.Array(
     closedObject({
       official: Type.Optional(Type.Boolean()),
       score: Type.Number(),
       slug: NonEmptyString,
+      categories: Type.Optional(Type.Array(Type.String())),
       registry: NonEmptyString,
       ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       installRef: Type.String({
@@ -47,5 +70,7 @@ export const SkillsSearchResultSchema = closedObject({
   ),
 });
 
+export type SkillsCategoriesParams = Static<typeof SkillsCategoriesParamsSchema>;
+export type SkillsCategoriesResult = Static<typeof SkillsCategoriesResultSchema>;
 export type SkillsSearchParams = Static<typeof SkillsSearchParamsSchema>;
 export type SkillsSearchResult = Static<typeof SkillsSearchResultSchema>;

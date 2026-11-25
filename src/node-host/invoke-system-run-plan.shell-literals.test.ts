@@ -14,11 +14,11 @@ it.each([
   ["pwsh", "-NoProfile", "-Command", "Write-Output 'x&y'"],
   ["nu", "--commands", "echo 'x&y'"],
   ["bash", "-c", "echo 'x&y'"],
-])("retains separator rejection outside node sh grammar: %j", (...command) => {
-  expect(buildSystemRunApprovalPlan({ command })).toMatchObject(DENIED_RUNTIME_APPROVAL);
+])("retains separator rejection outside node sh grammar: %j", async (...command) => {
+  expect(await buildSystemRunApprovalPlan({ command })).toMatchObject(DENIED_RUNTIME_APPROVAL);
 });
 
-posix("preserves native shell literal arguments", ({ skip }) => {
+posix("preserves native shell literal arguments", async ({ skip }) => {
   const binaryPath = native.resolveNativeBinaryFixturePath();
   if (native.canMutateNativeBinaryFixturePath(binaryPath)) {
     skip();
@@ -31,7 +31,7 @@ posix("preserves native shell literal arguments", ({ skip }) => {
     ["printf", `'${callback}'`],
   ]) {
     const command = `${executable} --auth-url ${argument}`;
-    expect(prepareShell(command), command).toMatchObject({
+    expect(await prepareShell(command), command).toMatchObject({
       ok: true,
       plan: { argv: ["/bin/sh", "-lc", command], mutableFileOperand: undefined },
     });
@@ -76,6 +76,6 @@ it
     ]),
     ...["let", "declare"].map((builtin) => `${builtin} 'a[$(python ./mutable.py "x&y")]=1'`),
     "busybox sh -c 'python ./mutable.py \"x&y\"'",
-  ])("rejects unsafe shell syntax and mutable-interpreter carriers: %j", (command) => {
-  expect(prepareShell(command)).toMatchObject(DENIED_RUNTIME_APPROVAL);
+  ])("rejects unsafe shell syntax and mutable-interpreter carriers: %j", async (command) => {
+  expect(await prepareShell(command)).toMatchObject(DENIED_RUNTIME_APPROVAL);
 });

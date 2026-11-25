@@ -298,7 +298,7 @@ suite.define(() => {
           });
         }
 
-        await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+        await page.getByRole("link", { name: "New session", exact: true }).first().click();
         await page.waitForURL((current) => current.pathname === "/new");
         await waitForControlUiGatewayReady(page);
         const modelControl = page.locator("[data-chat-model-select='true']");

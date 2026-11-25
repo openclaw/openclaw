@@ -431,6 +431,22 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     },
   );
 
+  it("keeps a fresh itemless start separate from a completed keyed compaction", () => {
+    const host = createTimedHost();
+    const itemId = "old-compaction";
+    emitEvent(host, "run-1", 1, "compaction", { phase: "start", itemId });
+    emitEvent(host, "run-1", 2, "compaction", { phase: "end", completed: true });
+    expectCompactionCompleteAndRetained(host, itemId);
+
+    emitEvent(host, "run-1", 3, "compaction", { phase: "start" });
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "run-1",
+      startedAt: TOOL_STREAM_TEST_NOW + 5000,
+      completedAt: null,
+    });
+  });
+
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     const host = createTimedHost();
 
@@ -512,11 +528,17 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     emitOperation(host, "operation-1", "start", "agent:main:main");
 
-    expect(host.compactionStatus).toEqual(compaction("active", "operation-1"));
+    expect(host.compactionStatus).toEqual({
+      ...compaction("active", "operation-1"),
+      manualOperation: true,
+    });
 
     emitOperation(host, "operation-1", "end", "agent:main:main", { completed: true });
 
-    expect(host.compactionStatus).toEqual(compaction("complete", "operation-1"));
+    expect(host.compactionStatus).toEqual({
+      ...compaction("complete", "operation-1"),
+      manualOperation: true,
+    });
   });
 
   it("ignores manual session operation compaction for other sessions", () => {
@@ -574,7 +596,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     emitOperation(host, "operation-2", "start", "agent:main:main");
     emitOperation(host, "operation-1", "end", "agent:main:main", { completed: true });
 
-    expect(host.compactionStatus).toEqual(compaction("active", "operation-2"));
+    expect(host.compactionStatus).toEqual({
+      ...compaction("active", "operation-2"),
+      manualOperation: true,
+    });
     vi.advanceTimersByTime(5 * 60_000);
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();

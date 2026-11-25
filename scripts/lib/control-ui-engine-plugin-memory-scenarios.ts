@@ -157,7 +157,7 @@ export function createEnginePluginMemoryScenarios(): EngineScenario[] {
       };
     },
   });
-  return [
+  const scenarios: EngineScenario[] = [
     ...(["updates", "idle", "mounts"] as const).map(workboardScenario),
     {
       id: "memory-mcp-relay-updates",
@@ -212,5 +212,30 @@ export function createEnginePluginMemoryScenarios(): EngineScenario[] {
         return { rounds, updates: rounds * updatesPerRound, grants: grantCount };
       },
     },
+  ];
+  return [
+    ...scenarios,
+    ...scenarios
+      .filter((scenario) => scenario.id.endsWith("-updates"))
+      .map((scenario) => {
+        const run: EngineScenario["run"] = async (page, gateway, checkpoint) => {
+          if (!checkpoint) {
+            throw new Error("Plugin census requires memory collection");
+          }
+          await retire(page);
+          await checkpoint("warm");
+          await navigate(page, scenario.route);
+          await scenario.prepare(page, gateway);
+          await checkpoint("entered");
+          await retire(page);
+          await checkpoint("left");
+          return { visits: 1 };
+        };
+        return Object.assign({}, scenario, {
+          id: scenario.id.replace(/-updates$/u, "-visit"),
+          expected: "One plugin route entry and retirement in the same document.",
+          run,
+        });
+      }),
   ];
 }

@@ -157,13 +157,15 @@ it.each([
 
 it("reads ranked plugins and categories from the overview", async () => {
   const ranking = { featured: true, trending: true, featuredRank: 1, trendingRank: 0 };
+  const category = { ...remoteCategory, previewCursor: "opaque-english-preview" };
   const fetchImpl = mockResponse({
-    categories: [remoteCategory],
+    categories: [category],
     items: [{ ...remotePlugin, ...ranking }],
   });
   const result = await fetchClawHubPluginOverview(registry);
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
-  expect(result.categories).toEqual([remoteCategory]);
+  expect(Object.fromEntries(fetchImpl.url().searchParams)).toEqual({ previewCursors: "true" });
+  expect(result.categories).toEqual([category]);
   expect(result.items).toMatchObject([
     {
       packageName: "memory-plus",
@@ -568,12 +570,13 @@ it.each([
   [undefined, undefined],
   [[], []],
   [
-    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "x".repeat(2048)],
-    ["Plan  my week.\nPrioritize commitments.", "Compare options.", "x".repeat(2048)],
+    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "😀".repeat(128)],
+    ["Plan my week. Prioritize commitments.", "Compare options.", "😀".repeat(128)],
   ],
   [["one", "two", "three", "four"], undefined],
   [["valid", " "], undefined],
   [["valid", false], undefined],
+  [["valid", "😀".repeat(129)], undefined],
 ])(
   "transports third-party not-installed manifest recommendations without installation: %j",
   async (recommendedPrompts, expected) => {

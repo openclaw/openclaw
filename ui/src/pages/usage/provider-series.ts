@@ -12,9 +12,12 @@ const PROVIDER_SLOTS: Record<string, number> = {
 };
 const SERIES_SLOTS = 5;
 
+/** Neutral data ink for usage without a provider color (not a surface border). */
+export const UNASSIGNED_SERIES_COLOR = "var(--muted-strong)";
+
 /** Series hues are base.css chart tokens; slot 0 is the shared "other" tone. */
 const SLOT_COLORS = [
-  "var(--oc-border-strong)",
+  UNASSIGNED_SERIES_COLOR,
   "var(--chart-series-1)",
   "var(--chart-series-2)",
   "var(--chart-series-3)",

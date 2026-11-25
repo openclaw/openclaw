@@ -48,6 +48,26 @@ export function readClientCredentialFileIdentity(
   return { path: fs.realpathSync.native(pathname), dev: String(stat.dev), ino: String(stat.ino) };
 }
 
+/**
+ * Path and inode identify the same shared file; a missing recorded binding never matches.
+ * st_dev is not compared because macOS APFS and some Linux mounts renumber a volume across
+ * reboots without replacing its files.
+ */
+export function isSameClientCredentialFile(
+  recorded: ClientCredentialFileIdentity | null | undefined,
+  current: ClientCredentialFileIdentity,
+): boolean {
+  return recorded?.path === current.path && recorded.ino === current.ino;
+}
+
+/** Independent source identities embed `<dev>:<ino>`; only their inode survives a device renumbering. */
+export function isSameIndependentClientCredentialIdentity(
+  identity: string,
+  current: ClientCredentialFileIdentity,
+): boolean {
+  return /^\d+:(\d+)$/u.exec(identity)?.[1] === current.ino;
+}
+
 export function emptyClientCredentialReceipt(
   sharedFile: ClientCredentialFileIdentity | null = null,
 ): ClientCredentialReceipt {

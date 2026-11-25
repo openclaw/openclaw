@@ -5,6 +5,13 @@ import type { SignedStatement } from "../statements/types.js";
 /** Operations the local owner browser may relay; paths never come from the caller. */
 export type DeviceMailOperation = "bind" | "receive" | "send" | "ack";
 
+/** Discovery holds a mailbox read open this long when no mail is waiting. */
+export const DEVICE_MAIL_WAIT_SECONDS = 20;
+/** The Gateway's Discovery deadline: the held read plus room for a slow reply. */
+export const DEVICE_MAIL_RELAY_TIMEOUT_MS = DEVICE_MAIL_WAIT_SECONDS * 1000 + 15_000;
+/** The browser's deadline for one relayed call, outliving the Gateway's own deadline. */
+export const DEVICE_MAIL_REQUEST_TIMEOUT_MS = DEVICE_MAIL_RELAY_TIMEOUT_MS + 10_000;
+
 /** Exact bytes and credentials supplied by the browser, never retained by the Gateway. */
 export type DeviceMailRequest = {
   operation: DeviceMailOperation;
@@ -28,7 +35,10 @@ export function deviceMailRoute(operation: DeviceMailOperation, clawId: string, 
     case "bind":
       return { method: "POST", path: "/v1/devices" };
     case "receive":
-      return { method: "GET", path: `${mail}/device?after=${after}&wait=20` };
+      return {
+        method: "GET",
+        path: `${mail}/device?after=${after}&wait=${DEVICE_MAIL_WAIT_SECONDS}`,
+      };
     case "send":
       return { method: "POST", path: mail };
     case "ack":

@@ -284,15 +284,14 @@ function pruneProgressAfterInsert(db: EngineConnection, now: number): void {
     0,
     OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS - OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS,
   );
-  const overflowCutoff = kysely
+  const overflowIds = kysely
     .selectFrom("outbound_message_progress")
     .select("sequence")
-    .orderBy("sequence", "desc")
-    .offset(retainedRows)
-    .limit(1);
+    .orderBy("sequence", "asc")
+    .limit(Math.max(0, rowCount - retainedRows));
   const pruned = executeSqliteQuerySync(
     db,
-    kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", overflowCutoff),
+    kysely.deleteFrom("outbound_message_progress").where("sequence", "in", overflowIds),
   );
   rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
   progressRowCounts.set(db, rowCount);

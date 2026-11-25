@@ -63,7 +63,7 @@ describe("ClickClack discussion registration lifecycle", () => {
       const provider = vi
         .mocked(registerSessionDiscussionProvider)
         .mock.calls.find(([entry]) => entry.id === "clickclack")?.[0];
-      if (!service || !cleanup || !provider) {
+      if (service?.apiVersion !== 2 || !cleanup || !provider) {
         throw new Error("Expected the registered ClickClack discussion lifecycle");
       }
       const context = {
