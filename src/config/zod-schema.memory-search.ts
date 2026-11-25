@@ -19,6 +19,7 @@ export const MemorySearchSchema = z
         ]),
       )
       .optional(),
+    excludePaths: z.array(z.string().min(1)).optional(),
     multimodal: z
       .strictObject({
         enabled: z.boolean().optional(),
