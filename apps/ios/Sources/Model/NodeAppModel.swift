@@ -3510,7 +3510,8 @@ extension NodeAppModel {
             // every cached surface so stale prompts cannot authorize work on the replacement.
             invalidateExecApprovalSurfacesForGatewayChange()
         }
-        let operatorLoopRequired = shouldStartOperatorGatewayLoop(
+        // Tunnel admission authenticates an OpenClaw ID route; it has no token to check.
+        let operatorLoopRequired = nextConfig.openClawIDOperatorSession != nil || shouldStartOperatorGatewayLoop(
             token: nextConfig.token,
             bootstrapToken: nextConfig.bootstrapToken,
             password: nextConfig.password,
@@ -3538,7 +3539,9 @@ extension NodeAppModel {
         let attempting = GatewaySessionPhase.connecting(reconnect: isSameGatewayTarget)
         prepareForGatewayConnect(
             stableID: effectiveStableID,
-            connection: GatewayConnection(node: attempting, operator: operatorLoopRequired ? attempting : .idle),
+            connection: GatewayConnection(
+                node: nextConfig.openClawIDOperatorSession == nil ? attempting : .idle,
+                operator: operatorLoopRequired ? attempting : .idle),
             preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
             preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
@@ -3549,6 +3552,8 @@ extension NodeAppModel {
             self.operatorGatewayTask = nil
             Task { await self.operatorGateway.disconnect() }
         }
+        // An OpenClaw ID route carries only the operator session; the human key is not a node key.
+        guard nextConfig.openClawIDOperatorSession == nil else { return }
         startNodeGatewayLoop(
             config: nextConfig,
             sessionBox: sessionBox)
@@ -4461,6 +4466,7 @@ extension NodeAppModel {
         config: GatewayConnectConfig,
         sessionBox: WebSocketSessionBox?)
     {
+        let sessionBox = config.openClawIDOperatorSession ?? sessionBox
         let stableID = config.effectiveStableID
         let routeGeneration = self.gatewayRouteGeneration
         // Async reconnect helpers can resume after Disconnect or a target switch. Only the

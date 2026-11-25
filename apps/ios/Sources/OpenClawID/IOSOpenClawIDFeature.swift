@@ -1,11 +1,14 @@
 import AuthenticationServices
 import Foundation
 import OpenClawKit
+import OSLog
 import UIKit
 
 /// OpenClaw ID appears only in builds that package the native transport (`OPENCLAW_IROH_NATIVE=1`);
 /// other builds hide every entry point.
 enum IOSOpenClawIDFeature {
+    static let logger = Logger(subsystem: "ai.openclaw", category: "openclaw-id")
+
     static var isEnabled: Bool {
         OpenClawIDNodeNativeEndpoint.isPackaged
     }

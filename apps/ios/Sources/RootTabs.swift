@@ -1,5 +1,6 @@
 import OpenClawChatUI
 import OpenClawKit
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -934,7 +935,13 @@ extension RootTabs {
         if IOSOpenClawIDFeature.isEnabled {
             self.openClawIDSetup = OpenClawIDSetupModel(
                 service: IOSOpenClawIDFeature.setupService(),
-                onJoined: { _ in })
+                onJoined: { _ in
+                    self.onboardingComplete = true
+                    OnboardingStateStore.markCompleted(mode: nil)
+                    self.showOnboarding = false
+                    self.selectSidebarDestination(.chat)
+                    self.connectOpenClawID()
+                })
         }
         self.showOnboarding = true
     }
@@ -958,9 +965,28 @@ extension RootTabs {
             .environment(self.gatewayController)
     }
 
+    /// Connects chat to this device's OpenClaw ID claw through its tunnel.
+    private func connectOpenClawID() {
+        Task { @MainActor in
+            let options = await self.gatewayController.makeConnectOptions(deviceAuthGatewayID: nil)
+            do {
+                guard let config = try await IOSOpenClawIDRoute.shared.connectConfig(options: options) else { return }
+                self.appModel.applyGatewayConnectConfig(config)
+            } catch {
+                IOSOpenClawIDFeature.logger.error(
+                    "OpenClaw ID route failed: \(String(reflecting: error), privacy: .public)")
+            }
+        }
+    }
+
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
             self.presentOnboarding()
+            return
+        }
+        if !self.didEvaluateOnboarding, IOSOpenClawIDFeature.isEnabled, IOSOpenClawIDFeature.records.load() != nil {
+            self.didEvaluateOnboarding = true
+            self.connectOpenClawID()
             return
         }
 

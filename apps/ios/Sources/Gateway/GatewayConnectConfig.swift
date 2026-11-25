@@ -21,6 +21,9 @@ struct GatewayConnectConfig: Sendable {
     /// Control UI mount advertised by the connected operator session's hello-ok.
     /// Learned after connect, so it stays out of the connection and WebView identity inputs.
     var controlUiBasePath: String?
+    /// The operator session through this device's OpenClaw ID tunnel; the node session does not
+    /// run on that route.
+    var openClawIDOperatorSession: WebSocketSessionBox?
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
