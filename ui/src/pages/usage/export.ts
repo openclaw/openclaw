@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  usageDailyModelIdentity,
+  usageModelIdentity,
+} from "../../../../src/shared/usage-aggregates.js";
 import { compactUsageOverviewSession } from "../../../../src/shared/usage-overview.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
@@ -49,6 +53,38 @@ function sameReportValue(a: unknown, b: unknown, relativeError: number): boolean
   return false;
 }
 
+function groupByIdentity<T>(rows: readonly T[] | undefined, identity: (row: T) => string) {
+  if (!rows) {
+    return undefined;
+  }
+  const groups: Record<string, T[]> = Object.create(null);
+  for (const row of rows) {
+    (groups[identity(row)] ??= []).push(row);
+  }
+  return groups;
+}
+
+function comparableAggregates(aggregates: SessionsUsageResult["aggregates"]) {
+  // These groups are ranked by measurements. Roundoff can change their display order.
+  return {
+    ...aggregates,
+    tools: {
+      ...aggregates.tools,
+      tools: groupByIdentity(aggregates.tools.tools, (row) => row.name),
+    },
+    byModel: groupByIdentity(aggregates.byModel, (row) =>
+      usageModelIdentity(row.provider, row.model),
+    ),
+    byProvider: groupByIdentity(aggregates.byProvider, (row) => row.provider ?? "unknown"),
+    byAgent: groupByIdentity(aggregates.byAgent, (row) => row.agentId),
+    byChannel: groupByIdentity(aggregates.byChannel, (row) => row.channel),
+    byCreator: groupByIdentity(aggregates.byCreator, (row) => row.key),
+    modelDaily: groupByIdentity(aggregates.modelDaily, (row) =>
+      usageDailyModelIdentity(row.date, row.provider, row.model),
+    ),
+  };
+}
+
 function measuredUsage(row: UsageSessionEntry, days: ReadonlySet<string>) {
   const { usage } = compactUsageOverviewSession(row, days);
   // Recomputing cache metadata for a new prompt report does not change the measured usage.
@@ -72,7 +108,11 @@ function matchesDisplayedSnapshot(
   return (
     (displayed.overview?.selectedRowCount ?? data.sessions.length) === data.sessions.length &&
     sameReportValue(displayed.totals, data.totals, relativeError) &&
-    sameReportValue(displayed.aggregates, data.aggregates, relativeError) &&
+    sameReportValue(
+      comparableAggregates(displayed.aggregates),
+      comparableAggregates(data.aggregates),
+      relativeError,
+    ) &&
     rows.every((row) => {
       const detail = exported.get(sessionIdentity(row));
       return (

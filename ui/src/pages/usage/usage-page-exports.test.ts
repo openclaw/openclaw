@@ -273,12 +273,18 @@ it.each([false, true])(
   },
 );
 
-it("exports an unchanged report when the overview groups rows by model", async () => {
+it.each([false, true])("exports unchanged cohorts (tied agents: %s)", async (tiedAgents) => {
   const { result } = cacheSnapshot("fresh");
-  const rows = [0.02, 0.01, 0.03].map((cost, i) => ({
-    key: `agent:main:session-${i}`,
+  const rows = [
+    ...(tiedAgents ? [{ agentId: "B", model: "gamma", cost: 0.06 }] : []),
+    { agentId: "A", model: "alpha", cost: 0.02 },
+    { agentId: "A", model: "beta", cost: 0.01 },
+    { agentId: "A", model: "alpha", cost: 0.03 },
+  ].map(({ agentId, model, cost }, i) => ({
+    key: `agent:${agentId}:session-${i}`,
     sessionId: `instance-${i}`,
-    model: i === 1 ? "beta" : "alpha",
+    agentId,
+    model,
     usage: usageTotals(1, cost),
   }));
   const dayBucket = { mode: "utc-offset", utcOffsetMinutes: 0 } as const;
@@ -291,8 +297,13 @@ it("exports an unchanged report when the overview groups rows by model", async (
     rows.map((row) => compactUsageOverviewSession(row, new Set())),
   );
   const details = buildUsageOverview({ rows, options: {}, dayBucket, compact: false });
-  expect(selection.cohorts).toHaveLength(2);
-  expect(overview.totals.totalCost).not.toBe(details.totals.totalCost);
+  expect(selection.cohorts).toHaveLength(tiedAgents ? 3 : 2);
+  expect(overview.aggregates.byAgent.map((row) => row.agentId)).toEqual(
+    tiedAgents ? ["A", "B"] : ["A"],
+  );
+  expect(details.aggregates.byAgent.map((row) => row.agentId)).toEqual(
+    tiedAgents ? ["B", "A"] : ["A"],
+  );
 
   const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
   const { page } = await loadUsagePage(async (method: string, params?: { projection?: string }) =>
@@ -305,11 +316,15 @@ it("exports an unchanged report when the overview groups rows by model", async (
   await selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
   await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
   const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
+  expect(payload.aggregates.byAgent).toEqual(details.aggregates.byAgent);
   expect(payload.sessions).toHaveLength(rows.length);
   expect(new Set(payload.sessions.map((row) => row.sessionId))).toEqual(
     new Set(rows.map((row) => row.sessionId)),
   );
-  expect(payload.totals).toMatchObject({ totalTokens: 3, totalCost: 0.06 });
+  expect(payload.totals).toMatchObject({
+    totalTokens: rows.length,
+    totalCost: tiedAgents ? 0.12 : 0.06,
+  });
 });
 
 it("requires a refresh when an unbilled message changes the displayed usage", async () => {
