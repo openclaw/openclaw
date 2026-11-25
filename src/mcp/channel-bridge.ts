@@ -352,7 +352,7 @@ export class OpenClawChannelBridge {
         // Refuse before queueing so no channel owner sees a request whose reply would be
         // ignored; Claude still answers it through its own local prompt.
         process.stderr.write(
-          `openclaw mcp: refused Claude permission ${params.requestId}: ${PENDING_CLAUDE_PERMISSION_LIMIT} already pending\n`,
+          `openclaw mcp: OpenClaw didn’t send Claude permission request ${params.requestId} to the chat because ${PENDING_CLAUDE_PERMISSION_LIMIT} requests are already pending. Answer it in Claude’s local terminal prompt.\n`,
         );
         return;
       }

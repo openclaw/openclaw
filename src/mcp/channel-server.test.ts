@@ -300,7 +300,7 @@ describe("openclaw channel mcp server", () => {
         params: { request_id: requestId, tool_name: "Bash", description: "", input_preview: "" },
       });
     const overflow = ids.at(-1)!;
-    const refused = `openclaw mcp: refused Claude permission ${overflow}: ${limit} already pending\n`;
+    const refused = `openclaw mcp: OpenClaw didn’t send Claude permission request ${overflow} to the chat because ${limit} requests are already pending. Answer it in Claude’s local terminal prompt.\n`;
     const requestEvents = () =>
       mcp.bridge
         .pollEvents({ afterCursor: 0 }, limit + 1)
