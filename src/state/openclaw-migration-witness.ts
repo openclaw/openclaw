@@ -137,7 +137,7 @@ function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, 
   return !(
     role === "agent" &&
     ((table === "schema_meta" &&
-      ["schema_version", "app_version", "updated_at"].includes(column)) ||
+      ["schema_version", "min_reader", "app_version", "updated_at"].includes(column)) ||
       (table === "session_key_contract" && column === "canonical_ready") ||
       derivedMigrationColumns.get(table)?.has(column))
   );
@@ -527,7 +527,8 @@ export function captureOpenClawMigrationWitness(
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" ||
+        (object.name === "schema_meta" ||
+          object.name === "session_key_contract" ||
           object.name === "memory_entry_origins" ||
           derivedMigrationColumns.has(object.name))
       ) {

@@ -131,7 +131,6 @@ async function partialPublication(rerun?: "bound" | "later") {
     reference: {
       releaseTag: "v2026.8.27",
       targetSha: "a".repeat(40),
-      validationEvidenceDigest: `sha256:${"a".repeat(64)}`,
     },
     delta: { commits: 30, added: 16000, deleted: 2 },
     artifacts: [
@@ -349,7 +348,7 @@ it("digests full-size validation manifests beyond the source-admission byte cap"
   expect(releaseFastTrackDigest({ runId: "1", childEvidence, version: 4 })).toBe(digest);
 });
 
-it("recomputes the bounded delta against a matching published fully validated baseline, not a previous fast-track", async () => {
+it("recomputes the bounded delta against a shipped baseline release, not a previous fast-track", async () => {
   const root = roots.make("fast-track-publisher-baseline-");
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], {
@@ -371,12 +370,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
   const candidateSha = git("rev-parse", "HEAD");
   const f = candidatePublicationFixture({ candidateSha });
   assert(f.source.projection);
-  const baselineManifest = {
-    ...f.manifest,
-    targetSha: baselineSha,
-    sourceAdmission: { ...f.source, projection: { ...f.source.projection, version: "2026.8.27" } },
-  };
-  const reference = { current: { targetSha: baselineSha, manifest: baselineManifest } };
   const request: FastTrackRequest = {
     schemaVersion: 1,
     policy: "approved-fast-track-v1",
@@ -388,7 +381,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
     reference: {
       releaseTag: "v2026.8.27",
       targetSha: baselineSha,
-      validationEvidenceDigest: releaseFastTrackDigest(baselineManifest),
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [
@@ -405,8 +397,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    referenceRunId: "99",
-    referenceRunAttempt: "1",
   };
   const release = {
     draft: false,
@@ -419,7 +409,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
     manifest: f.manifest,
     jobs: [],
     repositoryRoot: root,
-    loadReference: async () => reference,
     readPublishedRelease: () => release,
   };
   await expect(authenticateFastTrackPolicy(operation)).resolves.toMatchObject({
@@ -432,7 +421,7 @@ it("recomputes the bounded delta against a matching published fully validated ba
   ]) {
     await expect(
       authenticateFastTrackPolicy({ ...operation, readPublishedRelease: () => changedRelease }),
-    ).rejects.toThrow("published fully validated release");
+    ).rejects.toThrow("published release that was not itself fast-tracked");
   }
   const wrongDelta = { ...request, delta: { commits: 1, added: 0, deleted: 0 } };
   await expect(

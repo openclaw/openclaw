@@ -143,6 +143,8 @@ function applyConfiguredMcpApproval(
 }
 
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+  /** Private host-issued carrier for a committed session store. */
+  storeAdmission?: object;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -262,6 +264,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 ): Promise<StaticHarnessMcpTools> {
   const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
@@ -299,14 +302,15 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
   });
   try {
-    // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
+    // Explicit configured tool exclusions define the expected catalog. Only unexpected
+    // omissions make that catalog incomplete.
     const omissions: string[] = [];
     const policyParams = {
       ...params,
       conversationCapabilityProfile,
       onFilter: (event: ToolPolicyFilterEvent) => {
         const omittedCount = event.before.length - event.after.length;
-        if (omittedCount > 0) {
+        if (omittedCount > 0 && event.step.source?.kind !== "config") {
           omissions.push(
             `${event.step.label}: ${omittedCount} configured MCP tool(s) omitted by policy`,
           );
@@ -380,6 +384,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,

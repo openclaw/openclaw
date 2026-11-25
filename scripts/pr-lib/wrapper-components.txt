@@ -374,6 +374,7 @@ src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
+src/agents/tool-search-protocol.ts
 src/agents/tools/automations-tool-name.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
@@ -957,6 +958,7 @@ src/gateway/openclaw-id/access-plugin.ts
 src/gateway/openclaw-id/member-role-presets.ts
 src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
+src/gateway/operator-refusal.ts
 src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
@@ -1074,6 +1076,7 @@ src/infra/diagnostic-semantic-run-progress-provenance.ts
 src/infra/diagnostic-tool-execution-liveness.ts
 src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
+src/infra/diagnostic-value-snapshot.ts
 src/infra/diagnostics-timeline.ts
 src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
@@ -1275,6 +1278,7 @@ src/infra/shell-env.ts
 src/infra/shell-inline-command.ts
 src/infra/shell-wrapper-resolution.ts
 src/infra/spawn-ps.ts
+src/infra/sqlite-additive-column.ts
 src/infra/sqlite-audit-record-store.async.ts
 src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
@@ -2262,6 +2266,7 @@ src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
+src/state/openclaw-state-db-doctor-repair.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-engine-input.ts
 src/state/openclaw-state-db-engine.ts
@@ -2305,6 +2310,7 @@ src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
 src/state/openclaw-state-db-schema-v41-approval-profile.ts
+src/state/openclaw-state-db-schema-v42-worker-loss-recovery.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2535,6 +2541,7 @@ src/config/sessions/session-accessor.sqlite-participant-projection.ts
 src/config/sessions/session-actor-entry-publication.worker.ts
 src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
+src/config/sessions/session-participation-source.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts

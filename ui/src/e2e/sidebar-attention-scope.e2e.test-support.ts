@@ -9,7 +9,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { twoFrames } from "./chat-presentation.test-support.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
@@ -51,7 +50,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       agentId: agent,
       name: (agent === "main" ? "Main" : "Writer") + " release digest",
     });
-  const mainJob = failedJob("main");
+  const mainJob = { ...failedJob("main"), state: { lastRunStatus: "ok" as const, nextRunAtMs: 1 } };
   const writerJob = failedJob("writer");
   const cronResponse = (jobs: CronJob[]) => ({
     jobs,
@@ -82,8 +81,6 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": scopedCronResponses(writerJob),
       "models.authStatus": { providers: [], ts: 1 },
-      // The gateway records the dismissed run; failures carry no run time, so they fail at 0.
-      "cron.acknowledgeFailure": { acknowledgedAtMs: 0 },
     },
   });
   const cronScopeRequestCount = async (agentId: string | null) =>
@@ -113,115 +110,51 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
     });
     const sidebar = page.locator("openclaw-app-sidebar");
-    const automationRows = sidebar.locator('[data-attention-kind="cronFailed"]');
+    const dot = sidebar.locator(".sidebar-rail .sidebar-automations__failed");
+    const clock = sidebar.getByRole("link", { name: "Automations", exact: true });
+    const inbox = sidebar.locator(".sidebar-issues-button");
     const approvalRow = sidebar.locator('[data-approval-id="approval-global"]');
-    const expectAutomations = async (main: number, writer: number) => {
-      await expect
-        .poll(async () => ({
-          main: await automationRows.getByText("Main release digest").count(),
-          writer: await automationRows.getByText("Writer release digest").count(),
-        }))
-        .toEqual({ main, writer });
-    };
-    const openAutomations = async () => {
-      await sidebar.locator(".sidebar-issues-button").click();
-      await expectCount(approvalRow, 1);
-      await sidebar.getByRole("tab", { name: /System/ }).click();
-    };
+    await inbox.click();
+    await expectCount(approvalRow, 1);
+    await expectCount(dot, 0);
+    expect(
+      await sidebar
+        .locator("#sidebar-issues-panel")
+        .getByText("Main release digest", { exact: true })
+        .count(),
+    ).toBe(0);
+    await inbox.click();
 
-    await openAutomations();
-    await expectAutomations(1, 0);
-    const mainDismiss = automationRows.getByRole("button", {
-      name: "Dismiss Main release digest",
-    });
-    await automationRows.filter({ hasText: "Main release digest" }).hover();
-    await expect
-      .poll(() =>
-        mainDismiss.evaluate((element) => {
-          const { opacity, pointerEvents } = getComputedStyle(element);
-          return { opacity, pointerEvents };
-        }),
-      )
-      .toEqual({ opacity: "1", pointerEvents: "auto" });
-    const close = page
-      .getByRole("dialog", { name: "Inbox" })
-      .getByRole("button", { name: "Close", exact: true });
-    expect(await mainDismiss.evaluate((button) => button.getBoundingClientRect().right)).toBe(
-      await close.evaluate((button) => button.getBoundingClientRect().right),
-    );
-    await captureProof("08-desktop-inbox-main-agent.png", true);
-    await automationRows
-      .filter({ hasText: "Main release digest" })
-      .locator(".sidebar-issues-panel__entity")
-      .click();
-    await captureProof("08a-desktop-inbox-row-click-result.png");
-    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
-    await captureProof("08b-desktop-inbox-row-navigation.png");
-    // Sessions returns to the conversation with its list and agent switcher.
-    await sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
-    // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
-    await openAutomations();
-    await expectAutomations(0, 1);
-    await captureProof("09-desktop-inbox-writer-agent.png", true);
-    await sidebar.locator(".sidebar-issues-button").click();
+    await expectVisible(dot);
+    await captureProof("desktop-automation-rail.png");
+    await clock.click();
+    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await expectVisible(dot);
 
-    // The Automations page has no header beside its sidebar; Usage keeps the shared agent scope
-    // in its header.
     const pages = await openSidebarPages(page);
     await pages.getByRole("link", { name: "Usage", exact: true }).click();
     await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
-    await pageScope.locator(".agent-select__trigger").click();
-    await pageScope
-      .locator(".agent-select__option[data-agent-option]")
-      .filter({ hasText: "All agents" })
-      .click();
-    await waitForCronScope(null);
-    await openAutomations();
-    await expectAutomations(1, 1);
-    for (const owner of ["Main", "Writer"]) {
-      const ownerLabel = automationRows
-        .filter({ hasText: owner + " release digest" })
-        .locator(".sidebar-issues-panel__meta-context");
-      await expect.poll(() => ownerLabel.textContent()).toBe(owner);
-    }
-    await captureProof("10-desktop-inbox-all-agents.png", true);
-
-    const writerRow = automationRows.filter({ hasText: "Writer release digest" });
-    await writerRow.hover();
-    await writerRow.getByRole("button", { name: "Dismiss Writer release digest" }).click();
-    await expectCount(automationRows.getByText("Writer release digest"), 0);
-    await sidebar.locator(".sidebar-issues-button").click();
-
-    const selectPageScope = async (label: string, agentId: string | null) => {
+    const selectScope = async (label: string, agentId: string | null) => {
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
         .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
       await expect.poll(() => pageScope.locator(".agent-select__label").textContent()).toBe(label);
-      // Returning to a scope reuses its valid inventory; a new RPC is not selection proof.
       await waitForCronScope(agentId);
     };
-    await selectPageScope("Main", "main");
-    await openAutomations();
-    await expectAutomations(1, 0);
-    await sidebar.locator(".sidebar-issues-button").click();
-    await selectPageScope("All agents", null);
-    await openAutomations();
-    await expectAutomations(1, 0);
-    await sidebar.locator(".sidebar-issues-button").click();
+    await selectScope("All agents", null);
+    await expectVisible(dot);
+    await selectScope("Main", "main");
+    await expectCount(dot, 0);
+    await selectScope("Writer", "writer");
+    await expectVisible(dot);
 
-    const writerJobNext = failedJob("writer", "writer-release-digest-next");
-    await gateway.setMethodResponse("cron.list", scopedCronResponses(writerJobNext));
-    const previousAllCount = await cronScopeRequestCount(null);
-    await gateway.emitGatewayEvent("cron.inventory.changed", {});
-    await expect.poll(() => cronScopeRequestCount(null)).toBeGreaterThan(previousAllCount);
-    await selectPageScope("Writer", "writer");
     const upstream = {
       commitsBehind: 246,
       upstreamRef: "origin/main",
@@ -249,14 +182,19 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expectCount(sidebar.locator(".sidebar-issues-button__count"), 1);
     await sidebar.locator(".sidebar-issues-button").click();
     await expectCount(sidebarUpdate, 1);
-    await expectAutomations(0, 1);
+    await expectVisible(dot);
+    expect(
+      await sidebar
+        .locator("#sidebar-issues-panel")
+        .getByText("Writer release digest", { exact: true })
+        .count(),
+    ).toBe(0);
     await sidebar.locator(".sidebar-issues-button").click();
 
     await page.setViewportSize({ height: 852, width: 393 });
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--mobile-nav");
-    await twoFrames(page);
     const floatingKinds = await page
       .locator(".sidebar-attention--floating [data-attention-kind]")
       .evaluateAll((elements) =>
@@ -270,13 +208,19 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expectVisible(sidebarUpdate);
     await expectCount(approvalRow, 1);
     await sidebar.getByRole("tab", { name: /System/ }).click();
-    await expectAutomations(0, 1);
+    await expectVisible(dot);
+    expect(
+      await sidebar
+        .locator("#sidebar-issues-panel")
+        .getByText("Writer release digest", { exact: true })
+        .count(),
+    ).toBe(0);
     await captureProof("11-mobile-inbox-writer-agent.png", true);
 
     await sidebar.locator(".sidebar-issues-panel__more").click();
     await sidebar.getByRole("menuitem", { name: "Dismiss shown" }).click();
     await expectCount(sidebarUpdate, 0);
-    await expectCount(automationRows, 0);
+    await expectVisible(dot);
     await sidebar.getByRole("tab", { name: /All/ }).click();
     await expectCount(approvalRow, 1);
     await captureProof("12-mobile-inbox-dismissed-alerts.png", true);
@@ -285,7 +229,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
   } catch (error) {
     await captureControlUiE2eFailureDiagnostics(page, {
       error: error instanceof Error ? error : new Error(String(error)),
-      label: "Control UI Inbox automation scope",
+      label: "Control UI automation failure indicator scope",
     });
     throw error;
   } finally {

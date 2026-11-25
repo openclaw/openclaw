@@ -306,7 +306,7 @@ describe("conversation reset confirmation", () => {
   it.each([
     ["run", "deferred", null],
     ["Gateway", "failed", "connection changed"],
-    ["scope", "failed", "operator.admin"],
+    ["scope", "failed", "You don’t have permission to do this."],
   ] as const)(
     "does not clear when %s changes during confirmation",
     async (change, result, error) => {

@@ -133,7 +133,7 @@ six-file smoke inventory, including Gateway serving, config compatibility and
 migration, and message-tool delivery. All six still run on hourly main.
 
 The `PR_EXEMPT_RUNTIME_TEST_FILES` inventory in
-`scripts/lib/ci-proof-test-inventory.mts` keeps measured slow integration tests
+`scripts/lib/ci-test-tier-policy.mts` keeps measured slow integration tests
 out of unrelated upstream PRs and exact-head PR fallback dispatches. Hourly
 `main` and Full Release Validation select these complete files through their
 registered suite owners: normal CI owns core, UI, and tooling tests; Plugin Prerelease

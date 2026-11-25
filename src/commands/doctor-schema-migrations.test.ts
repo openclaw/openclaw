@@ -21,6 +21,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawAgentMigrationSchema } from "../state/openclaw-agent-schema-history.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V26_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
@@ -37,15 +39,10 @@ import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
-function openLegacyDatabase(pathname: string, version = 26, agentId = "main") {
+function openLegacyDatabase(pathname: string, version: 24 | 26 = 26, agentId = "main") {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
-  database.exec(
-    fs.readFileSync(
-      new URL(`../../test/fixtures/sqlite/openclaw-agent-schema-v${version}.sql`, import.meta.url),
-      "utf8",
-    ),
-  );
+  database.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V26_SQL);
   database.exec(`PRAGMA user_version = ${version}`);
   database
     .prepare(`INSERT INTO schema_meta

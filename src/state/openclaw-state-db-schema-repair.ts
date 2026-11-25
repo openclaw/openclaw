@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
@@ -38,7 +39,61 @@ import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+/** Decode historical BLOB values in typed columns before migration readers consume them. */
+export function normalizeSqliteText(db: DatabaseSync): void {
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name IN (SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND strict = 0) ORDER BY rowid",
+    )
+    // SAFETY: the statement fixes the column names and types of each row.
+    .all() as Array<{ name: string }>;
+  // STRICT typed columns cannot contain historical BLOBs. Modern admission stays catalog-only.
+  if (tables.length === 0) {
+    return;
+  }
+  // Keys and references must settle together, or retain their original storage classes.
+  // SAFETY: PRAGMA foreign_keys returns one row with its integer foreign_keys setting.
+  const { foreign_keys: foreignKeys } = db.prepare("PRAGMA foreign_keys").get() as {
+    foreign_keys: number;
+  };
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    runSqliteImmediateTransactionSync(db, () => {
+      const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+      for (const { name } of tables) {
+        // SAFETY: table_xinfo fixes the names and types of these catalog columns.
+        const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
+          name: string;
+          type: string;
+          hidden: number;
+        }>;
+        for (const column of columns) {
+          // Declared BLOB and typeless columns may hold real bytes.
+          if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
+            continue;
+          }
+          const c = quote(column.name);
+          // An unchanged predecessor may have lazy FTS triggers for newer columns.
+          // Do not compile their UPDATE programs unless this column needs conversion.
+          if (
+            !db.prepare(`SELECT 1 FROM ${quote(name)} WHERE typeof(${c}) = 'blob' LIMIT 1`).get()
+          ) {
+            continue;
+          }
+          // Preserve SQLite's constraint diagnostic, including the conflicting table and key.
+          db.prepare(
+            `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
+          ).run();
+        }
+      }
+    });
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+  }
+}
 
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
 
@@ -141,7 +196,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
-    OPENCLAW_STATE_SCHEMA_SQL,
+    getOpenClawStatePredecessorSchema(8),
     "worker_session_placements",
     { errorMessage: "Canonical worker placement schema block is missing" },
   );

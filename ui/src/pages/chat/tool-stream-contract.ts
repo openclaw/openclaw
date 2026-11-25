@@ -73,6 +73,8 @@ export type CompactionStatus = {
   phase: "active" | "retrying" | "complete";
   runId: string | null;
   itemId?: string;
+  /** The session-operation event's unique ID, not a reusable agent run ID. */
+  manualOperation?: true;
   startedAt: number | null;
   completedAt: number | null;
 };

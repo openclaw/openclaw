@@ -21,6 +21,60 @@ const suite = createControlUiE2eSuite({
 const runPage = pageRunner(suite, settingsPageOptions);
 
 suite.define(() => {
+  it("keeps the four access facts paired on a phone, including a pending preview", async () => {
+    await suite.withPage(
+      {
+        ...settingsPageOptions,
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+      },
+      async ({ page }) => {
+        const config = { agents: { entries: { main: {} } } };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "config.get", "tools.effective"],
+          heldMethods: ["tools.effective"],
+          methodResponses: {
+            "agents.list": agentRoster({ main: "Main agent" }, "main", "agent"),
+            "config.get": {
+              ...configSnapshot(config, "paired-facts"),
+              runtimeConfig: config,
+              sourceConfig: config,
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/agents/main/tools");
+        await gateway.waitForRequest("tools.effective");
+        const facts = page.locator("#agent-panel .settings-kv").first();
+        for (const listed of ["Loading preview…", "0"]) {
+          await expect.poll(() => facts.locator("dd").last().textContent()).toBe(listed);
+          const pairs = await facts.locator("dt").evaluateAll((labels) =>
+            labels.map((label) => {
+              const name = label.getBoundingClientRect();
+              const value = label.nextElementSibling!.getBoundingClientRect();
+              return {
+                top: Math.abs(name.top - value.top),
+                beside: name.right <= value.left,
+                left: value.left,
+              };
+            }),
+          );
+          expect(pairs).toHaveLength(4);
+          expect(
+            pairs.every((pair) => pair.top < 1 && pair.beside && pair.left === pairs[0]!.left),
+          ).toBe(true);
+          if (listed !== "0") {
+            await gateway.resolveDeferred("tools.effective", {
+              agentId: "main",
+              profile: "full",
+              groups: [],
+            });
+          }
+        }
+      },
+    );
+  });
+
   it.each([false, true])(
     "retains populated=%s preview layout while revalidating an effective change",
     async (populated) => {

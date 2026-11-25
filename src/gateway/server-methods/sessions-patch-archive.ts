@@ -6,6 +6,7 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureSessionMcpRuntimeRetirement } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
 import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
@@ -348,6 +349,12 @@ async function prepareSessionPatchArchiveFromSource(
         entry?.sessionId ? [...sessionKeys, entry.sessionId] : sessionKeys,
         assertCurrent,
       );
+      if (entry?.sessionId) {
+        assertCurrent();
+        await captureSessionMcpRuntimeRetirement({ sessionId: entry.sessionId })?.retire(
+          assertCurrent,
+        );
+      }
     } catch (error) {
       drain.release();
       sessionLog.warn(

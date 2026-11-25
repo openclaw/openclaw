@@ -22,6 +22,7 @@ const aiPackageConsumer = {
 const doctorUiConsumers = [
   "extensions/qa-lab/src/gateway-child-initializer.e2e.test.ts",
   "src/commands/doctor.auth-profile-consumers.e2e.test.ts",
+  "test/doctor-guest-session-upgrade.e2e.test.ts",
   "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",

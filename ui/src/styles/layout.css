@@ -456,9 +456,9 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 }
 
 /* A full divider marks an open sidebar without a persistent selected pill. */
-.macos-titlebar-sidebar-toggle[aria-expanded="false"] .macos-titlebar-sidebar-divider {
-  transform: scaleY(0.55);
-  transform-origin: center;
+.macos-titlebar-sidebar-toggle[aria-expanded="false"] .macos-sidebar-open,
+.macos-titlebar-sidebar-toggle:not([aria-expanded="false"]) .macos-sidebar-closed {
+  display: none;
 }
 
 .shell--mobile-nav .macos-titlebar-controls {

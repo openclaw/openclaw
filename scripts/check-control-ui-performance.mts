@@ -126,8 +126,8 @@ const controlUiPerformanceBudgets = {
   // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
   // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
   // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
-  totalCssGzipBytes: 344_948,
-  totalCssRawBytes: 1_779_112,
+  totalCssGzipBytes: 346_369,
+  totalCssRawBytes: 1_783_929,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

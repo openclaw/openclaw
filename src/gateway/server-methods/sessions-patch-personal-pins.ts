@@ -26,7 +26,10 @@ import {
 import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { PERSONAL_PIN_PROFILE_REQUIRED, sessionPinRequester } from "./session-pin-requester.js";
-import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
+import {
+  SESSION_PATCH_ADDRESS_KEYS,
+  type SessionPatchTargetIdentity,
+} from "./session-unread-ack.js";
 import { sessionChangedError } from "./sessions-patch-errors.js";
 import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
@@ -34,11 +37,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 
 const pinFields = new Set([
-  "key",
-  "agentId",
+  ...SESSION_PATCH_ADDRESS_KEYS,
   "pinned",
-  "expectedSessionId",
-  "expectedLifecycleRevision",
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",
@@ -248,7 +248,9 @@ export async function patchPersonalSessionPins(
           try {
             item.assertCurrent();
           } catch (error) {
-            if (!many || !(error instanceof SessionMutationAuthorizationChangedError)) throw error;
+            if (!many || !(error instanceof SessionMutationAuthorizationChangedError)) {
+              throw error;
+            }
             errors.set(item.index, error.error);
             accepted.delete(key);
             stale = error;
@@ -276,7 +278,9 @@ export async function patchPersonalSessionPins(
       const entries: unknown[] = raw ?? DEFAULT_RAIL_SHORTCUTS;
       while (accepted.size) {
         const next = setPersonalSessionPins(entries, [...accepted.keys()], pinned);
-        if (next.length === entries.length) break;
+        if (next.length === entries.length) {
+          break;
+        }
         let refused: SessionMutationAuthorizationChangedError | undefined;
         let result: Awaited<ReturnType<typeof setCanonicalUserPreferences>>;
         try {
@@ -297,7 +301,9 @@ export async function patchPersonalSessionPins(
         } catch (error) {
           // Only our own pre-write refusal permits a smaller batch with the original CAS.
           // Never replay an uncertain write, preference conflict, or requester-wide refusal.
-          if (!refused || error !== refused) throw error;
+          if (!refused || error !== refused) {
+            throw error;
+          }
           continue;
         }
         if (!result?.ok) {

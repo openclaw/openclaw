@@ -114,6 +114,11 @@ Record the exception separately from a pass, keeping raw outcomes unchanged.
 See [#204382](https://github.com/openclaw/openclaw/pull/204382): cancellation in
 [Performance 45327586533](https://github.com/openclaw/openclaw/actions/runs/45327586533)
 blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
+Before committing a grant, stage the ledger in Q. From that checkout, run
+`node "$REVIEWED_TOOLING/scripts/lib/release-validation-waivers.mjs" --check-staged`,
+where `REVIEWED_TOOLING` is the absolute path to a reviewed checkout with the current
+waiver checker. Require `Staged release waiver selectors are supported.` Older
+copies can exit silently. Check the approved scope against the observed failure separately.
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).

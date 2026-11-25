@@ -230,7 +230,7 @@ describe("prepared session control target", () => {
     }
   });
 
-  it("fences a prepared action after reassignment or profile revocation", async () => {
+  it("fences a prepared action after reassignment", async () => {
     const { scope, request } = seedTarget("revocation");
     assign(scope, "human", callerId);
     const { authority } = issueAuthority(callerId);
@@ -253,12 +253,17 @@ describe("prepared session control target", () => {
       assign(scope, "human", callerId);
       expect(unobserved.assertCurrent).toThrow(/facts are unavailable/i);
     });
+  });
+
+  // Admitted once: a role change after the turn started applies to the caller's next turn.
+  it("keeps the admitted role for a prepared action after a role change", async () => {
+    const { scope, request } = seedTarget("role-change");
+    assign(scope, "human", callerId);
+    const { authority } = issueAuthority(callerId);
     try {
-      await withCapture(authorized, (profileCapture) => {
+      await withCapture({ ...request, authority }, (capture) => {
         setUserProfileRole(callerId, "reader");
-        expect(profileCapture.assertCurrent).toThrow(
-          /facts are unavailable|current authenticated profile/i,
-        );
+        expect(capture.assertCurrent).not.toThrow();
       });
     } finally {
       setUserProfileRole(callerId, null);

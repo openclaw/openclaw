@@ -299,6 +299,7 @@ async function executeAgentRun(
         // must leave the paused task's completion lifecycle with its owner.
         if (prepared.reactivateSubagent && params.resolvedSessionKey) {
           await reactivateCompletedSubagentSession({
+            operatorAuthority: prepared.operatorAuthority,
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
             task: message,
