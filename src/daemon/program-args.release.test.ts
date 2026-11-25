@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   planCliEntrypoint,
   resolveGatewayProgramArguments,
@@ -79,14 +80,15 @@ it.each(["openclaw.mjs", "dist/index.js"])(
     expect(wrapped.programArguments).toEqual([process.execPath, "gateway", "--port", "18789"]);
 
     // The resident Gateway does not own the separate node service.
-    const node = await resolveNodeProgramArguments({
-      cliEntrypoint,
-      runtime: "node",
-      runtimePath: process.execPath,
-      host: "gateway.example",
-      port: 18789,
+    await withEnvAsync({ OPENCLAW_STATE_DIR: state }, async () => {
+      const node = await resolveNodeProgramArguments({
+        runtime: "node",
+        runtimePath: process.execPath,
+        host: "gateway.example",
+        port: 18789,
+      });
+      expect(node.programArguments[1]).toBe(path.join(npmRoot, "openclaw.mjs"));
     });
-    expect(node.programArguments[1]).toBe(path.join(npmRoot, "openclaw.mjs"));
 
     const otherProfile = await resolveGatewayProgramArguments({
       ...inputs,
