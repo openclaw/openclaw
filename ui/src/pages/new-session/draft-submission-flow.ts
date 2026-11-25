@@ -305,6 +305,7 @@ export class DraftSubmissionFlow {
     const access = readSessionMethodAccess(this.read().context?.gateway.snapshot, {
       method: "sessions.create",
       params: this.buildDraftSessionCreateParams({ visibility: "incognito" }),
+      missingScopeReasonKey: "newSession.incognitoPermissionDenied",
     });
     return access.allowed ? undefined : access.reason;
   }

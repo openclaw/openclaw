@@ -178,6 +178,10 @@ export async function restoreDoctorGatewayService(params: {
       assertCustody?.();
       assertCurrent();
     };
+    // Update admission reads the update ledger (a full state-database observation).
+    // Native writers call their live `assertCurrent` at every command boundary, so
+    // they get custody plus the held service lock; the ledger is rechecked at each
+    // checkpoint below and in `beforeMutation`, before every native side effect.
     const assertMaintenanceCurrent = () => {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
@@ -382,9 +386,12 @@ export async function restoreDoctorGatewayService(params: {
                     },
                     serviceMaintenance: {
                       managerUid: before.serviceManagerUid,
-                      assertCurrent: assertInstallationCurrent,
+                      assertCurrent: assertInspectionCurrent,
                       assertReadCurrent: assertInspectionCurrent,
-                      beforeMutation: assertAutoStartCurrent,
+                      beforeMutation: async () => {
+                        await assertAutoStartCurrent();
+                        params.assertInstallationAdmission?.();
+                      },
                     },
                   },
                 ),
@@ -474,7 +481,9 @@ export async function restoreDoctorGatewayService(params: {
         preserveDefinition: true,
         preserveAutoStart: true,
         beforeMutation: assertAutoStartCurrent,
-        assertCurrent: assertMaintenanceCurrent,
+        // systemd also rechecks admission right before each native start/restart dispatch.
+        beforeEffect: assertMaintenanceCurrent,
+        assertCurrent: assertInspectionCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
           : {}),

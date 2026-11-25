@@ -6,7 +6,7 @@ import type { PluginHookBeforeModelResolveResult } from "../../plugins/hook-befo
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AssistantErrorTranscript } from "../assistant-error-transcript.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
-import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-outbox.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import type {
   FallbackAttempt,

@@ -387,13 +387,16 @@ async function* scanPiSummaries(candidates: PiFileCandidate[]) {
     const { results } = await runTasksWithConcurrency({
       tasks: candidates
         .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
-        .map((candidate) => () => readPiSessionSummary(candidate)),
+        .map((candidate) => async () => ({
+          candidate,
+          summary: await readPiSessionSummary(candidate),
+        })),
       limit: IO_CONCURRENCY,
       throwOnError: true,
     });
-    for (const summary of results) {
+    for (const { summary, candidate } of results) {
       if (summary) {
-        yield summary;
+        yield { summary, candidate };
       }
     }
   }
@@ -401,8 +404,19 @@ async function* scanPiSummaries(candidates: PiFileCandidate[]) {
 
 export async function listPiSummaryPage(
   env: NodeJS.ProcessEnv,
-  params: { offset: number; limit: number; searchTerm?: string },
+  params: {
+    offset: number;
+    limit: number;
+    searchTerm?: string;
+    exportSource?: { threadId: string; sourceHomeId?: string };
+  },
 ): Promise<{ summaries: PiSessionSummary[]; hasMore: boolean }> {
+  if (params.exportSource) {
+    const { threadId, sourceHomeId } = params.exportSource;
+    const candidate = sourceHomeId && (await resolvePiExportCandidate(threadId, env, sourceHomeId));
+    const summary = candidate && (await readPiSessionSummary(candidate));
+    return { summaries: summary && summary.threadId === threadId ? [summary] : [], hasMore: false };
+  }
   const candidates = await piFileCandidates(env);
   const activeFiles = new Set(candidates.map((candidate) => candidate.file));
   for (const file of summaryCache.keys()) {
@@ -413,7 +427,7 @@ export async function listPiSummaryPage(
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
   const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
-  for await (const summary of scanPiSummaries(candidates)) {
+  for await (const { summary } of scanPiSummaries(candidates)) {
     if (summaryMatches(summary, needle)) {
       matches.push(summary);
       if (matches.length >= target) {
@@ -431,7 +445,7 @@ async function findPiSummary(
   threadId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<PiSessionSummary | undefined> {
-  for await (const summary of scanPiSummaries(await piFileCandidates(env))) {
+  for await (const { summary } of scanPiSummaries(await piFileCandidates(env))) {
     if (summary.threadId === threadId) {
       return summary;
     }
@@ -465,17 +479,32 @@ export async function readPiSessionFileBaseline(
 // Discarding the native discovery generation also retires its file-origin mapping.
 const exportFilesByDiscovery = new WeakMap<
   PiFileCandidate[],
-  Promise<Map<string, string | null>>
+  Promise<Map<string, PiFileCandidate | null>>
 >();
 async function scanExportFiles(candidates: PiFileCandidate[]) {
   if (candidates.length >= MAX_DISCOVERY_FILES) {
     throw new Error("Pi session discovery is incomplete");
   }
-  const files = new Map<string, string | null>();
-  for await (const summary of scanPiSummaries(candidates)) {
-    files.set(summary.threadId, files.has(summary.threadId) ? null : summary.file);
+  const files = new Map<string, PiFileCandidate | null>();
+  for await (const { summary, candidate } of scanPiSummaries(candidates)) {
+    files.set(summary.threadId, files.has(summary.threadId) ? null : candidate);
   }
   return files;
+}
+
+async function resolvePiExportCandidate(
+  threadId: string,
+  env: NodeJS.ProcessEnv,
+  sourceHomeId: string,
+): Promise<PiFileCandidate | undefined> {
+  const candidates = await piFileCandidates(env);
+  let files = exportFilesByDiscovery.get(candidates);
+  if (!files) {
+    files = scanExportFiles(candidates);
+    exportFilesByDiscovery.set(candidates, files);
+  }
+  const selected = (await files).get(threadId);
+  return selected && sha256Hex(selected.file) === sourceHomeId ? selected : undefined;
 }
 
 export async function readPiSessionById(
@@ -490,17 +519,10 @@ export async function readPiSessionById(
   } else {
     // Legacy publication IDs omit the backing file. Refuse duplicate IDs and
     // store changes even when the normal interactive cache has selected a winner.
-    const candidates = await piFileCandidates(env);
-    let files = exportFilesByDiscovery.get(candidates);
-    if (!files) {
-      files = scanExportFiles(candidates);
-      exportFilesByDiscovery.set(candidates, files);
-    }
-    const selected = (await files).get(threadId);
-    if (!selected || sha256Hex(selected) !== sourceHomeId) {
+    file = (await resolvePiExportCandidate(threadId, env, sourceHomeId))?.file;
+    if (!file) {
       throw new Error("Pi source selection changed or is ambiguous");
     }
-    file = selected;
   }
   if (!file) {
     throw new Error("Pi session was not found");

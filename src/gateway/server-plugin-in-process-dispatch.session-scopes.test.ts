@@ -458,7 +458,9 @@ describe("hosted session tool narrow scope projection", () => {
     withHostedCreation(async (fixture) => {
       await fixture.seedForeign();
       const before = fixture.read();
-      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow("own session");
+      await expect(fixture.create({ label: "Rejected" })).rejects.toThrow(
+        'Session "agent:main:dashboard:scope-child" was not found.',
+      );
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toEqual(before);
     }));

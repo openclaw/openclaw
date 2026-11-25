@@ -11,7 +11,7 @@ import {
   persistentBeamTestStore,
   type BeamTestSession,
 } from "./beam.test-support.js";
-import { beamMirrorId } from "./mirror.js";
+import { beamMirrorId } from "./mirror-candidate.js";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.js";
 
@@ -99,9 +99,10 @@ describe("Beam terminal retry policy", () => {
     );
     try {
       await withServer(handler, async (baseUrl) => {
+        const catalog = createBeamTestCatalog({ sessions: () => activeSessions });
         const runner = createBeamTestRunner({
           endpoint: `${baseUrl}/api/v1/beam/sessions`,
-          listCatalogs: () => [createBeamTestCatalog({ sessions: () => activeSessions })],
+          listCatalogs: () => [catalog],
         });
         for (let offset = 0; offset < BEAM_MAX_SESSIONS; offset += 32) {
           const count = Math.min(32, BEAM_MAX_SESSIONS - offset);

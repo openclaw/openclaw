@@ -36,7 +36,7 @@ export function registerGatewayRestartOwnershipTests({
   respawnGatewayProcessForUpdate: respawnUpdate,
   cancelManagedServiceUpdateHandoff: cancelUpdate,
   requestManagedServiceUpdateHandoffPark: parkUpdate,
-  waitForGatewayHealthyRestart: waitForHealthy,
+  waitForGatewayHttpReadiness: waitForHealthy,
   restartGatewayProcessWithFreshPid: restartProcess,
   commitManagedServiceUpdateHandoff: commitUpdate,
 }: UpdateRespawnFixtures) {

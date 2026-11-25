@@ -4,6 +4,7 @@ import {
   validatePublicationAdmissionBinding,
 } from "../full-release-publication-contract.mjs";
 import { serializeReleaseArtifact } from "./full-release-evidence.mjs";
+import { BETA_FINAL_EVIDENCE_REUSE_POLICY } from "./release-beta-promotion.mjs";
 
 export function releaseManifestChildEvidence(child) {
   return {
@@ -37,6 +38,26 @@ export function releaseManifestChildEvidence(child) {
       }),
     ),
   };
+}
+
+export function releaseManifestRootPublication(root, reuse) {
+  if (reuse.requested && root?.publicationAdmissionContract !== undefined) {
+    const publication = {
+      sourceAdmissionContract: root.sourceAdmissionContract,
+      sourceAdmission: root.sourceAdmission,
+      publicationAdmissionContract: root.publicationAdmissionContract,
+      publicationAdmission: root.publicationAdmission,
+    };
+    validatePublicationAdmissionBinding(publication);
+    if (
+      root.sourceAdmission.runId !== reuse.rootRunId ||
+      root.sourceAdmission.candidateSha !== reuse.evidenceSha
+    ) {
+      throw new Error("reused publication admission differs from the retained root identity");
+    }
+    return publication;
+  }
+  return undefined;
 }
 
 export function buildReleaseValidationManifest({ plan, drain, context, reusedManifest }) {
@@ -92,26 +113,21 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
   if (plan.evidenceReuse.requested && !root) {
     throw new Error("reused release evidence manifest is required at the manifest boundary");
   }
-  let rootPublication;
-  if (plan.evidenceReuse.requested && root?.publicationAdmissionContract !== undefined) {
-    rootPublication = {
-      sourceAdmissionContract: root.sourceAdmissionContract,
-      sourceAdmission: root.sourceAdmission,
-      publicationAdmissionContract: root.publicationAdmissionContract,
-      publicationAdmission: root.publicationAdmission,
-    };
-    validatePublicationAdmissionBinding(rootPublication);
-    if (
-      root.sourceAdmission.runId !== plan.evidenceReuse.rootRunId ||
-      root.sourceAdmission.candidateSha !== plan.evidenceReuse.evidenceSha
-    ) {
-      throw new Error("reused publication admission differs from the retained root identity");
-    }
-  }
+  const rootPublication = releaseManifestRootPublication(root, plan.evidenceReuse);
   const manifest = plan.evidenceReuse.requested
     ? {
         ...root,
         ...current,
+        ...(plan.evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+          ? {
+              validationInputs: {
+                ...context.validationInputs,
+                targetVersion: plan.targetVersion,
+                ...publicationIntentInputs(plan.sourceAdmission),
+                ...(plan.coveragePolicy ? { coveragePolicy: plan.coveragePolicy } : {}),
+              },
+            }
+          : {}),
         evidenceReuse: {
           policy: plan.evidenceReuse.policy,
           runId: plan.evidenceReuse.rootRunId,
@@ -169,6 +185,9 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
             ])
           : {
               normalCi: runs.normalCi ?? "",
+              ...(Object.hasOwn(runs, "stableClientCompatibility")
+                ? { stableClientCompatibility: runs.stableClientCompatibility }
+                : {}),
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
               pluginPrereleaseCandidate: runs.pluginPrereleaseCandidate ?? "",
               releaseChecksIndependent: runs.releaseChecksIndependent ?? "",

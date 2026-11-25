@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { GATEWAY_CLIENT_NAMES } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { TurnGrant } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   getAgentRunContext,
@@ -15,22 +15,19 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** The composer can answer one ordinary question; other prompts yield to the new instruction. */
 export function captureChatSendQuestionReplacement(
-  options: GatewayRequestHandlerOptions | undefined,
+  options: GatewayRequestHandlerOptions,
   request: NormalizedChatSendRequest,
   sessionKey: string,
   runId: string | undefined,
   isCommand: boolean,
+  grant: TurnGrant | undefined,
 ) {
   if (
-    !options ||
+    !grant?.questionReplace ||
     !runId ||
     isCommand ||
-    request.systemInputProvenance ||
-    request.turnKind !== "main" ||
-    request.reconnectResumeRequested ||
     request.p.queueMode !== "steer" ||
-    !request.rawMessage.trim() ||
-    request.clientInfo?.id !== GATEWAY_CLIENT_NAMES.CONTROL_UI
+    !request.rawMessage.trim()
   ) {
     return undefined;
   }

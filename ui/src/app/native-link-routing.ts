@@ -248,6 +248,19 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
     listen(window, "auxclick", handleClick),
     listen(window, NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined),
   ];
+  if (hasNativeBrowserBridge()) {
+    stops.push(
+      listen(window, "openclaw:native-new-browser-tab", () => {
+        if (options.canPresentBrowserPanel?.() !== false) {
+          window.dispatchEvent(
+            new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+              detail: { open: true, newTab: true },
+            }),
+          );
+        }
+      }),
+    );
+  }
   // Capture keeps message-level context menus from replacing native link actions.
   if (postMessage) {
     stops.push(listen(document, "contextmenu", handleContextMenu, true));

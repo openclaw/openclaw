@@ -71,6 +71,14 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
   };
 }
 
+export function mergeWarnings(
+  captured: readonly string[],
+  reported?: readonly string[],
+): string[] | undefined {
+  const combined = [...captured, ...(reported ?? [])];
+  return combined.length > 0 ? combined : undefined;
+}
+
 export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;

@@ -1,6 +1,7 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
+import { appendTtsBlockSource } from "../../tts/directive-facts.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -82,16 +83,15 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         payload.isReasoning !== true &&
         payload.isCommentary !== true;
       if (payload.text && contributesToFinalReply) {
-        const joinsBufferedTtsDirective =
-          cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
         if (state.progressState.accumulatedBlockText.length > 0) {
           state.progressState.accumulatedBlockText += "\n";
         }
         state.progressState.accumulatedBlockText += payload.text;
-        if (state.progressState.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-          state.progressState.accumulatedBlockTtsText += "\n";
-        }
-        state.progressState.accumulatedBlockTtsText += payload.text;
+        state.progressState.accumulatedBlockTtsText = appendTtsBlockSource(
+          state.progressState.accumulatedBlockTtsText,
+          payload.text,
+          cleanBlockTtsDirectiveText,
+        );
       }
       let source: BlockReplySource | undefined;
       let cleanedPayload = payload;

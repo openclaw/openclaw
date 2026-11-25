@@ -120,6 +120,7 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
       storeKeys: [key],
     }),
     hasMembership: () => false,
+    memberAccess: () => undefined,
     sharingTargetState: () => {
       const target = projection.sharingTarget(query);
       return { status: "ready", target };

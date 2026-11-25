@@ -920,7 +920,6 @@
 @media (max-width: 900px) {
   .agent-chat__input-btn {
     width: 36px;
-    min-width: 36px;
     padding: 0;
   }
 }
@@ -1081,11 +1080,6 @@
 .chat-send-btn--voice-live .chat-send-btn__voice-stop-glyph svg {
   fill: currentColor;
   stroke: none;
-}
-
-.chat-send-btn--stop svg {
-  width: 18px;
-  height: 18px;
 }
 
 .chat-send-btn--stop rect {

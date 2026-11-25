@@ -1073,7 +1073,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearPersistedCurrentConversationBindingsForTests"],
         evidence:
-          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/registry-session-binding.ts inside the contract test body. No production binding cleanup calls it.",
       },
     ],
   ],
@@ -3612,6 +3612,7 @@ const workerModules = new Set([
   "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
   "src/config/sessions/session-reaction-store.read.ts", // Only the history worker reader calls reaction SQL; synchronous test inspection lives in test support.
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.
+  "src/config/sessions/session-participation-queue.kernel.ts", // Only session-sharing-store.native.ts revokes queued input inside the sharing worker's membership transaction; the host facade imports its mutation signatures by type.
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.

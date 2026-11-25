@@ -75,6 +75,57 @@ it("prints calendar event previews", async () => {
   cli.expectText(output(), "meet events: 1", "* Project sync", MEET_URL);
 });
 
+it("selects the first current Meet when another event ends at the same instant", async () => {
+  const noon = new Date(2026, 10, 25, 12);
+  const at = (minutes: number) => ({
+    dateTime: new Date(noon.getTime() + minutes * 60_000).toISOString(),
+  });
+  const ending = {
+    start: at(-30),
+    end: at(0),
+    hangoutLink: "https://meet.google.com/aaa-aaaa-aaa",
+  };
+  const starting = { start: at(0), end: at(30), hangoutLink: MEET_URL };
+  const tied = { ...starting, hangoutLink: "https://meet.google.com/ccc-cccc-ccc" };
+  const events = [ending, starting, tied];
+  const listUrl = (timeMin: Date, timeMax: Date) => {
+    const query = new URLSearchParams({
+      maxResults: "50",
+      orderBy: "startTime",
+      showDeleted: "false",
+      singleEvents: "true",
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+    });
+    return `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+  };
+  const todayUrl = listUrl(new Date(2026, 10, 25), new Date(2026, 10, 26));
+  const defaultUrl = listUrl(noon, new Date(2026, 11, 2, 12));
+  const fetchMock = cli.stubJsonRoutes({
+    [todayUrl]: { items: events },
+    [defaultUrl]: { items: [starting, tied] },
+  });
+
+  vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(noon);
+  try {
+    for (const { args, visible } of [
+      { args: ["--today"], visible: events },
+      { args: [], visible: [starting, tied] },
+    ]) {
+      await runApiCommand("calendar-events", [...args, "--json"]);
+      expect(json()).toMatchObject({
+        events: visible.map(({ hangoutLink }) => ({
+          meetingUri: hangoutLink,
+          selected: hangoutLink === MEET_URL,
+        })),
+      });
+    }
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([todayUrl, defaultUrl]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("ends an active conference for a Meet space", async () => {
   const endUrl = "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference";
   const fetchMock = cli.stubJsonRoutes({

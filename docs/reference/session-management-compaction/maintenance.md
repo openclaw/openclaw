@@ -143,9 +143,9 @@ is older than `afterDays`. Recent activity or a running status on the logical
 session protects its current window; historical windows use their own activity
 and running status. Recovery ownership, actual run admissions, and explicit
 history references such as checkpoints continue to protect the required
-windows. Pinning or archiving a session does not count as ongoing activity and
-does not by itself keep its
-payload in SQLite. The Gateway checks at startup and once a minute, running
+windows. Archiving, pinning, or unpinning a session by itself preserves its last
+activity time. Restoring the session to the active list refreshes that time.
+The Gateway checks at startup and once a minute, running
 background batches with work budgets of 128 transcripts and 64 MiB without
 requiring a new message. Changes to these settings apply to future work without
 restarting the Gateway; turning the feature off does not discard or strand
@@ -155,8 +155,9 @@ existing cold history.
 `session.maintenance.mode` is `warn`; that mode controls age, count, and
 disk-budget cleanup. Disable `coldStorage.enabled` to stop future extraction.
 
-Opening chat, requesting history, and channel writes restore cold history
-asynchronously before use. Bulk `sessions.preview` requests keep payloads archived
+Bounded chat history pages and initial message subscriptions use navigation rows
+in SQLite to read the selected archive chunks. Older archives awaiting navigation
+backfill still restore on these reads. Bulk `sessions.preview` requests keep payloads archived
 and return an explicit `cold` status so menu prewarming cannot refill the database.
 Session lists also keep cold payloads archived. When transcript title fields are
 not already cached, lists use session metadata and omit last-message previews
@@ -173,8 +174,8 @@ payloads. Matching preserves newest-first selection and active-branch membership
 a stale active projection still uses restoration and reconciliation. These reads
 verify the entire archive before returning a result, so corruption cannot look
 like missing history. Repeated reads decompress the archive again rather than
-keeping its payload resident. Conversation writes, indexed chat pages, model-context
-reads, and activity-summary generation retain their existing restoration path.
+keeping its payload resident. Conversation writes, model-context reads, and activity-summary
+generation can restore the transcript.
 Archive/unarchive notifications check recap freshness before loading a transcript;
 a current recap does not trigger restoration. New activity and terminal runs still
 request recap work.

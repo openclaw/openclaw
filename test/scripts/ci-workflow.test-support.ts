@@ -291,7 +291,10 @@ export function evaluateWorkflowExpression(
           },
         ]),
       ),
-      resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      resolve_target: {
+        result: context.jobResults?.resolve_target,
+        outputs: context.resolveTargetOutputs ?? {},
+      },
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
       },

@@ -559,6 +559,31 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
   },
 );
 
+it("keeps the preserved Anthropic fixture out of the later mock OpenAI restart", () => {
+  const root = tempDirs.make("upgrade-survivor-restart-inference-");
+  const result = runInner(
+    root,
+    `
+trap - ERR EXIT HUP INT TERM
+openclaw_e2e_start_mock_openai() { echo fixture-pid; }
+openclaw_e2e_wait_mock_openai() { return 0; }
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw() { printf "%s\n" "$*" >> "$FIXTURE_ROOT/calls"; }
+printf '{}\n' > "$OPENCLAW_CONFIG_PATH"
+prepare_restart_inference
+test "$restart_inference" = mock-openai
+grep -Fx "config set plugins.entries.anthropic.enabled false --strict-json" "$FIXTURE_ROOT/calls"
+`,
+    {
+      PATH: process.env.PATH,
+      HOME: root,
+      FIXTURE_ROOT: root,
+      OPENCLAW_CONFIG_PATH: join(root, "openclaw.json"),
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it("keeps legacy mock auth out of provider discovery and persists it for restarts", () => {
   const root = tempDirs.make("upgrade-survivor-legacy-env-");
   const result = runInner(

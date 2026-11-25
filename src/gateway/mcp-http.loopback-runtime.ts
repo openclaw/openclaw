@@ -1,11 +1,10 @@
-// Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+// Process-local MCP loopback runtime state for HTTP access.
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
-  nonOwnerToken: string;
 };
 
 export type McpLoopbackToolCallTerminalOutcome =

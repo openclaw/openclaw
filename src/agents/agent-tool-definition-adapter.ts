@@ -4,6 +4,7 @@ import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { readMissingScopeError } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 /**
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
@@ -74,7 +75,9 @@ function buildToolExecutionErrorResult(params: {
   return jsonResult({
     status: "error",
     tool: params.toolName,
-    error: params.message,
+    error: readMissingScopeError(params.cause)
+      ? `Your role on this Gateway does not allow this ${params.toolName} action. Ask a Gateway admin to do it, or to add the permission to your role. Do not retry.`
+      : params.message,
     ...(permissionMissing ? { permissionMissing } : {}),
   });
 }

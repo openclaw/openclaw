@@ -632,7 +632,9 @@ export async function prepareModelsListResult({
         cfg,
         isCurrent: () => isCurrent() && projector.isCurrent(),
         metadataSnapshot,
-        catalog,
+        // The all view projects exactly its input rows. Scope expensive per-row auth and
+        // runtime preparation here while retaining the complete catalog for policy and diagnostics.
+        catalog: view === "all" && providerFilter ? catalog.filter(matchesProvider) : catalog,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel,
         agentId,

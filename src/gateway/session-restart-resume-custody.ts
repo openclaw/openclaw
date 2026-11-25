@@ -53,7 +53,7 @@ import type {
   PreparedRestartStore,
   RestartResumeParams,
 } from "./session-restart-resume-discovery.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Fixed wording: no requester, grant, or result content reaches the chat. */
 const RESTART_COMPLETION_REFUSED_NOTICE =
@@ -234,6 +234,9 @@ async function recoverRequesterCompletionCustody(params: {
         // Re-admit the spawning requester's saved source; the woken turn checks session access
         // when it starts. Older rows use the session principal, else the System write baseline.
         const source = child.requesterOperatorSource;
+        if (child.requiresCompletionAuthority && !source) {
+          throw new Error("Participant completion requires its original requester source.");
+        }
         authority = source
           ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
           : await prepareSessionSystemTurnAuthority({

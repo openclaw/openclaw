@@ -40,7 +40,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 const freshCfg = { runtimeFresh: true };
 const sentinelError = new Error("stop-after-preflight");
@@ -403,7 +402,7 @@ describe("runReplyAgent runtime config", () => {
     },
   );
 
-  it("records abortForRestart during memory flush as cancellation without starting the main turn", async () => {
+  it("does not start the main turn after abortForRestart during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
     const runState: ReplyOperationRunState = {};
     replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
@@ -418,11 +417,10 @@ describe("runReplyAgent runtime config", () => {
     const result = await runReplyAgent(replyParams);
 
     expect(result).toEqual({});
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });
 
-  it("records an aborted user agent turn as cancellation", async () => {
+  it("keeps an aborted user agent turn silent", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
     const runState: ReplyOperationRunState = {};
     replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
@@ -432,9 +430,7 @@ describe("runReplyAgent runtime config", () => {
       outcome: { kind: "aborted", reason: "user" },
     });
 
-    await runReplyAgent(replyParams);
-
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({});
   });
 
   it("delivers known pre-run OAuth refresh failures instead of dropping the reply", async () => {

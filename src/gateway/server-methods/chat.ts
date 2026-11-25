@@ -13,6 +13,7 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { chatPendingInputsDismissHandlers } from "./chat-pending-inputs-dismiss-handler.js";
+import { chatPendingInputsOwnHandlers } from "./chat-pending-inputs-own-handler.js";
 import { chatPredictionHandlers } from "./chat-prediction-handler.js";
 import { chatSteerNowHandlers } from "./chat-steer-now-handler.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -23,6 +24,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   ...chatMessageGetHandlers,
   ...chatPredictionHandlers,
   ...chatPendingInputsDismissHandlers,
+  ...chatPendingInputsOwnHandlers,
   ...chatSteerNowHandlers,
   "chat.toolTitles": async ({ params, respond }) => {
     if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
