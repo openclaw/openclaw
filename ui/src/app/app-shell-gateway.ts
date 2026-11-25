@@ -469,7 +469,7 @@ export class ShellGatewayOwner {
       void connectionBootstrap.run("runtime-config", () =>
         this.ensureRuntimeConfig(snapshot, context.runtimeConfig),
       );
-      if (!context.agents.state.agentsList) {
+      if (context.agents && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
