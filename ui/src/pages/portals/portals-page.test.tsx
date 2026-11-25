@@ -333,7 +333,7 @@ it.each([undefined, "pending-machine"])("retires unreadable state (%s)", async (
   await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(1));
   source.updateSnapshot({ phase: "reconnecting" });
   await page.updateComplete;
-  expectText(page).not.toContain("This action requires operator.read access.");
+  expectText(page).not.toContain("You don’t have permission to view portals.");
   source.updateSnapshot({
     phase: "connected",
     hello: gatewayHelloForMethods(methods, ["operator.sessions.read"]),
@@ -342,7 +342,7 @@ it.each([undefined, "pending-machine"])("retires unreadable state (%s)", async (
   source.emitPortals([portal]);
   await vi.advanceTimersByTimeAsync(6_000);
   expect(source.request).toHaveBeenCalledTimes(1);
-  expectText(page).toContain("This action requires operator.read access.");
+  expectText(page).toContain("You don’t have permission to view portals.");
   expect(frameOf(page)).toBeNull();
   expectText(page).not.toContain("Starting your device");
 });

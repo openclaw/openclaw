@@ -155,7 +155,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   const actor = params.requester.snapshot.actor;
   if (!authority.operatorWrite && actor.kind !== "operator") {
     throw new Error(
-      "This conversation has no Gateway operator identity, so it cannot inspect PRs. A Gateway owner adds this sender to commands.ownerAllowFrom; anyone else asks an admin to link this channel account to their Gateway profile, then retries.",
+      "This channel cannot confirm who you are, so it cannot inspect PRs; use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
     );
   }
   // Updating an imported PR must not create guest author eligibility.
