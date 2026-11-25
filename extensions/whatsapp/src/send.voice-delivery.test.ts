@@ -129,8 +129,15 @@ it.each(["ogg", "m4a"])("delivers %s voice and caption in one activity scope", a
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
       },
+      undefined,
+      { remoteE164: "+1555", remoteJids: ["1555@s.whatsapp.net"] },
     ],
-    ["1555@s.whatsapp.net", { text: caption }],
+    [
+      "1555@s.whatsapp.net",
+      { text: caption },
+      undefined,
+      { remoteE164: "+1555", remoteJids: ["1555@s.whatsapp.net"] },
+    ],
   ]);
   expect(listenerSendMessage).toHaveBeenCalledTimes(2);
   expect(onDeliveryResult).toHaveBeenCalledTimes(2);

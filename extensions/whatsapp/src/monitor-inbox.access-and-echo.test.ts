@@ -4,9 +4,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { whatsappInboundLog } from "./auto-reply/loggers.js";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
+import { openBaileysLidMapping } from "./lid-mapping.test-support.js";
 import {
   buildNotifyMessageUpsert,
   getRecordChannelActivityMock,
+  getAuthDir,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
@@ -102,6 +104,71 @@ async function expectOutboundDmSkipsPairing(params: {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+
+  it("rejects stale reverse mappings before receive admission", async () => {
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({ dmPolicy: "allowlist", allowFrom: ["+15551230000"] }),
+    );
+    const mappings = await openBaileysLidMapping(getAuthDir());
+    await mappings.storeLIDPNMappings([{ lid: "777@lid", pn: "15551230000@s.whatsapp.net" }]);
+    await mappings.storeLIDPNMappings([{ lid: "888@lid", pn: "15551230000@s.whatsapp.net" }]);
+    expect(await mappings.getPNForLID("777@lid")).toContain("15551230000:");
+    const { onMessage, listener, sock } = await openInboxMonitor();
+    sock.signalRepository.lidMapping.getPNForLID.mockImplementation(
+      mappings.getPNForLID.bind(mappings),
+    );
+    try {
+      emitText(sock, "reassigned-lid", "777@lid", "hello");
+      await waitForInboundWorkDrained();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+      expect(sock.signalRepository.lidMapping.getPNForLID).not.toHaveBeenCalled();
+      emitText(sock, "current-lid", "888@lid", "hello");
+      await waitForMessageCalls(onMessage, 1);
+      await waitForInboundWorkDrained();
+      expectInbound(onMessage, { platform: { senderE164: "+15551230000", chatJid: "888@lid" } });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it.each([false, true])(
+    "delivers observed alternate PN identities without lookup (group: %s)",
+    async (group) => {
+      mockLoadConfig.mockReturnValue(
+        createInboxConfig({
+          dmPolicy: "allowlist",
+          allowFrom: ["+15551230000"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+      );
+      const { onMessage, listener, sock } = await openInboxMonitor();
+      const lid = "812345678901234:2@hosted.lid";
+      const pn = "15551230000:3@hosted";
+      sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(null);
+      try {
+        sock.ev.emit(
+          "messages.upsert",
+          buildNotifyMessageUpsert({
+            id: "observed-alternate-pn",
+            remoteJid: group ? "120363401234567890@g.us" : lid,
+            ...(group ? { participant: lid, participantAlt: pn } : { remoteJidAlt: pn }),
+            text: "hello",
+            timestamp: nowSeconds(),
+          }),
+        );
+        await waitForMessageCalls(onMessage, 1);
+        await waitForInboundWorkDrained();
+        expectInbound(onMessage, { platform: { senderE164: "+15551230000" } });
+        expect(sock.signalRepository.lidMapping.getPNForLID).not.toHaveBeenCalled();
+        expect(sock.signalRepository.lidMapping.getLIDForPN).not.toHaveBeenCalled();
+        expect(sock.readMessages).toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    },
+  );
 
   it.each([
     { policy: { dmPolicy: "disabled" }, group: false, reason: "dm_policy_disabled" },

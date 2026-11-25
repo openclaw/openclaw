@@ -27,6 +27,7 @@ const doctorUiConsumers = [
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
   "test/e2e/qa-lab/runtime/gateway-codex-refusal-product-proof.e2e.test.ts",
+  "test/e2e/whatsapp-doctor-lid-allowlist.built-cli.e2e.test.ts",
 ].map((file) => ({ file, configs: aiPackageConsumer.configs, dir: "" }));
 export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;

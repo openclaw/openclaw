@@ -23,6 +23,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { prepareWhatsAppInboundActor } from "./identity.js";
 import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
 import { buildWhatsAppReactionTargetKey } from "./reaction-target.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
@@ -299,12 +300,22 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     reaction?.key?.remoteJid,
     msg.key?.remoteJid,
   ]);
-  const actorJid =
-    msg.key?.participant?.trim() ||
-    (msg.key?.fromMe
-      ? (selfLid?.trim() ?? selfJid?.trim() ?? "")
-      : (msg.key?.remoteJid?.trim() ?? ""));
-  if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
+  const participantJid = msg.key?.participant?.trim();
+  const actor = participantJid
+    ? prepareWhatsAppInboundActor({
+        primaryJid: participantJid,
+        alternateJid: msg.key?.participantAlt,
+      })
+    : msg.key?.fromMe
+      ? prepareWhatsAppInboundActor({
+          primaryJid: selfLid?.trim() || selfJid?.trim(),
+          alternateJid: selfJid?.trim() || selfLid?.trim(),
+        })
+      : prepareWhatsAppInboundActor({
+          primaryJid: msg.key?.remoteJid,
+          alternateJid: msg.key?.remoteJidAlt,
+        });
+  if (!reactionKey || !messageId || remoteJids.length === 0) {
     return false;
   }
   const { accountId, resolveReactionTargetJids, logVerboseMessage } = params;
@@ -338,7 +349,9 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return false;
   }
 
-  const actorId = await params.resolveInboundJid(actorJid);
+  const actorId = actor
+    ? (actor.e164 ?? (await params.resolveInboundJid(actor.transportJid)))
+    : null;
   if (!actorId) {
     params.logVerboseMessage?.(
       `whatsapp: approval reaction ignored for ${target.approvalId}; missing actor identity`,

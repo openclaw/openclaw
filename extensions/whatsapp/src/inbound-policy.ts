@@ -8,23 +8,15 @@ import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
+import { normalizeWhatsAppDirectPhone } from "./normalize-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { isSelfChatMode } from "./targets-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = ReturnType<typeof resolveWhatsAppInboundPolicy>;
-
-function normalizeWhatsAppIngressPhone(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return normalizeE164(trimmed);
-}
 
 export function resolveWhatsAppInboundPolicy(params: {
   cfg: OpenClawConfig;
@@ -93,7 +85,7 @@ export async function resolveWhatsAppIngressAccess(params: {
     identity: {
       key: "whatsapp-sender-phone",
       kind: "phone",
-      normalize: normalizeWhatsAppIngressPhone,
+      normalize: normalizeWhatsAppDirectPhone,
       sensitivity: "pii",
       entryIdPrefix: "whatsapp-entry",
     },
@@ -143,7 +135,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   const sender = getSenderIdentity(params.msg, params.authDir);
   const dmSender = sender.e164 ?? admission.conversation.id;
   const groupSender = sender.e164 ?? "";
-  if (!normalizeE164(isGroup ? groupSender : dmSender)) {
+  if (!normalizeWhatsAppDirectPhone(isGroup ? groupSender : dmSender)) {
     return false;
   }
 
