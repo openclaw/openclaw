@@ -139,8 +139,10 @@ function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
     lines.push("");
     lines.push("| Kind | Metric | Count | Example scenario | State | Actual | Expected |");
     lines.push("| --- | --- | ---: | --- | --- | ---: | --- |");
-    const groups = Map.groupBy(violations, (item) => JSON.stringify([item.kind, item.metric]));
-    for (const samples of groups.values()) {
+    const byKindAndMetric = Map.groupBy(violations, (item) =>
+      JSON.stringify([item.kind, item.metric]),
+    );
+    for (const samples of byKindAndMetric.values()) {
       const item = samples[0]!;
       lines.push(
         markdownRow([
