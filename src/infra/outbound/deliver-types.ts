@@ -1,5 +1,6 @@
 // Delivery result types define the normalized channel send contract plus
 // partial-failure metadata for multi-payload outbound sends.
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type {
   AuditMessageDeliveryKind,
   AuditMessageFailureStage,
@@ -206,6 +207,27 @@ export class OutboundDeliveryError extends Error {
       );
     this.stage = options.stage ?? "unknown";
   }
+}
+
+/** The transport may have accepted this attachment before reporting failure. */
+export class OutboundAttachmentSendError extends Error {
+  constructor(
+    readonly failedAttachment: string,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "OutboundAttachmentSendError";
+  }
+}
+
+export function attachmentFailureDetails(error: unknown) {
+  const failure = collectNestedErrorCandidates(error).find(
+    (candidate): candidate is OutboundAttachmentSendError =>
+      candidate instanceof OutboundAttachmentSendError,
+  );
+  return failure
+    ? { failedAttachment: failure.failedAttachment, deliveryCertainty: "unknown" as const }
+    : {};
 }
 
 /** Internal control flow for lifecycle closure before recipient-visible dispatch. */

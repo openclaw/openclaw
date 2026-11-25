@@ -7,6 +7,8 @@ import type { MessageReceipt } from "../message/types.js";
 /** Provider-visible delivery facts shared by channel turns and outbound entrypoints. */
 export type ChannelDeliveryOutcome = {
   messageIds?: string[];
+  failedAttachment?: string;
+  deliveryCertainty?: "unknown";
   receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;

@@ -280,9 +280,11 @@ export async function executeGatewayAction(
       payload = await request<unknown>(reconciliationCall);
     }
   } catch (error) {
-    const partialDelivery = ctx.input.messageActionAuthorization?.scheduled
-      ? projectMessageActionPartialDelivery(error)
-      : undefined;
+    const partialDelivery =
+      ctx.input.messageActionAuthorization?.scheduled ||
+      (ctx.input.actionOrigin === "message-tool" && !ctx.input.gatewayOwnedDelivery)
+        ? projectMessageActionPartialDelivery(error)
+        : undefined;
     if (partialDelivery !== undefined) {
       payload = partialDelivery;
     } else {
@@ -539,9 +541,11 @@ export async function executeMessagePlugin(
       skipQueue: input.skipQueue,
     });
   } catch (error) {
-    const partialDelivery = input.messageActionAuthorization?.scheduled
-      ? projectMessageActionPartialDelivery(error)
-      : undefined;
+    const partialDelivery =
+      input.messageActionAuthorization?.scheduled ||
+      (input.actionOrigin === "message-tool" && !input.gatewayOwnedDelivery)
+        ? projectMessageActionPartialDelivery(error)
+        : undefined;
     if (partialDelivery) {
       return await finishPluginAction(partialDelivery);
     }

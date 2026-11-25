@@ -54,6 +54,7 @@ import {
 import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
+  projectMessageActionPartialDelivery,
 } from "./message-action-execution.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
@@ -657,6 +658,22 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     bestEffort: sendPayload.bestEffort,
     reply,
     threadId: resolvedThreadId ?? undefined,
+  }).catch((error: unknown) => {
+    const partial =
+      input.actionOrigin === "message-tool" && !input.gatewayOwnedDelivery
+        ? projectMessageActionPartialDelivery(error)
+        : undefined;
+    if (!partial) {
+      throw error;
+    }
+    return {
+      handledBy: "core" as const,
+      payload: partial,
+      sendResult: undefined,
+      toolResult: undefined,
+      deliveredText: undefined,
+      deliveredPayloads: undefined,
+    };
   });
 
   // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core

@@ -17,6 +17,7 @@ import { createChannelPartialDeliveryError } from "../../channels/turn/partial-d
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
+import { attachmentFailureDetails } from "../../infra/outbound/deliver-types.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -664,6 +665,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (send.status === "partial_failed") {
             throw createChannelPartialDeliveryError(send.error, {
               messageIds: send.results.map((result) => result.messageId),
+              ...attachmentFailureDetails(send.error),
               receipt: send.receipt,
               visibleReplySent: true,
             });
