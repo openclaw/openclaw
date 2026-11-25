@@ -465,7 +465,7 @@ describe("automatic client credential preparation", () => {
     async (role, required) => {
       const fixture = await bootstrap();
       if (required) {
-        changeRecordedDevice(fixture.env);
+        changeRecordedFile(fixture.env, "ino");
       } else {
         restoreLegacyBootstrapReceipt(fixture.env);
       }
