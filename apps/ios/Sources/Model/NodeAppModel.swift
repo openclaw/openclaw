@@ -4820,6 +4820,9 @@ extension NodeAppModel {
             guard let self else { return }
             var attempt = 0
             var options = config.nodeOptions
+            // The claw pairs an OpenClaw ID node as a first node-mode device: give it its own key, as
+            // the Mac does, rather than upgrading the operator's.
+            if config.openClawIDNodeSession != nil { options.deviceIdentityProfile = .node }
             while !Task.isCancelled,
                   self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
             {
