@@ -1,0 +1,4 @@
+# Four existing volume-policy cases move to an isolated runtime-policy fixture.
+# Shared setup adds 41 net test lines; no allowance or inherited credit changes.
+# Recompute this scoped credit if the comparison base changes.
+41
