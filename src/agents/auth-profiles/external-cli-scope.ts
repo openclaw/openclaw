@@ -127,7 +127,9 @@ export function resolveExternalCliAuthScopeFromConfig(
     return undefined;
   }
   return {
-    providerIds: [...providerIds].toSorted((left, right) => left.localeCompare(right)),
-    profileIds: [...profileIds].toSorted((left, right) => left.localeCompare(right)),
+    // oxlint-disable-next-line unicorn/no-array-sort -- Each Set spread is private to this returned scope.
+    providerIds: [...providerIds].sort((left, right) => left.localeCompare(right)),
+    // oxlint-disable-next-line unicorn/no-array-sort -- Each Set spread is private to this returned scope.
+    profileIds: [...profileIds].sort((left, right) => left.localeCompare(right)),
   };
 }

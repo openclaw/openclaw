@@ -6,11 +6,12 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
@@ -29,7 +30,7 @@ import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
 import type { MessageSentEvent } from "./message-sent-hook.js";
-import type { DeliveryMirror } from "./mirror.js";
+import type { OutboundSessionRoute } from "./outbound-session.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
@@ -210,7 +211,7 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
-  /** @internal Only the ordinary inbound final dispatcher grants bounded text replay. */
+  /** @internal Marks an agent final; ordinary text may be resent once when its send is unconfirmed. */
   retryAmbiguousFinalText?: true;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
@@ -226,7 +227,22 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   requireUnknownSendReconciliation?: boolean;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
-  mirror?: DeliveryMirror;
+  /** Known destination conversation route; `null` when the caller proved there is none. */
+  transcriptRoute?: OutboundSessionRoute | null;
+  /** @internal Another owner records this send's destination history. */
+  skipDestinationHistory?: boolean;
+  /** @internal Stable delivery identity, independent of provider reconciliation markers. */
+  transcriptDeliveryId?: string;
+  /** @internal State root captured for this delivery; history never follows a later ambient root. */
+  transcriptStateDir?: string;
+  /** Pins destination history to the caller's conversation when several share an address. */
+  transcriptExpectedGeneration?: { sessionKey?: string };
+  /** Background producer recorded on destination history rows. */
+  transcriptProvenance?: BackgroundSessionResultProvenance;
+  /** Receives warnings when a confirmed send could not be added to history. */
+  onTranscriptDiagnostic?: (message: string) => void;
+  /** Revalidates the producer before destination history is written. */
+  assertTranscriptCurrent?: () => void;
 };
 
 /**
@@ -260,7 +276,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
   /** Host-captured session generation retained independently by this delivery intent. */
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

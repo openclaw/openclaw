@@ -1,12 +1,15 @@
+import "./sessions-files.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../../agents/sandbox/shared.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -25,41 +28,8 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
 
-const hoisted = vi.hoisted(() => ({
-  execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
-}));
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
-}));
-
-// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
-vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
-  withSessionTranscriptDeltaReader: ((scope, consume) =>
-    consume({
-      visible: async (limits) => hoisted.readDelta(scope, limits),
-      raw: async () => {
-        throw new Error("File browsing must consume visible transcript pages");
-      },
-    })) satisfies typeof withSessionTranscriptDeltaReader,
-}));
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+const hoisted = { ...sessionFilesMocks, execOpenPath: vi.fn() };
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -87,8 +57,21 @@ afterEach(() => {
 
 function prepareHostFileRead(
   overrides: Partial<InternalSessionEntry> = {},
-  cfg: OpenClawConfig = {},
+  inputCfg: OpenClawConfig = {},
 ) {
+  const cfg: OpenClawConfig = {
+    ...inputCfg,
+    agents: {
+      ...inputCfg.agents,
+      defaults: {
+        ...inputCfg.agents?.defaults,
+        sandbox: {
+          ...inputCfg.agents?.defaults?.sandbox,
+          workspaceRoot: outsideDirs.make("session-file-sandboxes-"),
+        },
+      },
+    },
+  };
   const entry: InternalSessionEntry = {
     sessionId: "sess-main",
     updatedAt: 1,
@@ -96,6 +79,26 @@ function prepareHostFileRead(
     spawnedCwd: workspaceRoot,
     ...overrides,
   };
+  const runtime = resolveSandboxRuntimeStatus({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    preparedSessionEntry: entry,
+  });
+  const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+  if (runtime.sandboxed && sandbox.workspaceAccess === "none") {
+    const layout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: runtime.sandboxRequired
+        ? { ...sandbox, scope: "agent", workspaceAccess: runtime.workspaceAccess }
+        : sandbox,
+      agentId: "main",
+      rawSessionKey: sessionKey,
+      isolationSubject: runtime.isolationSubject,
+      workspaceDir: workspaceRoot,
+    });
+    fs.mkdirSync(path.join(layout.workspaceDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(layout.workspaceDir, "src/readme.md"), "# Read me\n");
+  }
   hoisted.loadSessionEntry.mockReturnValue({
     agentId: "main",
     canonicalKey: sessionKey,
@@ -135,7 +138,9 @@ it("downloads original binary bytes beyond preview limits with safe HTTP metadat
   const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
   bytes.write("PK\x03\x04", "binary");
   fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
+  hoisted.loadSessionEntry.mockClear();
   const download = await fixture.files.ok("download", filename, undefined, connection);
+  expect(hoisted.loadSessionEntry).toHaveBeenCalledOnce();
   expect(download).toMatchObject({ filename, mimeType: "application/zip" });
   const fetched = await connection.fetch(download.url);
   expect(fetched.response.statusCode).toBe(200);
@@ -170,36 +175,29 @@ it("rejects workspace escapes and links before granting downloads", async () => 
   }
 });
 
-it.each([
-  ["txt", 97, ""],
-  ["pdf", 0xff, "%PDF-1.7"],
-  ["zip", 0xff, "PK\x03\x04"],
-] as const)(
-  "downloads Full Access host %s bytes without assistant-media policy",
-  async (extension, fill, header) => {
-    using connection = createSessionFileDownloadClient();
-    const filename = "original." + extension;
-    const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
-    const bytes = Buffer.alloc(600_003, fill);
-    bytes.write(header, "binary");
-    fs.writeFileSync(outsidePath, bytes);
-    const fixture = prepareHostFileRead({ permissionMode: "full" });
-    const download = await fixture.files.ok("download", outsidePath, undefined, {
-      ...fixture.options,
-      ...connection,
-    });
-    expect(download.filename).toBe(filename);
-    const result = await connection.fetch(download.url);
-    expect(result.response.statusCode).toBe(200);
-    expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
-    fixture.entry.permissionMode = "read-only";
-    expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
-    await fixture.files.error("download", outsidePath, undefined, {
-      ...fixture.options,
-      ...connection,
-    });
-  },
-);
+it("downloads Full Access host bytes without assistant-media policy", async () => {
+  using connection = createSessionFileDownloadClient();
+  const filename = "original.zip";
+  const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
+  const bytes = Buffer.alloc(600_003, 0xff);
+  bytes.write("PK\x03\x04", "binary");
+  fs.writeFileSync(outsidePath, bytes);
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const download = await fixture.files.ok("download", outsidePath, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+  expect(download.filename).toBe(filename);
+  const result = await connection.fetch(download.url);
+  expect(result.response.statusCode).toBe(200);
+  expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
+  fixture.entry.permissionMode = "read-only";
+  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+  await fixture.files.error("download", outsidePath, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+});
 
 it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
   ["read-only mode", { permissionMode: "read-only" }],
@@ -234,6 +232,115 @@ it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
   },
 );
 
+it("stats only the references a preview would open", async () => {
+  const outsidePath = outsideFile("outside\n");
+  fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "src/readme.md"), "# Read me\n");
+  fs.mkdirSync(path.join(workspaceRoot, "a"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "b"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "a/twin.ts"), "");
+  fs.writeFileSync(path.join(workspaceRoot, "b/twin.ts"), "");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const paths = [
+    "readme.md",
+    "twin.ts",
+    "src/readme.md",
+    "./src/readme.md",
+    outsidePath,
+    `${outsidePath}.missing`,
+    "src/absent.md",
+    "src",
+    "src/readme.md",
+  ];
+
+  const full = await fixture.files.ok("stat", {
+    files: paths.map((filePath) => ({ path: filePath, messageEntryId: "entry-1" })),
+  });
+  expect(full).toEqual({
+    sessionKey,
+    files: [
+      ["readme.md", "file"],
+      ["twin.ts", "missing"],
+      ["src/readme.md", "file"],
+      ["./src/readme.md", "file"],
+      [outsidePath, "file"],
+      [`${outsidePath}.missing`, "missing"],
+      ["src/absent.md", "missing"],
+      ["src", "missing"],
+      ["src/readme.md", "file"],
+    ].map(([filePath, status]) => ({ path: filePath, status })),
+  });
+  for (const file of (full.files as { path: string; status: string }[]).filter((entry) =>
+    entry.path.includes("/"),
+  )) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+
+  fixture.entry.permissionMode = "read-only";
+  const contained = await fixture.files.ok("stat", {
+    files: [{ path: outsidePath }, { path: "src/readme.md" }],
+  });
+  expect(contained.files).toEqual([
+    { path: outsidePath, status: "missing" },
+    { path: "src/readme.md", status: "file" },
+  ]);
+});
+
+it("stats a reference as openable only when the reader would open it", async () => {
+  fs.mkdirSync(path.join(workspaceRoot, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "sub"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "docs/report.md"), "# Report\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/other.md"), "# Other\n");
+  fs.writeFileSync(path.join(workspaceRoot, "docs/source.md"), "# Source\n");
+  fs.linkSync(
+    path.join(workspaceRoot, "docs/source.md"),
+    path.join(workspaceRoot, "docs/linked.md"),
+  );
+  // A touched path resolves only from the session cwd; an untouched one also tries the root.
+  const fixture = prepareHostFileRead({
+    permissionMode: "full",
+    spawnedWorkspaceDir: workspaceRoot,
+    spawnedCwd: path.join(workspaceRoot, "sub"),
+  });
+  mockVisibleMessages([assistantToolCall("read", { path: "docs/report.md" })]);
+  const references = ["docs/report.md", "docs/other.md", "docs/linked.md", "linked.md"];
+
+  const stat = await fixture.files.ok("stat", {
+    files: references.map((reference) => ({ path: reference })),
+  });
+  expect(stat.files).toEqual([
+    { path: "docs/report.md", status: "missing" },
+    { path: "docs/other.md", status: "file" },
+    { path: "docs/linked.md", status: "missing" },
+    // The unique bare-name match is the hard link, which the reader then refuses to open.
+    { path: "linked.md", status: "missing" },
+  ]);
+  expect(
+    (await fixture.files.request("get", path.join(workspaceRoot, "docs/linked.md")))[0]?.ok,
+  ).toBe(false);
+  for (const file of stat.files) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+});
+
+it("stats touched references that name literal @ files like the reader", async () => {
+  fs.writeFileSync(path.join(workspaceRoot, "@report.md"), "# At\n");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  mockVisibleMessages([assistantToolCall("read", { path: "./@report.md" })]);
+  const stat = await fixture.files.ok("stat", { files: [{ path: "./@report.md" }] });
+  const preview = await fixture.files.request("get", "./@report.md");
+  expect(preview[0]?.ok).toBe(true);
+  expect(stat.files).toEqual([{ path: "./@report.md", status: "file" }]);
+
+  // A bare name whose only match needs @-sensitive resolution is left to the reader.
+  fs.mkdirSync(path.join(workspaceRoot, "@docs"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "@docs/notes.md"), "# Notes\n");
+  const bare = await fixture.files.ok("stat", { files: [{ path: "notes.md" }] });
+  expect(bare.files).toEqual([{ path: "notes.md", status: "unknown" }]);
+});
+
 it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
   const outsidePath = outsideFile("outside\n");
   const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");
@@ -267,7 +374,9 @@ it("canonicalizes host previews and lists outside touched-file metadata without 
   ]);
   expect(list.files[0]).not.toHaveProperty("content");
   expect(list.files[0]).not.toHaveProperty("hash");
-  const hidden = expectOkPayload(await invoke("sessions.files.list", { sessionKey }));
+  const hidden = expectOkPayload(
+    await invoke("sessions.files.list", { sessionKey }, fixture.context),
+  );
   expect(hidden.files).toEqual([]);
   const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
   fs.linkSync(outsidePath, hardlinkedPath);
@@ -311,6 +420,7 @@ it("keeps host previews bounded and classifies image and unsupported bytes", asy
         type: "session_file_too_large",
         maxPreviewBytes: 256 * 1024,
         size: bytes.length,
+        root: workspaceRoot,
       });
     } else {
       const { file } = expectOkPayload(result);
@@ -361,4 +471,91 @@ it("rejects escaped and symlinked write targets without touching outside files",
   }
   expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);
   expect(fs.existsSync(escapedPath)).toBe(false);
+});
+
+const previewPolicy =
+  "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+function previewDocument(script: string) {
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${previewPolicy}"><script defer src="${script}"></script></head><body><p>Ready</p></body></html>`;
+}
+
+it("serves only the preview's exact admitted bytes and retires them with their owner", async () => {
+  using connection = createSessionFileDownloadClient();
+  using other = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+  const html = previewDocument("app.js");
+  const code = 'document.querySelector("p").textContent = "Loaded";';
+  fs.writeFileSync(path.join(workspaceRoot, "index.html"), html);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), code);
+  const options = { ...fixture.options, ...connection };
+  const preview = await fixture.files.ok(
+    "preview",
+    { path: "index.html", html },
+    undefined,
+    options,
+  );
+  expect(preview.status).toBe("ready");
+  expect(preview.html).toContain(`content="${previewPolicy}"`);
+  const url = new URL("app.js", "http://preview.invalid" + preview.sandboxPath).pathname;
+  const response = await connection.fetch(url);
+  expect(response.response.statusCode).toBe(200);
+  expect(Buffer.from(response.body as Uint8Array).toString()).toBe(code);
+  expect(response.response.getHeader("content-type")).toBe("text/javascript; charset=utf-8");
+  expect(response.response.getHeader("cache-control")).toBe("private, no-store");
+  expect(response.response.getHeader("access-control-allow-origin")).toBeNull();
+  expect((await connection.fetch(url + "?ungranted=1")).response.statusCode).toBe(404);
+  expect((await connection.fetch(url.replace("app.js", "index.html"))).response.statusCode).toBe(
+    404,
+  );
+  expect((await other.fetch(url)).response.statusCode).toBe(404);
+  expect(
+    (
+      await fixture.files.ok(
+        "preview.release",
+        { path: "index.html", previewId: preview.previewId },
+        undefined,
+        { ...fixture.options, ...other },
+      )
+    ).released,
+  ).toBe(false);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), "replacement");
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
+  fs.writeFileSync(path.join(workspaceRoot, "app.js"), code);
+  expect(
+    (
+      await fixture.files.ok(
+        "preview.release",
+        { path: "index.html", previewId: preview.previewId },
+        undefined,
+        options,
+      )
+    ).released,
+  ).toBe(true);
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
+  expect(fs.readFileSync(path.join(workspaceRoot, "index.html"), "utf8")).toBe(html);
+});
+
+it("rechecks preview host-read authority after the asset read before HTTP delivery", async () => {
+  using connection = createSessionFileDownloadClient();
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const external = path.join(outsideDirs.make("preview-private-"), "asset.js");
+  fs.writeFileSync(external, "window.privateValue = 1;");
+  const html = previewDocument(path.relative(workspaceRoot, external));
+  fs.writeFileSync(path.join(workspaceRoot, "index.html"), html);
+  const preview = await fixture.files.ok("preview", { path: "index.html", html }, undefined, {
+    ...fixture.options,
+    ...connection,
+  });
+  expect(preview.status).toBe("ready");
+  const url = new URL(
+    path.relative(workspaceRoot, external),
+    "http://preview.invalid" + preview.sandboxPath,
+  ).pathname;
+  const read = workspaceFs.readWorkspaceFile;
+  vi.spyOn(workspaceFs, "readWorkspaceFile").mockImplementationOnce(async (...args) => {
+    const result = await read(...args);
+    fixture.entry.permissionMode = "read-only";
+    return result;
+  });
+  expect((await connection.fetch(url)).response.statusCode).toBe(404);
 });

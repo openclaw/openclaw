@@ -4,12 +4,13 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
-import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import { workspaceActions, workspaceCommandResult } from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import {
@@ -38,16 +39,6 @@ it.each([
     const workspaceDir = path.join(root, "worker");
     const home = path.join(root, "home");
     const temporaryRoot = path.join(root, "transfers");
-    const commandResult = (result: Partial<SpawnResult> = {}) => ({
-      workspaceDir,
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-      ...result,
-    });
     await fs.mkdir(workspaceDir);
     const exec = async (argv: string[], input?: string | Uint8Array) => {
       const result = await runCommandWithTimeout(argv, {
@@ -151,12 +142,9 @@ it.each([
       }
       return await realpath(...args);
     });
-    const actions = createNodeWorkerWorkspaceActions({
+    const actions = workspaceActions({
       environmentId: "environment",
-      ownerEpoch: 1,
       sessionId: "session",
-      ownerSignal: new AbortController().signal,
-      isOwnerCurrent: () => true,
       restoredWorkspace: {
         source: {
           kind: "repository",
@@ -193,12 +181,12 @@ it.each([
             expect(await uploadOutcome).toBe("completed");
           }
           // The data channel can outlive a lost control-channel command result.
-          return commandResult({
+          return workspaceCommandResult(workspaceDir, {
             stderr: "control channel lost its result",
             code: 1,
           });
         }
-        return commandResult({ stdout: await upload });
+        return workspaceCommandResult(workspaceDir, { stdout: await upload });
       },
     });
     const checkpoint: Extract<
@@ -208,9 +196,13 @@ it.each([
       if (!failPublication) {
         expect(payload.publicationStagingRoot).toBeDefined();
       }
-      expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
-        "checkpoint edit\n",
-      );
+      if (payload.baseManifestRef === base.manifestRef) {
+        expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
+          "checkpoint edit\n",
+        );
+      } else {
+        expect(await fs.readdir(payload.stagingRoot)).toEqual([]);
+      }
       const prepared = await stageSessionRepositoryCheckpoint({
         ...payload,
         store,
@@ -227,21 +219,23 @@ it.each([
       }
       return prepared;
     };
-    const reconcile = () =>
+    const reconcile = async () =>
       actions.reconcileWorkspace({
         remoteWorkspaceDir: workspaceDir,
         baseManifestRef: base.manifestRef,
         source: {
           kind: "repository",
           referenceManifestRef: base.manifestRef,
+          acceptedManifestRef: (await store.get(repository.workspaceId))?.manifestHash ?? undefined,
           prepareCheckpoint: checkpoint,
         },
       });
     let first: ReturnType<typeof reconcile> | undefined;
     const accept = async (pending: ReturnType<typeof reconcile>) => {
+      const before = await store.get(repository.workspaceId);
       const result = await pending;
       try {
-        expect(result.changed).toBe(true);
+        expect(result.changed).toBe(before?.manifestHash !== result.manifestRef);
         await result.verifyLocalStable();
         await result.publishStagedResult?.();
         expect((await store.get(repository.workspaceId))?.manifestHash).toBe(result.manifestRef);
@@ -284,9 +278,9 @@ it.each([
         expect((await fs.stat(cleanupRoot!)).isDirectory()).toBe(true);
       } else {
         expect(
-          (await fs.readdir(temporaryRoot, { recursive: true })).filter((entry) =>
-            path.basename(entry).startsWith("upload-"),
-          ),
+          (await listDirectoryTreeStrict(temporaryRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .filter((entry) => path.basename(entry).startsWith("upload-")),
         ).toEqual([]);
       }
       failPublication = false;

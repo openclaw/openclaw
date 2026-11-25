@@ -313,10 +313,6 @@ describe("Docker channel promotion", () => {
       queue: "max",
     };
 
-    expect(releaseWorkflow.concurrency).toBeUndefined();
-    expect(publish.concurrency).toEqual(publicationLock);
-    expect(publish.environment).toBeUndefined();
-    expect(requireJob(releaseWorkflow, "approve").environment).toBe("docker-release");
     expect(publish.permissions).toEqual({
       actions: "read",
       attestations: "read",

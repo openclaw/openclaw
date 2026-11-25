@@ -5,10 +5,12 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
-import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
+import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
+import type { Agent, AgentMessage } from "../runtime/index.js";
+import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -20,19 +22,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-function projectMessages(
-  messages: AgentMessage[],
-  project: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const projected = messages.map((message) => {
-    const next = project(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? projected : messages;
-}
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -88,11 +77,13 @@ function truncateToolResultToChars(
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+      const boundedContent = (bounded as { content: unknown[] }).content;
+      return {
+        message: replaceToolResultContent(msg, [...boundedContent, ...notice]),
+        compactedText: boundedContent.length < retainedContent.length,
+        boundedContent,
+      };
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
@@ -103,21 +94,21 @@ function truncateToolResultToChars(
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
       );
-      const projected = projectContent(
+      const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
         retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
       );
-      const projectedContent = (projected as { content: unknown[] }).content;
       if (
+        !compactedText &&
         retainedContent.some((block, index) => {
-          const projectedBlock = projectedContent[index];
+          const projectedBlock = boundedContent[index];
           return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
         })
       ) {
         continue;
       }
-      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
-        return projected;
+      if (estimateMessageCharsCached(message, cache) <= maxChars) {
+        return message;
       }
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
@@ -133,7 +124,7 @@ function truncateToolResultToChars(
         : formatContextLimitTruncationNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
-    );
+    ).message;
   }
 
   const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
@@ -141,6 +132,37 @@ function truncateToolResultToChars(
     minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   });
   return replaceToolResultContent(msg, truncatedText);
+}
+
+type RequestToolSchemas = Parameters<typeof createFreshLlmBoundaryTokenEstimator>[0]["tools"];
+
+// Budgets mid-turn history in raw token units so a view that fills it exactly
+// still passes the mid-turn precheck for the same request.
+function resolveMidTurnHistoryTokenBudget(params: {
+  tokenBudget: number;
+  reserveTokens: number;
+  systemPrompt?: string;
+  tools?: RequestToolSchemas;
+  pendingMessages: AgentMessage[];
+}): number {
+  // Price fixed content and assembled history in the precheck's nominal units.
+  // The pending exchange already carries the active prompt.
+  const promptBudget =
+    Math.max(1, Math.floor(params.tokenBudget)) -
+    resolveEffectiveCompactionReserveTokens({
+      contextTokenBudget: params.tokenBudget,
+      reserveTokens: params.reserveTokens,
+    });
+  const fixedTokens = createFreshLlmBoundaryTokenEstimator({
+    systemPrompt: params.systemPrompt,
+    tools: params.tools,
+    retainCompletionUsage: true,
+    safetyMargin: 1,
+  })({
+    messages: params.pendingMessages.map((message) => projectRecordedModelPrompt(message)),
+    prompt: "",
+  });
+  return Math.max(1, Math.floor(promptBudget - fixedTokens));
 }
 
 /**
@@ -158,9 +180,11 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   reserveTokens?: () => number;
   getSystemPrompt?: () => string | undefined;
+  getTools?: () => RequestToolSchemas;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
+  getCurrentUserIdempotencyKey?: () => string | undefined;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
@@ -168,8 +192,6 @@ export function installContextEngineLoopHook(params: {
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
   runtimeSettings?: ContextEngineRuntimeSettings;
-  /** True when this turn belongs to a heartbeat run. */
-  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const sessionIdentity = { sessionId, sessionKey };
@@ -231,7 +253,6 @@ export function installContextEngineLoopHook(params: {
               prePromptMessageCount,
             }),
             runtimeSettings: params.runtimeSettings,
-            isHeartbeat: params.isHeartbeat,
           });
         } else {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -239,14 +260,12 @@ export function installContextEngineLoopHook(params: {
             await contextEngine.ingestBatch({
               ...sessionIdentity,
               messages: newMessages,
-              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
                 ...sessionIdentity,
                 message,
-                isHeartbeat: params.isHeartbeat,
               });
               signal?.throwIfAborted();
             }
@@ -259,21 +278,25 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       // An admitted turn is not in the engine's store yet. Assemble accepted
       // history separately, then retain the host-owned user/tool exchange.
-      const historyLength = params.deferredTurn
-        ? (params.getPrePromptMessageCount?.() ?? 0)
-        : providerMessages.length;
+      let historyLength = providerMessages.length;
+      if (params.deferredTurn) {
+        historyLength = params.getPrePromptMessageCount?.() ?? 0;
+        const currentUserKey = params.getCurrentUserIdempotencyKey?.();
+        const currentUserIndex = currentUserKey
+          ? providerMessages.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === currentUserKey,
+            )
+          : -1;
+        // The engine replaces everything before the fence with its stored history, which
+        // cannot contain the admitted user message; a stale count must not put it there.
+        if (currentUserIndex >= 0) {
+          historyLength = Math.min(historyLength, currentUserIndex);
+        }
+      }
       const pendingMessages = providerMessages.slice(historyLength);
-      const pendingTokens = pendingMessages.reduce(
-        (sum, message) => sum + estimateTokens(projectRecordedModelPrompt(message)),
-        0,
-      );
-      // The pending exchange already includes the active prompt; reserve only
-      // the system prompt here, using the same pressure estimate as turn start.
-      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
-        systemPrompt: params.getSystemPrompt?.(),
-        prompt: "",
-      });
-      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
@@ -281,7 +304,13 @@ export function installContextEngineLoopHook(params: {
         tokenBudget:
           tokenBudget === undefined
             ? undefined
-            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
+            : resolveMidTurnHistoryTokenBudget({
+                tokenBudget,
+                reserveTokens: params.reserveTokens?.() ?? 0,
+                systemPrompt: params.getSystemPrompt?.(),
+                tools: params.getTools?.(),
+                pendingMessages,
+              }),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
@@ -309,6 +338,9 @@ export function installContextEngineLoopHook(params: {
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
+    // The removed hook stays reachable from retained run callbacks; drop its assembled history.
+    lastAssembledView = null;
+    lastSourceMessages = null;
   };
 }
 
@@ -328,7 +360,7 @@ export function installToolResultContextGuard(params: {
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const estimateCache = new WeakMap<AgentMessage, number>();
-    return projectMessages(sourceMessages, (message) =>
+    return mapArrayIfChanged(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );
   };

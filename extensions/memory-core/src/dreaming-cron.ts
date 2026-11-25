@@ -1,4 +1,5 @@
 /** Stateless convergence of the memory-core-owned dreaming cron job family. */
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG,
@@ -13,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -52,7 +52,7 @@ type ManagedCronJobCreate = {
   };
 };
 
-type ManagedCronJobPatch = Partial<Omit<ManagedCronJobCreate, "declarationKey">>;
+type ManagedCronJobPatch = Partial<Omit<ManagedCronJobCreate, "declarationKey" | "enabled">>;
 
 type ManagedCronJobLike = {
   id: string;
@@ -75,7 +75,6 @@ type ManagedCronJobLike = {
   delivery?: {
     mode?: string;
   };
-  createdAtMs?: number;
 };
 
 export type CronServiceLike = {
@@ -87,7 +86,14 @@ export type CronServiceLike = {
 };
 
 type ReconcileResult = {
-  status: "unavailable" | "disabled" | "doctor-required" | "added" | "updated" | "noop";
+  status:
+    | "unavailable"
+    | "disabled"
+    | "doctor-required"
+    | "owner-required"
+    | "added"
+    | "updated"
+    | "noop";
   removed: number;
 };
 
@@ -135,9 +141,6 @@ function buildManagedDreamingPatch(
   if (normalizeOptionalString(job.description) !== desired.description) {
     patch.description = desired.description;
   }
-  if (job.enabled !== true) {
-    patch.enabled = true;
-  }
 
   const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);
   const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
@@ -171,39 +174,6 @@ function buildManagedDreamingPatch(
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
-}
-
-function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
-  return managed.toSorted((a, b) => {
-    const aCreated =
-      typeof a.createdAtMs === "number" && Number.isFinite(a.createdAtMs)
-        ? a.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    const bCreated =
-      typeof b.createdAtMs === "number" && Number.isFinite(b.createdAtMs)
-        ? b.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    if (aCreated !== bCreated) {
-      return aCreated - bCreated;
-    }
-    return a.id.localeCompare(b.id);
-  });
-}
-
-function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
-  return (
-    isRecord(candidate) &&
-    (candidate.isEnabled === undefined || typeof candidate.isEnabled === "function") &&
-    typeof candidate.list === "function" &&
-    typeof candidate.add === "function" &&
-    typeof candidate.update === "function" &&
-    typeof candidate.remove === "function"
-  );
-}
-
-export function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown }) {
-  const cron = context.getCron?.();
-  return isCronServiceLike(cron) ? cron : null;
 }
 
 export async function reconcileShortTermDreamingCronJob(params: {
@@ -273,12 +243,19 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const desired = buildManagedDreamingCronJob(params.config);
   const primary = managed[0];
   if (!primary) {
-    await cron.add(desired);
+    try {
+      await cron.add(desired);
+    } catch (error) {
+      if (extractErrorCode(error) === "AGENT_SELECTION_REQUIRED") {
+        return { status: "owner-required", removed: 0 };
+      }
+      throw error;
+    }
     params.logger.info("memory-core: created managed dreaming cron job.");
     return { status: "added", removed: 0 };
   }
 
-  const duplicates = sortManagedJobs(managed.filter((job) => job.id !== primary.id));
+  const duplicates = managed.filter((job) => job.id !== primary.id);
   const removed = await removeJobs(duplicates, "prune duplicate");
 
   const patch = buildManagedDreamingPatch(primary, desired);

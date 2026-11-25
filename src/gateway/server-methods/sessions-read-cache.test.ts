@@ -4,7 +4,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -15,6 +14,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -25,6 +28,7 @@ import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -47,7 +51,12 @@ import {
 } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
+import {
+  captureRpcTargetForTest,
+  createActiveRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -119,6 +128,79 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([
+  { name: "broad", scopes: ["operator.read", "operator.write"] as const },
+  { name: "session-only", scopes: ["operator.sessions.write"] as const },
+])(
+  "rechecks invitation membership in a warm $name sidebar without exposing foreign drafts",
+  async ({ scopes }) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const profileId = ensureProfileForEmail("invited-reader@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const context = requestContext(cfg);
+      const client = identifiedClient(profileId);
+      client.connect.scopes = [...scopes];
+      for (const [index, name] of ["own", "foreign", "invited", "draft"].entries()) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:${name}` },
+          {
+            sessionId: name,
+            updatedAt: index + 1,
+            visibility: name === "own" || name === "draft" ? "draft" : "shared",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: name === "own" ? profileId : "creator",
+            },
+          },
+        );
+        if (name === "invited" || name === "draft") {
+          await addSessionMember(
+            { agentId: "main", sessionKey: `agent:main:${name}` },
+            { identityId: profileId, addedBy: "creator" },
+          );
+        }
+      }
+      const list = (ifRowsRevision?: string) =>
+        listSessions({
+          client,
+          context,
+          request: { agentId: "main", rowMode: "sidebar", limit: 50, ifRowsRevision },
+        });
+      await list();
+      const initial = await list();
+      expect(keys(initial).toSorted()).toEqual(["agent:main:invited", "agent:main:own"]);
+      expect(initial.totalCount).toBe(2);
+      expect((await list(initial.rowsRevision)).rowsUnchanged).toBe(true);
+      await removeSessionMember({ agentId: "main", sessionKey: "agent:main:invited" }, profileId);
+      const revoked = await list(initial.rowsRevision);
+      expect(revoked.rowsUnchanged).toBeUndefined();
+      expect(revoked.rowsRevision).not.toBe(initial.rowsRevision);
+      expect(keys(revoked)).toEqual(["agent:main:own"]);
+      expect(revoked.totalCount).toBe(1);
+      await addSessionMember(
+        { agentId: "main", sessionKey: "agent:main:invited" },
+        { identityId: profileId, addedBy: "creator" },
+      );
+      expect(keys(await list(revoked.rowsRevision)).toSorted()).toEqual([
+        "agent:main:invited",
+        "agent:main:own",
+      ]);
+    });
+  },
+);
+
 it("omits unchanged sidebar rows without reusing membership or revoked access", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const request = { agentId: "main", rowMode: "sidebar", limit: 50 } as const;
@@ -176,26 +258,26 @@ it("omits unchanged sidebar rows without reusing membership or revoked access", 
 
 it("refreshes reply activity including previously rejected candidates", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { context, list } = await listFixture({ agentId: "main", search: "live", limit: 50 });
+    const { list } = await listFixture({ agentId: "main", search: "live", limit: 50 });
     await patchEntry(mainScope, { status: "done" });
-    context.chatAbortControllers.set("retained-terminal", {
-      sessionId: "main-active",
-      sessionKey: mainKey,
-      agentId: "main",
-      projectSessionActive: false,
-    } as never);
+    const target = { ...mainScope, sessionId: "main-active" };
+    const storeScope = captureRpcTargetForTest(target).storeScope;
+    rpcSourceTesting.set(
+      "retained-terminal",
+      createRpcSourceForTest(
+        { projectSessionActive: false },
+        { ...target, storeScope, phase: "consumed" },
+      ),
+    );
     expect((await list()).sessions).toEqual([]);
-    const operation = createReplyOperation({
-      sessionId: "main-active",
-      sessionKey: mainKey,
-      resetTriggered: false,
-    });
+    const active = await createActiveRpcSourceForTest({}, { ...target, storeScope });
+    rpcSourceTesting.set("active-reply", active);
     try {
       expect(mainRow(await list())).toMatchObject({ hasActiveRun: true, status: "running" });
-      operation.complete();
+      active.release();
       expect((await list()).sessions).toEqual([]);
     } finally {
-      operation.complete();
+      active.release();
     }
   }));
 
@@ -684,7 +766,7 @@ it.each([{}, { search: "direct" }, { activeOnly: true }])(
       const context = requestContext(config);
       if (filter.activeOnly) {
         for (const name of ["first", "second", "third"]) {
-          activateReadSession(
+          await activateReadSession(
             context,
             `page-run-${name}`,
             "main",

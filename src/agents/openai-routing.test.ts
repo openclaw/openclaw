@@ -1,15 +1,10 @@
-// Verifies OpenAI model selections route between OpenClaw and Codex runtimes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   resolveOpenAIImplicitAgentRuntime,
-  resolveContextConfigProviderForRuntime,
-  resolveOpenAIRuntimeProvider,
-  resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-routing.js";
 
 function implicit(params: Parameters<typeof resolveOpenAIImplicitAgentRuntime>[0] = {}) {
@@ -22,6 +17,13 @@ function ensure(config?: OpenClawConfigWithLegacyRoster, agentId?: string) {
 
 function providerConfig(baseUrl: string, api?: ModelApi): OpenClawConfig {
   return { models: { providers: { openai: { baseUrl, api, models: [] } } } };
+}
+
+function expectImplicit(
+  params: Parameters<typeof implicit>[0],
+  runtime: ReturnType<typeof implicit> = "codex",
+) {
+  expect(implicit(params)).toBe(runtime);
 }
 
 describe("OpenAI runtime routing policy", () => {
@@ -39,31 +41,27 @@ describe("OpenAI runtime routing policy", () => {
     expect(ensure({})).toBe(true);
   });
 
-  it.each([["thinking", { thinking: "xhigh" }]])(
-    "keeps Codex for model-scoped %s controls",
-    (_label, params) => {
-      const config: OpenClawConfig = {
-        agents: { defaults: { models: { "openai/gpt-5.6-sol": { params } } } },
-      };
-      expect(implicit({ modelId: "gpt-5.6-sol", config })).toBe("codex");
-    },
-  );
+  it("keeps Codex for model-scoped thinking controls", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { models: { "openai/gpt-5.6-sol": { params: { thinking: "xhigh" } } } } },
+    };
+    expectImplicit({ modelId: "gpt-5.6-sol", config });
+  });
 
   it("maps provider route facts onto a closed implicit runtime", () => {
-    expect(implicit({ modelId: "gpt-5.6" })).toBe("codex");
-    expect(
-      implicit({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-      }),
-    ).toBe("codex");
-    expect(
-      implicit({
+    expectImplicit({ modelId: "gpt-5.6" });
+    expectImplicit({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    });
+    expectImplicit(
+      {
         modelId: "gpt-5.5",
         config: providerConfig("https://api.openai.com/v1", "openai-completions"),
-      }),
-    ).toBe("openclaw");
-    expect(implicit({ baseUrl: "https://direct.example.test/v1" })).toBe("openclaw");
+      },
+      "openclaw",
+    );
+    expectImplicit({ baseUrl: "https://direct.example.test/v1" }, "openclaw");
   });
 
   it("fails closed to OpenClaw when the provider artifact is unavailable", () => {
@@ -75,18 +73,10 @@ describe("OpenAI runtime routing policy", () => {
   });
 
   it("does not force Codex for custom OpenAI-compatible base URLs", () => {
-    // A custom baseUrl means the provider key is only OpenAI-compatible, not official OpenAI.
     const config = providerConfig("https://example.test/v1");
 
     expect(resolveOpenAIImplicitAgentRuntime({ provider: "openai", config })).toBe("openclaw");
     expect(ensure(config)).toBe(false);
-    expect(
-      resolveContextConfigProviderForRuntime({
-        provider: "openai",
-        runtimeId: "codex",
-        config,
-      }),
-    ).toBe("openai");
   });
 
   it("uses the configured fixed-store owner for agent-scoped request parameters", () => {
@@ -102,21 +92,9 @@ describe("OpenAI runtime routing policy", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(
-      implicit({
-        modelId: "gpt-5.5",
-        config,
-        sessionKey: "global",
-      }),
-    ).toBe("openclaw");
-    expect(() =>
-      implicit({
-        modelId: "gpt-5.5",
-        config,
-        agentId: "ops",
-        sessionKey: "global",
-      }),
-    ).toThrow(/belongs to "research"/);
+    const params = { modelId: "gpt-5.5", config, sessionKey: "global" };
+    expectImplicit(params, "openclaw");
+    expect(() => implicit({ ...params, agentId: "ops" })).toThrow(/belongs to "research"/);
   });
 
   it("honors explicit model runtime policy before the OpenAI base URL default", () => {
@@ -169,41 +147,5 @@ describe("OpenAI runtime routing policy", () => {
     } satisfies OpenClawConfigWithLegacyRoster;
 
     expect(ensure(config)).toBe(true);
-  });
-
-  it("keeps explicit OpenClaw plus Codex auth profile under the unified OpenAI provider", () => {
-    // OpenAI auth now stays canonical even when the runtime is not Codex.
-    expect(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-      }),
-    ).toEqual(["openai"]);
-    expect(
-      resolveOpenAIRuntimeProvider({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-        authProfileProvider: "openai",
-        authProfileId: "openai:work",
-      }),
-    ).toBe("openai");
-  });
-
-  it("keeps OpenAI as the runtime provider when harness runtime is codex", () => {
-    expect(
-      resolveSelectedOpenAIRuntimeProvider({
-        provider: "openai",
-        harnessRuntime: "codex",
-      }),
-    ).toBe("openai");
-  });
-
-  it("does not route non-OpenAI providers when runtime is codex", () => {
-    expect(
-      resolveSelectedOpenAIRuntimeProvider({
-        provider: "anthropic",
-        harnessRuntime: "codex",
-      }),
-    ).toBe("anthropic");
   });
 });

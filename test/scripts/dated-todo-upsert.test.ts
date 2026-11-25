@@ -5,25 +5,20 @@ import {
 } from "../../scripts/github/dated-todo-upsert.mjs";
 
 const MARKER = "<!-- dated-todo-sweep -->";
+const TODO_ITEM = "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)";
 const REPORT = [
   "# Dated TODO sweep",
-  "",
   "Generated for 2026-07-25 UTC.",
-  "",
   "## OVERDUE",
-  "",
-  "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-  "",
+  TODO_ITEM,
   "## DUE within 30 days",
-  "",
   "_None._",
-  "",
   "## FUTURE",
-  "",
   "_None._",
-  "",
   "Dropped as noise: 2",
-].join("\n");
+].join("\n\n");
+
+const EMPTY_TRACKER = `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`;
 
 function issue(number: number, options: { trusted: boolean; body?: string }) {
   return {
@@ -34,6 +29,8 @@ function issue(number: number, options: { trusted: boolean; body?: string }) {
     labels: options.trusted ? [{ name: "dated-todo-sweep" }] : [],
   };
 }
+
+const emptyTracker = () => issue(10, { trusted: true, body: EMPTY_TRACKER });
 
 function harness(
   searchItems: ReturnType<typeof issue>[],
@@ -50,6 +47,18 @@ function harness(
     warnings: [] as string[],
     sequence: [] as string[],
   };
+  const record =
+    (kind: "create" | "update" | "comment", data = {}) =>
+    async (args: unknown) => {
+      calls[kind].push(args);
+      if (kind !== "create") {
+        calls.sequence.push(kind);
+      }
+      if (kind === "comment" && options.commentError) {
+        throw options.commentError;
+      }
+      return { data };
+    };
   const github = {
     paginate: async (_method: unknown, args: Record<string, unknown>) =>
       "labels" in args
@@ -69,23 +78,9 @@ function harness(
       issues: {
         getLabel: async () => ({ data: { name: "dated-todo-sweep" } }),
         createLabel: async () => ({ data: {} }),
-        create: async (args: unknown) => {
-          calls.create.push(args);
-          return { data: { number: 123 } };
-        },
-        update: async (args: unknown) => {
-          calls.update.push(args);
-          calls.sequence.push("update");
-          return { data: {} };
-        },
-        createComment: async (args: unknown) => {
-          calls.comment.push(args);
-          calls.sequence.push("comment");
-          if (options.commentError) {
-            throw options.commentError;
-          }
-          return { data: {} };
-        },
+        create: record("create", { number: 123 }),
+        update: record("update"),
+        createComment: record("comment"),
         listComments: async () => ({ data: options.comments ?? [] }),
         listForRepo: async () => ({ data: searchItems }),
       },
@@ -95,139 +90,87 @@ function harness(
     info: () => {},
     warning: (message: string) => calls.warnings.push(message),
   };
-  return { calls, core, github };
+  const run = () =>
+    runDatedTodoUpsert({
+      github,
+      core,
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      report: REPORT,
+    });
+  return { calls, run };
+}
+
+async function notificationRetry(appId?: number) {
+  const tracker = emptyTracker();
+  const first = harness([tracker]);
+  await first.run();
+  const { body } = first.calls.comment[0] as { body: string };
+  return harness([tracker], {
+    comments: [
+      { body, ...(appId === undefined ? {} : { performed_via_github_app: { id: appId } }) },
+    ],
+  });
 }
 
 describe("dated TODO issue upsert", () => {
   it("ignores a public marker spoof and updates only the bot-and-label tracker", async () => {
     const spoof = issue(99, { trusted: false });
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const { calls, core, github } = harness([spoof, tracker]);
+    const tracker = emptyTracker();
+    const { calls, run } = harness([spoof, tracker]);
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
-    expect(calls.create).toHaveLength(0);
-    expect(calls.update).toEqual([
-      expect.objectContaining({ issue_number: tracker.number, state: "open" }),
-    ]);
-    expect(calls.comment).toEqual([
-      expect.objectContaining({
-        issue_number: tracker.number,
-        body: expect.stringContaining("src/urgent.ts:7"),
-      }),
-    ]);
-    expect(calls.sequence).toEqual(["comment", "update"]);
-    expect(calls.warnings).toEqual([expect.stringContaining("Ignored 1 untrusted")]);
+    expect(calls).toMatchObject({
+      create: [],
+      update: [{ issue_number: tracker.number, state: "open" }],
+      comment: [{ issue_number: tracker.number, body: expect.stringContaining("src/urgent.ts:7") }],
+      sequence: ["comment", "update"],
+      warnings: [expect.stringContaining("Ignored 1 untrusted")],
+    });
   });
 
   it("updates the canonical tracker when diagnostics-only search fails", async () => {
     const tracker = issue(10, { trusted: true });
-    const { calls, core, github } = harness([tracker], {
+    const { calls, run } = harness([tracker], {
       searchError: new Error("secondary rate limit"),
     });
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
     expect(calls.update).toEqual([expect.objectContaining({ issue_number: tracker.number })]);
     expect(calls.warnings).toEqual([expect.stringContaining("Skipping diagnostics-only")]);
   });
 
   it("does not advance the issue body when an urgent notification fails", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const { calls, core, github } = harness([tracker], {
+    const tracker = emptyTracker();
+    const { calls, run } = harness([tracker], {
       commentError: new Error("comment failed"),
     });
 
-    await expect(
-      runDatedTodoUpsert({
-        github,
-        context: { repo: { owner: "openclaw", repo: "openclaw" } },
-        core,
-        report: REPORT,
-      }),
-    ).rejects.toThrow("comment failed");
+    await expect(run()).rejects.toThrow("comment failed");
 
     expect(calls.update).toHaveLength(0);
   });
 
   it("does not duplicate an urgent comment when retrying a failed body update", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const first = harness([tracker]);
-    await runDatedTodoUpsert({
-      github: first.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: first.core,
-      report: REPORT,
-    });
-    const firstComment = first.calls.comment[0] as { body: string };
-    const retry = harness([tracker], {
-      comments: [{ body: firstComment.body, performed_via_github_app: { id: 2729701 } }],
-    });
-
-    await runDatedTodoUpsert({
-      github: retry.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: retry.core,
-      report: REPORT,
-    });
+    const retry = await notificationRetry(2729701);
+    await retry.run();
 
     expect(retry.calls.comment).toHaveLength(0);
     expect(retry.calls.update).toHaveLength(1);
   });
 
   it("ignores a notification marker copied by an ordinary commenter", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const first = harness([tracker]);
-    await runDatedTodoUpsert({
-      github: first.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: first.core,
-      report: REPORT,
-    });
-    const firstComment = first.calls.comment[0] as { body: string };
-    const spoofed = harness([tracker], { comments: [{ body: firstComment.body }] });
-
-    await runDatedTodoUpsert({
-      github: spoofed.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: spoofed.core,
-      report: REPORT,
-    });
+    const spoofed = await notificationRetry();
+    await spoofed.run();
 
     expect(spoofed.calls.comment).toHaveLength(1);
   });
 
   it("creates a labeled tracker instead of overwriting an untrusted marker issue", async () => {
-    const { calls, core, github } = harness([issue(99, { trusted: false })]);
+    const { calls, run } = harness([issue(99, { trusted: false })]);
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
     expect(calls.update).toHaveLength(0);
     expect(calls.create).toEqual([
@@ -237,91 +180,51 @@ describe("dated TODO issue upsert", () => {
 });
 
 describe("dated TODO report validation", () => {
-  it.each([["invalid date", "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-99-01)"]])(
-    "rejects a malformed %s",
-    (_name, malformed) => {
-      expect(() =>
-        validateDatedTodoReport(
-          REPORT.replace(
-            "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-            malformed,
-          ),
-        ),
-      ).toThrow(/Invalid dated TODO checklist item/u);
-    },
-  );
-
+  const validate =
+    (report: string, options?: Parameters<typeof validateDatedTodoReport>[1]) => () =>
+      validateDatedTodoReport(report, options);
   it.each([
+    ["invalid date", "(2026-07-01)", "(2026-99-01)", /Invalid dated TODO checklist item/u],
+    ["future OVERDUE date", "(2026-07-01)", "(2027-01-01)", /Non-overdue date/u],
     [
-      "future date under OVERDUE",
-      REPORT.replace("(2026-07-01)", "(2027-01-01)"),
-      /Non-overdue date/u,
-    ],
-    [
-      "date beyond 30 days under DUE",
-      REPORT.replace(
-        "## DUE within 30 days\n\n_None._",
-        "## DUE within 30 days\n\n- [ ] src/due.ts:9 — revisit gate (2026-08-25)",
-      ),
+      "late DUE date",
+      "## DUE within 30 days\n\n_None._",
+      "## DUE within 30 days\n\n- [ ] src/due.ts:9 — revisit gate (2026-08-25)",
       /outside the 30-day due window/u,
     ],
-  ])("rejects a %s", (_name, report, expected) => {
-    expect(() => validateDatedTodoReport(report)).toThrow(expected);
+    ...[
+      "notify @maintainers",
+      "see https://example.com",
+      "follow up in GH-123",
+      "remove _expired_ compatibility",
+    ].map(
+      (summary) =>
+        [summary, "remove expired compatibility", summary, /Non-plain-text summary/u] as const,
+    ),
+    [
+      "unexpected prologue",
+      "Generated for 2026-07-25 UTC.\n\n",
+      "Generated for 2026-07-25 UTC.\n\n@maintainers\n\n",
+      /prologue or section order/u,
+    ],
+  ] as const)("rejects %s", (_name, from, to, error) => {
+    expect(validate(REPORT.replace(from, to))).toThrow(error);
   });
 
   it("binds the report date and file locations to the fresh checkout", () => {
     const verifiedReport = REPORT.replace("src/urgent.ts:7", "scripts/github/pr-ci-sweeper.mjs:1");
 
-    expect(() =>
-      validateDatedTodoReport(verifiedReport, {
-        expectedDate: "2026-07-25",
-        repoRoot: process.cwd(),
-      }),
-    ).not.toThrow();
-    expect(() => validateDatedTodoReport(verifiedReport, { expectedDate: "2026-07-26" })).toThrow(
+    const checkout = { expectedDate: "2026-07-25", repoRoot: process.cwd() };
+    expect(validate(verifiedReport, checkout)).not.toThrow();
+    expect(validate(verifiedReport, { expectedDate: "2026-07-26" })).toThrow(
       /expected 2026-07-26/u,
     );
-    expect(() =>
-      validateDatedTodoReport(REPORT, {
-        expectedDate: "2026-07-25",
-        repoRoot: process.cwd(),
-      }),
-    ).toThrow(/Untracked or missing repository path/u);
+    expect(validate(REPORT, checkout)).toThrow(/Untracked or missing repository path/u);
   });
 
-  it.each([
-    ["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"],
-    ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
-    ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
-  ])("rejects non-plain-text summaries containing a %s", (_name, item) => {
-    const report = REPORT.replace(
-      "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-      item,
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
-  });
-
-  it("allows underscores only inside plain identifiers", () => {
-    const safe = REPORT.replace(
-      "remove expired compatibility",
-      "remove media_legacy compatibility",
-    );
-    const emphasized = REPORT.replace(
-      "remove expired compatibility",
-      "remove _expired_ compatibility",
-    );
-
-    expect(() => validateDatedTodoReport(safe)).not.toThrow();
-    expect(() => validateDatedTodoReport(emphasized)).toThrow(/Non-plain-text summary/u);
-  });
-
-  it("rejects unexpected report prologue content", () => {
-    const report = REPORT.replace(
-      "Generated for 2026-07-25 UTC.\n\n",
-      "Generated for 2026-07-25 UTC.\n\n@maintainers\n\n",
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/prologue or section order/u);
+  it("allows underscores inside plain identifiers", () => {
+    expect(
+      validate(REPORT.replace("remove expired compatibility", "remove media_legacy compatibility")),
+    ).not.toThrow();
   });
 });

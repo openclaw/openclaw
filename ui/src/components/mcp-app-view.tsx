@@ -1,18 +1,15 @@
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { onCleanup, onSettled, Show } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
-import {
-  createMcpAppView,
-  type McpAppViewOwner,
-  type McpAppViewProps,
-  type McpAppViewElement,
-  type ViewMethods,
-} from "./mcp-app-view-owner.ts";
+import { presentMcpAppInSidebar } from "./mcp-app-sidebar.ts";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
+import { createMcpAppView, type McpAppViewOwner } from "./mcp-app-view-owner.ts";
+import type { McpAppViewProps, McpAppViewElement, ViewMethods } from "./mcp-app-view-types.ts";
 import "../styles/mcp-app-view.css";
 
 const owners = new WeakMap<McpAppViewElement, McpAppViewOwner>();
@@ -21,50 +18,25 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   "mcp-app-view",
   (props, host) => {
     const context = useApplication();
-    const gateway = context ? projectGateway(context.gateway) : undefined;
-    const owner = createMcpAppView(host, context);
-    const read = projectOwner(owner, (current) => current.read()).read;
+    const gateway = projectGateway(context.gateway);
+    const { owner, view } = projectCallbackOwner(
+      (notify) => createMcpAppView(host, context, onSettled, notify),
+      (current) => current.read(),
+    );
+    const read = view.read;
     owners.set(host, owner);
-    const binding = createMemo(
-      () => {
-        gateway?.read();
-        return [
-          context?.gateway.snapshot.client,
-          props.sessionKey,
-          props.viewId,
-          props.agentId,
-          context?.gateway.connectionRevision,
-          context?.gateway.snapshot.hello,
-        ] as const;
-      },
-      { equals: (a, b) => a.every((value, index) => value === b[index]) },
-    );
-    createEffect(binding, () => {
-      void owner.setup(owner.currentBinding());
-    });
-    createEffect(
-      () => [props.title, t("mcpApp.title")],
-      () => {
-        owner.updateTitle();
-      },
-    );
-    const presentation = createMemo(
-      () => [props.height, props.fillContainer, props.displayMode, props.deepLink],
-      { equals: (a, b) => a.every((value, index) => value === b[index]) },
-    );
-    createEffect(presentation, () => owner.updatePresentation());
-    createEffect(
-      () => props.surface,
-      () => owner.updateReservedHeight(),
-    );
+    const unregister = registerMcpAppUnmountTarget(host);
+    onSettled(() => owner.start());
+    // Retire bridge methods and host registration even if disposal precedes the first settle.
     onCleanup(() => {
+      unregister();
       owners.delete(host);
-      void owner.teardown();
+      owner.dispose();
     });
     const relaunch = () => (read().inactive === "ended" ? props.onRelaunch : undefined);
     return (
       <>
-        <Show when={props.displayMode === "fullscreen"}>
+        <Show when={props.displayMode === "fullscreen" && !props.sidebar}>
           <button
             class="exit-fullscreen"
             onClick={() => {
@@ -99,6 +71,13 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
               {t("mcpApp.unavailable", {
                 error: formatUiError(error(), t("mcpApp.errors.requestFailed")),
               })}
+              <button
+                type="button"
+                disabled={gateway.read().snapshot.phase !== "connected"}
+                onClick={() => void owner.setup(owner.currentBinding())}
+              >
+                {t("mcpApp.retry")}
+              </button>
             </div>
           )}
         </Show>
@@ -119,10 +98,13 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       onHeightChange: { default: undefined, attribute: false },
       relaunching: { default: false },
       displayMode: { default: "inline", attribute: "display-mode", reflect: true },
+      sidebar: { default: false, attribute: false },
     },
+    propertyChanged: (host) => owners.get(host)?.inputChanged(),
     methods: {
       teardown: (host) => owners.get(host)?.teardown() ?? Promise.resolve(),
       restartAfterTeardown: (host) => owners.get(host)?.restartAfterTeardown(),
+      presentInSidebar: (host, target) => presentMcpAppInSidebar(host, target),
     },
   },
 );

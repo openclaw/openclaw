@@ -10,6 +10,7 @@ import {
   isConfigurationUpdate,
   replayResponsesReasoningUpdates,
   supportsResponsesReasoningUpdate,
+  type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
 import {
   buildProviderReplayContext,
@@ -40,8 +41,14 @@ export function recordResponsesReasoningState(
   const reasoning = {
     ...buildProviderReplayContext(model, identity),
     effort: request.reasoning.effort,
-    controls: request.input.flatMap((item, index) =>
-      isConfigurationUpdate(item) ? [{ index, item }] : [],
+    controls: request.input.reduce<Array<{ index: number; item: ResponsesConfigurationUpdate }>>(
+      (controls, item, index) => {
+        if (isConfigurationUpdate(item)) {
+          controls.push({ index, item });
+        }
+        return controls;
+      },
+      [],
     ),
     inputLength: request.input.length,
     outputLength: output.length,

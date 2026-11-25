@@ -19,15 +19,11 @@ import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
 } from "../agents/harness/runtime-plugin-load-plan.js";
-import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import {
-  findModelCatalogEntry,
-  type ModelCatalogEntry,
-  type ModelCatalogSnapshot,
-} from "../agents/model-catalog.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   type ModelRef,
+  NO_MODEL_CONFIGURED_MESSAGE,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
@@ -43,7 +39,9 @@ import {
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeTraceLevel,
   normalizeUsageDisplay,
+  normalizeVerboseLevel,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
@@ -56,19 +54,14 @@ import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-o
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
-import {
-  applyTraceOverride,
-  applyVerboseOverride,
-  parseTraceOverride,
-  parseVerboseOverride,
-} from "../sessions/level-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -79,8 +72,9 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
-import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
+import { isReadMarkerOnly } from "./server-methods/session-unread-ack.js";
 import {
+  createSessionAccessProgramValidation,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -93,9 +87,13 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
-import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
+import {
+  applySessionsPatchDisplayMetadata,
+  isSessionIconColorOnlyPatch,
+} from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
+import { resolveSessionPatchThinkingProfile } from "./sessions-patch-thinking.js";
 
 type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;
@@ -110,15 +108,12 @@ type SessionPatchProjectionParams = {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
-  /** Creation snapshots selected models, including the configured default. */
-  pinModelSelection?: boolean;
 };
 
 type SessionPatchProjectionResult =
@@ -159,12 +154,13 @@ export async function prepareSessionsPatchEntry(
     : undefined;
   const pinnedProfile =
     "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
-  const recordedProvider = pinnedProfile
-    ? await prepareAuthProfileProvider({
-        agentDir: resolveAgentDir(params.cfg, sessionAgentId),
-        profileId: pinnedProfile,
-      })
-    : undefined;
+  const recordedProvider =
+    pinnedProfile && !splitTrailingAuthProfile(params.patch.model ?? "").profile
+      ? await prepareAuthProfileProvider({
+          agentDir: resolveAgentDir(params.cfg, sessionAgentId),
+          profileId: pinnedProfile,
+        })
+      : undefined;
   const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
@@ -205,14 +201,12 @@ function* projectSessionPatchSteps(
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   const now = Date.now();
-  const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
-    params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
+    params.agentId ?? parseAgentSessionKey(storeKey)?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  let resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
-  const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
-    : undefined;
+  let resolvedDefault: ModelRef | undefined;
+  const getResolvedDefault = () =>
+    (resolvedDefault ??= resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId }));
   const resolveThinkingRuntime = (
     provider: string,
     model: string,
@@ -252,33 +246,21 @@ function* projectSessionPatchSteps(
     model: string,
     entry?: SessionEntry,
   ): Generator<void, ReturnType<typeof resolveThinkingProfile>, ModelCatalogSnapshot | undefined> {
-    const catalog = yield* loadPreparedModelCatalogForPatch();
+    yield* loadPreparedModelCatalogForPatch();
     const agentRuntime = resolveThinkingRuntime(provider, model, entry);
-    const logical = catalog
-      ? findModelCatalogEntry(catalog, { provider, modelId: model })
-      : undefined;
-    const selected =
-      logical && loadedModelCatalog
-        ? selectModelCatalogRuntimeEntry({
-            entry: logical,
-            routeVariants: loadedModelCatalog.routeVariants,
-            runtimeId: agentRuntime,
-          }).entry
-        : undefined;
-    return resolveThinkingProfile({
+    return resolveSessionPatchThinkingProfile({
       provider,
       model,
-      catalog: selected ? [selected] : catalog,
       agentRuntime,
+      catalog: loadedModelCatalog,
     });
   }
 
-  const existing =
-    params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
-  // A read acknowledgement is not session activity: ageing the row here would move a
-  // just-opened session to the top of recency order, so only the read state commits.
-  const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
-  const nextUpdatedAt = unreadAckOnly
+  const existing = params.existingEntry && projectCanonicalSessionEntryShape(params.existingEntry);
+  // Marking read/unread or changing the icon/color is not session activity: ageing the
+  // row here would move the session to the top of recency order, so only the patch commits.
+  const recencyNeutral = isReadMarkerOnly(patch) || isSessionIconColorOnlyPatch(patch);
+  const nextUpdatedAt = recencyNeutral
     ? (existing?.updatedAt ?? now)
     : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
@@ -399,14 +381,24 @@ function* projectSessionPatchSteps(
     const normalized = normalizeThinkLevel(rawThinking);
     if (!normalized) {
       const hintProvider =
-        normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
-      const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+        normalizeOptionalString(existing?.providerOverride) || getResolvedDefault()?.provider;
+      const hintModel =
+        normalizeOptionalString(existing?.modelOverride) || getResolvedDefault()?.model;
+      if (!hintProvider || !hintModel) {
+        return invalid(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       const profile = yield* loadThinkingProfileForPatch(hintProvider, hintModel, existing);
       return invalid(
         `invalid thinkingLevel (use ${profile.levels.map(({ label }) => label).join("|")})`,
       );
     }
     next.thinkingLevel = normalized;
+  }
+
+  if (patch.cyberAccessProgram === null) {
+    delete next.cyberAccessProgram;
+  } else if (patch.cyberAccessProgram !== undefined) {
+    next.cyberAccessProgram = patch.cyberAccessProgram;
   }
 
   const fastModeError = applyNormalizedPreference(
@@ -455,24 +447,18 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("verboseLevel" in patch) {
-    const parsed = parseVerboseOverride(patch.verboseLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyVerboseOverride(next, parsed.value);
-  }
-
-  if ("traceLevel" in patch) {
-    const parsed = parseTraceOverride(patch.traceLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyTraceOverride(next, parsed.value);
-  }
-
   // Explicit "off" values remain stored so session preferences override defaults.
   const preferenceError =
+    applyNormalizedPreference(
+      "verboseLevel",
+      normalizeVerboseLevel,
+      'invalid verboseLevel (use "on"|"off"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "traceLevel",
+      normalizeTraceLevel,
+      'invalid traceLevel (use "on"|"off"|"raw")',
+    ) ??
     applyNormalizedPreference(
       "reasoningLevel",
       normalizeReasoningLevel,
@@ -487,6 +473,11 @@ function* projectSessionPatchSteps(
       "elevatedLevel",
       normalizeElevatedLevel,
       'invalid elevatedLevel (use "on"|"off"|"ask"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "execHost",
+      (raw) => normalizeExecTarget(raw) ?? undefined,
+      'invalid execHost (use "auto"|"sandbox"|"gateway"|"node")',
     );
   if (preferenceError) {
     return invalid(preferenceError);
@@ -503,31 +494,39 @@ function* projectSessionPatchSteps(
     applyModelRuntimeDirective(next, { kind: "clear" });
   }
   if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    getResolvedDefault();
     yield* loadPreparedModelCatalogForPatch();
   }
   if ("model" in patch) {
     const statusModelPatch = isSessionStatusModelPatchOrigin();
+    const previousModel = resolveSessionModelRef(cfg, next, sessionAgentId);
+    // A session with no previous model has nothing to revert to.
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : createAgentPatchedSessionModelFallback({
-            ...resolveSessionModelRef(cfg, next, sessionAgentId),
-            entry: next,
-            ts: now,
-          })
+        : previousModel &&
+          createAgentPatchedSessionModelFallback({ ...previousModel, entry: next, ts: now })
       : undefined;
     if (!statusModelPatch) {
       delete next.modelFallback;
     }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
-    if (raw === null) {
-      selection = { ...resolvedDefault, isDefault: true };
+    const clearedToDefault = raw === null ? getResolvedDefault() : undefined;
+    if (clearedToDefault) {
+      selection = { ...clearedToDefault, isDefault: true };
+    } else if (raw === null) {
+      // No configured model to return to: clearing the override leaves the session without one.
+      applyModelOverrideToSessionEntry({ entry: next, selection: { isDefault: true } });
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
+      const selectionDefault = getResolvedDefault();
+      const subagentModelHint = isSubagentSessionKey(storeKey)
+        ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+        : undefined;
       const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
@@ -544,15 +543,15 @@ function* projectSessionPatchSteps(
         catalog,
         raw: trimmed,
         defaultProvider:
-          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+          (statusModelPatch && next.providerOverride?.trim()) || selectionDefault?.provider,
+        defaultModel: selectionDefault?.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
       });
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      selection = { ...resolved, isDefault: !params.pinModelSelection && resolved.isDefault };
+      selection = resolved;
     }
     if (selection) {
       const prepared = prepareSessionPatchModelSelection({
@@ -640,14 +639,12 @@ function* projectSessionPatchSteps(
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
-        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+        currentProvider:
+          next.providerOverride ?? next.modelProvider ?? getResolvedDefault()?.provider,
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         recordedProvider,
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
         markLiveSwitchPending: statusModelPatch || raw !== null,
       });
       if (raw === null && !statusModelPatch) {
@@ -660,8 +657,11 @@ function* projectSessionPatchSteps(
   }
 
   if (typeof rawThinking === "string") {
-    const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
-    const effectiveModel = next.modelOverride ?? resolvedDefault.model;
+    const effectiveProvider = next.providerOverride ?? getResolvedDefault()?.provider;
+    const effectiveModel = next.modelOverride ?? getResolvedDefault()?.model;
+    if (!effectiveProvider || !effectiveModel) {
+      return invalid(NO_MODEL_CONFIGURED_MESSAGE);
+    }
     const profile = yield* loadThinkingProfileForPatch(effectiveProvider, effectiveModel, next);
     if (!profile.levels.some(({ id }) => id === next.thinkingLevel)) {
       return invalid(
@@ -671,8 +671,7 @@ function* projectSessionPatchSteps(
   }
 
   const contextWindowPatch = yield* applySessionContextWindowPatch({
-    defaultModel: resolvedDefault.model,
-    defaultProvider: resolvedDefault.provider,
+    resolveDefaultModel: getResolvedDefault,
     loadModelCatalog: loadPreparedModelCatalogForPatch,
     runtimeId: resolveThinkingRuntime,
     routeVariants: () => loadedModelCatalog?.routeVariants,
@@ -725,5 +724,19 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
+  if (
+    params.operatorAuthority &&
+    (patch.cyberAccessProgram !== undefined || "model" in patch || "agentRuntime" in patch)
+  ) {
+    validateModelSelection = createSessionAccessProgramValidation({
+      operatorAuthority: params.operatorAuthority,
+      entry: next,
+      validateModelSelection,
+    });
+    const error = validateModelSelection();
+    if (error) {
+      return { ok: false, error };
+    }
+  }
   return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

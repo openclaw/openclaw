@@ -4,37 +4,14 @@
  * awaiting completion announces so pruning cannot delete needed transcripts.
  */
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
-import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { prepareSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
 
-function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
-    // The killed row is a reconciliation tombstone. Its session owns the
-    // provider result until the sweeper accepts completion or finalizes cancellation.
-    return true;
-  }
-  if (typeof entry.cleanupCompletedAt === "number") {
-    return false;
-  }
-  return (
-    typeof entry.execution.endedAt !== "number" ||
-    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
-    entry.delivery?.status === "pending" ||
-    isDeliverySuspended(entry)
-  );
-}
-
-function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>): string[] {
-  const keys: string[] = [];
+function* protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecord>) {
   for (const entry of runs) {
-    if (!shouldPreserveForMaintenance(entry)) {
-      continue;
-    }
-    keys.push(entry.childSessionKey);
+    yield entry.childSessionKey;
   }
-  return keys;
 }
 
 registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
@@ -43,7 +20,7 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
     native ? { live: true } : undefined,
   );
   return {
-    capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
+    capture: () => protectedSubagentSessionKeys(prepared.capture()),
     dispose() {},
   };
 });

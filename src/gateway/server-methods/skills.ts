@@ -1,8 +1,12 @@
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
+  validateSkillsCategoriesParams,
   validateSkillsDetailParams,
   validateSkillsSearchParams,
   validateSkillsSecurityVerdictsParams,
@@ -11,28 +15,28 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
+import { fetchClawHubSkillCategories } from "../../infra/clawhub-skill-categories.js";
+import { fetchClawHubSkillDetail, searchClawHubSkillsPage } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
-import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
-import { collectSkillBins } from "../../skills/discovery/bins.js";
-import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../../skills/lifecycle/clawhub.js";
+  SkillApiKeyReferenceError,
+  updateSkillConfigEntry,
+} from "../../skills/config/mutations.js";
+import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
+import { updateSkillsFromClawHub } from "../../skills/lifecycle/clawhub.js";
 import { prepareWorkspaceSkillEntries } from "../../skills/loading/workspace-skill-loader.js";
 import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import { respondError } from "./response.js";
 import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
 import { buildRemoteAwareWorkspaceSkillStatus, handleSkillsStatus } from "./skills-status.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
-import { skillsWorkshopHandlers } from "./skills-workshop.js";
 import { resolveSkillsAgentWorkspace } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
@@ -41,34 +45,27 @@ export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsFilesHandlers,
   ...skillsLibraryHandlers,
   ...skillsUploadHandlers,
-  ...skillsWorkshopHandlers,
   ...skillsRetiredHandlers,
   "skills.status": handleSkillsStatus,
-  "skills.securityVerdicts": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSkillsSecurityVerdictsParams,
-        "skills.securityVerdicts",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const resolved = resolveSkillsAgentWorkspace(params, context);
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    try {
-      const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
-      const targets = collectClawHubVerdictTargets(report);
-      const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
-      respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+  "skills.securityVerdicts": defineValidatedGatewayHandler(
+    "skills.securityVerdicts",
+    validateSkillsSecurityVerdictsParams,
+    async ({ params, respond, context }) => {
+      const resolved = resolveSkillsAgentWorkspace(params, context);
+      if (!resolved.ok) {
+        respond(false, undefined, resolved.error);
+        return;
+      }
+      try {
+        const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
+        const targets = collectClawHubVerdictTargets(report);
+        const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
+        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
+      } catch (error) {
+        respondError(respond, ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+      }
+    },
+  ),
   "skills.skillCard": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSkillsSkillCardParams, "skills.skillCard", respond)) {
       return;
@@ -89,13 +86,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
           ?.skillCard?.content
       : undefined;
     if (!skill?.skillCard || content === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `skill card not ${skill?.skillCard ? "readable" : "found"} for ${params.skillKey}`,
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `skill card not ${skill?.skillCard ? "readable" : "found"} for ${params.skillKey}`,
       );
       return;
     }
@@ -127,22 +121,40 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentSkillFilter: "ignore",
         },
       );
-      for (const bin of collectSkillBins(entries)) {
+      for (const bin of normalizeSortedUniqueTrimmedStringList(
+        entries.flatMap((entry) =>
+          (entry.metadata?.requires?.bins ?? []).concat(
+            entry.metadata?.requires?.anyBins ?? [],
+            (entry.metadata?.install ?? []).flatMap((spec) => spec?.bins ?? []),
+          ),
+        ),
+      )) {
         bins.add(bin);
       }
     }
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
+  "skills.categories": defineValidatedGatewayHandler(
+    "skills.categories",
+    validateSkillsCategoriesParams,
+    async ({ respond }) => respond(true, await fetchClawHubSkillCategories(), undefined),
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
   "skills.search": defineValidatedGatewayHandler(
     "skills.search",
     validateSkillsSearchParams,
     async ({ params, respond }) => {
-      const results = await searchSkillsFromClawHub({
-        query: params.query,
-        limit: params.limit,
-      });
-      registerClawHubCatalogIconUrls(results.map((result) => result.icon ?? undefined));
-      respond(true, { results }, undefined);
+      if (params.query?.trim() && params.cursor) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "ClawHub text search does not support a cursor.",
+        );
+        return;
+      }
+      const page = await searchClawHubSkillsPage(params);
+      registerClawHubCatalogIconUrls(page.results.map((result) => result.icon ?? undefined));
+      respond(true, page, undefined);
     },
     (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
   ),
@@ -157,13 +169,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         // ClawHub has no source-qualified read endpoint, so reading this by bare slug would
         // show a same-slug registry skill while install resolves the external artifact.
         // Refusing keeps review and install on one identity until that contract exists.
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only. Install it directly, or run "openclaw skills install ${requested.requestedReference}".`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `ClawHub cannot return details for ${requested.requestedReference}; external skill sources are install-only. Install it directly, or run "openclaw skills install ${requested.requestedReference}".`,
         );
         return;
       }
@@ -189,15 +198,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params;
     if ("source" in p) {
       if (Boolean(p.slug) === Boolean(p.all)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            p.slug
-              ? 'clawhub skills.update accepts either "slug" or "all", not both'
-              : 'clawhub skills.update requires "slug" or "all"',
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          p.slug
+            ? 'clawhub skills.update accepts either "slug" or "all", not both'
+            : 'clawhub skills.update requires "slug" or "all"',
         );
         return;
       }
@@ -236,7 +242,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const updated = await updateSkillConfigEntry(p);
+    let updated: Record<string, unknown>;
+    try {
+      updated = await updateSkillConfigEntry(p);
+    } catch (error) {
+      if (error instanceof SkillApiKeyReferenceError) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
+        return;
+      }
+      throw error;
+    }
     respond(
       true,
       { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },

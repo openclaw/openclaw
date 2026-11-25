@@ -73,7 +73,7 @@ describePosix("complete prior-CI proof transport", () => {
           ? "matching failed-run attribution"
           : fault === "evidence mutation"
             ? "operator evidence changed"
-            : "fail\tSecurity Review\tFAILURE",
+            : "pre-existing CI authority does not waive other required checks, including security",
       );
       expect(result.output).not.toContain("Argument list too long");
       expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });

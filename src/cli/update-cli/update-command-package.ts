@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -7,19 +6,23 @@ import {
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import type {
   PackageActivationOptions,
   PackageUpdateTransaction,
+  StagedPackageSwapParams,
 } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
-  getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -30,8 +33,6 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
-  resolveGlobalInstallTarget,
-  verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
@@ -48,11 +49,11 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
+import { createUpdateDoctorProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
   readPackageVersion,
-  resolveGlobalManager,
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
@@ -63,6 +64,7 @@ import {
   captureUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { observeUpdateParentDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { createPackageUpdateDoctorCompletion } from "./update-command-doctor-completion.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
@@ -73,7 +75,6 @@ type PackageDoctorContext = {
   executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
   inputHash: string;
-  changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
@@ -99,6 +100,10 @@ type PackageDoctorOptions = {
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const doctorTimeoutMs = resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs);
+  const remaining = createDoctorServiceInspectionBudget(
+    doctorTimeoutMs === undefined ? undefined : Date.now() + doctorTimeoutMs,
+  );
   const assertRequesterCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
   const assertCurrent = () => {
@@ -118,21 +123,23 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   await createUpdateConfigSnapshot(doctorEnv);
   const candidateHostVersion = await readPackageVersion(params.root);
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-  const sectionTiming = createUpdateDoctorSectionTiming();
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
   // Service ownership stays with the finalizer while the retained package
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
     targetVersion: candidateHostVersion,
-    allowGatewayServiceRepair: false,
   });
   let doctorArgv: string[];
   if (context) {
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
     doctorArgv = [
-      params.nodeRunner ?? resolveNodeRunner(),
-      path.join(
-        params.root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({
+          ...runtimeProcessEntrypoints.updateMigratedFinalize,
+          root: params.root,
+        }),
+        workerRuntime,
       ),
       "--doctor",
     ];
@@ -183,9 +190,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
+  const completedSteps: UpdateStepResult[] = [];
   const completeDoctorStep = createPackageUpdateDoctorCompletion({
     root: params.root,
     progress: params.progress,
+    results: completedSteps,
     onConfigSnapshot: params.onConfigSnapshot,
     context,
     configSnapshot,
@@ -193,7 +202,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     assertCurrent,
     doctorProgressInfo,
   });
-  const completedSteps: UpdateStepResult[] = [];
   let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
@@ -216,11 +224,18 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
           params.restart === false ? "0" : UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
       },
-      timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
+      timeoutMs: remaining(),
       runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
   try {
+    if (context?.databaseBackup) {
+      await observeUpdateParentDatabaseWrites(context.databaseBackup, {
+        env: doctorEnv,
+        root: params.root,
+        assertCurrent,
+      });
+    }
     outcome = {
       step: context
         ? await withUpdateDoctorChild(
@@ -237,9 +252,15 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 fullIntegrityCheck: params.fullIntegrityCheck,
-                databaseGenerations: context.databaseBackup?.sourceGenerations,
+                databaseGenerations:
+                  context.databaseBackup?.migration?.to ??
+                  context.databaseBackup?.sourceGenerations,
                 databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
+                get serviceInspectionDeadlineAtMs() {
+                  const budget = remaining();
+                  return budget === undefined ? undefined : Date.now() + budget;
+                },
               },
             },
             runDoctor,
@@ -288,61 +309,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   return outcome.step;
 }
 
-/** Keep package staging open until its source owner publishes the validated checkout. */
-export async function prepareGitPackageExposure(
-  params: Omit<Parameters<typeof runGlobalPackageUpdateSteps>[0], "beforeActivate">,
-) {
-  const prepared = createDeferredCore();
-  const activation = createDeferredCore<boolean>();
-  const cancellation = new Error("Source activation cancelled before global exposure");
-  const completed = runGlobalPackageUpdateSteps({
-    ...params,
-    beforeActivate: async () => {
-      prepared.resolve();
-      if (!(await activation.promise)) {
-        throw cancellation;
-      }
-    },
-  });
-  const outcome = await Promise.race([prepared.promise.then(() => null), completed]);
-  if (outcome) {
-    const failure = outcome.failedStep;
-    throw new UpdatePreMutationError(
-      outcome.reason ??
-        (failure
-          ? normalizeFallbackFailureReason(failure.name)
-          : "source-exposure-preparation-failed"),
-      failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      {
-        failureFacts: failure?.failureFacts,
-        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
-      },
-    );
-  }
-  return {
-    activate: () => {
-      activation.resolve(true);
-      return completed;
-    },
-    cancel: async () => {
-      activation.resolve(false);
-      try {
-        return await completed;
-      } catch (error) {
-        if (error !== cancellation) {
-          throw error;
-        }
-        // Only this gate's cancellation leaves the package untouched. Recheck
-        // it after staging cleanup without masking the source owner's failure.
-        return {
-          steps: [],
-          recovery: await verifyPackageUpdateRecovery(params.installTarget.packageRoot),
-        };
-      }
-    },
-  };
-}
-
 export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> & {
   reapplyLocalOverrides?: boolean;
   requirePackageReplacement?: boolean;
@@ -351,16 +317,16 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   installSpec?: string;
   timeoutMs: number;
   startedAt: number;
-  honorPackageRoot?: boolean;
   resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
-  installTarget?: ResolvedGlobalInstallTarget;
+  installTarget: ResolvedGlobalInstallTarget;
   beforeVerifyCandidate?: (root: string) => Promise<void>;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   getActivation?: () => PackageActivationOptions | undefined;
+  onPackageRelease?: StagedPackageSwapParams["onPackageRelease"];
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -428,6 +394,7 @@ export async function stagePackageInstallUpdate(
       reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
       getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
+      onPackageRelease: (release) => requireActive().onPackageRelease?.(release),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
     () => requireActive(),
@@ -485,21 +452,7 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
   resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
-  let installTarget = params.installTarget;
-  if (!installTarget) {
-    const manager = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: params.timeoutMs,
-    });
-    installTarget = await resolveGlobalInstallTarget({
-      manager,
-      runCommand: runCommandWithTimeout,
-      timeoutMs: params.timeoutMs,
-      pkgRoot: params.root,
-      honorPackageRoot: params.honorPackageRoot === true,
-    });
-  }
+  const { installTarget } = params;
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv(undefined, installTarget));
   const pkgRoot = installTarget.packageRoot;
   const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
@@ -512,7 +465,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
-  const doctorSettlements: UpdateStepResult[] = [];
+  const doctorReceipts: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -530,6 +483,8 @@ export async function runPackageInstallUpdate(
     reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
     getActivation: params.getActivation,
+    releaseLayout: true,
+    onPackageRelease: params.onPackageRelease,
     installTarget,
     installSpec,
     installCwd: params.invocationCwd,
@@ -552,8 +507,12 @@ export async function runPackageInstallUpdate(
       try {
         return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
       } finally {
-        doctorSettlements.push(
-          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        doctorReceipts.push(
+          ...(results?.filter(
+            (result) =>
+              result.name === "doctor process settlement" ||
+              result.name === "database migration writes",
+          ) ?? []),
         );
       }
     },
@@ -570,7 +529,11 @@ export async function runPackageInstallUpdate(
           ? "error"
           : "ok",
     mode: installTarget.manager,
-    root: packageUpdate.activePackageRoot ?? undefined,
+    // A release replaced in place behind its link is the installation at the link.
+    root: packageUpdate.activePackageRoot
+      ? (resolvePackageReleaseSlotForRootSync(packageUpdate.activePackageRoot) ??
+        packageUpdate.activePackageRoot)
+      : undefined,
     reason:
       getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
       packageUpdate.reason ??
@@ -582,7 +545,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: [...packageUpdate.steps, ...doctorSettlements],
+    steps: [...packageUpdate.steps, ...doctorReceipts],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

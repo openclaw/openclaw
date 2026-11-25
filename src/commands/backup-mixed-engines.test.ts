@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 describe("mixed-engine archive backup", () => {
   it("retains authored family choices through archive capture and staging restore", async () => {
-    await withOpenClawTestState(
+    await withIsolatedBackupState(
       { layout: "state-only", prefix: "openclaw-backup-mixed-", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({

@@ -60,6 +60,13 @@ import { enqueueRelayVoiceTranscript } from "./voice.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
 const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
+// A provider-cancelled call accepts no tool result, so this is the model's only signal
+// that the work it announced stopped. Cancellation aborts only the remaining steps, so
+// earlier effects may have landed and the outcome stays unknown.
+const PROVIDER_CANCELLED_CONSULT_PROMPT = [
+  "The earlier OpenClaw request was interrupted before it reported back, so its outcome is unknown; some steps may already have happened.",
+  "Do not say it finished or that nothing happened. Check what was done before running it again.",
+].join(" ");
 
 /** Creates a realtime voice relay session and returns the browser audio contract. */
 export function createTalkRealtimeRelaySession(
@@ -154,6 +161,7 @@ export function createTalkRealtimeRelaySession(
         constructionTerminal.current ??= { kind: "error", error: new Error(message) };
       }
     },
+    () => bridgeRef.current?.bridge.outputAudioMode === "continuous",
   );
   const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
   const transcriptReadiness = createClientVoiceTranscriptReadiness({
@@ -367,6 +375,7 @@ export function createTalkRealtimeRelaySession(
             type: "toolCallCancelled",
             callId: relayCallId,
           });
+          bridgeRef.current?.sendUserMessage?.(PROVIDER_CANCELLED_CONSULT_PROMPT);
         }
         return;
       }

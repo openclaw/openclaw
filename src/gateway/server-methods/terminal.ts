@@ -26,6 +26,7 @@ import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
@@ -47,7 +48,7 @@ import {
 } from "./terminal-open-plan.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
@@ -145,6 +146,8 @@ type TerminalSessionOpenRequest = {
   rows: number;
   requiredCwd?: string;
   requireCliAgents?: boolean;
+  /** Gateway-parsed node selected by the caller before invoking the catalog provider. */
+  catalogNodeId?: string;
   resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
   catalogFailureMessage?: string;
   failureHint?: string;
@@ -202,7 +205,34 @@ async function openTerminalSessionWithSource(
     unavailable("terminal is not available");
     return;
   }
-  const launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  const localTerminalBlockReason = manager.gatewayLocalTerminalBlockReason;
+  if (localTerminalBlockReason) {
+    // Catalog providers can run a local login shell while preparing a plan.
+    if (!request.catalogNodeId || !request.resolveCatalogPlan) {
+      unavailable(localTerminalBlockReason);
+      return;
+    }
+    if (!context.nodeRegistry.get(request.catalogNodeId)) {
+      unavailable("terminal node is not connected");
+      return;
+    }
+  }
+  const qualifiedSession = parseAgentSessionKey(request.sessionKey?.trim());
+  let launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  // Only a qualified conversation can supply a missing launch owner. Unqualified
+  // aliases must retain the launch policy's refusal to select a system agent.
+  if (request.sessionKey && (launch.ok || qualifiedSession)) {
+    const requestedOwner = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      request.sessionKey,
+      qualifiedSession || !launch.ok ? request.agentId : launch.plan.agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    launch = context.resolveTerminalLaunchPolicy(requestedOwner.agentId);
+  }
   if (!launch.ok) {
     respondLaunchBlocked(respond, launch.block, request.failureHint);
     return;
@@ -238,6 +268,13 @@ async function openTerminalSessionWithSource(
           ? error.message
           : (request.catalogFailureMessage ?? "catalog terminal open failed"),
       );
+      return;
+    }
+    if (
+      localTerminalBlockReason &&
+      (catalogPlan.kind !== "node" || catalogPlan.nodeId !== request.catalogNodeId)
+    ) {
+      unavailable(localTerminalBlockReason);
       return;
     }
     title = catalogPlan.title;
@@ -322,18 +359,9 @@ async function openTerminalSessionWithSource(
   let agentOwner: AgentTerminalOwner | undefined;
   if (request.sessionKey) {
     const runtimeConfig = context.getRuntimeConfig();
-    const requestedOwner = resolveRequestedSessionAgentId(
-      runtimeConfig,
-      request.sessionKey,
-      launch.plan.agentId,
-    );
-    if (!requestedOwner.ok) {
-      respond(false, undefined, requestedOwner.error);
-      return;
-    }
     const agentSessionKey = resolveStoredSessionKeyForAgentStore({
       cfg: runtimeConfig,
-      agentId: requestedOwner.agentId,
+      agentId: launch.plan.agentId,
       sessionKey: request.sessionKey,
     });
     source?.assertCurrent();
@@ -342,7 +370,7 @@ async function openTerminalSessionWithSource(
       (await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: runtimeConfig,
         key: agentSessionKey,
-        agentId: requestedOwner.agentId,
+        agentId: launch.plan.agentId,
       }));
     const agentSessionId = entry?.sessionId?.trim();
     if (!agentSessionId) {
@@ -358,7 +386,7 @@ async function openTerminalSessionWithSource(
       kind: "agent",
       agentSessionKey,
       agentSessionId,
-      agentId: requestedOwner.agentId,
+      agentId: launch.plan.agentId,
     };
   }
   if (context.isConnectionActive?.(connId) === false) {
@@ -375,13 +403,7 @@ async function openTerminalSessionWithSource(
     );
     return;
   }
-  if (!context.isTerminalEnabled()) {
-    unavailable("terminal is disabled");
-    return;
-  }
-  const refreshedLaunch = context.resolveTerminalLaunchPolicy(
-    agentOwner?.agentId ?? request.agentId,
-  );
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(launch.plan.agentId);
   if (!refreshedLaunch.ok) {
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
@@ -413,7 +435,6 @@ async function openTerminalSessionWithSource(
           source?.assertCurrent();
           return (
             context.isConnectionActive?.(connId) !== false &&
-            context.isTerminalEnabled() &&
             (!request.requireCliAgents ||
               context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
             context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
@@ -460,7 +481,7 @@ async function openTerminalSessionWithSource(
         rows: request.rows,
         env: terminalEnv,
         signal: deadline.controller.signal,
-        ...(createBackend ? { createBackend } : {}),
+        ...(createBackend ? { createBackend, executionHost: "node" as const } : {}),
         ...(stageUpload ? { stageUpload } : {}),
       });
       return openingTerminal;
@@ -528,11 +549,8 @@ function terminalSessionHandler<T extends { sessionId: string }>(
     params: T,
   ) => boolean,
 ): GatewayRequestHandlers[string] {
-  return async (opts) => {
+  return defineValidatedGatewayHandler(method, validate, async (opts) => {
     const { params, respond, context } = opts;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const connId = requireConnId(opts);
     if (!connId) {
       return;
@@ -546,7 +564,7 @@ function terminalSessionHandler<T extends { sessionId: string }>(
     const manager = context.terminalSessions;
     const ok = (manager && operate(manager, connId, params)) ?? false;
     respond(true, { ok });
-  };
+  });
 }
 
 export const terminalHandlers: GatewayRequestHandlers = {
@@ -583,6 +601,9 @@ export const terminalHandlers: GatewayRequestHandlers = {
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       cols: params.cols,
       rows: params.rows,
+      ...(params.catalog?.hostId.startsWith("node:")
+        ? { catalogNodeId: params.catalog.hostId.slice("node:".length) }
+        : {}),
       ...(resolveCatalogPlan ? { resolveCatalogPlan } : {}),
       catalogFailureMessage: "catalog terminal open failed",
     });

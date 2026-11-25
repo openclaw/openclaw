@@ -1,5 +1,6 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -15,7 +16,7 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -34,7 +35,7 @@ const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_W
 
 type PreparedToolSurface = Pick<
   Parameters<typeof createCodeModeTools>[0],
-  "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
+  "abortSignal" | "executeTool" | "toolExecutionAllow" | "codeModeSkills"
 > & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
@@ -61,6 +62,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
   },
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const presentation = input.presentation;
   const params = presentation
@@ -164,12 +166,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     const controls = createControls
       ? createControls({
           ...params,
+          pluginExecutionAuthority,
           runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           catalogRef: toolSearchCatalogRef,
           abortSignal: prepared?.abortSignal ?? params.abortSignal,
           executeTool: prepared?.executeTool ?? params.executeTool,
-          forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
           codeModeSkills,
         })
@@ -207,6 +209,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       projectedTools: projectedCompactedTools,
       diagnostics: schemaProjection.diagnostics,
       promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        diagnosticIdentity: params,
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,

@@ -100,7 +100,8 @@ describe("Gateway node control plane", () => {
         executablePath: process.execPath,
         argsPrefix: ["dist/entry.js"],
         cwd: process.cwd(),
-        usePackagedPlugins: true,
+        // The local protocol fixture needs no packaged-install repair.
+        usePackagedPlugins: false,
       },
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -154,7 +155,7 @@ describe("Gateway node control plane", () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       const identity = loadOrCreateDeviceIdentity({
-        path: path.join(gateway.tempRoot, "control-plane-node.sqlite"),
+        path: path.join(gateway.tempRoot, "control-plane-node", "client", "credentials.sqlite"),
       });
       const invocations: InvocationRecord[] = [];
       const handlerErrors: Error[] = [];
@@ -402,7 +403,11 @@ describe("Gateway node control plane", () => {
     { timeout: REQUEST_TIMEOUT_MS * 4 },
     async () => {
       const identity = loadOrCreateDeviceIdentity({
-        path: path.join(tempDirs.make("openclaw-node-host-negotiation-"), "node.sqlite"),
+        path: path.join(
+          tempDirs.make("openclaw-node-host-negotiation-"),
+          "client",
+          "credentials.sqlite",
+        ),
       });
       const fixture = await startProtocolEnvelopeFixture();
       const helloProtocols: number[] = [];
@@ -534,7 +539,7 @@ describe("Gateway node control plane", () => {
 
       try {
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(gateway.tempRoot, "rolling-compat-node.sqlite"),
+          path: path.join(gateway.tempRoot, "rolling-compat-node", "client", "credentials.sqlite"),
         });
         const declaredCaps = ["camera", FIXTURE_CAPABILITY];
         const declaredCommands = ["camera.list", FIXTURE_COMMAND];

@@ -12,6 +12,13 @@ import {
 } from "./timeouts.js";
 
 describe("resolveSafeTimeoutDelayMs", () => {
+  it.each([
+    [12_345_678_901_000, 0, 60_000, 2_147_483_647],
+    [1_000, 900, 60_000, 60_000],
+  ])("keeps refresh deadline %i within safe timer bounds", (refreshAt, now, minMs, expected) => {
+    expect(resolveSafeTimeoutDelayMs(refreshAt - now, { minMs })).toBe(expected);
+  });
+
   it("preserves callers that intentionally allow zero-delay timers", () => {
     expect(resolveSafeTimeoutDelayMs(Number.NaN, { minMs: 0 })).toBe(0);
     expect(resolveSafeTimeoutDelayMs(-5, { minMs: 0 })).toBe(0);

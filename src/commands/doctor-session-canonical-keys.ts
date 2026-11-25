@@ -22,6 +22,7 @@ import {
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
 import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -30,6 +31,7 @@ import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqliteOptions,
 } from "../infra/session-sqlite-migration-readers.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -134,16 +136,7 @@ function hydrateCanonicalSessionCandidates(
     CanonicalSessionCandidateFact,
     ReturnType<typeof loadCanonicalSessionRepairEntries>[number]
   >();
-  const byStore = new Map<string, CanonicalSessionCandidateFact[]>();
-  for (const fact of facts) {
-    const key = `${fact.agentId}\0${fact.storePath}`;
-    const grouped = byStore.get(key);
-    if (grouped) {
-      grouped.push(fact);
-    } else {
-      byStore.set(key, [fact]);
-    }
-  }
+  const byStore = groupRecords(facts, (fact) => `${fact.agentId}\0${fact.storePath}`);
   for (const group of byStore.values()) {
     const first = group[0]!;
     const entries = loadCanonicalSessionRepairEntries(
@@ -392,13 +385,7 @@ async function repairCanonicalSessionGroup(
   const destination = selected.destination;
   const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const databaseKey = isSameDatabasePath.createIndex();
-  const byDatabase = new Map<string, CanonicalSessionCandidate[]>();
-  for (const candidate of candidates) {
-    const key = databaseKey(candidate.sqlitePath);
-    const group = byDatabase.get(key) ?? [];
-    group.push(candidate);
-    byDatabase.set(key, group);
-  }
+  const byDatabase = groupRecords(candidates, (candidate) => databaseKey(candidate.sqlitePath));
 
   const destinationStore = byDatabase.get(databaseKey(destination.sqlitePath)) ?? [];
   const archivedDirectories = new Set<string>();
@@ -421,18 +408,22 @@ async function repairCanonicalSessionGroup(
         (candidate) => candidate.entry.sessionId === sessionId,
       );
       const [destinationEvents, sourceEvents] = await Promise.all([
-        loadTranscriptEvents({
-          agentId: destinationCollision?.agentId ?? destination.agentId,
-          sessionId,
-          sessionKey: destinationCollision?.sessionKey ?? winner.canonicalKey,
-          storePath: destinationCollision?.storePath ?? destination.storePath,
-        }),
-        loadTranscriptEvents({
-          agentId: winner.agentId,
-          sessionId,
-          sessionKey: winner.sessionKey,
-          storePath: winner.storePath,
-        }),
+        withSessionTranscriptHydrationCaller("doctor", () =>
+          loadTranscriptEvents({
+            agentId: destinationCollision?.agentId ?? destination.agentId,
+            sessionId,
+            sessionKey: destinationCollision?.sessionKey ?? winner.canonicalKey,
+            storePath: destinationCollision?.storePath ?? destination.storePath,
+          }),
+        ),
+        withSessionTranscriptHydrationCaller("doctor", () =>
+          loadTranscriptEvents({
+            agentId: winner.agentId,
+            sessionId,
+            sessionKey: winner.sessionKey,
+            storePath: winner.storePath,
+          }),
+        ),
       ]);
       const destinationContent = serializeJsonlLines(
         destinationEvents.map((event) => JSON.stringify(event)),
@@ -449,7 +440,6 @@ async function repairCanonicalSessionGroup(
       writeTranscriptArchive({
         archiveDirectory,
         content: destinationContent,
-        reason: "deleted",
         sessionId,
       });
       archivedDirectories.add(archiveDirectory);

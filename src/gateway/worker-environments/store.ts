@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { Buffer } from "node:buffer";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { publishSqliteCommittedState } from "../../infra/sqlite-post-commit.js";
 import {
@@ -7,6 +8,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   assertPublishedOpenClawStateDatabaseLifecycle,
@@ -16,7 +18,9 @@ import {
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "../openclaw-id/member-source-role-import.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import {
   isPreparedReservationWithinCapacity,
@@ -24,6 +28,7 @@ import {
   selectPreparedEnvironmentReservations,
 } from "./prepared-environment-store.js";
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { readWorkerEnvironmentReceipt } from "./store-receipt.js";
@@ -33,8 +38,6 @@ import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
-  WorkerEnvironmentPruneCursor,
-  WorkerEnvironmentPrunePage,
 } from "./store.types.js";
 
 export type {
@@ -71,13 +74,36 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   }
 });
 
-export async function createWorkerEnvironmentStore(
+export function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
+  return createWorkerEnvironmentStoreOwner(options);
+}
+
+/** Import only affected sources, publishing through the same live inventory owner. */
+export async function migrateWorkerEnvironmentMemberSources(
+  context: OpenClawStateWorkerContext,
+  input: LegacyOpenClawIdMemberRoleImport,
+  assertCurrent: () => void,
+): Promise<void> {
+  const store = await createWorkerEnvironmentStoreOwner({ context, assertCurrent });
+  try {
+    await store.importLegacyMemberSources(input, assertCurrent);
+  } finally {
+    await store.close();
+  }
+}
+
+async function createWorkerEnvironmentStoreOwner(options: {
+  database?: OpenClawStateDatabase;
+  now?: () => number;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}) {
   const inCreationScope = AsyncLocalStorage.snapshot();
-  let context = captureOpenClawStateWorkerContext(
-    options.database ? { path: options.database.path } : {},
-  );
+  let context =
+    options.context ??
+    captureOpenClawStateWorkerContext(options.database ? { path: options.database.path } : {});
   const pathname = context.admission.databasePath;
   const now = options.now ?? Date.now;
   let owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
@@ -94,6 +120,7 @@ export async function createWorkerEnvironmentStore(
       throw new WorkerEnvironmentInventoryClosedError();
     }
     context.admission.assertCurrent();
+    options.assertCurrent?.();
   };
   const read = <T>(operation: () => T): T => {
     assertActive();
@@ -102,22 +129,15 @@ export async function createWorkerEnvironmentStore(
   async function snapshot(ids?: readonly string[]) {
     const reply = await executeExistingOpenClawStateRead(
       { path: pathname },
-      { type: "workerEnvironments.snapshot", ids },
+      { type: "workerEnvironments.snapshot", input: { ids } },
     );
     assertActive();
-    if (!reply || !reply.ok || reply.type !== "workerEnvironments.snapshot") {
+    if (!reply) {
       throw new Error("Worker environment inventory could not be read");
     }
     return reply.facts;
   }
-  function track<T>(operation: Promise<T>): Promise<T> {
-    operations.add(operation);
-    void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
-    );
-    return operation;
-  }
+  const track = createPendingPromiseTracker(operations);
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,
@@ -309,14 +329,16 @@ export async function createWorkerEnvironmentStore(
     },
   });
   try {
-    await mutate("workerEnvironments.initialize", {});
-    // First creation publishes its physical identity through the captured admission.
-    workerEnvironmentProjections.get(context.admission.identity);
-    // Hydration joins the inventory writer queue.
-    await owner.enqueue(async () => {
-      const facts = await snapshot();
-      owner.install(facts, owner.nextSequence(), false);
-    });
+    if (!options.context) {
+      await mutate("workerEnvironments.initialize", {});
+      // First creation publishes its physical identity through the captured admission.
+      workerEnvironmentProjections.get(context.admission.identity);
+      // Hydration joins the inventory writer queue.
+      await owner.enqueue(async () => {
+        const facts = await snapshot();
+        owner.install(facts, owner.nextSequence(), false);
+      });
+    }
   } catch (error) {
     await close();
     throw error;
@@ -447,8 +469,27 @@ export async function createWorkerEnvironmentStore(
         revocationSubscriptions.delete(unsubscribe);
       };
     },
+    importLegacyMemberSources: (
+      input: LegacyOpenClawIdMemberRoleImport,
+      assertCurrent: () => void,
+    ) => mutate("workerEnvironments.importLegacyMemberSources", { input }, assertCurrent),
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
+    beginRetentionOperation({ assertCurrent, ...input }: Input<"beginRetentionOperation">) {
+      return mutate("workerEnvironments.beginRetentionOperation", { input }, assertCurrent);
+    },
+    recordRetentionObservation({ assertCurrent, ...input }: Input<"recordRetentionObservation">) {
+      return mutate("workerEnvironments.recordRetentionObservation", { input }, assertCurrent);
+    },
+    setRetentionRuntimeAdmission({
+      assertCurrent,
+      ...input
+    }: Input<"setRetentionRuntimeAdmission">) {
+      return mutate("workerEnvironments.setRetentionRuntimeAdmission", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(
@@ -504,6 +545,9 @@ export async function createWorkerEnvironmentStore(
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
       return mutate("workerEnvironments.ensurePreparedIntent", { input }, assertCurrent);
     },
+    refreshPreparedProject({ assertCurrent, ...input }: Input<"refreshPreparedProject">) {
+      return mutate("workerEnvironments.refreshPreparedProject", { input }, assertCurrent);
+    },
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
       return mutate("workerEnvironments.requestPreparedDestroy", { input }, assertCurrent);
     },
@@ -523,61 +567,70 @@ export async function createWorkerEnvironmentStore(
       return mutate("workerEnvironments.touchSessionAttachment", { input }, assertCurrent);
     },
     async pruneTerminalEnvironments(input: WorkerEnvironmentPruneInput = {}) {
-      assertActive();
+      await ready();
       const nowMs = input.nowMs ?? now();
+      const limit = input.limit ?? 256;
+      if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+        throw new Error("Worker environment prune timestamp must be a non-negative safe integer");
+      }
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+        throw new Error("Worker environment prune limit must be between 1 and 1000");
+      }
+      const cutoffMs = Math.max(0, nowMs - 7 * 24 * 60 * 60 * 1_000);
       const canPruneDemand = input.canPruneDemand;
-      const approved: WorkerEnvironmentPrunePage["candidates"] = [];
-      let cursor: WorkerEnvironmentPruneCursor | undefined;
-      for (;;) {
-        const reply = await executeExistingOpenClawStateRead(
-          { path: pathname },
-          {
-            type: "workerEnvironments.pruneCandidates",
-            input: { nowMs, limit: input.limit, cursor },
-          },
+      const candidates = owner
+        .list()
+        .filter(
+          (record) =>
+            isTerminalWorkerEnvironmentState(record.state) &&
+            record.stateChangedAtMs <= cutoffMs &&
+            !(record.state === "orphaned" && record.preparation !== null),
+        )
+        .toSorted(
+          (left, right) =>
+            left.stateChangedAtMs - right.stateChangedAtMs ||
+            Buffer.compare(Buffer.from(left.environmentId), Buffer.from(right.environmentId)),
         );
-        assertActive();
-        if (!reply || !reply.ok || reply.type !== "workerEnvironments.pruneCandidates") {
-          throw new Error("Worker environment retention candidates could not be read");
-        }
-        const page = reply.page;
-        for (const candidate of page.candidates) {
-          if (canPruneDemand?.(candidate.record, nowMs) ?? true) {
-            approved.push(candidate);
-          }
-          if (approved.length === page.limit) {
-            break;
-          }
-        }
-        if (approved.length === page.limit || !page.nextCursor) {
-          break;
-        }
-        cursor = page.nextCursor;
-      }
-      if (!approved.length) {
-        return 0;
-      }
       const demandChanged = new Error("Worker environment demand changed during retention");
-      try {
-        return await mutate(
-          "workerEnvironments.pruneTerminalEnvironments",
-          {
-            input: { approved: approved.map((candidate) => candidate.observed) },
-          },
-          () => {
-            for (const candidate of approved) {
-              if (!(canPruneDemand?.(candidate.record, nowMs) ?? true)) {
-                throw demandChanged;
-              }
-            }
-          },
-        );
-      } catch (error) {
-        if (error === demandChanged) {
-          return 0;
+      let deleted = 0;
+      for (let offset = 0; offset < candidates.length && deleted < limit; offset += 256) {
+        const approved = candidates
+          .slice(offset, offset + 256)
+          .filter((record) => canPruneDemand?.(record, nowMs) ?? true);
+        if (!approved.length) {
+          continue;
         }
-        throw error;
+        try {
+          deleted += await mutate(
+            "workerEnvironments.pruneTerminalEnvironments",
+            {
+              input: {
+                environmentIds: approved.map((record) => record.environmentId),
+                cutoffMs,
+                limit: limit - deleted,
+              },
+            },
+            () => {
+              for (const record of approved) {
+                const current = owner.get(record.environmentId);
+                // Missing is idempotent, including this operation's published deletion receipt.
+                if (
+                  current &&
+                  (current !== record || !(canPruneDemand?.(current, nowMs) ?? true))
+                ) {
+                  throw demandChanged;
+                }
+              }
+            },
+          );
+        } catch (error) {
+          if (error === demandChanged) {
+            return deleted;
+          }
+          throw error;
+        }
       }
+      return deleted;
     },
   };
   return store;

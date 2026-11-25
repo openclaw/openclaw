@@ -1,4 +1,4 @@
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**

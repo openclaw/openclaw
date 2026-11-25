@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -25,8 +26,8 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import * as voiceSessionReads from "./client-voice-session-read.js";
 import { createClientVoiceSessionSource } from "./client-voice-session-source.js";
+import * as voiceWriters from "./client-voice-session-source.js";
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
-import * as voiceWriters from "./client-voice-session-write.js";
 import {
   completeRun,
   createCompletedMutationSession,
@@ -59,7 +60,6 @@ const {
   readRecord,
   closeVoice,
   recoverStale,
-  expectRetained,
   recordEffect,
 } = harness;
 
@@ -102,7 +102,6 @@ it("records a missing conversation instead of silently completing its digest", a
   await closing.drain();
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("conversation not found"));
   expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-  expectRetained();
 });
 
 it("does not retry an unknown digest marker when writer cleanup also fails", async () => {
@@ -189,6 +188,7 @@ it.each(["current", "runtime-entry", "worker-preparation"] as const)(
     await seedSession("agent:main:main");
     const coldTarget = { agentId: "cold-prepared", sessionKey: "agent:cold-prepared:main" };
     const writer = voiceWriters.captureClientVoiceSessionWriter(coldTarget);
+    await writer.prepare();
     const controller = new AbortController();
     const revoke = () => controller.abort(new Error("prepared requester revoked"));
     let bootstrap = false;
@@ -274,25 +274,23 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
     await seedSession(target.sessionKey);
     await createVoiceSession({ voiceSessionId });
     const writerA = voiceWriters.captureClientVoiceSessionWriter(target);
+    await writerA.prepare();
     const sourceA = writerA.source;
     setTestEnvValue("OPENCLAW_STATE_DIR", otherState);
     await seedSession(target.sessionKey);
     await createVoiceSession({ voiceSessionId });
     const writerB = voiceWriters.captureClientVoiceSessionWriter(target);
+    await writerB.prepare();
     const sourceB = writerB.source;
-    const entered = createDeferred();
-    const resume = createDeferred();
+    const writerGate = createEnteredGate();
     let blocker: Promise<void> | undefined;
     let pendingB: Promise<() => void> | undefined;
     let releaseA: (() => void) | undefined;
     let releaseB: (() => void) | undefined;
     try {
       if (mode === "concurrent") {
-        blocker = runOpenClawAgentWorkerWrite(sourceB.options, async () => {
-          entered.resolve();
-          await resume.promise;
-        });
-        await entered.promise;
+        blocker = runOpenClawAgentWorkerWrite(sourceB.options, writerGate.wait);
+        await writerGate.entered;
         pendingB = registerClientVoiceConsultRun({ ...binding, physicalSource: sourceB });
         void pendingB.catch(() => {});
       }
@@ -318,7 +316,7 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
         await closeClientVoiceSession({ ...target, voiceSessionId, config: {} }, writerA);
         await settleDigestAttempts();
       }
-      resume.resolve();
+      writerGate.release();
       releaseB = await (pendingB ??
         registerClientVoiceConsultRun({
           ...binding,
@@ -343,7 +341,7 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
         ),
       ).toEqual(staysOriginal ? [1, 0] : [0, 1]);
     } finally {
-      resume.resolve();
+      writerGate.release();
       await blocker;
       if (pendingB && !releaseB) {
         releaseB = await pendingB.catch(() => undefined);
@@ -489,7 +487,6 @@ it.each(["different path", "same path replacement"] as const)(
       using _ = fakeTimers();
       await closeVoice(voiceSessionId, { sessionKey });
       await settleDigestAttempts();
-      expectRetained();
       if (replacement === "same path replacement") {
         await closeOpenClawAgentDatabasesAsync(harness.stateDir);
         await fs.rename(originalPath, archivedPath);
@@ -501,7 +498,6 @@ it.each(["different path", "same path replacement"] as const)(
       expect(await recoverStale({ now: 6 * 60 * 60_000 + 2 })).toBe(1);
       await settleDigestAttempts();
       expect(readRecord(stale)?.status).toBe("closed");
-      expectRetained();
       expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 
       await createVoiceSession({ sessionKey, voiceSessionId });
@@ -545,21 +541,15 @@ it("recovers current stale calls after shared storage retires a failed digest co
       failed.resolve();
     }
   });
-  void warning;
   await closeVoice(retired, target);
   await withinTest(failed.promise, signal);
   await settleDigestAttempts();
-  expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
-    pending: 0,
-    retained: 1,
-  });
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
   const agentPath = resolveOpenClawAgentSqlitePath(target);
   const identity = readDatabasePathIdentitySync(agentPath);
 
   // Retain the digest owner and agent file while replacing only shared-store admission.
   await closeOpenClawStateDatabaseAsync();
-  expectRetained();
   openOpenClawStateDatabase();
   const stale = await createVoiceSession({ now: 1 });
   expect(readDatabasePathIdentitySync(agentPath)).toEqual(identity);
@@ -568,11 +558,12 @@ it("recovers current stale calls after shared storage retires a failed digest co
   expect(readRecord(stale)?.status).toBe("closed");
   expect(readRecord(retired)?.digestDeliveredAt).toBeUndefined();
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
-  expectRetained(0);
   await vi.advanceTimersByTimeAsync(
     clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
   );
-  expect(clientVoiceSessionTesting.digestDeliverySnapshot().retained).toBe(0);
+  expect(warning).toHaveBeenCalledWith(
+    expect.stringContaining("voice mutation digest dropped after retry retention expired"),
+  );
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 });
 

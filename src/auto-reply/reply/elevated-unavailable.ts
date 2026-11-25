@@ -1,4 +1,3 @@
-// Formats guidance when an elevated command cannot run in the current channel.
 import { formatCliCommand } from "../../cli/command-format.js";
 
 export function formatElevatedUnavailableMessage(params: {

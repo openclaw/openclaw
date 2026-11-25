@@ -104,7 +104,6 @@ export function registerCodexSideQuestionRelay(
     | "requirePreToolUse"
     | "ttlMs"
     | "command"
-    | "preToolUseLoopDetection"
     | "agentId"
     | "sessionId"
     | "sessionKey"
@@ -130,7 +129,6 @@ export function registerCodexSideQuestionRelay(
     ...(sideParams.sessionKey ? { sessionKey: sideParams.sessionKey } : {}),
     ...(sideParams.cfg ? { config: sideParams.cfg } : {}),
     ...(channelId ? { channelId } : {}),
-    preToolUseLoopDetection: params.appServer.loopDetectionPreToolUseRelay,
     requirePreToolUse: params.denyToolCalls,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,
@@ -215,7 +213,7 @@ export class CodexSideQuestionFork {
   ) {
     const inference = getCodexInferenceThread(client, this.parentThreadId);
     if (inference) {
-      this.inferenceContext = inference.context.fork({
+      this.inferenceContext = await inference.context.fork({
         sourceThreadId: this.parentThreadId,
         threadId,
         signal: runAbortController.signal,

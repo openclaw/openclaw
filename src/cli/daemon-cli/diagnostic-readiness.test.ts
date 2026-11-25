@@ -8,9 +8,10 @@ import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-su
 import {
   callGateway,
   classifyPortListener,
-  hasActiveStartupMigrationLease,
   inspectPortUsage,
   monotonicClock,
+  ownerLease,
+  portUsage as makePortUsage,
   readActiveGatewayLockIdentity,
   readGatewayOwnerLease,
   requestStartupProbe,
@@ -44,12 +45,7 @@ function portUsage(
   port: number,
   listeners: Array<{ pid: number; ppid?: number; command?: string }> = [],
 ) {
-  return {
-    port,
-    status: listeners.length ? ("busy" as const) : ("free" as const),
-    listeners,
-    hints: [],
-  };
+  return makePortUsage(listeners, { port });
 }
 
 function startedGateway() {
@@ -67,8 +63,14 @@ function expectWait(
   result: Awaited<ReturnType<typeof waitForReadiness>>,
   waitOutcome: string,
   elapsedMs: number,
+  expected: object = {},
 ) {
-  expect(result).toMatchObject({ waitOutcome, elapsedMs });
+  expect(result).toMatchObject({
+    healthy: waitOutcome === "healthy",
+    waitOutcome,
+    elapsedMs,
+    ...expected,
+  });
   expect(monotonicClock.nowMs).toBe(elapsedMs);
 }
 
@@ -83,15 +85,11 @@ function advanceClock<T>(ms: number, value: T) {
 
 function foregroundOwner(owner = "fixture-owner", port = 18789) {
   return {
+    ...ownerLease(8000, "live", 1),
     owner,
-    pid: 8000,
-    host: "fixture-host",
-    startedAt: 1,
     port,
     mode: "foreground" as const,
     supervisor: null,
-    state: "live" as const,
-    expired: false,
   };
 }
 
@@ -158,21 +156,14 @@ it.each([22_000, 61_000])(
   },
 );
 
-it.each(
-  (
-    [
-      [20_000, 19_500, false],
-      [7_500, 20_000, false],
-      [20_000, 19_500, true],
-      [7_500, 20_000, true],
-      [20_000, 20_000, false],
-    ] as const
-  ).flatMap(([timeoutMs, readyAtMs, ownerAppearsDuringProbe]) =>
-    ["lease", "legacy lock"].map(
-      (ownerKind) => [timeoutMs, readyAtMs, ownerAppearsDuringProbe, ownerKind] as const,
-    ),
-  ),
-)(
+it.each([
+  [20_000, 19_500, false, "lease"],
+  [7_500, 20_000, false, "lease"],
+  [20_000, 20_000, false, "lease"],
+  [20_000, 19_500, true, "lease"],
+  [20_000, 19_500, false, "legacy lock"],
+  [20_000, 19_500, true, "legacy lock"],
+] as const)(
   "observes startup within %d ms, ready at %d ms (late owner=%s, kind=%s)",
   async (timeoutMs, readyAtMs, ownerAppearsDuringProbe, ownerKind) => {
     isAbsent.mockResolvedValue(true);
@@ -184,9 +175,8 @@ it.each(
     const publishOwner = () => {
       if (ownerKind === "lease") {
         readGatewayOwnerLease.mockReturnValue(owner);
-      } else {
-        readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(owner.pid, owner.port));
       }
+      readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(owner.pid, owner.port));
     };
     if (ownerAppearsDuringProbe) {
       readCommand.mockResolvedValue(null);
@@ -215,13 +205,15 @@ it.each(
       token: "fixture-token",
       timeoutMs,
     });
-    expect(result).toMatchObject({
-      healthy: readyAtMs < timeoutMs,
-      waitOutcome: readyAtMs < timeoutMs ? "healthy" : "still-starting",
-      elapsedMs: Math.min(timeoutMs, readyAtMs),
-      runtime: { status: "running", pid: 8000 },
-      portUsage: { port: 19091 },
-    });
+    expectWait(
+      result,
+      readyAtMs < timeoutMs ? "healthy" : "still-starting",
+      Math.min(timeoutMs, readyAtMs),
+      {
+        runtime: { status: "running", pid: 8000 },
+        portUsage: { port: 19091 },
+      },
+    );
     expect(readRuntime).not.toHaveBeenCalled();
     if (readyAtMs < timeoutMs) {
       expectPartialCall(callGateway, {
@@ -251,6 +243,7 @@ it("waits for a legacy replacement after an observed owner lease dies", async ()
   inspectPortUsage.mockImplementation(async (port) => {
     if (monotonicClock.nowMs === 0) {
       leasePublished = true;
+      readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(8000, port));
     } else {
       readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner(9000, port));
     }
@@ -259,16 +252,11 @@ it("waits for a legacy replacement after an observed owner lease dies", async ()
   });
   startedGateway();
   const result = await waitForReadiness({ timeoutMs: 5_000 });
-  expect(result).toMatchObject({
-    healthy: true,
-    waitOutcome: "healthy",
-    elapsedMs: 1_000,
-    runtime: { status: "running", pid: 9000 },
-  });
+  expectWait(result, "healthy", 1_000, { runtime: { status: "running", pid: 9000 } });
 });
 
 it.each([
-  ...["service-command", "permissive command", "absence", "legacy lock", "late legacy lock"].map(
+  ...["service-command", "absence", "legacy lock", "late legacy lock"].map(
     (source) =>
       [source, source === "late legacy lock" ? 30_000 : 1_250, undefined, undefined] as const,
   ),
@@ -282,18 +270,9 @@ it.each([
     const error = new Error("owner lookup unavailable");
     if (platformAbsent !== undefined) {
       missingService(platformAbsent);
-      hasActiveStartupMigrationLease.mockImplementation(() => {
-        throw new Error("startup migration owner unavailable");
-      });
+      readActiveGatewayLockIdentity.mockRejectedValue(error);
     } else if (source === "service-command") {
       readCommand.mockRejectedValue(error);
-    } else if (source === "permissive command") {
-      readCommand.mockImplementation(async (_env, options) => {
-        if (options?.requireEffective) {
-          throw error;
-        }
-        return null;
-      });
     } else if (source === "absence") {
       isAbsent.mockRejectedValue(error);
     } else {
@@ -322,26 +301,17 @@ it.each(["initial runtime", "late legacy owner"])(
   },
 );
 
-it.each(["missing command", "different port", "unavailable manager"])(
+it.each(["missing command", "different port"])(
   "does not wait for an absent Gateway with %s",
   async (reason) => {
-    const unavailableManager = reason === "unavailable manager";
     isAbsent.mockResolvedValue(reason !== "different port");
-    if (unavailableManager) {
-      readCommand.mockRejectedValue(new Error("service manager unavailable"));
-    } else {
-      readCommand.mockResolvedValue(reason === "missing command" ? null : nativeCommand);
-      readRuntime.mockResolvedValueOnce({ status: "running" });
-    }
-    const result = await waitForGatewayDiagnosticReadiness({
-      config: noAuthConfig,
-      localPortOverride: unavailableManager ? undefined : 19092,
-      timeoutMs: unavailableManager ? 1_250 : 60_000,
-    });
+    readCommand.mockResolvedValue(reason === "missing command" ? null : nativeCommand);
+    readRuntime.mockResolvedValueOnce({ status: "running" });
+    const result = await waitForReadiness({ localPortOverride: 19092, timeoutMs: 60_000 });
     expect(result).toBeUndefined();
     expect(monotonicClock.nowMs).toBe(0);
     expect(readRuntime).not.toHaveBeenCalled();
-    if (unavailableManager) {
+    if (reason === "missing command") {
       expect(readCommand).not.toHaveBeenCalled();
     }
   },
@@ -367,11 +337,7 @@ it.each(
       serviceMode: context === "external" ? "external" : undefined,
     });
     if (state === "starting") {
-      expect(result).toMatchObject({
-        waitOutcome: "still-starting",
-        elapsedMs: 1_250,
-        runtime: { status: "running", pid: 8000 },
-      });
+      expectWait(result, "still-starting", 1_250, { runtime: { status: "running", pid: 8000 } });
     } else {
       expect(result).toBeUndefined();
       expect(monotonicClock.nowMs).toBe(0);
@@ -384,7 +350,7 @@ it.each(missingServiceCases)(
   "waits for startup migration to hand off to a foreground Gateway with %s",
   async (_name, platformAbsent, serviceMode, readyAtMs, timeoutMs) => {
     missingService(platformAbsent);
-    hasActiveStartupMigrationLease.mockImplementation(() => monotonicClock.nowMs < readyAtMs - 500);
+    readActiveGatewayLockIdentity.mockImplementation(async () => legacyOwner(8000));
     readGatewayOwnerLease.mockImplementation(() =>
       monotonicClock.nowMs < readyAtMs ? undefined : foregroundOwner("migrated-owner"),
     );
@@ -394,7 +360,6 @@ it.each(missingServiceCases)(
     startedGateway();
     const result = await waitForReadiness({ serviceMode, timeoutMs });
     expectWait(result, "healthy", readyAtMs);
-    expect(result?.healthy).toBe(true);
   },
 );
 
@@ -420,9 +385,9 @@ it.each([
     } else {
       isAbsent.mockResolvedValue(true);
       if (phase === "final owner") {
-        readGatewayOwnerLease
-          .mockReturnValueOnce(undefined)
-          .mockImplementationOnce(() => advanceClock(ownerElapsedMs, undefined));
+        readActiveGatewayLockIdentity
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(async () => advanceClock(ownerElapsedMs, undefined));
       } else {
         if (phase === "initial lock") {
           isAbsent.mockImplementation(async () => advanceClock(1_125, true));
@@ -519,7 +484,7 @@ it.each(["loaded", "unverifiable", "absent", "stopped", "unknown"] as const)(
       expect(result).toBeUndefined();
       expect(monotonicClock.nowMs).toBe(0);
     } else {
-      expect(result).toMatchObject({ waitOutcome: "timeout", elapsedMs: 1_250 });
+      expectWait(result, "timeout", 1_250);
       if (owner === "stopped" || owner === "unknown") {
         expect(result).toMatchObject({ healthy: false, portUsage: { status: "free" } });
         expect(callGateway).not.toHaveBeenCalled();
@@ -533,8 +498,7 @@ it("still probes an unowned listener without an installed service", async () => 
   inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 8000 }]));
   callGateway.mockImplementation(gatewayHealthResponse());
   const result = await waitForGatewayDiagnosticReadiness({ config: noAuthConfig });
-  expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy" });
-  expect(monotonicClock.nowMs).toBe(0);
+  expectWait(result, "healthy", 0);
 });
 
 it.each(["missing", "stopped"])(
@@ -546,7 +510,7 @@ it.each(["missing", "stopped"])(
     classifyPortListener.mockReturnValue("non_gateway");
     inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 4242, command: "socat" }]));
     const result = await waitForReadiness();
-    expect(result).toMatchObject({ healthy: false, waitOutcome: "port-held", elapsedMs: 0 });
+    expectWait(result, "port-held", 0);
     expect(result?.probeError).toContain("port 18789 is held by another process");
     expect(result?.probeError).toContain("openclaw gateway status --deep");
     if (!result) {
@@ -586,22 +550,15 @@ it.each(
     "runtime PPID": () => nativePid(1),
     "live owner": () => readGatewayOwnerLease.mockReturnValue(foregroundOwner()),
     "unknown owner": () =>
-      readGatewayOwnerLease.mockReturnValue({ ...foregroundOwner(), state: "unknown" }),
+      readActiveGatewayLockIdentity.mockRejectedValue(new Error("owner identity unavailable")),
     "legacy owner": () => readActiveGatewayLockIdentity.mockResolvedValue(legacyOwner()),
-    "startup migration": () => hasActiveStartupMigrationLease.mockReturnValue(true),
     "migration inspection failure": () =>
-      hasActiveStartupMigrationLease.mockImplementation(() => {
-        throw new Error("unavailable");
-      }),
+      readActiveGatewayLockIdentity.mockRejectedValue(new Error("unavailable")),
   }),
 )("preserves startup grace for %s on a busy port", async (_reason, setup) => {
   readCommand.mockResolvedValue(null);
   classifyPortListener.mockReturnValue("non_gateway");
   inspectPortUsage.mockResolvedValue(portUsage(18789, [{ pid: 4242, ppid: 1, command: "socat" }]));
   setup();
-  await expect(waitForReadiness()).resolves.toMatchObject({
-    healthy: false,
-    waitOutcome: "timeout",
-    elapsedMs: 1_250,
-  });
+  expectWait(await waitForReadiness(), "timeout", 1_250);
 });

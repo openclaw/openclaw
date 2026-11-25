@@ -23,11 +23,6 @@ export async function withAgentHarnessDescendantCancellation<T>(
         const errors = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [...(result.value.errors ?? [])],
         );
-        try {
-          params.assertCurrent();
-        } catch (error) {
-          errors.push(error);
-        }
         return results.reduce<AgentHarnessDescendantCancellationResult>(
           (total, result) => {
             if (result.status === "fulfilled") {
@@ -49,22 +44,14 @@ export async function withAgentHarnessDescendantCancellation<T>(
     };
     try {
       assertCurrent();
-      const result = await owner.prepare({ ...params, assertCurrent }, async (cancel) => {
+      return await owner.prepare({ ...params, assertCurrent }, async (cancel) => {
         assertCurrent();
         cancellations.push(async () => {
           assertCurrent();
-          const count = await cancel();
-          try {
-            assertCurrent();
-          } catch (error) {
-            return { ...count, errors: [...(count.errors ?? []), error] };
-          }
-          return count;
+          return cancel();
         });
         return prepareNext(index + 1);
       });
-      assertCurrent();
-      return result;
     } finally {
       active = false;
     }

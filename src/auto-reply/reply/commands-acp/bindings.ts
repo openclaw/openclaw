@@ -158,7 +158,6 @@ export async function bindSpawnedAcpSession(params: {
   }
 
   try {
-    commandParams.command.assertOwnerCurrent?.();
     const label = params.label || params.agentId;
     const lifecycleScope = {
       cfg: commandParams.cfg,
@@ -171,7 +170,6 @@ export async function bindSpawnedAcpSession(params: {
       targetKind: "session",
       conversation: conversationRef,
       placement,
-      assertCurrent: commandParams.command.assertOwnerCurrent,
       metadata: {
         threadName: resolveThreadBindingThreadName({ agentId: params.agentId, label }),
         agentId: params.agentId,
@@ -183,10 +181,7 @@ export async function bindSpawnedAcpSession(params: {
           idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel(lifecycleScope),
           maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(lifecycleScope),
           sessionCwd: resolveAcpSessionCwd(params.sessionMeta),
-          sessionDetails: resolveAcpThreadSessionDetailLines({
-            sessionKey: params.sessionKey,
-            meta: params.sessionMeta,
-          }),
+          sessionDetails: resolveAcpThreadSessionDetailLines(params.sessionMeta),
         }),
       },
     };

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { throwIfSettledRejected } from "./error-graph-internal.js";
 
 export type AgentDatabaseReadCandidate = { path: string; scope?: "sibling-family" };
 
@@ -59,8 +60,9 @@ export function registerAgentDatabaseReaderCloser(closer: AgentDatabaseReaderClo
 }
 
 /** A deleted agent's database stays closed in this isolate until the roster admits the agent again. */
-export function isDeletedAgentDatabasePath(pathname: string): boolean {
-  return readers.deleted.has(path.resolve(pathname));
+export function isDeletedAgentDatabasePath(pathname: string, agentId?: string): boolean {
+  const deletedAgentId = readers.deleted.get(path.resolve(pathname));
+  return deletedAgentId !== undefined && (agentId === undefined || deletedAgentId === agentId);
 }
 
 /** Task admission carries the parent owner's current fences into every worker generation. */
@@ -97,13 +99,7 @@ export async function applyAgentDatabaseReaderRequest(
   const results = await Promise.allSettled(
     [...readers.closers].map(async (closer) => closer(request.candidates, retainedPaths)),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Agent database reader cleanup failed");
-  }
+  throwIfSettledRejected(results, "Agent database reader cleanup failed");
 }
 
 function normalizeCandidates(candidates: unknown): AgentDatabaseReadCandidate[] | undefined {

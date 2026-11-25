@@ -1,6 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+
+registerModelSetupEnglish();
 
 export type ModelSetupTaskResult<T> =
   | { client: GatewayBrowserClient; value: T }

@@ -53,7 +53,6 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     evaluateCronTrigger,
     runIsolatedAgentJob,
   };

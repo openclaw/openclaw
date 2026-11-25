@@ -507,7 +507,6 @@ setInterval(() => {}, 1000);
     expect(retainBundles).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,
       bundleHashes: ["a".repeat(64)],
-      acknowledgedGeneration: 3,
     });
     expect(inspectBundle).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,

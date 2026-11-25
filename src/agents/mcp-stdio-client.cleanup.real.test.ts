@@ -77,7 +77,6 @@ async function createFixture(
         : "process.disconnect = () => { setInterval(() => {}, 1000); };"
       : `import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
   const exit = process.exit;
@@ -98,7 +97,6 @@ if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
     if (anchor && ${hold === "anchor-kill-fails"}) child.kill = () => false;
     return child;
   };
-  syncBuiltinESMExports();
 }`,
   );
   fixture.preload = pathToFileURL(preload).href;
@@ -182,9 +180,10 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       cause: {
         message: expect.stringContaining('"relayExit":true'),
         cause: {
-          durationMs: expect.any(Number),
-          escalationAfterMs: expect.any(Number),
-          signalError: expect.any(Error),
+          message: expect.stringMatching(
+            /service child cleanup owner: .*"durationMs":\d+.*"escalationAfterMs":\d+/,
+          ),
+          cause: expect.any(Error),
         },
       },
     });
@@ -246,7 +245,12 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
     try {
       await expect(client.stop()).rejects.toMatchObject({
         cause: {
-          cause: { escalationAfterMs: expect.any(Number), signalError: expect.any(Error) },
+          cause: {
+            message: expect.stringMatching(
+              /service child cleanup owner: .*"escalationAfterMs":\d+/,
+            ),
+            cause: expect.any(Error),
+          },
         },
       });
       expect(relay.connected).toBe(false);

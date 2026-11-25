@@ -6,7 +6,7 @@ import {
   sqliteStringSet,
 } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
@@ -163,12 +163,15 @@ const subagentSessionListPaths = [
   "collectorCompletion.status",
   "runTimeoutSeconds",
   "execution.status",
-  "execution.interruptionReason",
   "execution.startedAt",
   "execution.endedAt",
   "execution.outcome.status",
   "completion.required",
   "delivery.status",
+  "delivery.requesterDelivery.state",
+  "delivery.requesterDelivery.runId",
+  "delivery.requesterDelivery.at",
+  "delivery.requesterDelivery.blockingRunId",
   "delivery.disposition",
   "delivery.suspendedAt",
   "delivery.handoffLeaseId",
@@ -401,12 +404,10 @@ export function loadSubagentSessionListRunsFromSqlite(
     return runs;
   }
   for (const row of readSubagentSessionListRows({ controllerSessionKeys: keys }, database)) {
-    const entry = rowToSubagentRunRecord({
-      ...row,
-      run_id: row.run_id.trim(),
-      child_session_key: row.child_session_key.trim(),
-      requester_session_key: row.requester_session_key.trim(),
-    });
+    row.run_id = row.run_id.trim();
+    row.child_session_key = row.child_session_key.trim();
+    row.requester_session_key = row.requester_session_key.trim();
+    const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, projectSubagentRunForSessionList(entry));
     }
@@ -421,7 +422,7 @@ export function loadSubagentRunsForSessionsInDatabase(
   inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
 ) {
   const { db } = database;
-  const result = runSqliteDeferredTransactionSync(db, () => {
+  const result = runSqliteReadSnapshotSync(db, () => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     const identities = executeSqliteQuerySync(
       db,

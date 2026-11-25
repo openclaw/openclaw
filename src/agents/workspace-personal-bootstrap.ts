@@ -52,7 +52,9 @@ export async function loadPersonalUserBootstrapFile(
     ) {
       return undefined;
     }
-    return createLoadedWorkspaceBootstrapFile(DEFAULT_USER_FILENAME, filePath, loaded, true);
+    const file = createLoadedWorkspaceBootstrapFile(DEFAULT_USER_FILENAME, filePath, loaded, true);
+    file.origin = { kind: "personal", rootPath: path.dirname(filePath) };
+    return file;
   } finally {
     catalog?.release();
   }

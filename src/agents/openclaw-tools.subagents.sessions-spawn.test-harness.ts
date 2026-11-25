@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { onTestFinished, vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { configureMockSubagentRegistryPersistence } from "./subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
@@ -256,6 +257,22 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   if (!cachedCreateSessionsSpawnTool) {
     ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
       await import("./tools/sessions-spawn-tool.js"));
+  }
+  if (opts?.agentSessionKey) {
+    const requesterKey = resolveRequesterStoreKey(
+      hoisted.state.configOverride,
+      opts.agentSessionKey,
+      opts.requesterAgentIdOverride,
+    );
+    const requesterEntry = {
+      sessionId: `requester-${requesterKey}`,
+      updatedAt: Date.now(),
+    };
+    hoisted.sessionStore[requesterKey] = requesterEntry;
+    await upsertSessionEntryCore(
+      { storePath: sessionStorePath, sessionKey: requesterKey },
+      requesterEntry,
+    );
   }
   return cachedCreateSessionsSpawnTool(opts);
 }

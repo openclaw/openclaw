@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import { withPersistedStateOwnerInspection } from "../infra/gateway-state-owner-record.js";
 import {
   assertStateDatabaseAccessAllowed,
   getStateDatabaseSchemaLease,
@@ -12,6 +13,7 @@ import {
 import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import { isLiveStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateSchemaReadAdmission } from "./openclaw-state-db-contract.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -22,14 +24,22 @@ import {
   parseExternalOwnership,
 } from "./openclaw-state-ownership.js";
 
-/** Check write admission; callers may defer orphan-sidecar recovery until mutation is certain. */
-export async function assertOpenClawStateWriteAllowedAtPath(options: {
+type StateWriteAdmissionOptions = {
   databasePath: string;
   env?: NodeJS.ProcessEnv;
   recoverOrphanedSidecars?: boolean;
   signal?: AbortSignal;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
-}): Promise<void> {
+};
+
+/** Check write admission; callers may defer orphan-sidecar recovery until mutation is certain. */
+export function assertOpenClawStateWriteAllowedAtPath(
+  options: StateWriteAdmissionOptions,
+): Promise<void> {
+  return withPersistedStateOwnerInspection(() => assertWriteAllowed(options));
+}
+
+async function assertWriteAllowed(options: StateWriteAdmissionOptions): Promise<void> {
   options.signal?.throwIfAborted();
   const databasePath = path.resolve(options.databasePath);
   assertStateDatabaseAccessAllowed(databasePath);
@@ -54,9 +64,9 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     assertOwnershipAllowsWrite(read?.ownership ?? null, databasePath, env);
     return;
   }
-  // Offline admission belongs to this process. Its live scope/lease cannot be
-  // borrowed by a native reader child; retain the private-copy path instead.
+  // Offline admission belongs to this process; a child cannot borrow its schema lease.
   if (
+    !isLiveStateRead() &&
     !options.openStateSchemaReadAdmission &&
     !getOpenClawDatabaseMaintenanceScope() &&
     !getStateDatabaseSchemaLease(databasePath)
@@ -74,17 +84,21 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-    preserveSourceArtifacts: true,
-    signal: options.signal,
-  });
+  // Gateway maintenance reads through SQLite itself; only offline inspection preserves artifacts.
+  const prepared = isLiveStateRead()
+    ? undefined
+    : await prepareSqliteReadOnlyLocation(databasePath, {
+        preserveSourceArtifacts: true,
+        signal: options.signal,
+        reuse: true,
+      });
   let readSucceeded = false;
   try {
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
     assertOwnershipAllowsWrite(
       inspectOwnershipThroughConnection(
-        prepared.location,
+        prepared?.location ?? databasePath,
         databasePath,
         options.openStateSchemaReadAdmission,
       ),
@@ -93,7 +107,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     readSucceeded = true;
   } finally {
-    await prepared.cleanupAsync().catch((error: unknown) => {
+    await prepared?.cleanupAsync().catch((error: unknown) => {
       if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
         throw error;
       }

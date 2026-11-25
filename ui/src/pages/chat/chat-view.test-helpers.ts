@@ -4,36 +4,46 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { composerContextWrapper, createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./components/chat-message-markdown-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
+import { resolveMessageActionDetails } from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import {
   createChatTranscript,
   type ChatTranscript,
 } from "./components/chat-transcript-controller.ts";
+import { settleChatMount } from "./test-helpers/chat-mount-frames.ts";
 
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
-export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+export async function renderChatModelControls(
+  props: ChatModelControlsProps,
+  container: HTMLDivElement,
+) {
+  installModelPickerLayout();
   const renderProps: ChatModelControlsProps = {
     ...props,
     modelPickerOpen: props.modelPickerOpen ?? true,
   };
+  if (renderProps.modelPickerOpen) {
+    await import("./components/chat-model-picker-panel.tsx");
+  }
   const update = modelControlsUpdates.get(container);
   if (update) {
     update(renderProps);
@@ -45,15 +55,23 @@ export function renderChatModelControls(props: ChatModelControlsProps, container
     const view = mountSolidComponent(ChatModelControls, renderProps, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
   }
+  if (renderProps.modelPickerOpen) {
+    // The first open compiles the lazy panel under the full CI shard's load.
+    await waitForSolid(
+      () =>
+        expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
+      { timeout: 5_000 },
+    );
+  }
   return container;
 }
 
 export function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
+  return expectDefined(container.querySelector(selector), label);
+}
+
+export function waitForElement(container: Element, selector: string, label = selector) {
+  return waitForSolid(() => requireElement(container, selector, label));
 }
 
 export function getComposerTextarea(container: Element): HTMLTextAreaElement {
@@ -69,10 +87,7 @@ let nextTestTranscriptId = 0;
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
 ): ChatTranscript {
-  return createChatTranscript(
-    () => undefined,
-    () => paneId,
-  );
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(
@@ -83,6 +98,7 @@ export function createPasteEvent(
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
     value: {
+      files: [],
       items: Object.assign(Object.fromEntries(itemTypes.map((type, index) => [index, { type }])), {
         length: itemTypes.length,
       }),
@@ -140,18 +156,17 @@ export function appendChatBubble(
 }
 
 export function stubAnimationFrames() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }),
-  );
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(clock.request));
+  vi.stubGlobal("cancelAnimationFrame", vi.fn(clock.cancel));
+  return () => clock.flush(0);
+}
+
+export function stubSettledAnimationFrames() {
+  const frame = stubAnimationFrames();
   return () => {
-    for (const callback of callbacks.splice(0)) {
-      callback(0);
-    }
+    frame();
+    flush();
   };
 }
 
@@ -194,6 +209,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     realtimeTalkDetail: null,
     connected: true,
     canSend: true,
+    canDismissPendingInputs: true,
     disabledReason: null,
     error: null,
     runError: null,
@@ -216,7 +232,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
     onDraftChange: () => undefined,
-    onRequestUpdate: () => undefined,
     onSend: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
@@ -228,7 +243,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     currentAgentId: "main",
     onSessionSelect: () => undefined,
     onOpenSidebar: () => undefined,
-    onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
     transcript,
@@ -266,18 +280,23 @@ export function renderChatPropsInto(
       document.body.append(container);
     }
     const [current, setCurrent] = createSignal({ props, application });
-    const view = mountSolid(
-      () =>
-        createComponent(ChatView, {
-          get props() {
-            return current().props;
-          },
-          get application() {
-            const value = current().application;
-            return value && normalizeApplicationContext(value);
-          },
-        }),
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const questions = createComposerQuestions(props.paneId, () => current().props);
+          return createComponent(ChatView, {
+            questions,
+            get props() {
+              return current().props;
+            },
+            get application() {
+              const value = current().application;
+              return value && normalizeApplicationContext(value);
+            },
+          });
+        },
+        { container, wrapper: composerContextWrapper(container) },
+      ),
     );
     mountedViews.set(container, {
       update: (nextProps, nextApplication) =>
@@ -314,11 +333,11 @@ export function renderChatInto(container: HTMLElement, overrides: Partial<ChatPr
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-model-select="true"]'),
+    "chat model control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
   return select;
 }
 
@@ -327,11 +346,11 @@ export function getChatThinkingValue(control: HTMLElement): string {
 }
 
 export function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]'),
+    "chat thinking control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
   return select;
 }
 
@@ -360,12 +379,13 @@ export function getThinkingReasoningValueLabel(container: Element): string {
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",
   );
-  return preview?.textContent?.trim() ?? "";
+  // The level text precedes the optional Default badge.
+  return preview?.firstChild?.textContent?.trim() ?? "";
 }
 
 export function createDragEvent(type: string, types = ["Files"]): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  Object.defineProperty(event, "dataTransfer", { value: { types, files: [], getData: () => "" } });
   return event;
 }
 
@@ -384,6 +404,7 @@ export function replaceSkillCommands(
       skillDisplayName,
       description,
       source: "skill" as const,
+      skillReferenceable: true,
       skillModelVisible: true,
     })),
   ]);
@@ -398,10 +419,10 @@ export function inputDraft(container: HTMLElement, value: string) {
   flush();
 }
 
-export function inputDraftAtEnd(container: HTMLElement, value: string) {
+export function inputDraftAtEnd(container: HTMLElement, value: string, caret = value.length) {
   const textarea = getComposerTextarea(container);
   textarea.value = value;
-  textarea.setSelectionRange(value.length, value.length);
+  textarea.setSelectionRange(caret, caret);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   flush();
 }
@@ -452,7 +473,6 @@ export function createReactiveDraftHarness({
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onRequestUpdate: renderCurrent,
       ...currentOverrides,
       draftSource: currentOverrides.draftSource ?? draftSource,
       onGoalDraftModeChange: (mode) => {
@@ -463,7 +483,7 @@ export function createReactiveDraftHarness({
     });
   };
   renderCurrent();
-  return { container, renderCurrent };
+  return { container, readDraft: () => draft, renderCurrent };
 }
 
 export function createSlashRerenderHarness() {
@@ -493,12 +513,11 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
   const onDraftChange = vi.fn((next: string) => {
     host.draft = next;
   });
-  const onRequestUpdate = vi.fn(() => redraw());
   const onClearReply = vi.fn(() => {
     host.replyTarget = null;
     redraw();
   });
-  function redraw() {
+  const redraw = vi.fn(() => {
     renderChatInto(container, {
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -508,18 +527,16 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       canAbort: true,
       runActive: true,
       onDraftChange,
-      onRequestUpdate,
       onClearReply,
       onSend,
       onAbort,
     });
-  }
+  });
   return {
     container,
     host,
     redraw,
     onDraftChange,
-    onRequestUpdate,
     onClearReply,
     onSend,
     onAbort,
@@ -529,4 +546,21 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       resetChatViewState(paneId, container);
     },
   };
+}
+
+export function appendMessageActionFixture(
+  group: HTMLElement,
+  messageKey: string,
+  onCopy?: () => void,
+) {
+  const element = document.createElement("div");
+  element.dataset.messageActionsFor = messageKey;
+  const copy = onCopy ? document.createElement("button") : undefined;
+  if (copy) {
+    copy.className = "chat-copy-btn";
+    copy.addEventListener("click", () => onCopy?.());
+    element.append(copy);
+  }
+  group.append(element);
+  onTestFinished(registerMessageActionElements(element, () => messageKey, { copy }));
 }

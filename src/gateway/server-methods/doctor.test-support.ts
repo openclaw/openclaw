@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, vi } from "vitest";
 import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-sdk/src/host/workspace-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ShortTermDreamingStatsEntry } from "../../memory-host-sdk/dreaming.js";
+import type { ShortTermDreamingStatsEntry } from "../../memory-host-sdk/dreaming-report-types.js";
 
 type Mock = ReturnType<typeof vi.fn>;
 type Maintenance = Pick<MemoryWorkspaceMaintenance, "stat" | "readFile" | "listDirectory">;
@@ -25,7 +25,7 @@ const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
     backend: "builtin",
   })),
 );
-const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
+const prepareGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
   vi.fn<(workspaceDir: string) => { memoryFiles?: { maintenance?: Maintenance } } | undefined>(),
 );
@@ -39,7 +39,7 @@ beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
   resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
   getActiveMemoryProviderCore.mockReset();
-  captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
+  prepareGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
     authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
     release: vi.fn(),
   });
@@ -98,11 +98,10 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 }));
 
 // mock-isolation: Exercise fixture-owned authority without a running Gateway session.
-vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority }));
+vi.mock("../operator-run-authority.js", () => ({ prepareGatewayOperatorRunAuthority }));
 
-import { createDoctorHandlers } from "./doctor.js";
-
-const doctorHandlers = createDoctorHandlers({
+// mock-isolation: Exercise Doctor through the existing bundled-runtime module boundary.
+vi.mock("../../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -110,7 +109,11 @@ const doctorHandlers = createDoctorHandlers({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-});
+}));
+
+import { createDoctorHandlers } from "./doctor.js";
+
+const doctorHandlers = createDoctorHandlers();
 
 export const DOCTOR_MEMORY_TARGET_METHODS = [
   "doctor.memory.status",
@@ -214,14 +217,7 @@ export function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   const probeEmbeddingAvailability =
     options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
   getMemorySearchManager.mockResolvedValue({
-    manager: {
-      status: options.status,
-      probeEmbeddingAvailability,
-      ...(options.getCachedEmbeddingAvailability
-        ? { getCachedEmbeddingAvailability: options.getCachedEmbeddingAvailability }
-        : {}),
-      close,
-    },
+    manager: { ...options, probeEmbeddingAvailability, close },
   });
   return { close, probeEmbeddingAvailability };
 }

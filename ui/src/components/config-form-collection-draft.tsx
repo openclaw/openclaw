@@ -1,9 +1,10 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show, createEffect, createMemo, createStore, onSettled } from "solid-js";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { Show, createMemo, createStore, onSettled } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 
 export type ConfigFormCollectionDraftProps = {
   schema: JsonSchema;
@@ -26,6 +27,50 @@ export type ConfigCollectionDraftHandle = {
   openDraft(): void;
 };
 
+/**
+ * Draft source identity for a collection: an edit of one of its existing entries
+ * keeps the unfinished add draft, while any other source change still resets it.
+ */
+export function createCollectionDraftSource(source: () => unknown) {
+  let localEdit: { expected: unknown; retained: unknown } | undefined;
+  let sourceRevision = 0;
+  let sourceSnapshot: { source: unknown; revision: number } | undefined;
+  const draftSource = createMemo(() => {
+    const current = source();
+    if (localEdit && configValuesEqual(current, localEdit.expected)) {
+      return localEdit.retained;
+    }
+    // Returning to the pre-edit value is still an external context change.
+    // Keep its reset distinct from the retained source, without changing draft ownership.
+    if (localEdit) {
+      sourceRevision += 1;
+      localEdit = undefined;
+    }
+    // Unset collections use a symbol, which cannot survive JSON equality in a cloned wrapper.
+    if (
+      !sourceSnapshot ||
+      !Object.is(sourceSnapshot.source, current) ||
+      sourceSnapshot.revision !== sourceRevision
+    ) {
+      sourceSnapshot = { source: current, revision: sourceRevision };
+    }
+    return sourceSnapshot;
+  });
+  return {
+    draftSource,
+    editEntry<T>(expected: unknown, dispatch: () => T): T {
+      const previous = localEdit;
+      // The parent may synchronously render; record this exact local result before dispatch.
+      localEdit = { expected, retained: draftSource() };
+      const accepted = dispatch();
+      if (accepted === false) {
+        localEdit = previous;
+      }
+      return accepted;
+    },
+  };
+}
+
 function emptyDraft(): {
   open: boolean;
   key: string;
@@ -33,7 +78,6 @@ function emptyDraft(): {
   isNull: boolean;
   error: string;
   invalidTarget: "key" | "value" | null;
-  focusRequest: { target: "key" | "value" } | undefined;
 } {
   return {
     open: false,
@@ -42,7 +86,6 @@ function emptyDraft(): {
     isNull: false,
     error: "",
     invalidTarget: null,
-    focusRequest: undefined,
   };
 }
 
@@ -114,6 +157,7 @@ export function ConfigCollectionDraft(
   const usesTextInput = createMemo(() =>
     ["string", "number", "integer"].includes(valueType() ?? ""),
   );
+  const ValueInput = dynamic(() => (usesTextInput() ? "input" : "textarea"));
   const errorId = () => `${props.id}-error`;
   const valueLabel = () => `${t("configForm.add")}: ${props.label}`;
 
@@ -130,6 +174,8 @@ export function ConfigCollectionDraft(
   });
 
   function editDraft(patch: Partial<ReturnType<typeof emptyDraft>>) {
+    keyInput?.setCustomValidity("");
+    valueInput?.setCustomValidity("");
     setDraft((current) => ({ ...current, ...patch, error: "", invalidTarget: null }));
   }
 
@@ -141,8 +187,10 @@ export function ConfigCollectionDraft(
     setDraft((current) => {
       current.invalidTarget = target;
       current.error = message;
-      current.focusRequest = { target };
     });
+    keyInput?.setCustomValidity(target === "key" ? message : "");
+    valueInput?.setCustomValidity(target === "value" ? message : "");
+    (target === "key" ? keyInput : valueInput)?.focus();
   }
 
   function commit() {
@@ -191,107 +239,79 @@ export function ConfigCollectionDraft(
     }
   }
 
-  // Native validity and focus follow the committed draft controls.
-  createEffect(
-    () => ({
-      visible: visible(),
-      request: draft.focusRequest,
-      target: draft.focusRequest?.target,
-      error: draft.error,
-      invalidTarget: draft.invalidTarget,
-    }),
-    (next, previous) => {
-      if (!next.visible) {
-        return;
-      }
-      keyInput?.setCustomValidity(next.invalidTarget === "key" ? next.error : "");
-      valueInput?.setCustomValidity(next.invalidTarget === "value" ? next.error : "");
-      if (next.request && next.request !== previous?.request) {
-        (next.target === "key" ? keyInput : valueInput)?.focus();
-      } else if (!previous?.visible) {
-        valueInput?.focus();
-      }
-    },
-  );
-
   const onValueInput = (event: Event & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) =>
     editDraft({ value: event.currentTarget.value });
   return (
     <openclaw-config-form-collection-draft id={props.id}>
       <Show when={visible()}>
-        <div class="settings-row settings-row--stacked cfg-collection-draft">
-          <div class="settings-row__control">
-            <div class="cfg-collection-draft__controls">
-              <Show when={props.existingKeys}>
-                <input
-                  ref={(element) => (keyInput = element)}
-                  data-collection-draft-key
-                  type="text"
-                  class="settings-input"
-                  aria-label={t("configForm.key")}
-                  aria-describedby={errorId()}
-                  aria-invalid={draft.invalidTarget === "key" ? "true" : "false"}
-                  placeholder={t("configForm.key")}
-                  value={draft.key}
-                  onInput={(event) => editDraft({ key: event.currentTarget.value })}
-                />
-              </Show>
-              <Show when={canUseNull()}>
-                <label class="field checkbox">
-                  <input
-                    data-collection-draft-null
-                    type="checkbox"
-                    checked={draft.isNull}
-                    onChange={(event) => editDraft({ isNull: event.currentTarget.checked })}
-                  />
-                  <span>{t("configForm.nullValue")}</span>
-                </label>
-              </Show>
-              <Show
-                when={usesTextInput()}
-                fallback={
-                  <textarea
-                    ref={(element) => (valueInput = element)}
+        {(_visible) => {
+          onSettled(() => {
+            keyInput?.setCustomValidity(draft.invalidTarget === "key" ? draft.error : "");
+            valueInput?.setCustomValidity(draft.invalidTarget === "value" ? draft.error : "");
+            valueInput?.focus();
+          });
+          return (
+            <div class="settings-row settings-row--stacked cfg-collection-draft">
+              <div class="settings-row__control">
+                <div class="cfg-collection-draft__controls">
+                  <Show when={props.existingKeys}>
+                    <input
+                      ref={(element) => (keyInput = element)}
+                      data-collection-draft-key
+                      type="text"
+                      class="settings-input"
+                      aria-label={t("configForm.key")}
+                      aria-describedby={errorId()}
+                      aria-invalid={draft.invalidTarget === "key" ? "true" : "false"}
+                      placeholder={t("configForm.key")}
+                      value={draft.key}
+                      onInput={(event) => editDraft({ key: event.currentTarget.value })}
+                    />
+                  </Show>
+                  <Show when={canUseNull()}>
+                    <label class="field checkbox">
+                      <Checkbox
+                        data-collection-draft-null
+                        checked={draft.isNull}
+                        onChange={(event) => editDraft({ isNull: event.currentTarget.checked })}
+                      />
+                      <span>{t("configForm.nullValue")}</span>
+                    </label>
+                  </Show>
+                  <ValueInput
+                    ref={(element: HTMLInputElement | HTMLTextAreaElement) =>
+                      (valueInput = element)
+                    }
                     data-collection-draft-value
+                    type={
+                      usesTextInput() ? (valueType() === "string" ? "text" : "number") : undefined
+                    }
                     class="settings-input"
                     aria-label={valueLabel()}
                     aria-describedby={errorId()}
                     aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
-                    placeholder={t("configForm.jsonValue")}
-                    rows={2}
+                    placeholder={usesTextInput() ? undefined : t("configForm.jsonValue")}
+                    rows={usesTextInput() ? undefined : 2}
                     value={draft.value}
                     disabled={draft.isNull}
                     onInput={onValueInput}
                   />
-                }
-              >
-                <input
-                  ref={(element) => (valueInput = element)}
-                  data-collection-draft-value
-                  type={valueType() === "string" ? "text" : "number"}
-                  class="settings-input"
-                  aria-label={valueLabel()}
-                  aria-describedby={errorId()}
-                  aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
-                  value={draft.value}
-                  disabled={draft.isNull}
-                  onInput={onValueInput}
-                />
-              </Show>
-              <span id={errorId()} class="cfg-field__error" role="alert" hidden={!draft.error}>
-                {draft.error}
-              </span>
-              <div class="cfg-collection-draft__actions">
-                <button type="button" class="btn btn--sm" onClick={commit}>
-                  {props.existingKeys ? t("configForm.addEntry") : t("configForm.add")}
-                </button>
-                <button type="button" class="btn btn--sm" onClick={closeDraft}>
-                  {t("common.cancel")}
-                </button>
+                  <span id={errorId()} class="cfg-field__error" role="alert" hidden={!draft.error}>
+                    {draft.error}
+                  </span>
+                  <div class="cfg-collection-draft__actions">
+                    <button type="button" class="btn btn--sm" onClick={commit}>
+                      {props.existingKeys ? t("configForm.addEntry") : t("configForm.add")}
+                    </button>
+                    <button type="button" class="btn btn--sm" onClick={closeDraft}>
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          );
+        }}
       </Show>
     </openclaw-config-form-collection-draft>
   );

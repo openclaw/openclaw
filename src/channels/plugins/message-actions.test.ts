@@ -179,15 +179,20 @@ it.each<AccessCase>([
   await expectAccess(context, allowed);
 });
 
-it("rejects unknown actions before callbacks", async () => {
-  register();
-  expect(
-    await dispatch({ action: "forged-read", conversationReadOrigin: "direct-operator" }),
-  ).toBeNull();
-  expect(handleAction).not.toHaveBeenCalled();
-  expect(supportsAction).not.toHaveBeenCalled();
-  expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
-});
+it.each(["forged-read", "toString", "constructor", "__proto__"])(
+  "rejects unknown action %s before callbacks",
+  async (action) => {
+    register();
+    const params = { target: "channel:C1" };
+    expect(
+      await dispatch({ action, params, conversationReadOrigin: "direct-operator" }),
+    ).toBeNull();
+    expect(params).toEqual({ target: "channel:C1" });
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(supportsAction).not.toHaveBeenCalled();
+    expect(requiresTrustedRequesterSender).not.toHaveBeenCalled();
+  },
+);
 
 it.each<TargetCase>([
   [
@@ -371,7 +376,9 @@ it.each(["caller", "registration"] as const)("rechecks %s after alias proof", as
       }
     },
   });
-  const expected = expect(pending).rejects.toThrow("no longer active");
+  const expected = expect(pending).rejects.toThrow(
+    revoked === "caller" ? "caller is no longer active" : "was reloaded during alias resolution",
+  );
   if (revoked === "caller") {
     callerCurrent = false;
   } else {
@@ -467,8 +474,7 @@ function activateCapabilities() {
   );
 }
 
-it.each<[string | undefined, boolean, boolean]>([
-  [undefined, true, true],
+it.each<[string, boolean, boolean]>([
   ["demo-cards-alias", false, true],
   ["demo-missing", false, false],
 ])("scopes capabilities: %s", async (channel, presentation, pin) => {

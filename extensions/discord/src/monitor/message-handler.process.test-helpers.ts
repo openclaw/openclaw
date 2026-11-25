@@ -1,6 +1,10 @@
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
+import { firstMockArg } from "../test-support/mock-calls.js";
+export { firstMockArg } from "../test-support/mock-calls.js";
 import {
   createAutomaticSourceDeliveryContext,
+  createBaseContext,
   createDiscordDraftStream,
   createMockDraftStream,
   deliverDiscordReply,
@@ -12,23 +16,27 @@ import type { DispatchInboundParams } from "./message-handler.process.test-harne
 
 type AutomaticSourceDeliveryOverrides = Parameters<typeof createAutomaticSourceDeliveryContext>[0];
 
+export async function runBase(overrides: Parameters<typeof createBaseContext>[0] = {}) {
+  await runProcessDiscordMessage(await createBaseContext(overrides));
+}
+
+export async function sendFinal(
+  params: DispatchInboundParams | undefined,
+  payload: Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0],
+  wait = true,
+) {
+  await params?.dispatcher.sendFinalReply(payload);
+  if (wait) {
+    await params?.dispatcher.waitForIdle();
+  }
+  return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+}
+
 export async function createAutomaticDraftContext(
   overrides: AutomaticSourceDeliveryOverrides = {},
 ): Promise<Awaited<ReturnType<typeof createAutomaticSourceDeliveryContext>>> {
-  const cfg = (overrides.cfg ?? {}) as {
-    messages?: Record<string, unknown>;
-  } & Record<string, unknown>;
   // Draft tests own preview behavior; keep reaction timers out of their fake-clock lifecycle.
-  return await createAutomaticSourceDeliveryContext({
-    ...overrides,
-    cfg: {
-      ...cfg,
-      messages: {
-        ...cfg.messages,
-        statusReactions: { enabled: false },
-      },
-    },
-  });
+  return await createAutomaticSourceDeliveryContext(overrides, { disableStatusReactions: true });
 }
 
 export function getReactionEmojis(): string[] {
@@ -37,26 +45,7 @@ export function getReactionEmojis(): string[] {
   ).map((call) => call[2]);
 }
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
-export function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`missing ${label} call`);
-  }
-  return call;
-}
-
-export function firstMockArg(mock: MockWithCalls, label: string) {
-  return firstMockCall(mock, label)[0];
-}
+export const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function firstDispatchParams(): DispatchInboundParams {
   return firstMockArg(dispatchInboundMessage, "dispatchInboundMessage") as DispatchInboundParams;
@@ -66,84 +55,44 @@ export function expectRecordFields(
   record: Record<string, unknown>,
   fields: Record<string, unknown>,
 ) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAckReactionRuntimeOptions(
-  options: unknown,
-  params?: {
-    accountId?: string;
-    ackReaction?: string;
-  },
-) {
-  const optionRecord = requireRecord(options, "reaction runtime options");
-  requireRecord(optionRecord.rest, "reaction REST client");
-  if (params?.accountId) {
-    expect(optionRecord.accountId).toBe(params.accountId);
-  }
-  const messages: Record<string, unknown> = {};
-  if (params?.ackReaction) {
-    messages.ackReaction = params.ackReaction;
-  }
-  if (Object.keys(messages).length > 0) {
-    const cfg = requireRecord(optionRecord.cfg, "reaction config");
-    expectRecordFields(requireRecord(cfg.messages, "reaction message config"), messages);
-  }
-}
-
-function requireReactionCall(
-  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
-  index: number,
-) {
-  const call = mock.mock.calls[index] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`missing reaction call ${index + 1}`);
-  }
-  return call;
-}
-
-function expectReactionCallAt(
-  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
-  index: number,
-  emoji: string,
-  params?: {
-    accountId?: string;
-    ackReaction?: string;
-    channelId?: string;
-    messageId?: string;
-  },
-) {
-  const call = requireReactionCall(mock, index);
-  expect(call[0]).toBe(params?.channelId ?? "c1");
-  expect(call[1]).toBe(params?.messageId ?? "1001");
-  expect(call[2]).toBe(emoji);
-  expectAckReactionRuntimeOptions(call[3], params);
-}
-
-export function expectReactionCallsContain(channelId: string, messageId: string, emoji: string) {
-  const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
-    [string, string, string]
-  >;
-  const hasCall = calls.some(
-    ([actualChannelId, actualMessageId, actualEmoji]) =>
-      actualChannelId === channelId && actualMessageId === messageId && actualEmoji === emoji,
-  );
-  expect(hasCall).toBe(true);
+  expect(Object.fromEntries(Object.keys(fields).map((key) => [key, record[key]]))).toEqual(fields);
 }
 
 export function expectReactAckCallAt(
   index: number,
   emoji: string,
   params?: {
-    channelId?: string;
-    messageId?: string;
     accountId?: string;
     ackReaction?: string;
+    channelId?: string;
+    messageId?: string;
   },
 ) {
-  expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
+  const call = sendMocks.reactMessageDiscord.mock.calls[index];
+  expect(call?.slice(0, 3)).toEqual([
+    params?.channelId ?? "c1",
+    params?.messageId ?? "1001",
+    emoji,
+  ]);
+  const options = requireRecord(call?.[3], "reaction runtime options");
+  requireRecord(options.rest, "reaction REST client");
+  if (params?.accountId) {
+    expect(options.accountId).toBe(params.accountId);
+  }
+  if (params?.ackReaction) {
+    const cfg = requireRecord(options.cfg, "reaction config");
+    expect(requireRecord(cfg.messages, "reaction message config").ackReaction).toEqual(
+      params.ackReaction,
+    );
+  }
+}
+
+export function expectReactionCallsContain(channelId: string, messageId: string, emoji: string) {
+  expect(sendMocks.reactMessageDiscord.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([
+    channelId,
+    messageId,
+    emoji,
+  ]);
 }
 
 export function createMockDraftStreamForTest() {
@@ -164,19 +113,23 @@ export function getDeliveredFinalTexts(): string[] {
   });
 }
 
-// The final answer is delivered on its own: no synthesized activity receipt is
-// ever appended beneath it.
-export function expectFinalAnswerText(answer: string) {
-  expect(getDeliveredFinalTexts()[0] ?? "").toBe(answer);
-}
-
 export function expectFreshFinalText(text: string) {
-  const finalParams = deliverDiscordReply.mock.calls
+  const firstFinal = deliverDiscordReply.mock.calls
     .map((call) => requireRecord(call[0], "deliverDiscordReply params"))
     .find((params) => params.kind === "final");
-  expect(finalParams).toBeDefined();
-  const replies = (finalParams as { replies?: Array<{ text?: string }> }).replies;
+  expect(firstFinal).toBeDefined();
+  const replies = (firstFinal as { replies?: Array<{ text?: string }> }).replies;
   expect(replies?.[0]?.text).toBe(text);
+}
+
+type DispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+export function mockDispatch(
+  run: (params: DispatchInboundParams | undefined) => Promise<DispatchResult | void>,
+) {
+  dispatchInboundMessage.mockImplementationOnce(
+    async (params) =>
+      (await run(params)) ?? { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } },
+  );
 }
 
 export function useProgressDraftStartDelay() {
@@ -193,11 +146,7 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
 
-  const ctx = await createAutomaticDraftContext({
-    discordConfig,
-  });
-
-  await runProcessDiscordMessage(ctx);
+  await runProcessDiscordMessage(await createAutomaticDraftContext({ discordConfig }));
 }
 
 export async function createBlockModeContext() {

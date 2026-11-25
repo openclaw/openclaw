@@ -5,27 +5,17 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
-import type {
-  detectInferenceBackends,
-  InferenceBackendKind,
-} from "../commands/onboard-inference.js";
+import type { InferenceBackendKind } from "../commands/onboard-inference.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { enablePluginInConfig } from "../plugins/enable.js";
-import type {
-  ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -38,12 +28,7 @@ import type {
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
-import type {
-  captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
@@ -55,8 +40,37 @@ export const setupInferenceLog = createSubsystemLogger("system-agent/setup-infer
  * A failing candidate must never leave config pointing at a broken model.
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
+/**
+ * A remote API answering a one-word, tool-free prompt either replies well inside this
+ * or is not usable for chat; the setup dialog waits on it, so don't hold it for 90 s.
+ * Local servers, CLI runners and native harnesses keep the full budget for startup.
+ */
+export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
+/**
+ * The tool-free check fits small windows, but a first real turn also sends the system prompt
+ * and tool schemas (measured 11.8K to 18.5K tokens). Same floor guided Ollama and LM Studio
+ * discovery apply (#112028).
+ */
+const SETUP_INFERENCE_MIN_CONTEXT_TOKENS = 16_384;
 
-export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
+/**
+ * Shortfall of a primary model chosen in setup. Automatic setup refuses it; a manual pick only
+ * warns, since #112028 keeps smaller models available through manual selection. Utility models
+ * run a reduced prompt and keep their own minimums.
+ */
+export function resolveSetupContextShortfall(
+  route: { modelLabel: string; modelTarget?: "utility" },
+  contextTokens: number | undefined,
+): string | undefined {
+  if (
+    route.modelTarget === "utility" ||
+    contextTokens === undefined ||
+    contextTokens >= SETUP_INFERENCE_MIN_CONTEXT_TOKENS
+  ) {
+    return undefined;
+  }
+  return `${route.modelLabel} has an effective context window of ${contextTokens} tokens. A first OpenClaw turn usually needs at least ${SETUP_INFERENCE_MIN_CONTEXT_TOKENS} for the system prompt and tool definitions, so messages may fail with a context overflow. Raise the model's context limit (the server's context size, and contextWindow or contextTokens in its model settings), or choose a larger model.`;
+}
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
@@ -131,6 +145,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
+      /** The summary first; later lines are notices (audit or context-window warnings). */
       lines: string[];
       modelName?: string;
       gatewayRestartRequired?: true;
@@ -166,6 +181,8 @@ export type VerifySetupInferenceResult =
       modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
+      /** Verified, but the effective context window is likely too small for a first turn. */
+      warning?: string;
     }
   | {
       ok: false;
@@ -174,7 +191,9 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
@@ -228,7 +247,6 @@ export type ActivateSetupInferenceParams = {
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */
   onActivationCompletion?: (complete: () => Promise<boolean>) => void;
-  deps?: ActivateSetupInferenceDeps;
 };
 
 export class SetupInferenceCancelledError extends Error {
@@ -256,32 +274,6 @@ export async function waitForProviderAuth<T>(
     () => new SetupInferenceCancelledError(),
   );
 }
-
-export type ActivateSetupInferenceDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
-  captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  timeoutMs?: number;
-};
-
-export type DetectSetupInferenceDeps = {
-  /** Supplies prepared setup choices before native or provider discovery starts. */
-  onPartial?: (detection: SetupInferenceDetection) => void;
-  detectInferenceBackends?: typeof detectInferenceBackends;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-};
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
   return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
@@ -401,11 +393,30 @@ export function describeSetupInferenceError(
       };
 }
 
-export function validateSetupInferenceOwnerEvidence(params: {
-  runner: "cli" | "embedded";
-  configuredHarnessId?: string;
-  auth: AgentExecutionAuthBinding;
-}): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+/**
+ * Activation evidence: the context shortfall (refused in automatic setup, a warning otherwise),
+ * then a runtime owner OpenClaw can reuse.
+ */
+export function validateSetupInferenceEvidence(
+  route: {
+    runner: "cli" | "embedded";
+    agentHarnessRuntimeOverride?: string;
+    modelLabel: string;
+    modelTarget?: "utility";
+  },
+  verification: { auth: AgentExecutionAuthBinding; contextTokens?: number },
+  options: { automaticSetup?: true } = {},
+): { failure?: Extract<ActivateSetupInferenceResult, { ok: false }>; warning?: string } {
+  const shortfall = resolveSetupContextShortfall(route, verification.contextTokens);
+  if (shortfall && options.automaticSetup) {
+    return { failure: { ok: false, status: "unavailable", error: shortfall } };
+  }
+  const params = {
+    runner: route.runner,
+    configuredHarnessId:
+      route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+    auth: verification.auth,
+  };
   let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&
@@ -439,13 +450,11 @@ export function validateSetupInferenceOwnerEvidence(params: {
       reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return reason
-    ? {
-        ok: false,
-        status: "unknown",
-        error: `Inference succeeded, but ${reason}. No default model was changed.`,
-      }
-    : undefined;
+  if (reason) {
+    const error = `Inference succeeded, but ${reason}. No default model was changed.`;
+    return { failure: { ok: false, status: "unknown", error } };
+  }
+  return shortfall ? { warning: shortfall } : {};
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
@@ -542,13 +551,13 @@ export function validateSetupModelTarget(
 }
 export type StageContext = {
   params: ActivateSetupInferenceParams;
-  deps: ActivateSetupInferenceDeps;
   snapshot: ConfigFileSnapshot;
   cfg: OpenClawConfig;
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  effects: { credentialsSaved: boolean };
+  /** Caller authority ends once configPersisted is set; saved activation then completes. */
+  effects: { credentialsSaved: boolean; configPersisted: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

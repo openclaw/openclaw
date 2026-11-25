@@ -1,6 +1,7 @@
 import { classifyFailoverReasonCore } from "../agents/failover/classify-core.js";
 import { isAuthErrorMessage } from "../agents/failover/message-patterns.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import type { SetTuiActivityStatus, TuiRunOutcome } from "./tui-activity-status.js";
 import { formatPrimitiveString } from "./tui-formatters.js";
 import { matchesSelectedTuiSession } from "./tui-session-events.js";
 import type { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
@@ -34,7 +35,7 @@ type TuiRunLifecycleContext = {
   };
   btw: { clear: () => void };
   tui: { requestRender: (force?: boolean) => void };
-  setActivityStatus: (status: string) => void;
+  setActivityStatus: SetTuiActivityStatus;
   refreshSessionInfo?: () => Promise<void>;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -277,6 +278,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
         runId: activeRunId,
         wasActiveRun: true,
         status: "idle",
+        runOutcome: runOutcome.state === "completed" ? "completed" : "aborted",
         displayedFinal: runOutcome.state === "interrupted",
       });
       return;
@@ -291,6 +293,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       runId: string;
       wasActiveRun: boolean;
       status: "idle" | "aborted" | "error";
+      runOutcome?: TuiRunOutcome;
       localModelMayStillBeFinishing?: boolean;
     },
     reconcileIdle: boolean,
@@ -303,7 +306,13 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     if (!promotedRemainingRun) {
       if (params.wasActiveRun) {
         clearCancellationNotice();
-        setActivityStatus(params.status);
+        if (params.runOutcome === "completed" && hasPendingSubmit(state)) {
+          setActivityStatus(state.pendingSubmit?.phase === "sending" ? "sending" : "waiting");
+        } else if (params.runOutcome) {
+          setActivityStatus(params.status, params.runOutcome);
+        } else {
+          setActivityStatus(params.status);
+        }
         clearStreamingWatchdog();
         if (params.localModelMayStillBeFinishing && !hasPendingSubmit(state)) {
           const noticeSessionKey = state.currentSessionKey;
@@ -338,6 +347,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    runOutcome?: TuiRunOutcome;
     displayedFinal?: boolean;
     reconcileIdle?: boolean;
   }) => {
@@ -414,7 +424,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     liveTerminalErrorMessages.set(runId, displayMessage);
     chatLog.addSystem(displayMessage);
     runCoordinator.noteFinalizedRun(runId, { displayedFinal: true });
-    terminateRun({ runId, wasActiveRun, status: "error" });
+    settleRunActivity({ runId, wasActiveRun, status: "error" }, false);
     maybeRefreshHistoryForRun(runId, { hasDisplayableFinal: true });
     return true;
   };

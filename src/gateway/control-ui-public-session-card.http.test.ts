@@ -57,16 +57,11 @@ it("serves real publication documents and PNGs once, and withholds closed public
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    const targets = {
-      published: { name: "published", shareId: "a".repeat(48) },
-      private: { name: "private", shareId: "b".repeat(48) },
-      unpublished: { name: "unpublished", shareId: "c".repeat(48) },
-      replaced: { name: "replaced", shareId: "d".repeat(48) },
-      pending: { name: "pending", shareId: "e".repeat(48) },
-    };
+    const targets = ["published", "private", "unpublished", "replaced", "pending"] as const;
     const codec = await loadPublicSessionShareTokenCodec();
     const publications = await Promise.all(
-      Object.values(targets).map(async ({ name, shareId }) => {
+      targets.map(async (name, index) => {
+        const shareId = String.fromCharCode(97 + index).repeat(48);
         const locator = {
           agentId: "main",
           sessionKey: `agent:main:public-card-${name}`,
@@ -84,18 +79,15 @@ it("serves real publication documents and PNGs once, and withholds closed public
         });
         await replaceTranscriptEvents(locator, [
           { type: "session", version: 3, id: locator.sessionId },
-          {
+          ...[
+            { role: "user", content: "Show the synthetic public card." },
+            { role: "assistant", content: "The published response is visible." },
+          ].map((message, messageIndex) => ({
             type: "message",
-            id: "question",
-            parentId: null,
-            message: { role: "user", content: "Show the synthetic public card." },
-          },
-          {
-            type: "message",
-            id: "answer",
-            parentId: "question",
-            message: { role: "assistant", content: "The published response is visible." },
-          },
+            id: messageIndex === 0 ? "question" : "answer",
+            parentId: messageIndex === 0 ? null : "question",
+            message,
+          })),
         ]);
         const token = codec.mint(locator);
         return {
@@ -106,7 +98,7 @@ it("serves real publication documents and PNGs once, and withholds closed public
         };
       }),
     );
-    const publication = (name: keyof typeof targets) => {
+    const publication = (name: (typeof targets)[number]) => {
       const found = publications.find((entry) => entry.name === name);
       if (!found) {
         throw new Error(`Missing synthetic publication: ${name}`);
@@ -218,10 +210,6 @@ it("serves real publication documents and PNGs once, and withholds closed public
       for (const end of responseEnds) {
         expect(end).toHaveBeenCalledTimes(1);
       }
-      console.info(
-        "public-card HTTP proof: document=200/304 PNG=1200x630 cached-render=1 " +
-          "private/unpublished/replaced/revoked/pending-revoked=exact-static-fallback responses=10 single-end",
-      );
     } finally {
       renderer.beforeReturn = undefined;
       server.closeAllConnections();

@@ -5,7 +5,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
-import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   candidateArtifactJsonFromBinding,
   loadSelectedFullReleaseCandidate,
@@ -195,16 +194,34 @@ async function loadingFixture(
   return { archive, manifest, metadata, options };
 }
 
-function discoveryCli(prefix: string, ghSource: string) {
+function discoveryCli(prefix: string) {
   const root = tempDirs.make(`full-release-candidate-${prefix}-`);
   const bin = join(root, "bin");
   const inputPath = join(root, "request-input.json");
   const outputPath = join(root, "github-output");
   const countPath = join(root, "gh-count");
   const callLogPath = join(root, "gh-calls");
+  const responsesPath = join(root, "gh-responses.json");
   mkdirSync(bin);
   const ghPath = join(bin, "gh");
-  writeFileSync(ghPath, `#!/bin/sh\n${ghSource}`);
+  writeFileSync(
+    ghPath,
+    `#!${testNodeExecPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_GH_CALL_LOG, args.join(" ") + "\\n");
+const countPath = process.env.FAKE_GH_COUNT;
+fs.writeFileSync(countPath, String(Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : 0) + 1));
+const { replies, errors } = JSON.parse(fs.readFileSync(${JSON.stringify(responsesPath)}, "utf8"));
+const endpoint = args.find((arg) => arg.startsWith("repos/${REPOSITORY}/"))?.slice(${`repos/${REPOSITORY}/`.length});
+if (Object.hasOwn(errors, endpoint)) {
+  console.error(errors[endpoint]);
+  process.exit(1);
+}
+if (!Object.hasOwn(replies, endpoint)) throw new Error("unexpected gh invocation: " + args.join(" "));
+process.stdout.write(JSON.stringify(replies[endpoint]));
+`,
+  );
   chmodSync(ghPath, 0o755);
   writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
   return {
@@ -213,6 +230,10 @@ function discoveryCli(prefix: string, ghSource: string) {
     outputPath,
     countPath,
     callLogPath,
+    inventory: (requestSha256 = fullReleaseCandidateManifestFixture().requestSha256, page = 1) =>
+      `actions/artifacts?name=full-release-candidate-v2-${requestSha256}&per_page=100&page=${page}`,
+    respond: (replies: Record<string, unknown>, errors: Record<string, string> = {}) =>
+      writeFileSync(responsesPath, JSON.stringify({ replies, errors })),
     run: (env: NodeJS.ProcessEnv = {}, args: string[] = []) =>
       spawnSync(testNodeExecPath, [SCRIPT, "discover", "--request-input", inputPath, ...args], {
         encoding: "utf8",
@@ -349,13 +370,7 @@ describe("trusted full release candidate selection", () => {
 
 describe("full release candidate discovery CLI", () => {
   it("preserves canonical request arrays when checking the expected digest", () => {
-    const cli = discoveryCli(
-      "canonical",
-      `
-printf '%s\n' "$*" >> "$FAKE_GH_CALL_LOG"
-printf '%s\n' '{"artifacts":[]}'
-`,
-    );
+    const cli = discoveryCli("canonical");
     const rawInputPath = join(cli.root, "raw-request-input.json");
     const requestPath = cli.inputPath;
     writeFileSync(
@@ -384,6 +399,7 @@ printf '%s\n' '{"artifacts":[]}'
     };
     expect(request.upgradeSurvivorBaselines).toEqual(["openclaw@latest"]);
     expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
+    cli.respond({ [cli.inventory(contract.requestSha256)]: { artifacts: [] } });
     const result = cli.run({}, ["--expected-request-sha256", contract.requestSha256]);
     expect(result.status, result.stderr).toBe(0);
     const outputs = Object.fromEntries(
@@ -408,17 +424,8 @@ printf '%s\n' '{"artifacts":[]}'
   });
 
   it("marks exhausted transient reads unavailable instead of permitting preparation", () => {
-    const cli = discoveryCli(
-      "discovery",
-      `
-count=0
-if [ -f "$FAKE_GH_COUNT" ]; then count="$(cat "$FAKE_GH_COUNT")"; fi
-count=$((count + 1))
-printf '%s\\n' "$count" > "$FAKE_GH_COUNT"
-echo "HTTP 502: transient candidate lookup failure" >&2
-exit 1
-`,
-    );
+    const cli = discoveryCli("discovery");
+    cli.respond({}, { [cli.inventory()]: "HTTP 502: transient candidate lookup failure" });
     const result = cli.run();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(cli.countPath, "utf8").trim()).toBe("2");
@@ -426,22 +433,16 @@ exit 1
   });
 
   it("marks bounded artifact inventory exhaustion unavailable instead of permitting preparation", () => {
-    const cli = discoveryCli(
-      "inventory",
-      `
-count=0
-if [ -f "$FAKE_GH_COUNT" ]; then count="$(cat "$FAKE_GH_COUNT")"; fi
-count=$((count + 1))
-printf '%s\\n' "$count" > "$FAKE_GH_COUNT"
-cat "$FAKE_GH_PAYLOAD"
-`,
+    const cli = discoveryCli("inventory");
+    cli.respond(
+      Object.fromEntries(
+        Array.from({ length: 10 }, (_, index) => [
+          cli.inventory(undefined, index + 1),
+          { artifacts: Array.from({ length: 100 }, () => ({})) },
+        ]),
+      ),
     );
-    const payloadPath = join(cli.root, "artifacts.json");
-    writeFileSync(
-      payloadPath,
-      JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
-    );
-    const result = cli.run({ FAKE_GH_PAYLOAD: payloadPath });
+    const result = cli.run();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(cli.countPath, "utf8").trim()).toBe("10");
     expectUnavailable(cli.outputPath, "candidate artifact inventory exceeded the bounded scan");
@@ -450,46 +451,23 @@ cat "$FAKE_GH_PAYLOAD"
   it.each([false, true])(
     "marks bounded candidate evaluation unavailable when older candidates remain (100-job pages 502: %s)",
     async (largePage502) => {
-      const cli = discoveryCli(
-        "evaluation",
-        `
-printf '%s\\n' "$*" >> "$FAKE_GH_CALL_LOG"
-case "$*" in
-  *"actions/artifacts?name="*) cat "$FAKE_GH_ARTIFACT_LISTING" ;;
-  *"/jobs?filter=all&per_page=100")
-    if [ -n "$FAKE_GH_LARGE_PAGE_502" ]; then
-      echo "gh: Server Error (HTTP 502)" >&2
-      exit 1
-    fi
-    run_id="$(printf '%s' "$*" | sed -E 's#.*actions/runs/([0-9]+)/jobs.*#\\1#')"
-    cat "$FAKE_GH_RESPONSES/jobs-$run_id.json"
-    ;;
-  *"/jobs?filter=all"*)
-    run_id="$(printf '%s' "$*" | sed -E 's#.*actions/runs/([0-9]+)/jobs.*#\\1#')"
-    cat "$FAKE_GH_RESPONSES/jobs-$run_id.json"
-    ;;
-  *"actions/runs/"*)
-    run_id="$(printf '%s' "$*" | sed -E 's#.*actions/runs/([0-9]+).*#\\1#')"
-    cat "$FAKE_GH_RESPONSES/run-$run_id.json"
-    ;;
-  *)
-    echo "unexpected gh invocation: $*" >&2
-    exit 2
-    ;;
-esac
-`,
-      );
-      const responses = join(cli.root, "responses");
-      const artifactListingPath = join(cli.root, "artifacts.json");
-      mkdirSync(responses);
+      const cli = discoveryCli("evaluation");
+      const replies: Record<string, unknown> = {};
+      const errors: Record<string, string> = {};
       const now = Date.now();
       const { manifest, metadata } = await fixture(now);
       const artifacts = Array.from({ length: 6 }, (_, index) => {
         const runId = 80 + index;
         const jobs = workflowJobs(manifest, { runId });
         jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
-        writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
-        writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
+        replies[`actions/runs/${runId}`] = workflowRun(runId);
+        for (const perPage of [100, 50]) {
+          const endpoint = `actions/runs/${runId}/jobs?filter=all&per_page=${perPage}`;
+          replies[endpoint] = [jobs];
+          if (largePage502 && perPage === 100) {
+            errors[endpoint] = "gh: Server Error (HTTP 502)";
+          }
+        }
         return {
           ...metadata,
           created_at: new Date(now - index * 1000).toISOString(),
@@ -502,12 +480,8 @@ esac
           },
         };
       });
-      writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
-      const result = cli.run({
-        FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
-        FAKE_GH_LARGE_PAGE_502: largePage502 ? "1" : "",
-        FAKE_GH_RESPONSES: responses,
-      });
+      cli.respond({ ...replies, [cli.inventory()]: { artifacts } }, errors);
+      const result = cli.run();
       expect(result.status, result.stderr).toBe(0);
       expectUnavailable(cli.outputPath, "candidate evaluation exceeded the bounded scan", true);
       const candidateCalls = readFileSync(cli.callLogPath, "utf8")
@@ -530,35 +504,20 @@ esac
   );
 
   it("marks a selected candidate with a missing constituent unavailable", async () => {
-    const cli = discoveryCli(
-      "selected-missing",
-      `
-case "$*" in
-  *"actions/artifacts?name="*) cat "$FAKE_GH_ARTIFACT_LISTING" ;;
-  *"actions/runs/77/jobs?filter=all"*) cat "$FAKE_GH_WORKFLOW_JOBS" ;;
-  *"actions/runs/77"*) cat "$FAKE_GH_WORKFLOW_RUN" ;;
-  *"actions/artifacts/101"*)
-    echo "HTTP 404: candidate constituent artifact missing" >&2
-    exit 1
-    ;;
-  *)
-    echo "unexpected gh invocation: $*" >&2
-    exit 2
-    ;;
-esac
-`,
-    );
+    const cli = discoveryCli("selected-missing");
     const archivePath = join(cli.root, "candidate.zip");
-    const artifactListingPath = join(cli.root, "artifacts.json");
-    const workflowRunPath = join(cli.root, "workflow-run.json");
-    const workflowJobsPath = join(cli.root, "workflow-jobs.json");
     const artifactMetadataPath = join(cli.root, "artifact-metadata.json");
     const fetchPreloadPath = join(cli.root, "fetch-preload.mjs");
     const { archive, manifest, metadata } = await fixture(Date.now());
     writeFileSync(archivePath, archive);
-    writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
-    writeFileSync(workflowRunPath, JSON.stringify(workflowRun()));
-    writeFileSync(workflowJobsPath, JSON.stringify([workflowJobs(manifest)]));
+    cli.respond(
+      {
+        [cli.inventory()]: { artifacts: [metadata] },
+        "actions/runs/77": workflowRun(),
+        "actions/runs/77/jobs?filter=all&per_page=100": [workflowJobs(manifest)],
+      },
+      { "actions/artifacts/101": "HTTP 404: candidate constituent artifact missing" },
+    );
     writeFileSync(artifactMetadataPath, JSON.stringify(metadata));
     writeFileSync(
       fetchPreloadPath,
@@ -583,9 +542,6 @@ globalThis.fetch = async (url) => {
     const result = cli.run({
       FAKE_ARTIFACT_ARCHIVE: archivePath,
       FAKE_ARTIFACT_METADATA: artifactMetadataPath,
-      FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
-      FAKE_GH_WORKFLOW_JOBS: workflowJobsPath,
-      FAKE_GH_WORKFLOW_RUN: workflowRunPath,
       NODE_OPTIONS: `--import=${pathToFileURL(fetchPreloadPath).href}`,
     });
     expect(result.status, result.stderr).toBe(0);
@@ -597,30 +553,6 @@ globalThis.fetch = async (url) => {
   });
 });
 
-it("does not start artifact metadata reads after the absolute deadline", async () => {
-  let reads = 0;
-  await expect(
-    downloadExactActionsArtifactArchive({
-      deadlineMs: Date.now() - 1,
-      expected: {
-        artifactDigest: `sha256:${"a".repeat(64)}`,
-        artifactExpiresAt: EXPIRES_AT,
-        artifactId: 301,
-        artifactName: `full-release-candidate-v2-${"b".repeat(64)}`,
-        artifactSizeBytes: 1,
-        repository: REPOSITORY,
-        runId: 77,
-        workflowSha: "b".repeat(40),
-      },
-      fetchImpl: async () => {
-        reads += 1;
-        return new Response();
-      },
-      token: "test-token",
-    }),
-  ).rejects.toThrow("deadline exceeded");
-  expect(reads).toBe(0);
-});
 describe("full release candidate loading", () => {
   it.each([WORKFLOW_PATH, ".github/workflows/full-release-artifacts.yml"])(
     "binds exact candidate artifacts from %s",

@@ -3,6 +3,18 @@
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "redirects": [
     {
+      "source": "/start/teams",
+      "destination": "/start/multiplayer"
+    },
+    {
+      "source": "/gateway/team-server",
+      "destination": "/start/multiplayer"
+    },
+    {
+      "source": "/cli/claws",
+      "destination": "/cli/templates"
+    },
+    {
       "source": "/cli/commitments",
       "destination": "/automation#retired-inferred-commitments"
     },
@@ -1361,7 +1373,7 @@
                 "group": "Setup guides and reference",
                 "pages": [
                   "start/openclaw",
-                  "start/teams",
+                  "start/multiplayer",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1439,6 +1451,7 @@
                   {
                     "group": "App platforms",
                     "pages": [
+                      "install/boat",
                       "install/cloudflare",
                       "install/daytona",
                       "install/exe-dev",
@@ -1465,6 +1478,7 @@
                     "pages": [
                       "install/ansible",
                       "install/docker-vm-runtime",
+                      "install/jetson",
                       "install/kubernetes",
                       "install/macos-vm",
                       "install/raspberry-pi"
@@ -1661,6 +1675,7 @@
               {
                 "group": "Agent runtime",
                 "pages": [
+                  "concepts/agents-and-templates",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
@@ -1688,6 +1703,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-controller",
                   "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/session-pruning",
@@ -1835,10 +1851,30 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/gbrain",
+                      "plugins/knowledge",
+                      {
+                        "group": "Knowledge",
+                        "pages": [
+                          "plugins/knowledge/stores-and-access",
+                          "plugins/knowledge/memory-provider",
+                          "plugins/knowledge/tools",
+                          "plugins/knowledge/records-and-ontology",
+                          "plugins/knowledge/retrieval",
+                          "plugins/knowledge/evidence",
+                          "plugins/knowledge/ingestion",
+                          "plugins/knowledge/corrections",
+                          "plugins/knowledge/local-history",
+                          "plugins/knowledge/maintenance",
+                          "plugins/knowledge/scribes",
+                          "plugins/knowledge/control-ui"
+                        ]
+                      },
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
                       "plugins/onnx",
+                      "plugins/subq",
                       "plugins/typesafe"
                     ]
                   },
@@ -1870,6 +1906,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/runtime-compatibility",
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
@@ -2022,6 +2059,7 @@
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
+                      "tools/session-project",
                       "tools/tool-search"
                     ]
                   },
@@ -2078,6 +2116,7 @@
                     "group": "Web search",
                     "pages": [
                       "tools/web",
+                      "tools/deep-research",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",
@@ -2202,6 +2241,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abliteration",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
@@ -2219,8 +2259,10 @@
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
+                      "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
+                      "providers/levanto",
                       "providers/longcat",
                       "providers/meta",
                       "providers/minimax",
@@ -2246,6 +2288,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",
                       "providers/qianfan",
@@ -2262,6 +2305,10 @@
                       "providers/xiaomi",
                       "providers/zai"
                     ]
+                  },
+                  {
+                    "group": "Decision models",
+                    "pages": ["providers/celeris", "providers/fastino", "providers/liquid-ai", "providers/nace", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",
@@ -2289,13 +2336,16 @@
                   {
                     "group": "Gateways and routers",
                     "pages": [
+                      "providers/bifrost",
                       "providers/claude-max-api-proxy",
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
+                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
+                      "providers/requesty",
                       "providers/vercel-ai-gateway"
                     ]
                   },
@@ -2653,8 +2703,7 @@
                   "gateway/remote",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
-                  "gateway/cloudflare-access",
-                  "gateway/team-server"
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -2827,7 +2876,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
-                      "cli/claws",
+                      "cli/templates",
                       "cli/infer",
                       "cli/memory",
                       "cli/models",
@@ -2852,6 +2901,7 @@
                       "cli/channels",
                       "cli/directory",
                       "cli/pairing",
+                      "cli/pair",
                       "cli/qr",
                       "cli/users",
                       "cli/voicecall"
@@ -2865,6 +2915,7 @@
                       "cli/cron",
                       "cli/connect",
                       "cli/devices",
+                      "cli/id",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",
@@ -3221,6 +3272,22 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.10",
+              "releases/2026.11.9",
+              "releases/2026.11.8",
+                  "releases/2026.11.7",
+                  "releases/2026.11.6",
+                  "releases/2026.11.5",
+                  "releases/2026.11.4",
+                  "releases/2026.11.3",
+                  "releases/2026.11.2",
+                  "releases/2026.11.1",
+                  "releases/2026.10.10",
+                  "releases/2026.10.9",
+                  "releases/2026.10.8",
+                  "releases/2026.10.7",
+                  "releases/2026.10.6",
+                  "releases/2026.10.5",
                   "releases/2026.10.4",
                   "releases/2026.10.3",
                   "releases/2026.10.2",
@@ -3376,6 +3443,7 @@
                 "group": "Start here",
                 "pages": [
                   "help/index",
+                  "help/support",
                   "help/troubleshooting",
                   "help/debugging"
                 ]

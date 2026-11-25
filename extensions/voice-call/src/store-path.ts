@@ -1,8 +1,8 @@
 import os from "node:os";
 import path from "node:path";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "./utils.js";
 
 /** Resolve the plugin-owned store below OpenClaw's canonical state directory. */
@@ -13,7 +13,7 @@ export function resolveDefaultVoiceCallStoreDir(env: NodeJS.ProcessEnv = process
 /** Read the configured voice-call store path from either package id. */
 function getVoiceCallConfigStore(config: OpenClawConfig): string {
   for (const pluginId of ["voice-call", "@openclaw/voice-call"]) {
-    const store = asOptionalRecord(config.plugins?.entries?.[pluginId]?.config)?.store;
+    const store = resolvePluginConfigObject(config, pluginId)?.store;
     if (typeof store === "string" && store.trim()) {
       return store.trim();
     }

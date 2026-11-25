@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { SignalDataTypeMap } from "baileys";
 import {
@@ -9,6 +8,7 @@ import {
   statRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 
 // The legacy OAuth root is shared; keep its exact WhatsApp namespaces aligned
 // with Baileys without importing the provider into setup discovery.
@@ -112,14 +112,10 @@ export function hasWebCredsSync(authDir: string): boolean {
 }
 
 export function collectWhatsAppAuthDirs(accountsRoot: string, authDirs: Set<string>): string[] {
-  try {
-    for (const entry of fs.readdirSync(accountsRoot, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        authDirs.add(path.join(accountsRoot, entry.name));
-      }
+  for (const entry of readDirectoryEntriesSync(accountsRoot)) {
+    if (entry.isDirectory()) {
+      authDirs.add(path.join(accountsRoot, entry.name));
     }
-  } catch {
-    // Unreadable roots leave only the caller's configured auth directories.
   }
   return [...authDirs];
 }

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   publishFileExclusive,
   requireDirectorySync,
@@ -36,17 +37,40 @@ export const MigrationArtifactSchema = z.object({
 });
 export type MigrationArtifact = z.infer<typeof MigrationArtifactSchema>;
 export type MigrationArtifactIdentity = MigrationArtifact["identity"];
+
+export function sameSourceContent(
+  left: MigrationArtifactIdentity,
+  right: MigrationArtifactIdentity,
+) {
+  return left.sha256 === right.sha256 && left.size === right.size;
+}
+
 /** One maintenance operation owns these facts; never persist or share them across runs. */
 export type MigrationArtifactVerification = Map<
   string,
-  { stat: fs.BigIntStats; identity: MigrationArtifactIdentity }
+  { stat: fs.BigIntStats; content: ReturnType<typeof hashFileDescriptorSync> }
 >;
 
-export function statMigrationPath(filePath: string): fs.Stats | undefined {
+export function statMigrationPath(filePath: string): fs.Stats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options: { bigint: true },
+): fs.BigIntStats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options?: { bigint: true },
+): fs.Stats | fs.BigIntStats | undefined {
   try {
-    return fs.lstatSync(filePath);
+    return options ? fs.lstatSync(filePath, options) : fs.lstatSync(filePath);
   } catch (error) {
-    if ((isRecord(error) ? error.code : undefined) === "ENOENT") {
+    const code = isRecord(error) ? error.code : undefined;
+    // Older receipts can name an impossible destination; the original never moved there.
+    if (code === "ENOENT" || code === "ENAMETOOLONG") {
+      if (code === "ENAMETOOLONG") {
+        createSubsystemLogger("doctor").warn(
+          `Ignoring an overlong migration path as absent; original files and receipts are preserved: ${filePath}`,
+        );
+      }
       return undefined;
     }
     throw error;
@@ -129,7 +153,7 @@ export function readMigrationArtifactIdentity(
       previous &&
       previous.stat.nlink === before.nlink &&
       sameFileMutationFingerprint(previous.stat, before)
-        ? { sha256: previous.identity.sha256, sizeBytes: previous.identity.size }
+        ? previous.content
         : hashFileDescriptorSync(fd);
     const { sha256, sizeBytes: bytes } = content;
     const after = fs.lstatSync(filePath, { bigint: true });
@@ -152,7 +176,7 @@ export function readMigrationArtifactIdentity(
       sha256,
     };
     if (key !== undefined) {
-      verification?.set(key, { stat: after, identity });
+      verification?.set(key, { stat: after, content });
     }
     return identity;
   } finally {

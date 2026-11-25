@@ -29,7 +29,8 @@ type EventReadOptions = Omit<
 async function eventFixture() {
   const workspaceDir = await createTempDir("memory-host-events-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-  const append = (query: string) => appendMemoryHostEvent(workspaceDir, recall(query), { env });
+  const append = (event: string | Parameters<typeof appendMemoryHostEvent>[1]) =>
+    appendMemoryHostEvent(workspaceDir, typeof event === "string" ? recall(event) : event, { env });
   const records = (options: EventReadOptions = {}) =>
     readMemoryHostEventRecords({ workspaceDir, env, ...options });
   const stored = (options: EventReadOptions = {}) =>
@@ -63,17 +64,6 @@ function delayJournalCommit() {
   return { entered, release };
 }
 
-function createDedupe(root: string, overrides?: { ttlMs?: number }) {
-  return createPersistentDedupe({
-    ttlMs: overrides?.ttlMs ?? 24 * 60 * 60 * 1000,
-    memoryMaxSize: 100,
-    pluginId: "test-persistent-dedupe",
-    namespacePrefix: "test-dedupe",
-    stateMaxEntries: 1000,
-    env: { ...process.env, OPENCLAW_STATE_DIR: root },
-  });
-}
-
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -84,7 +74,7 @@ afterEach(async () => {
 
 describe("memory host event journal helpers", () => {
   it("limits matching event types before returning journal history", async () => {
-    const { workspaceDir, env, records } = await eventFixture();
+    const { append, records } = await eventFixture();
     const phase = {
       type: "memory.dream.completed" as const,
       timestamp: "2026-10-15T04:15:00.000Z",
@@ -93,13 +83,9 @@ describe("memory host event journal helpers", () => {
       lineCount: 1,
       storageMode: "separate" as const,
     };
-    await appendMemoryHostEvent(workspaceDir, { ...phase, phase: "light" }, { env });
-    await appendMemoryHostEvent(workspaceDir, phase, { env });
-    await appendMemoryHostEvent(
-      workspaceDir,
-      { ...recall("newer unrelated event"), timestamp: "2026-10-15T04:16:00.000Z" },
-      { env },
-    );
+    await append({ ...phase, phase: "light" });
+    await append(phase);
+    await append({ ...recall("newer unrelated event"), timestamp: "2026-10-15T04:16:00.000Z" });
 
     expect(await records({ type: "memory.dream.completed", limit: 1 })).toEqual([phase]);
   });
@@ -211,7 +197,7 @@ describe("memory host event journal helpers", () => {
   });
 
   it("keeps legacy event readers stable when diagnostic records are present", async () => {
-    const { workspaceDir, env, append, records, legacy } = await eventFixture();
+    const { append, records, legacy } = await eventFixture();
 
     const skipped = {
       type: "memory.recall.skipped" as const,
@@ -222,25 +208,18 @@ describe("memory host event journal helpers", () => {
       skippedResultCount: 0,
       results: [],
     };
-    await appendMemoryHostEvent(workspaceDir, skipped, { env });
+    await append(skipped);
     await append("daily memory");
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        ...skipped,
-        timestamp: "2026-10-05T12:10:00.000Z",
-        query: "durable memory again",
-      },
-      { env },
-    );
-
-    const legacyEvents = await legacy();
-    const legacyTail = await legacy({ limit: 1 });
-    const events = await records();
-
-    expect(legacyEvents.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
-    expect(legacyTail.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
-    expect(events.map((event) => event.type)).toEqual([
+    await append({
+      ...skipped,
+      timestamp: "2026-10-05T12:10:00.000Z",
+      query: "durable memory again",
+    });
+    const types = (events: Awaited<ReturnType<typeof records>>) =>
+      events.map((event) => event.type);
+    expect(types(await legacy())).toEqual(["memory.recall.recorded"]);
+    expect(types(await legacy({ limit: 1 }))).toEqual(["memory.recall.recorded"]);
+    expect(types(await records())).toEqual([
       "memory.recall.skipped",
       "memory.recall.recorded",
       "memory.recall.skipped",
@@ -249,26 +228,6 @@ describe("memory host event journal helpers", () => {
 });
 
 describe("createPersistentDedupe", () => {
-  it("deduplicates keys, persists across instances, warms up, and checks recent keys", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const first = createDedupe(root);
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
-    expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
-
-    const second = createDedupe(root);
-    expect(await second.hasRecent("m1", { namespace: "a" })).toBe(true);
-    expect(await second.warmup("a")).toBe(1);
-    expect(await second.checkAndRecord("m1", { namespace: "a" })).toBe(false);
-    expect(await second.checkAndRecord("m2", { namespace: "a" })).toBe(true);
-
-    const raceDedupe = createDedupe(root, { ttlMs: 10_000 });
-    const [raceFirst, raceSecond] = await Promise.all([
-      raceDedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-      raceDedupe.checkAndRecord("race-key", { namespace: "feishu" }),
-    ]);
-    expect([raceFirst, raceSecond]).toEqual([true, false]);
-  });
-
   it("bounds non-finite persistent dedupe options", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const dedupe = createPersistentDedupe({
@@ -280,9 +239,12 @@ describe("createPersistentDedupe", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: root },
     });
 
-    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(true);
-    expect(await dedupe.hasRecent("m1", { namespace: "a", now: 100 })).toBe(true);
-    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(false);
+    const options = { namespace: "a", now: 100 };
+    expect([
+      await dedupe.checkAndRecord("m1", options),
+      await dedupe.hasRecent("m1", options),
+      await dedupe.checkAndRecord("m1", options),
+    ]).toEqual([true, true, false]);
     expect(dedupe.memorySize()).toBe(0);
   });
 

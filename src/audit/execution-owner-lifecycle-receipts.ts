@@ -10,7 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE } from "./execution-owner-lifecycle-binding-store.js";
 
@@ -242,7 +242,7 @@ export function pageOwnerLifecycleReceiptsInDatabase(
     limit: number;
   },
 ): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
-  const rows = runSqliteDeferredTransactionSync(
+  const rows = runSqliteReadSnapshotSync(
     db,
     () =>
       readRows({

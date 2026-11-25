@@ -71,6 +71,15 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
   hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
+  getSqliteDatabaseAdmissionIdentityForPath: (canonicalPath: string) =>
+    observed.preparedDatabase
+      ? {
+          canonicalPath,
+          key: canonicalPath.replace(/^.*-(\d+)\.sqlite$/u, "file:1:$1"),
+          birthtime: "1",
+        }
+      : undefined,
+  hasSqliteDatabaseSchemaAdmissionForIdentity: () => observed.preparedDatabase,
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
@@ -99,6 +108,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
     const retiring = new Set<NonNullable<typeof worker>>();
     let activeTasks = 0;
+    let rotation: Promise<void> | undefined;
     const serialSlots = Array.from({ length: poolOptions.maxWorkers ?? 1 }, () =>
       Promise.resolve(),
     );
@@ -106,6 +116,9 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         const execute = async () => {
+          if (rotation) {
+            await rotation;
+          }
           activeTasks++;
           try {
             const preparedInput = prepare();
@@ -128,23 +141,32 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
         return result;
       },
       getSnapshot: () => ({ activeTasks }),
-      async rotate() {
+      rotate() {
+        if (rotation) {
+          return rotation;
+        }
         if (worker) {
           retiring.add(worker);
         }
         worker = undefined;
         const previous = [...retiring];
-        try {
-          await observed.rotate();
-          for (const prepared of previous) {
-            if (retiring.delete(prepared)) {
-              await prepared.releaseResources?.();
+        rotation = (async () => {
+          try {
+            await observed.rotate();
+            for (const prepared of previous) {
+              if (retiring.delete(prepared)) {
+                await prepared.releaseResources?.();
+              }
             }
+            poolOptions.onRotationComplete?.();
+          } catch (error) {
+            void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+            throw error;
+          } finally {
+            rotation = undefined;
           }
-        } catch (error) {
-          void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
-          throw error;
-        }
+        })();
+        return rotation;
       },
       closeResources: observed.closeResources,
     };
@@ -152,6 +174,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
 }));
 // mock-isolation: Observe custody without registering real database lifecycle resources.
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+  registerAgentDatabaseResourceReleaseHandler: () => {},
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
@@ -173,10 +196,8 @@ vi.mock("./disk-budget-runtime.js", () => ({
 
 import {
   historyLane,
-  maintenanceLane,
-  projectionLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "./session-transcript-worker-resources.js";
 
 let sequence = 0;
@@ -210,11 +231,7 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all(
-    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
-      rotateDatabaseWorkers(lane),
-    ),
-  );
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
 });
 afterAll(() => {
   vi.useRealTimers();

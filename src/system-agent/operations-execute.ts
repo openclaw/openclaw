@@ -28,7 +28,6 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
-import { executePluginInstall } from "./plugin-install.js";
 
 const INTERACTIVE_SETUP_GUIDANCE = {
   "skills-setup": [
@@ -88,17 +87,18 @@ export async function executeSystemAgentOperation(
     run: Parameters<typeof applyPersistentOperation>[0]["run"],
   ) => applyPersistentOperation({ auditOperation, operation, runtime, opts, run });
   switch (operation.kind) {
+    case "template-review":
+    case "template-install": {
+      const { executeSystemAgentTemplateOperation } = await import("./template-operations.js");
+      return await executeSystemAgentTemplateOperation(operation, runtime, opts);
+    }
     case "none":
       runtime.log(operation.message);
       return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
     case "overview": {
       const overview = await loadOverviewForOperation(opts.deps);
-      if (opts.deps?.formatOverview) {
-        runtime.log(opts.deps.formatOverview(overview));
-      } else {
-        const { formatSystemAgentOverview } = await import("./overview.js");
-        runtime.log(formatSystemAgentOverview(overview));
-      }
+      const { formatSystemAgentOverview } = await import("./overview.js");
+      runtime.log(formatSystemAgentOverview(overview));
       return { applied: false };
     }
     case "agents": {
@@ -368,8 +368,10 @@ export async function executeSystemAgentOperation(
           };
         },
       );
-    case "plugin-install":
-      return await executePluginInstall(operation, runtime, opts);
+    case "plugin-install": {
+      const { executeSystemAgentPluginInstall } = await import("./plugin-install.js");
+      return await executeSystemAgentPluginInstall(operation, runtime, opts);
+    }
     case "plugin-activate-artifact": {
       const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
       return await executePluginArtifactActivation(operation, runtime, opts);

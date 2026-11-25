@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type ActiveSessionSqliteMigrationRun,
@@ -16,6 +13,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
+import { resolveActiveSqliteTranscriptFile } from "./doctor-session-sqlite-transcript-file.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteReport,
@@ -129,6 +127,9 @@ export async function compactSqliteDatabase(
 ): Promise<void> {
   try {
     if (options.operation === "import-finalize") {
+      if (getDatabaseEngineInput("agent")) {
+        return;
+      }
       await closeOpenClawAgentDatabaseByPathAsync(resolveTargetSqlitePath(target));
     }
     report.compact = await compactDoctorSessionSqliteTarget(target, options);
@@ -138,34 +139,6 @@ export async function compactSqliteDatabase(
       message: `SQLite database compact failed: ${formatErrorMessage(err)}`,
     });
   }
-}
-
-function resolveActiveSqliteTranscriptFile(
-  target: SessionStoreTarget,
-  entry: { sessionFile?: string; sessionId: string },
-): string | undefined {
-  let transcriptPath: string;
-  try {
-    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
-      agentId: target.agentId,
-      sessionsDir: path.dirname(target.storePath),
-    });
-  } catch {
-    return undefined;
-  }
-  if (!transcriptPath.endsWith(".jsonl")) {
-    return undefined;
-  }
-  try {
-    if (!fs.statSync(transcriptPath).isFile()) {
-      return undefined;
-    }
-  } catch {
-    return undefined;
-  }
-  const sessionsDir = canonicalFilePath(path.dirname(target.storePath));
-  const activePath = canonicalFilePath(transcriptPath);
-  return path.dirname(activePath) === sessionsDir ? activePath : undefined;
 }
 
 export function summarizeDoctorSessionSqliteReport(

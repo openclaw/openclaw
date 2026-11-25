@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -32,8 +32,10 @@ import {
   dismissMentionInbox as dismiss,
   mentionRoles,
 } from "./mention-inbox.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -573,6 +575,16 @@ it("keeps view revisions private and retracts a now-hidden session", () =>
     expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
     await f.post();
     const visible = await read(f.inbox, f.bobClient);
+    const response = await read(f.inbox, f.bobClient);
+    response.items[0]!.senderLabel = "Caller-owned label";
+    response.items.length = 0;
+    response.revision++;
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    f.broadcast.mockClear();
+    setDisplayName(f.carol.id, "Carol Updated");
+    await Promise.resolve();
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    expect(f.broadcast).not.toHaveBeenCalled();
     await f.setSession({ displayName: "Updated design review" });
     expect((await f.items())[0]?.sessionTitle).toBe("Updated design review");
     await f.setSession({ visibility: "draft" });
@@ -682,6 +694,63 @@ it.each([
     );
   }, cfg);
 });
+
+it("keeps mention views and dismissal within the canonical profile role", () =>
+  withInbox(
+    async (f) => {
+      f.bobClient.connect.scopes = ["operator.admin"];
+      const principal = {
+        kind: "member" as const,
+        peerKey: "iroh:mention-reader",
+        accountId: "mention-reader",
+        role: "admin",
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+      const member: GatewayClient = {
+        ...f.bobSecond,
+        connId: "bob-member",
+        connect: { ...f.bobSecond.connect, scopes: ["operator.sessions.read"] },
+        internal: { openclawIdPrincipal: principal },
+      };
+      f.clients.push(member);
+      await f.items(member);
+      await f.post();
+      const localItems = await f.items(f.bobClient);
+      expect(localItems).toEqual([expect.objectContaining({ excerpt: "@Bob review this change" })]);
+      setUserProfileRole(f.bob.id, "restricted");
+      invalidateOperatorRolePolicy(f.bob.id);
+      expect(await f.items(member)).toEqual([]);
+      expectMentionError(
+        await f.call("users.mentionable", { sessionKey: SESSION_KEY }, member),
+        "INVALID_REQUEST",
+      );
+      expect(await dismiss(f.inbox, member, [localItems[0]!.id])).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      // A member still receives mentions in its own conversations.
+      const ownKey = "agent:main:dashboard:member-mention";
+      const ownId = "member-mention-session";
+      await f.setSession(
+        { sessionId: ownId, createdActor: { type: "human", source: "profile", id: f.bob.id } },
+        ownKey,
+      );
+      await f.post("own", { sessionKey: ownKey, sessionId: ownId });
+      const ownItem = (await f.items(f.bobClient)).find((item) => item.sessionKey === ownKey);
+      expect(ownItem).toBeDefined();
+      expect(await f.items(member)).toEqual([ownItem]);
+      expect((await f.call("users.mentionable", { sessionKey: ownKey }, member)).ok).toBe(true);
+      expect((await dismiss(f.inbox, member, [ownItem!.id])).ok).toBe(true);
+      setUserProfileRole(f.bob.id, "reader");
+      invalidateOperatorRolePolicy(f.bob.id);
+      expect(await f.items(f.bobClient)).toEqual(localItems);
+    },
+    mentionRoles({
+      admin: { agents: "*", scopes: ["operator.admin"], sessions: { others: "write" } },
+      restricted: { agents: [], scopes: ["operator.sessions.read"], sessions: { others: "none" } },
+    }),
+  ));
 
 it("fences delayed push preparation on role revocation, session replacement, and disposal", async () => {
   const cfg = mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } });

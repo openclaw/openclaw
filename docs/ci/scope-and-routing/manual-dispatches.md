@@ -5,29 +5,30 @@ read_when:
   - You need the Windows Testbox Check inputs
 title: "Manual dispatches"
 sidebarTitle: "Manual dispatches"
+doc-schema-version: 1
 ---
 
-Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check. Part of the [CI scope and routing](/ci/scope-and-routing) index.
+Manual CI and Windows proof reference. Part of [CI scope and routing](/ci/scope-and-routing).
 
 ## Manual dispatches
 
-Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 24 minimum compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, full iOS build/test and screenshot qualification, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 24 minimum compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS smoke, and generated-native-locale scope without selecting iOS screenshots or native tests. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope release validation, and release prep. CI reports proven obsolete native translation IDs, Android generated rows, and Apple catalog rows as warnings while the locale refresh catches up; active-key coverage, correctness, and all other parity checks remain blocking. See [local checks](/ci/local-proof) for the exact boundary. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); full-scope release validation enables Android by passing `include_android=true` without setting `release_gate`; npm qualification scopes defer Android. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Ordinary manual CI uses the normal graph, forcing all non-Android scoped lanes: Linux Node, bundled-plugin, plugin/channel contract shards, Node 24 minimum compatibility, `check-*`, `check-additional-*`, built-artifact smoke, docs, Python skills, Windows, macOS, full iOS build/test/screenshots, and Control UI/native app i18n. Logical runner profile: always `github`, regardless of physical `runs-on` fallback. Node 24 minimum compatibility runs only in manual CI and Full Release Validation, not push/PR CI.
 
-PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
+| Scope                              | Behavior                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Android                            | Manual: `include_android=true` or `release_gate`. Full-scope validation passes `include_android=true`, not `release_gate`; npm qualification defers Android.                                                                                                                                                                                             |
+| Exact-head `release_gate`          | Keeps PR macOS, iOS smoke, and generated-native-locale scope; excludes iOS screenshots/native tests, Docker seed, and QA Smoke.                                                                                                                                                                                                                          |
+| Automatic source PRs/release gates | Check native extraction inventory and Android/Apple localization safety without requiring translated/platform-generated output in the same PR.                                                                                                                                                                                                           |
+| Native App Locale Refresh          | Serialized workflow rebuilds artifacts in one isolated PR; exact-head auto-merge after required checks.                                                                                                                                                                                                                                                  |
+| Native parity                      | Blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope validation, and release prep. Proven obsolete translation IDs, Android generated rows, and Apple catalog rows warn while refresh catches up; active-key coverage, correctness, and other parity remain blocking. See [local checks](/ci/local-proof). |
+| Control UI locale parity           | Advisory on automatic PR/`main`; blocking on manual/release CI.                                                                                                                                                                                                                                                                                          |
+| Excluded from CI                   | Plugin prerelease static checks, full `agentic-plugins` and extension batch sweeps, plugin prerelease Docker lanes. Docker prerelease runs only through `Full Release Validation`’s separate `Plugin Prerelease` dispatch with release-validation gate enabled.                                                                                          |
 
-Ordinary upstream manual CI also retains QA Smoke's full profile and Control UI
-performance without owner-path filtering. When the target declares
-`docker-seed-e2e-contract-v1`, it selects `published-upgrade-survivor`, preserving
-the exact `legacy-operator-state` plus `auto-auth` proof used by every admitted
-upstream main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`,
-`mcp-channels`, `mcp-code-mode-gateway`, and `update-channel-switch` through
-`resolveDockerSeedLanes`, including `npm-beta` and `npm-stable` qualification.
-Older targets without the tier selector retain the survivor. Ordinary manual CI
-builds the full package. The main-only `ciArtifacts` preparation also applies to admitted main-shape qualification
-dispatches, which reproduce the main job for timing comparisons.
-Pull requests and exact-head `release_gate` fallbacks omit Docker seed and QA Smoke.
-Full Release Validation reaches these lanes through its normal CI child without
-setting `release_gate`; frozen targets retain their existing capability checks.
+- PR ratchets compare the checked-out synthetic merge tree and verify its head parent against the event head. Max-lines chains the environment-variable budget with the same fork-point ref before assertion-safety, catching production growth before `main`.
+- Manual runs have unique concurrency groups, preventing push/PR cancellation of candidate suites. Trusted callers can set `target_ref` to a branch, tag, or full SHA; workflow comes from the dispatch ref. Ratchets use the target/default-branch-head merge base resolved for that run.
+- Maintainer fallback for capacity-stalled PR CI: `release_gate` requires full-SHA `target_ref` matching the dispatched branch head and `pull_request_number` identifying the open PR whose merge tree is validated. Merge-tree lint uses hosted PR CI’s five core stripes plus one extension stripe, splitting type-aware lint across runners.
+- Ordinary upstream manual CI builds the full package, retaining QA Smoke’s full profile and Control UI performance without owner-path filtering. `docker-seed-e2e-contract-v1` targets select `published-upgrade-survivor`: the exact `legacy-operator-state` + `auto-auth` proof used by every admitted upstream main run. Older targets without the tier selector retain the survivor.
+- `resolveDockerSeedLanes` adds `cron-mcp-cleanup`, `mcp-channels`, `mcp-code-mode-gateway`, and `update-channel-switch` to every ordinary manual dispatch, including `npm-beta`/`npm-stable` qualification. Main-only `ciArtifacts` preparation also applies to admitted main-shape qualification dispatches for main-job timing comparisons. PRs omit Docker seed/QA Smoke. Full Release Validation uses its normal CI child without `release_gate`; frozen-target capability checks remain.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
@@ -39,222 +40,75 @@ gh workflow run full-release-validation.yml --ref main \
   -f expected_sha="$VALIDATION_SHA"
 ```
 
-Gateway extended-stable shared publication requires complete candidate-owned
-Full Release Validation from an independently admitted `release-ci/*` harness
-at Q=C, targeting the frozen `extended-stable/YYYY.M.33` tip. The raw diagnostic
-example above and direct `main` producers do not satisfy that publication
-contract. Current
-manifests also supply qualified npm preflight artifacts. The shared
-`OpenClaw Release Publish` parent dispatches from a protected lightweight
-`release-publish/<sha12>-<epoch>` tag at the frozen trusted-main Tooling SHA and
-uses `npm_dist_tag=extended-stable` to publish official npm plugins and core, attach evidence, publish Docker, and
-finalize a non-Latest GitHub Release. Only `extended-stable*` container aliases
-advance; ClawHub, native-app, website, regular npm `latest`, and private
-dist-tag surfaces are excluded. Core-resume recovery verifies existing registry
-bytes before resuming evidence and finalization; Docker-only recovery leaves
-GitHub finalization untouched. See [Monthly Gateway extended-stable
-publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md)
-for commands and recovery.
+Gateway extended-stable shared publication requires complete candidate-owned Full Release Validation from an independently admitted `release-ci/*` harness: Q=C by default, or explicit reviewed main-ancestor Q, targeting frozen `extended-stable/YYYY.M.33`. Use the [admitted helper](/reference/full-release-validation/dispatch); moving-main fallbacks, direct `main` producers, and the diagnostic example above do not qualify. Current manifests also supply qualified npm preflight artifacts.
+
+`OpenClaw Release Publish` dispatches from protected lightweight `release-publish/<sha12>-<epoch>` at frozen trusted-main Tooling SHA. With `npm_dist_tag=extended-stable`, it publishes official npm plugins/core, attaches evidence, publishes Docker, and finalizes a non-Latest GitHub Release. Only `extended-stable*` container aliases advance; ClawHub, native-app, website, regular npm `latest`, and private dist-tags are excluded. Core-resume verifies registry bytes before evidence/finalization; Docker-only recovery leaves GitHub finalization untouched. [Commands and recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md).
 
 <a id="windows-testbox-probe" />
 
 ### Windows Testbox Check
 
-The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL checking and
-headless Windows CI on the selected `runner_label`. The `run_windows_ci` input
-(default `false`) requests both headless CI and a separate native Scheduled Task
-proof job on GitHub-hosted `windows-2025` when no installed package binding is
-supplied. Neither job depends on the other, so
-their results remain independently visible; either requested proof failing fails
-the workflow.
+`windows-testbox-probe.yml` keeps Windows/WSL checking and headless CI on `runner_label`. `run_windows_ci` defaults to `false`; without an installed package binding, `true` requests independent headless CI and native Scheduled Task proof jobs (native: GitHub-hosted `windows-2025`). Either requested proof failing fails the workflow.
 
-Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
-throughout the workflow, including native and installed Scheduled Task proof jobs.
-This skips only the workspace and Node process exclusions; proof selection,
-isolation checks, native lifecycle tests, cleanup, and evidence upload remain
-unchanged. The default is `false`, preserving the existing best-effort exclusions
-for Windows CI and exact replay.
-
-For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
-check out that target, and native proof verifies checkout equality before running
-the lifecycle test. Native preflight runs before setup and requires an interactive
-Windows session. A noninteractive runner fails qualification rather than silently
-skipping proof. Selecting `windows-2025` does not establish native qualification:
-the unchanged lifecycle assertions and cleanup must pass on the actual runner.
-Cleanup and diagnostic upload still run after failure, and retained evidence is
-removed only after cleanup and upload succeed.
+- Source-native preparation: compile/validate workers in a separate five-minute step; reuse through content-validated worker cache. Failure blocks lifecycle. Lifecycle retains five minutes including cache validation/finalization, 240-second case, 65-second restart observation, unchanged assertions/cleanup; total job limit 75 minutes.
+- `skip_defender_exclusions=true` leaves Defender unchanged everywhere, including native/installed Scheduled Task jobs. Only workspace/Node process exclusions are skipped; proof selection, isolation checks, lifecycle tests, cleanup, and evidence upload remain. Default `false`: best-effort exclusions for Windows CI/exact replay.
+- Both proofs require exact 40-character commit SHA `target_ref`; both check it out, native verifies equality. Native preflight precedes setup and requires an interactive Windows session; noninteractive runners fail, never skip. `windows-2025` alone is not qualification: actual-runner lifecycle assertions/cleanup must pass. Cleanup/diagnostic upload run after failure; retained evidence is removed only after both succeed.
 
 #### Installed Scheduled Task upgrades
 
-Set `run_windows_ci=true` with one `installed_startup_package` binding from a
-successful Package Acceptance run, `runner_label=windows-2025`, and
-`keepalive_minutes=0`. Dispatch the reviewed workflow revision and use its exact
-SHA as `target_ref`; the binding independently pins the product package. Leave
-the other proof modes off. With an empty package binding, the independent
-source-only CI and native jobs above retain their behavior.
+Set `run_windows_ci=true`, one successful Package Acceptance `installed_startup_package` binding, `runner_label=windows-2025`, `keepalive_minutes=0`; other proof modes off. Dispatch the reviewed workflow revision and use its exact SHA as `target_ref`; the binding independently pins product. Empty binding retains independent source-only CI/native jobs.
 
-The existing package resolver authenticates the candidate, then passes a verified
-artifact within the same workflow run to the native job. That job retains
-`contents: read` permissions. It runs a fresh installed candidate and the unchanged
-published 2026.9.3 and 2026.9.4 CLI updaters against the candidate. Each upgrade
-also preserves a separate running profile under its standard Task name. Live
-status handshakes must match the verified package version and build ID; the
-updated Gateway must have a new PID, while the peer retains its PID and baseline
-identity. Candidate update preview and deep Doctor discovery inspect actual
-registered Task actions, including a disabled custom-named Gateway CMD task
-reported as an extra and an owned disabled task with a missing launcher. The fresh cell also inspects a disabled
-direct executable action and verifies that packaged update preview leaves its
-unsupported automatic service management unavailable. This proves read-only
-inspection and preservation, not direct-action execution or update mutation.
+The existing resolver authenticates candidate and passes a verified same-run artifact to native proof (`contents: read`). Three cells: fresh installed candidate, then unchanged published 2026.9.3 and 2026.9.4 CLI updaters against candidate. Each upgrade preserves a running peer profile under its standard Task name. Live status must match verified version/build ID; updated Gateway gets a new PID, peer retains PID/baseline identity.
 
-Cells prepare their own normal npm installations in sequence. Actual Task and
-descendant cleanup and immutable proof upload must succeed before disposable
-prefixes and caches are retired or the next cell starts. A failed cell retains
-its evidence and stops the sequence; forced command cleanup cannot establish a
-passing natural-exit result. The final artifact requires all three cells.
+Candidate update preview/deep Doctor inspect registered Task actions: disabled custom-named Gateway CMD task reported as extra; owned disabled task missing its launcher. Fresh cell also inspects a disabled direct executable action: packaged preview must leave unsupported automatic service management unavailable. This proves read-only inspection/preservation, not direct-action execution/update mutation.
 
-The fixture checks actual free space after tooling setup against provisional
-13 GiB fresh-install and 29 GiB published-pair allowances. These are planning
-allowances, not measured package bounds or runner capacity. It records space and
-owned allocations at lifecycle boundaries; transient peaks between observations
-remain unknown. Existing command, test, step, and job deadlines remain unchanged.
+Cells prepare normal npm installs sequentially. Actual Task/descendant cleanup and immutable proof upload must succeed before retiring disposable prefixes/caches or starting another cell. Failure retains evidence/stops; forced command cleanup cannot prove natural exit. Final artifact requires all three cells.
+
+After tooling setup, actual free space is checked against provisional allowances: 13 GiB fresh-install, 29 GiB published-pair—not measured package bounds/runner capacity. Space/owned allocations are recorded at lifecycle boundaries; intervening peaks unknown. Command/test/step/job deadlines unchanged.
 
 #### Exact Windows test replay
 
-For an ordered diagnostic from a recorded CI failure, set `windows_ci_replay`
-to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
-`maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
-checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
-integer from 1 through 4. `files` is the original ordered array of literal,
-tracked test paths under `src/`, `test/`, `extensions/`, or `packages/`;
-`projects` is the original ordered array of
-`test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
-arguments, and environment overrides are not accepted.
+For ordered diagnosis of a recorded CI failure, `windows_ci_replay` accepts a JSON object:
 
-Set `target_ref` to the exact source SHA, select the original `runner_label`,
-set `keepalive_minutes=0`, and leave all other proof modes off. This runs only
-the existing `scripts/test-projects.mts` entrypoint with `--fileParallelism`,
-one project process at a time, the requested worker count, and the original
-Windows CI heap and extension-shard settings. Normal CI worker policy is
-unchanged. Runtime preparation and process lifetime stay with the frozen
-source's dispatcher; the workflow does not copy current test tooling into it.
+| Field            | Required value                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `nodeVersion`    | Exact Node 24 patch                                                                                  |
+| `packageManager` | Checkout’s complete pnpm integrity pin                                                               |
+| `vitestVersion`  | Checkout’s Vitest version                                                                            |
+| `maxWorkers`     | Integer 1–4                                                                                          |
+| `files`          | Original ordered array of literal tracked paths under `src/`, `test/`, `extensions/`, or `packages/` |
+| `projects`       | Original ordered array of `test/vitest/vitest.<name>.config.ts` paths                                |
 
-Run baseline and failing sources as separate, serialized workflow invocations
-at the same reviewed workflow revision. Each gets its own runner checkout and
-frozen install; never switch sources in an active checkout. Record actual
-CPU/RAM from both runs rather than inferring capacity from the runner label.
+No globs, shell text, arbitrary CLI arguments, or environment overrides. Set exact source SHA `target_ref`, original `runner_label`, `keepalive_minutes=0`; other proof modes off. Runs only existing `scripts/test-projects.mts` with `--fileParallelism`, one project process at a time, requested workers, original Windows CI heap/extension-shard settings. Normal CI worker policy unchanged; frozen-source dispatcher owns preparation/lifetime, never copied current tooling.
 
-The `windows-ci-replay-<runId>-<attempt>` artifact retains the input, source and
-workflow identities, dependency hashes, native runtime/resources, exact argv,
-combined output, process status, observed project order, and retained-namespace
-diagnostics. A successful test command without the complete expected project
-sequence fails qualification. An earlier failure retains its partial sequence
-and remains failed. No replay retries or pass/fail waivers are added.
+Run baseline/failing sources separately and serially at the same reviewed workflow revision, each with its own checkout/frozen install; never switch active-checkout sources. Record both runs’ actual CPU/RAM, not label-inferred capacity.
 
-There is no persistent Testbox lease, SSH setup, or keepalive. The existing test
-owner handles ordinary lifetime; Actions owns final job/runner teardown. A
-frozen Windows runner can retain temporary namespaces when descendant settlement
-is unverified. Do not delete them during the run or infer settlement from a
-zero process status. Preserve that diagnostic, inspect final runner cleanup,
-and report any missing teardown evidence separately from the test result.
+`windows-ci-replay-<runId>-<attempt>` retains input, source/workflow identities, dependency hashes, native runtime/resources, exact argv, combined output, process status, observed project order, and retained-namespace diagnostics. Success requires the complete expected project sequence; earlier failure retains partial sequence and stays failed. No retries or pass/fail waivers.
+
+No persistent Testbox lease, SSH, or keepalive. Existing test owner handles lifetime; Actions owns final job/runner teardown. Unverified descendant settlement can retain temporary namespaces: do not delete during runs or infer settlement from zero status. Preserve diagnostics, inspect final runner cleanup, and report missing teardown evidence separately from test result.
 
 #### Installed repair-worker compatibility and cleanup
 
-Set `installed_repair_worker=true` with one `installed_startup_package` binding,
-`runner_label=windows-2025`, and `keepalive_minutes=0`. Pin `target_ref` to the
-same reviewed commit as the dispatched workflow. Leave other proof modes off.
-The existing package owner installs and verifies the exact candidate artifact;
-the native admission gate requires a fresh hosted runner without credentials,
-operator mounts, Tailnet attachment, or managed identity.
+Set `installed_repair_worker=true`, one `installed_startup_package` binding, `runner_label=windows-2025`, `keepalive_minutes=0`, exact reviewed workflow commit as `target_ref`; other proof modes off. Existing package owner installs/verifies candidate. Native admission requires fresh hosted runner without credentials, operator mounts, Tailnet, or managed identity.
 
-The check authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
-calls their unchanged published repair controllers against the installed candidate
-worker. Version 2026.9.4 delegates its verifying phase; 2026.9.5 also delegates
-validation. Each must receive the deferred unavailable result without provider
-requests, validation calls, or changes to synthetic state. This proves controller
-compatibility, not a complete installed-updater upgrade.
+Authenticate/install npm 2026.9.4/2026.9.5; their unchanged published repair controllers call installed candidate worker: 2026.9.4 delegates verifying; 2026.9.5 also validation. Both must receive deferred unavailable without provider requests, validation calls, or synthetic-state changes. This is controller compatibility, not complete installed-updater upgrade.
 
-Separate cells use the candidate's packaged executor and ledger owners to admit
-real delegated work against a loopback model fixture and reject a wrong receiver.
-A real tool starts descendant processes. Both normal and forced worker exits must
-remove them before the parent executor settles, while the outer observer and its
-Windows Job launcher remain alive. Parent or outer cleanup cannot satisfy that
-assertion. Original 90-second worker,
-60-second turn, 120-second cell, and two-second extinction deadlines remain fixed.
+Separate cells use packaged executor/ledger owners to admit real delegated work against loopback model fixture and reject wrong receiver. A real tool starts descendants; normal/forced worker exits must remove them before parent settlement while outer observer/Windows Job launcher stay alive. Parent/outer cleanup cannot satisfy proof. Fixed deadlines: worker 90 seconds, turn 60, cell 120, extinction two.
 
-The `windows-installed-startup-<runId>-<attempt>` artifact retains
-`repair-results.json`, the failed or completed cells, native Job observations,
-PID/start identities, exact package/controller/runtime/tooling hashes, synthetic
-provider counts, state effects, and final cleanup. The check stops after a failed
-cell and never substitutes successful runner teardown for worker qualification.
+`windows-installed-startup-<runId>-<attempt>` retains `repair-results.json`, failed/completed cells, native Job observations, PID/start identities, exact package/controller/runtime/tooling hashes, synthetic provider counts, state effects, final cleanup. Stop after failed cell; runner teardown never substitutes for worker qualification.
 
 #### Installed Gateway startup measurements
 
-The same workflow can measure one immutable npm package on the selected Windows
-runner. Set `target_ref` to the full tooling commit, `run_windows_ci=false`,
-`keepalive_minutes=0`, and `startup_node_version` to an exact Node version
-(default `26.9.0`). Leave WSL and Defender inputs at their defaults. The optional
-`installed_startup_package` input is a JSON object with `runId`, `runAttempt`,
-`workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, and `sourceSha`.
-Use the immutable `package-under-test-<runId>-<runAttempt>` artifact from a
-successful Package Acceptance run. The workflow verifies its producer and
-artifact metadata, resolves it through the package-candidate owner, and installs
-and rebuilds with normal npm lifecycle scripts.
+Measure one immutable npm package on selected Windows runner: full tooling commit `target_ref`, `run_windows_ci=false`, `keepalive_minutes=0`, exact `startup_node_version` (default `26.9.0`); WSL/Defender defaults. Optional `installed_startup_package`: JSON fields `runId`, `runAttempt`, `workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, `sourceSha`. Use successful Package Acceptance’s immutable `package-under-test-<runId>-<runAttempt>`. Workflow verifies producer/artifact metadata, resolves through package-candidate owner, installs/rebuilds with normal npm lifecycle scripts.
 
-After the benchmark's lifecycle fixtures pass on Windows, the installed
-`openclaw.mjs` runs once with new synthetic state, then eight more times with that
-same state. Each sample records HTTP readiness, first status and health RPC
-responses, and acknowledged graceful shutdown. An outer managed Windows Job
-contains the controller and all descendants; final success requires both clean
-Gateway shutdown and observed descendant settlement before forced Job cleanup.
-No synchronous process sampler or startup profiler runs during measurement.
+After Windows lifecycle fixtures pass, installed `openclaw.mjs` runs once with new synthetic state, then eight times reusing it. Each records HTTP readiness, first status/health RPC responses, acknowledged graceful shutdown. Outer managed Windows Job contains controller/descendants; success requires clean Gateway shutdown and observed descendant settlement before forced Job cleanup. No synchronous sampler/startup profiler.
 
-The `windows-installed-startup-<runId>-<runAttempt>` artifact retains all nine
-sample slots, errors, package/runtime/helper hashes, source and tooling commits,
-runner hardware, the raw installed npm lockfile, and cleanup evidence. A streamed
-`cohort.log` retains the active PID, phase, child output, and completed check/RPC
-observations even if cancellation prevents the final sample checkpoint. Synthetic databases and compile caches
-stay in the runner's temporary directory. A failed or interrupted cohort has no
-established summary. “Fresh” means new state, not a cold filesystem; dedicated
-runner results establish a new baseline and do not establish a speedup relative
-to a different desktop. Health RPC success is separate from recorded plugin
-availability and degraded diagnostics.
+`windows-installed-startup-<runId>-<runAttempt>` retains all nine slots, errors, package/runtime/helper hashes, source/tooling commits, hardware, raw installed npm lockfile, cleanup evidence. Streamed `cohort.log` preserves active PID, phase, child output, completed check/RPC observations even if cancellation prevents final checkpoint. Synthetic databases/compile caches stay in runner temp. Failed/interrupted cohorts establish no summary. Fresh means new state, not cold filesystem; dedicated-runner results establish a baseline, not speedup against another desktop. Health RPC success is separate from plugin availability/degraded diagnostics.
 
-For a matched comparison, pass `installed_startup_package` as
-`{"baseline": <package-binding>, "candidate": <package-binding>}`. Both bindings
-use the same fields above. The workflow resolves and normally installs both
-packages on one runner before measurement. Their complete npm lock records must
-match, except the independently verified OpenClaw tarball references and integrity.
-Any dependency drift stops the comparison before a Gateway starts; both raw locks
-remain evidence. The packages must have the same version and dependency graph.
+Matched comparison: `installed_startup_package` = `{"baseline": <package-binding>, "candidate": <package-binding>}`, same fields above. Resolve/normally install both on one runner before measuring. Same version/dependency graph required; complete npm locks must match except independently verified OpenClaw tarball references/integrity. Drift stops before Gateway startup; retain both raw locks.
 
-Each package has its own immutable install and synthetic state/cache directory.
-The cohort plans 18 slots: fresh baseline then fresh candidate, followed by eight
-restart pairs alternating baseline/candidate and candidate/baseline order. Both
-arms retain their own state across restarts. There are no discarded warmups or
-replacement samples. A failure stops the cohort, retains the remaining unrun
-slots, and invalidates the comparison summary. The per-sample deadlines stay the
-same; the outer lifecycle budget scales from 30 to 60 minutes for two arms.
+Each arm has immutable install and separate synthetic state/cache, retained across restarts. 18 slots: fresh baseline then fresh candidate, then eight restart pairs alternating baseline/candidate and candidate/baseline. No discarded warmups/replacements. Failure stops, retains unrun slots, invalidates summary. Per-sample deadlines unchanged; outer lifecycle budget 30 → 60 minutes.
 
-After all samples and descendants settle, the comparison reports each arm's
-established readiness and absolute first status/health completion, plus paired
-candidate-minus-baseline differences. Negative differences favor the candidate.
-Fresh samples remain separate. Alternating order reduces time-order bias; it
-does not make the filesystem cold or establish performance on other machines.
+After all samples/descendants settle, report each arm’s established readiness, absolute first status/health completion, and paired candidate-minus-baseline differences (negative favors candidate). Fresh samples separate. Alternating order reduces time-order bias; it neither makes filesystems cold nor establishes other-machine performance.
 
-For CPU attribution, set `installed_startup_cpu_diagnostic=true` with one package
-binding. This separate mode runs one unprofiled fresh prime, then one native CPU
-profile of an established launch using the same synthetic state. Both launches
-still require readiness, first status/health requests, acknowledged shutdown,
-and descendant settlement. It produces no timing summary or paired comparison.
-The artifact retains raw `.cpuprofile` files, the main process/thread identity,
-preload clock observations, startup trace metrics, config hashes, and backup-existence
-facts. The preload's monotonic and performance-clock observations remain available
-for calibration within the Gateway process. Controller, Gateway, and native-profile
-timestamps have separately identified clock domains; their alignment is not
-established. Do not compare absolute values across those domains or assume that a
-profile's last sampled timestamp includes the preload's exit observation.
-Console and stream trace output share the diagnostic observer, including under Bun.
-Profiling and trace observation add overhead; main-isolate samples do not
-account for unprofiled child or Worker CPU. Ordinary timing cohorts remain
-uninstrumented.
+CPU attribution: `installed_startup_cpu_diagnostic=true` with one binding runs unprofiled fresh prime, then native CPU profile of established launch using same state. Both require readiness, first status/health, acknowledged shutdown, descendant settlement. No timing summary/paired comparison. Artifact retains raw `.cpuprofile`, main process/thread identity, preload clock observations, startup trace metrics, config hashes, backup-existence facts. Preload monotonic/performance observations support within-Gateway calibration. Controller/Gateway/native-profile clock domains are identified but unaligned: never compare absolute values across them or assume last profile sample includes preload exit observation. Console/stream traces share diagnostic observer, including Bun. Profiling/tracing adds overhead; main-isolate samples exclude unprofiled child/Worker CPU. Ordinary timing remains uninstrumented.

@@ -113,39 +113,6 @@ function chooseMentionJid(
   );
 }
 
-function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionParticipant[]): {
-  byPhone: Map<string, MentionTarget>;
-  byLid: Map<string, MentionTarget>;
-} {
-  const byPhone = new Map<string, MentionTarget>();
-  const byLid = new Map<string, MentionTarget>();
-  for (const participant of participants) {
-    const values = typeof participant === "string" ? { id: participant } : participant;
-    const mentionJid = chooseMentionJid(values);
-    if (!mentionJid) {
-      continue;
-    }
-    const lidDigits = extractLidDigits(mentionJid);
-    const target = {
-      mentionJid,
-      ...(lidDigits ? { replacementText: `@${lidDigits}` } : {}),
-    };
-    for (const value of [values.id, values.phoneNumber, values.e164]) {
-      const digits = extractPhoneDigits(value);
-      if (digits && !byPhone.has(digits)) {
-        byPhone.set(digits, target);
-      }
-    }
-    for (const value of [values.id, values.lid]) {
-      const digits = extractLidDigits(value);
-      if (digits && !byLid.has(digits)) {
-        byLid.set(digits, target);
-      }
-    }
-  }
-  return { byPhone, byLid };
-}
-
 function shouldSkipMentionAt(
   text: string,
   index: number,
@@ -173,7 +140,32 @@ export function resolveWhatsAppOutboundMentions(params: {
     return { text: params.text, mentionedJids: [] };
   }
 
-  const { byPhone, byLid } = buildMentionTargetMaps(params.participants);
+  const byPhone = new Map<string, MentionTarget>();
+  const byLid = new Map<string, MentionTarget>();
+  for (const participant of params.participants) {
+    const values = typeof participant === "string" ? { id: participant } : participant;
+    const mentionJid = chooseMentionJid(values);
+    if (!mentionJid) {
+      continue;
+    }
+    const lidDigits = extractLidDigits(mentionJid);
+    const target = {
+      mentionJid,
+      ...(lidDigits ? { replacementText: `@${lidDigits}` } : {}),
+    };
+    for (const value of [values.id, values.phoneNumber, values.e164]) {
+      const digits = extractPhoneDigits(value);
+      if (digits && !byPhone.has(digits)) {
+        byPhone.set(digits, target);
+      }
+    }
+    for (const value of [values.id, values.lid]) {
+      const digits = extractLidDigits(value);
+      if (digits && !byLid.has(digits)) {
+        byLid.set(digits, target);
+      }
+    }
+  }
   if (byPhone.size === 0 && byLid.size === 0) {
     return { text: params.text, mentionedJids: [] };
   }

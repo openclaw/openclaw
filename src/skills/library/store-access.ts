@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -10,6 +11,10 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { captureUserProfileAuthorityRead } from "../../state/user-profile-events.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  readResidentUserProfileIdentity,
+} from "../../state/user-profile-list.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type {
   SkillLibraryReadInput,
@@ -36,26 +41,21 @@ export function captureSkillLibraryAccess(
   });
   const roles = structuredClone(authority.getConfig().gateway?.roles);
   const input: SkillLibraryWorkerAuthority = {
+    roleSubject:
+      authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
+        ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
+        : { profileId: authority.profileId, openclawIdMember: false },
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
+    ownerDevice: authority.ownerDevice,
     config: { gateway: { roles } },
   };
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
+  // Roles and scopes are admitted once above; only Stop and the database fence end access.
   const assertCurrent = () => {
     context.admission.assertCurrent();
     authority.assertCurrent();
-    if (
-      !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
-      !isDeepStrictEqual(input.scopes, authority.scopes) ||
-      input.profileId !== authority.profileId ||
-      input.namespace !== authority.namespace
-    ) {
-      throw new SkillLibraryError(
-        "AUTHORITY_EXPIRED",
-        "Skill library authority changed. Refresh and retry.",
-      );
-    }
   };
   return {
     options: pinned,
@@ -76,6 +76,7 @@ export function captureSkillLibraryAccess(
         kind,
         params,
         authority: input,
+        ...(kind === "session" ? { sessionFacts: captureSessionFacts() } : {}),
       } as SkillLibraryReadInput; // SAFETY: K binds the captured kind and parameters in SkillLibraryReadQueries.
       // Upload progress changes independently of published library entries.
       const cacheKey = kind === "upload" ? undefined : JSON.stringify(commandInput);
@@ -99,29 +100,14 @@ export function captureSkillLibraryAccess(
       if (!reply.ok || reply.type !== "skillLibrary.read" || reply.kind !== kind) {
         throw new Error("Unexpected skill library read result");
       }
+      // Profile changes invalidate the cached reply; they do not refuse a started read.
       const profileCurrent = profiles.bind(reply.profileIds);
-      if (!profileCurrent) {
-        throw new SkillLibraryError(
-          "CONFLICT",
-          "Profile authority changed during library access. Retry.",
-        );
-      }
-      const check = () => {
-        assertSource();
-        if (!profileCurrent()) {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill library profile authority changed. Refresh and retry.",
-          );
-        }
-      };
-      check();
-      if (cacheKey !== undefined && !cached) {
+      if (cacheKey !== undefined && !cached && profileCurrent) {
         library.remember(cacheKey, reply, profileCurrent);
       }
       // SAFETY: The typed read registry binds output to kind, checked against K above.
       const value = reply.value as SkillLibraryReadQueries[K]["output"];
-      return { value, assertCurrent: check };
+      return { value, assertCurrent: assertSource };
     },
     async write<K extends keyof SkillLibraryWorkerOperations>(
       type: K,
@@ -206,4 +192,22 @@ export function captureSkillLibraryAccess(
       }
     },
   };
+
+  function captureSessionFacts() {
+    const profile = input.profileId
+      ? readResidentUserProfileIdentity(input.profileId, pinned)
+      : undefined;
+    if (input.profileId && !profile) {
+      throw new SkillLibraryError(
+        "AUTHORITY_EXPIRED",
+        "Your Gateway profile is no longer available. Sign in again before accessing the library.",
+      );
+    }
+    return {
+      profile: profile
+        ? { id: profile.profileId, role: profile.role, githubLogin: profile.githubLogin ?? null }
+        : undefined,
+      multipleProfiles: hasMultipleResidentSessionSharingIdentities(pinned),
+    };
+  }
 }

@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import {
@@ -108,7 +108,8 @@ it.for(["accepted", "conflict", "failure"] as const)(
         type: "message",
         message: { role: "assistant", content: [{ type: "text", text: "Worker reply" }] },
       });
-      expect(before.getLeafId()).toBe(terminalId);
+      // Only the session prompt checkpoint may follow the terminal reply.
+      expect(before.getBranch().findLast((entry) => entry.type === "message")?.id).toBe(terminalId);
       if (outcome === "accepted") {
         followup = execute(followupInput);
         void followup.catch(() => {});
@@ -121,7 +122,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
           payloads: [{ text: "Follow-up reply" }],
         });
       }
-      await withinTest(waitForEmbeddedAgentRunEnd(SESSION_ID, null), signal);
+      await withinTest(waitForSessionRunEnd(SESSION_ID, null), signal);
       const pending = await placements.listPendingWorkspaceResultsAsync();
       if (outcome === "failure") {
         expect(reconcileActivePlacement).toHaveBeenCalledOnce();
@@ -164,7 +165,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
     } finally {
       reconcileRelease.resolve();
       await Promise.allSettled([first, followup]);
-      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+      await waitForSessionRunEnd(SESSION_ID, null);
       input.preparedRunAdmission.close();
       followupInput.preparedRunAdmission.close();
     }

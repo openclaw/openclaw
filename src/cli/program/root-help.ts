@@ -1,18 +1,18 @@
 import { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli-root-descriptors.js";
-import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
 import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
 } from "./command-descriptor-utils.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
-import { getSubCliEntriesCore } from "./subcli-descriptors.js";
+import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
 /** Options for rendering root help without fully registering the live CLI. */
-export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
+export type RootHelpRenderOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
@@ -21,9 +21,7 @@ export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution
 export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
   const program = new Command();
   const pluginDescriptors = renderOptions?.config
-    ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
-        pluginSdkResolution: renderOptions.pluginSdkResolution,
-      })
+    ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env)
     : [];
   configureProgramHelp(
     program,
@@ -39,9 +37,9 @@ export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Pro
 
   addCommandDescriptorsToProgram(
     program,
-    collectUniqueCommandDescriptors([
+    collectUniqueCommandDescriptors<NamedCommandDescriptor>([
       getCoreCliCommandDescriptors(),
-      getSubCliEntriesCore(),
+      getSubCliCommandMetadata(),
       pluginDescriptors,
     ]),
   );

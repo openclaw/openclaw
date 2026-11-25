@@ -54,6 +54,31 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
   </Step>
 </Steps>
 
+## Memory embeddings
+
+Select `qianfan` as the memory embedding provider to apply its model-specific
+request limits. Existing configurations using `openai-compatible` for Qianfan
+should change `memory.search.provider` to `qianfan`; keep their endpoint and key.
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "qianfan",
+      model: "bge-large-zh",
+    },
+  },
+}
+```
+
+The plugin reuses your configured Qianfan connection and resolves credentials
+from your saved profile or `QIANFAN_API_KEY`. An explicit remote API key or
+Authorization header takes precedence; a different remote endpoint requires
+its own credentials. It limits each memory
+embedding request to 16 inputs for `bge-large-zh`, `bge-large-en`, and
+`Embedding-V1`, following [Baidu's documented batch limits](https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu).
+Other models retain the compatible transport's existing batching behavior.
+
 ## Built-in catalog
 
 | Model ref                            | Input       | Context   | Max output | Reasoning | Notes                                                                      |

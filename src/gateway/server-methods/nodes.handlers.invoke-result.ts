@@ -1,4 +1,3 @@
-// Gateway RPC handler for asynchronous node invocation results.
 import {
   ErrorCodes,
   errorShape,
@@ -26,7 +25,6 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   return normalized;
 }
 
-/** Handle a node's response to an earlier gateway `node.invoke` request. */
 export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   params,
   respond,

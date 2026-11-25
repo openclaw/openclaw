@@ -1,26 +1,14 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
-/** Process totals for retained session-list views and their estimated memory. */
-type DiagnosticSessionsListRetentionFields = {
-  type: "sessions.list.retention";
-  views: number;
-  refs: number;
-  estimatedBytes: number;
-};
+export type SessionEventRowsResetCause =
+  | "close"
+  | "delivery-lost"
+  | "generation"
+  | "evicted"
+  | "projection";
 
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
-
-type DiagnosticSessionsListBaselineRetiredFields = {
-  type: "sessions.list.baseline.retired";
-  cause:
-    | "projection-revision"
-    | "config"
-    | "identity"
-    | "selection-reset"
-    | "view-evicted"
-    | "history-evicted";
-};
 
 type SessionsListAttribution = {
   clientKind: GatewayClientId;
@@ -38,6 +26,8 @@ type DiagnosticGatewayRpcFields = {
 } & (
   | {
       phase: "received";
+      /** Coarse handshake identity; never a device id, platform, or display name. */
+      clientKind?: "control-ui" | "macos" | "ios" | "android" | "cli" | "node" | "plugin" | "other";
       cronList?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";
@@ -91,6 +81,8 @@ type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsPresenceMode = "delta" | "reset" | "legacy";
+
 export type GatewayWsSessionEventAttribution = {
   reason: string;
   delivery: "subscribed" | "roster";
@@ -103,12 +95,52 @@ type DiagnosticGatewayWsFields =
       event: string;
       count: number;
       bytes: number;
+      /** Post-codec payload bytes; excludes WebSocket and lower-level headers. */
+      wireBytes?: number;
+      /** Cumulative raw frame counts by fixed upper byte bound, including +Inf. */
+      frameBytes?: Record<string, number>;
       sessionEvent?: GatewayWsSessionEventAttribution;
+      presenceMode?: GatewayWsPresenceMode;
     }
   | { type: "gateway.ws.connections"; operators: number };
 
 export type DiagnosticGatewayFields =
   | DiagnosticGatewayRpcFields
   | DiagnosticGatewayWsFields
-  | DiagnosticSessionsListBaselineRetiredFields
-  | DiagnosticSessionsListRetentionFields;
+  | {
+      type: "sessions.list.baseline.retired";
+      cause:
+        | "projection-revision"
+        | "config"
+        | "identity"
+        | "selection-reset"
+        | "view-evicted"
+        | "history-evicted";
+    }
+  | {
+      /** Process totals for retained session-list views and their estimated memory. */
+      type: "sessions.list.retention";
+      views: number;
+      refs: number;
+      estimatedBytes: number;
+    }
+  | {
+      /** Sampled owner inventory; bounded data estimates exclude closure/native storage. */
+      type: "sessions.projection.retention";
+      projections: number;
+      entries: number;
+      estimatedBytes: number;
+      truncatedProjections: number;
+    }
+  | {
+      /** Process totals for per-connection session-event field-hash vectors. */
+      type: "sessions.event.retention";
+      entries: number;
+      estimatedBytes: number;
+    }
+  | {
+      /** Number of retained wire baselines retired by one bounded lifecycle cause. */
+      type: "sessions.event.rows.reset";
+      cause: SessionEventRowsResetCause;
+      count: number;
+    };

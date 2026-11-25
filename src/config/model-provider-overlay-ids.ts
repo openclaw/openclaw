@@ -61,6 +61,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "qwen",
   "qwen-token-plan",
   "qwencloud",
+  "requesty",
   "runway",
   "sglang",
   "stepfun",

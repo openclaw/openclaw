@@ -78,9 +78,7 @@ beforeAll(() => {
   database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 test.each([
   { operation: "register", refusedStage: "commit" },

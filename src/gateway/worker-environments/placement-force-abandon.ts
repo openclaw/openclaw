@@ -7,7 +7,7 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
-import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -132,7 +132,7 @@ export async function forceAbandonWorkerEnvironment(
   }> = [];
   const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
-    const placement = await placements.getAsync(owner.sessionId);
+    const { placement } = await placements.getWithMoveAsync(owner.sessionId);
     if (!isCapturedPlacementCurrent(capturedPlacements.get(owner.sessionId), placement)) {
       retainedJournalSessions.add(owner.sessionId);
       continue;
@@ -171,7 +171,7 @@ export async function forceAbandonWorkerEnvironment(
   }> = [];
   for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
-      const placement = await placements.getAsync(pending.sessionId);
+      const { placement } = await placements.getWithMoveAsync(pending.sessionId);
       if (!isCapturedPlacementCurrent(capturedPlacements.get(pending.sessionId), placement)) {
         retainedJournalSessions.add(pending.sessionId);
         continue;
@@ -200,7 +200,7 @@ export async function forceAbandonWorkerEnvironment(
     if (placement.environmentId !== environmentId) {
       continue;
     }
-    let current = await placements.getAsync(placement.sessionId);
+    let { placement: current } = await placements.getWithMoveAsync(placement.sessionId);
     if (
       !current ||
       !isCapturedPlacementCurrent(capturedPlacements.get(placement.sessionId), current)

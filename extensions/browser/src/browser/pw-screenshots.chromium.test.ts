@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, expect, it as test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { captureScreenshot } from "./cdp.js";
 import { resolveBrowserConfig } from "./config.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+import { withChromiumPage, type ChromiumTarget } from "./pw-chromium.test-support.js";
+import { getPageForTargetId } from "./pw-session.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
 import {
@@ -23,7 +22,6 @@ import { registerBrowserAgentSnapshotRoutes } from "./routes/agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
-import { getFreePort } from "./test-port.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const it = test.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1");
@@ -47,10 +45,9 @@ const readGeometry = () => ({
   },
 });
 
-type Target = { cdpUrl: string; targetId: string };
 type PixelSample = [x: number, y: number, rgb: number[]];
 
-function snapshotRoutes({ cdpUrl, targetId }: Target) {
+function snapshotRoutes({ cdpUrl, targetId }: ChromiumTarget) {
   const state: BrowserServerState = {
     port: 0,
     resolved: resolveBrowserConfig({
@@ -81,41 +78,31 @@ function snapshotRoutes({ cdpUrl, targetId }: Target) {
   };
 }
 
-async function withBrowser(
-  run: (target: Target, page: Page, wsUrl: string) => Promise<void>,
+function withBrowser(
+  run: (target: ChromiumTarget, page: Page, wsUrl: string) => Promise<void>,
   deviceScaleFactor?: number,
   showScrollbars = false,
 ) {
-  const port = await getFreePort();
-  const cdpUrl = `http://127.0.0.1:${port}`;
-  const context = await getPlaywrightCore().chromium.launchPersistentContext(
-    path.join(tempDirs.make("openclaw-screenshot-geometry-"), "profile"),
+  return withChromiumPage(
+    tempDirs.make("openclaw-screenshot-geometry-"),
+    html,
+    async ({ target, page }) => {
+      const tabs = (await fetch(`${target.cdpUrl}/json/list`).then((response) =>
+        response.json(),
+      )) as Array<{
+        id: string;
+        webSocketDebuggerUrl: string;
+      }>;
+      const tab = tabs.find(({ id }) => id === target.targetId)!;
+      await run(target, page, tab.webSocketDebuggerUrl);
+    },
     {
-      headless: true,
       ...(showScrollbars ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}),
       ...(deviceScaleFactor
         ? { viewport: { width: 640, height: 480 }, deviceScaleFactor }
         : { viewport: null }),
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${port}`],
     },
   );
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    await page.setContent(html);
-    const session = await context.newCDPSession(page);
-    const { targetInfo } = await session.send("Target.getTargetInfo");
-    await session.detach();
-    const tabs = (await fetch(`${cdpUrl}/json/list`).then((response) => response.json())) as Array<{
-      id: string;
-      webSocketDebuggerUrl: string;
-    }>;
-    const tab = tabs.find(({ id }) => id === targetInfo.targetId)!;
-    await run({ cdpUrl, targetId: targetInfo.targetId }, page, tab.webSocketDebuggerUrl);
-  } finally {
-    await closePlaywrightBrowserConnection({ cdpUrl });
-    await context.close();
-  }
 }
 
 async function expectImage(

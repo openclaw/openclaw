@@ -29,7 +29,10 @@ import {
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 
 const AGENT_SCHEMA = `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`;
 
@@ -79,6 +82,75 @@ describe("admitted SQLite schema facts", () => {
     database.prepare("SELECT mutate()").get();
     expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
     expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
+  });
+
+  it.each(["get", "all", "run", "iterate"] as const)(
+    "ignores unprepared mutation tails through %s",
+    (method) => {
+      for (const sql of [
+        "; -- UPDATE\n /* CREATE */ SELECT 'DROP; DELETE'",
+        "WITH value AS (SELECT 1) SELECT * FROM value",
+        "PRAGMA user_version",
+      ]) {
+        const { database } = openFile();
+        const writeRevision = readSqliteDatabaseWriteRevision(database);
+        const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+        expect(writeRevision).toBeTypeOf("number");
+        expect(schemaRevision).toBeTypeOf("number");
+        const statement = database.prepare(
+          `${sql}; INSERT INTO original VALUES (7); CREATE TABLE ignored(id)`,
+        );
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          if (method === "iterate") {
+            expect([...statement.iterate()]).toHaveLength(1);
+          } else {
+            statement[method]();
+          }
+          expect(readSqliteDatabaseWriteRevision(database)).toBe(writeRevision);
+          expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaRevision);
+        }
+        expect(database.prepare("SELECT id FROM original").all()).toEqual([]);
+        expect(tableExists(database, "ignored")).toBe(false);
+      }
+    },
+  );
+
+  it("tracks the prepared mutation while ignoring later schema changes", () => {
+    const { database } = openFile();
+    const writeRevision = readSqliteDatabaseWriteRevision(database);
+    const schemaRevision = getSqliteDatabaseSchemaRevision(database);
+    expect(writeRevision).toBeTypeOf("number");
+    expect(schemaRevision).toBeTypeOf("number");
+    database.prepare("INSERT INTO original VALUES (7); CREATE TABLE ignored(id)").run();
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(writeRevision);
+    expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaRevision);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 7 }]);
+    expect(tableExists(database, "ignored")).toBe(false);
+
+    database.prepare("CREATE TABLE prepared(id); DROP TABLE original").run();
+    expect(getSqliteDatabaseSchemaRevision(database)).not.toBe(schemaRevision);
+    expectSchema(database, { original: true, prepared: true });
+  });
+
+  it("retains the complete prepared trigger body and executes all exec statements", () => {
+    const database = openDatabase();
+    database.exec("CREATE TABLE audit(id); INSERT INTO original VALUES (1)");
+    database
+      .prepare(`CREATE TRIGGER record_insert AFTER INSERT ON original BEGIN
+        INSERT INTO audit VALUES (NEW.id);
+        INSERT INTO audit VALUES (NEW.id + 1);
+      END; DROP TABLE original`)
+      .run();
+    expect(getAdmittedSqliteSchemaFacts(database)?.triggers.has("record_insert")).toBe(true);
+    database.prepare("INSERT INTO original VALUES (7)").run();
+    expect(database.prepare("SELECT id FROM audit ORDER BY id").all()).toEqual([
+      { id: 7 },
+      { id: 8 },
+    ]);
+    expect(database.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
+      { id: 1 },
+      { id: 7 },
+    ]);
   });
 
   it("serves admitted runtime schema checks without executing SQL", () => {
@@ -411,7 +483,6 @@ describe("admitted SQLite schema facts", () => {
     expect(revision()).not.toBe(before);
     expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
     const tracking = {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",
@@ -503,6 +574,57 @@ describe("admitted SQLite schema facts", () => {
     expect(read()).toEqual(["fourth"]);
     observation.expectNone(/data_version/iu);
   });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "keeps ended schema pins local until their transaction ends, sibling catalog published=%s, local TEMP DDL=%s",
+    (publishCatalog, localTempDdl) => {
+      const filename = databaseFile("sqlite-ended-schema-pin-");
+      // A cold writer publishes the DDL generation before admitting its new catalog.
+      const writer = openDatabase(
+        "PRAGMA journal_mode=WAL; CREATE TABLE original(id)",
+        false,
+        filename,
+      );
+      const reader = openDatabase("", true, filename);
+      runSqliteDeferredTransactionSync(reader, () => {
+        runSqliteSchemaReadSnapshotSync(reader, () => {
+          expect(tableExists(reader, "original")).toBe(true);
+        });
+        writer.exec("CREATE TABLE newly_committed(value); INSERT INTO newly_committed VALUES (42)");
+        if (publishCatalog) {
+          admitSqliteSchema(writer);
+        }
+        // The inner pin ended, but the outer native transaction still holds the old catalog.
+        expect(
+          reader.prepare("SELECT name FROM sqlite_schema WHERE name = 'newly_committed'").all(),
+        ).toEqual([]);
+        expect(tableExists(reader, "newly_committed")).toBe(false);
+        if (localTempDdl) {
+          reader.exec("CREATE TEMP TABLE local_tmp(value)");
+        }
+        // Consecutive pins also retain the outer catalog without an admission between them.
+        for (let pin = 0; pin < 2; pin++) {
+          runSqliteSchemaReadSnapshotSync(reader, () => {
+            expect(tableExists(reader, "newly_committed")).toBe(false);
+          });
+        }
+        expect(tableExists(reader, "newly_committed")).toBe(false);
+      });
+
+      const sibling = openDatabase("", true, filename);
+      for (const database of [reader, sibling]) {
+        expect(database.prepare("SELECT value FROM newly_committed").all()).toEqual([
+          { value: 42 },
+        ]);
+        expect(tableExists(database, "newly_committed")).toBe(true);
+      }
+    },
+  );
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {
     const { filename, database: writer } = openFile(undefined, true, true);

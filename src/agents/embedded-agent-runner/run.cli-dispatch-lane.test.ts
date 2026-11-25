@@ -67,8 +67,8 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       order.push("dispatch-run");
       return dispatchResult;
     });
-    // The custom enqueue hook stands in for both the session and the global
-    // lane, so a compliant run enters it twice before dispatching.
+    // The custom enqueue hook stands in for the global capacity lane. Session
+    // ownership is admitted by the controller without a second command queue.
     const enqueue: CommandQueueEnqueueFn = async (task) => {
       order.push("global-lane-enter");
       const result = await task();
@@ -88,15 +88,7 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
     const result = await runEmbeddedAgent({ ...params, enqueue });
 
     expect(result.payloads?.[0]?.text).toBe("dispatched");
-    // Both lane admissions (session, then global) must fully wrap the
-    // dispatch decision and execution.
-    expect(order).toEqual([
-      "global-lane-enter",
-      "global-lane-enter",
-      "dispatch-run",
-      "global-lane-exit",
-      "global-lane-exit",
-    ]);
+    expect(order).toEqual(["global-lane-enter", "dispatch-run", "global-lane-exit"]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
     expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0].sessionTarget).toMatchObject({
       ...params.sessionTarget,

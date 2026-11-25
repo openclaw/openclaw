@@ -226,6 +226,7 @@ function reclaimSqliteRowsInTransaction(
           transactionDb,
           plan.deleteParams.target,
           snapshot,
+          callbacks.preparedReferenceOwners,
         );
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
@@ -238,7 +239,7 @@ function reclaimSqliteRowsInTransaction(
         return {
           archivedTranscripts,
           deleted: true,
-          deletedEntry: structuredClone(entry),
+          deletedEntry: entry,
           ...(plan.materializedPlans.length === 0 && transcriptInventoryUnchanged
             ? { transcriptInventoryUnchanged: true as const }
             : {}),

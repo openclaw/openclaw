@@ -1,24 +1,26 @@
 import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import path from "node:path";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../src/config/config.js";
+import { clearRuntimeConfigSnapshot } from "../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../src/config/sessions/store-writer-state.js";
 import type { AgentDefaultsConfig } from "../src/config/types.agent-defaults.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  disconnectGatewayClient,
-  startGatewayWithClient,
-} from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import type { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+export { listenLoopback as listenProofProvider } from "./helpers/gateway-integration-fixtures.js";
+
+type Gateway = Awaited<ReturnType<typeof startGatewayWithClient>>;
+type Provider = { providerId: string; modelRef: string; config: ModelProviderConfig };
 
 export function useRuntimeProofFixture(hook: Parameters<typeof useAutoCleanupTempDirTracker>[0]) {
   const tempDirs = useAutoCleanupTempDirTracker(hook);
   return async (prefix: string, token: string, skipCron = "1") => {
     const tempHome = tempDirs.make(prefix);
     const stateDir = path.join(tempHome, ".openclaw");
-    const workspaceDir = path.join(tempHome, "workspace");
+    const workspace = path.join(tempHome, "workspace");
     const configPath = path.join(stateDir, "openclaw.json");
     const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
     const env = {
@@ -37,46 +39,37 @@ export function useRuntimeProofFixture(hook: Parameters<typeof useAutoCleanupTem
     };
     const envSnapshot = captureEnv([...Object.keys(env), "OPENCLAW_GATEWAY_URL"]);
     await Promise.all(
-      [workspaceDir, bundledPluginsDir, stateDir].map((dir) => fs.mkdir(dir, { recursive: true })),
+      [workspace, bundledPluginsDir, stateDir].map((dir) => fs.mkdir(dir, { recursive: true })),
     );
     for (const [key, value] of Object.entries(env)) {
       setTestEnvValue(key, value);
     }
     return {
       stateDir,
-      workspaceDir,
+      workspaceDir: workspace,
       configPath,
       config(
-        provider: { providerId: string; modelRef: string; config: ModelProviderConfig },
+        { providerId, modelRef, config }: Provider,
         defaults: AgentDefaultsConfig = {},
         extra: OpenClawConfig = {},
       ): OpenClawConfig {
         return {
           agents: {
-            defaults: {
-              workspace: workspaceDir,
-              skipBootstrap: true,
-              model: { primary: provider.modelRef },
-              ...defaults,
-            },
+            defaults: { workspace, skipBootstrap: true, model: { primary: modelRef }, ...defaults },
             entries: { main: {} },
           },
-          models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+          models: { mode: "replace", providers: { [providerId]: config } },
           gateway: { auth: { mode: "token", token } },
           ...extra,
         };
       },
-      async close(
-        gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined,
-        provider: Server | undefined,
-        closeConnections = false,
-      ) {
+      async close(gateway: Gateway | undefined, provider: Server | undefined, force = false) {
         if (gateway) {
           await disconnectGatewayClient(gateway.client).catch(() => undefined);
           await gateway.server.close().catch(() => undefined);
         }
         if (provider?.listening) {
-          if (closeConnections) {
+          if (force) {
             provider.closeAllConnections();
           }
           await new Promise<void>((resolve) => {
@@ -85,21 +78,8 @@ export function useRuntimeProofFixture(hook: Parameters<typeof useAutoCleanupTem
         }
         envSnapshot.restore();
         clearRuntimeConfigSnapshot();
-        clearConfigCache();
         clearSessionStoreCacheForTest();
       },
     };
   };
-}
-
-export async function listenProofProvider(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("proof provider did not bind a loopback port");
-  }
-  return `http://127.0.0.1:${address.port}`;
 }

@@ -1,44 +1,14 @@
-import { onCleanup } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ElementProperties } from "../../types/solid-elements.d.ts";
-import { usePanePresentation } from "./chat-pane-presentation.ts";
-import type { ChatDetails } from "./components/chat-details.tsx";
+import { CHAT_HEADER_VIEWER_LIMIT } from "./chat-header-viewers-snapshot.ts";
+import "./chat-pane-header-presence.css";
 
-export type PaneDetailsProps = {
-  chat: ChatDetails["props"];
-  mobile: boolean;
-  conversationVisible?: boolean;
-  externalTrigger?: boolean;
-  presentation: PresentationValue;
-  setRef: (details: ChatDetails | undefined) => void;
-};
-
-export function PaneDetails(props: PaneDetailsProps) {
-  const presented = usePanePresentation(() => props.presentation);
-  onCleanup(() => props.setRef(undefined));
-  return (
-    <openclaw-chat-details
-      ref={(element) => props.setRef(element)}
-      prop:props={props.chat}
-      prop:mobile={props.mobile}
-      prop:conversationVisible={props.conversationVisible ?? true}
-      prop:externalTrigger={props.externalTrigger ?? false}
-      prop:presented={presented()}
-    />
-  );
-}
-
-type PresenceProps = Pick<
-  HTMLElementTagNameMap["openclaw-viewer-facepile"],
-  "staticUsers" | "personActivity"
->;
-
-export function PaneSubagentStop(props: { onAbort: () => void }) {
+export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean }) {
   return (
     <button
-      class="chat-subagent-detail__stop"
+      class={
+        props.notice ? "btn btn--sm agent-chat__disabled-banner-stop" : "chat-subagent-detail__stop"
+      }
       type="button"
       aria-label={t("chat.runControls.stopGenerating")}
       onClick={() => props.onAbort()}
@@ -48,70 +18,20 @@ export function PaneSubagentStop(props: { onAbort: () => void }) {
     </button>
   );
 }
-export function PaneHeaderPresence(props: PresenceProps) {
+export function PaneHeaderPresence(
+  props: Pick<
+    HTMLElementTagNameMap["openclaw-viewer-facepile"],
+    "staticUsers" | "totalCount" | "personActivity"
+  >,
+) {
   return (
     <openclaw-viewer-facepile
-      class="chat-pane__presence"
+      class="chat-pane__presence chat-pane__presence--desktop"
       prop:staticUsers={props.staticUsers}
-      prop:maxVisible={4}
+      prop:maxVisible={CHAT_HEADER_VIEWER_LIMIT}
+      prop:totalCount={props.totalCount}
       prop:personActivity={props.personActivity}
       variant="session"
     />
   );
-}
-
-type SessionMenuProps = Omit<
-  HTMLElementTagNameMap["openclaw-chat-header-session-menu"],
-  keyof HTMLElement | "updateComplete" | "openMenu"
->;
-export function PaneHeaderSessionMenu(props: SessionMenuProps) {
-  return (
-    <openclaw-chat-header-session-menu
-      prop:session={props.session}
-      prop:worktreePath={props.worktreePath}
-      prop:onboarding={props.onboarding}
-      prop:preferencesBrowserOnly={props.preferencesBrowserOnly}
-      prop:compact={props.compact}
-      prop:prewarm={props.prewarm}
-      prop:copyMarkdownAllowed={props.copyMarkdownAllowed}
-      prop:splitAllowed={props.splitAllowed}
-      prop:settings={props.settings}
-      prop:bubbleModeEnabled={props.bubbleModeEnabled}
-      prop:mainKey={props.mainKey}
-      prop:boardWidgetMenu={props.boardWidgetMenu}
-      prop:sessionActions={props.sessionActions}
-      prop:sharing={props.sharing}
-      prop:groups={props.groups}
-      prop:currentOwner={props.currentOwner}
-      prop:actionDisabledReasons={props.actionDisabledReasons}
-      prop:forkDisabled={props.forkDisabled}
-      prop:forkFromLastCompleted={props.forkFromLastCompleted}
-      prop:archiveAllowed={props.archiveAllowed}
-      prop:archiveShortcut={props.archiveShortcut}
-      prop:deleteAllowed={props.deleteAllowed}
-      prop:onOpen={props.onOpen}
-      prop:onOpenCommandPalette={props.onOpenCommandPalette}
-      prop:onOpenDetails={props.onOpenDetails}
-      prop:onSettingsChange={props.onSettingsChange}
-      prop:onAction={props.onAction}
-    />
-  );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-details": HTMLAttributes<ChatDetails> &
-        ElementProperties<
-          Pick<
-            ChatDetails,
-            "props" | "presented" | "mobile" | "conversationVisible" | "externalTrigger"
-          >
-        >;
-      "openclaw-chat-header-session-menu": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-header-session-menu"]
-      > &
-        ElementProperties<SessionMenuProps>;
-    }
-  }
 }

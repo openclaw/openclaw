@@ -1,10 +1,25 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createStore, Show, For } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  Loading,
+  Match,
+  Switch,
+  onSettled,
+  Show,
+  For,
+} from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
   SettingsEmpty,
+  SettingsLoadingSkeleton,
+  RetryAction,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
@@ -14,14 +29,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
@@ -32,6 +44,8 @@ import {
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
 import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
+import { CloudWorkerMachineClass } from "./cloud-worker-machine-class.tsx";
+import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
@@ -44,37 +58,44 @@ export function CloudWorkersPage() {
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((value) => value + 1));
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
-  };
-  const configProjection = projectRuntimeConfig(context.runtimeConfig);
+  const configSave = useCloudWorkerConfig(clearPresentation, refreshCatalog);
+  const { gateway, runtime: configProjection, state: saveState, busy: saving } = configSave;
   const [catalog, setCatalog] = createSignal<{
-    pending: boolean;
-    value?: Map<string, ProfileSummary>;
-    error?: string;
-  }>({ pending: false });
-  const gateway = useGatewayPage({
-    getGateway: () => context.gateway,
-    invalidateRequests: () => configSave.update({ busy: false }),
-  });
-  void context.runtimeConfig.ensureLoaded();
-  const catalogKey = createMemo(
-    () =>
-      [
-        gateway.snapshot?.client,
-        gateway.snapshot?.phase,
-        gateway.epoch,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const,
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  // Refresh the Gateway profile catalog for the current connection and config receipt.
-  createEffect(catalogKey, (key) => {
+    profiles: Map<string, ProfileSummary>;
+    appliedHash: ReturnType<typeof catalogReceipt>[3];
+  }>();
+  const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
+  const catalogCompletion = createMemo(() => catalogLoad()?.promise.then(() => null) ?? null);
+  let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
+  let catalogRequest: AbortController | undefined;
+  function clearPresentation() {
+    catalogRequest?.abort();
+    setView((state) => {
+      state.editor = null;
+      state.draft = createCloudWorkerDraft();
+    });
+    setCatalog(undefined);
+    setCatalogLoad(null);
+  }
+  void configSave.ensureLoaded();
+  function catalogReceipt() {
+    const snapshot = context.gateway.snapshot;
+    return [
+      snapshot.client,
+      snapshot.phase,
+      gateway.readEpoch(),
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+    ] as const;
+  }
+  function refreshCatalog() {
+    const key = catalogReceipt();
+    if (previousCatalogReceipt?.every((value, index) => value === key[index])) {
+      return;
+    }
+    previousCatalogReceipt = key;
+    catalogRequest?.abort();
     const appliedHash = key[3];
-    const controller = new AbortController();
+    const controller = (catalogRequest = new AbortController());
     // A nested bridge can flush effects while its parent is still rendering.
     queueMicrotask(() => {
       if (controller.signal.aborted) {
@@ -85,11 +106,13 @@ export function CloudWorkersPage() {
         !scope ||
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
-        setCatalog({ pending: false });
+        if (gateway.connected) {
+          setCatalog(undefined);
+        }
+        setCatalogLoad(null);
         return;
       }
-      setCatalog({ pending: true });
-      void scope.client
+      const promise = scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
           { projection: "profiles" },
@@ -103,23 +126,32 @@ export function CloudWorkersPage() {
               context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
             ) {
               setCatalog({
-                pending: false,
-                value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
+                profiles: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
+                appliedHash,
               });
             }
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog({ pending: false, error: formatUiError(error) });
+              throw error;
             }
           },
         );
+      setCatalogLoad({ promise });
+      // The async memo owns feedback; retired and unobserved tasks still settle safely.
+      void promise.catch(() => undefined);
     });
-    return () => controller.abort();
-  });
-  function editableConfig(): Record<string, unknown> | null {
-    return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
+  onSettled(() => {
+    // Applied-config receipts abort the prior catalog request before refreshing profiles.
+    const stop = configProjection.subscribe(refreshCatalog);
+    refreshCatalog();
+    return () => {
+      stop();
+      catalogRequest?.abort();
+    };
+  });
+  const editableConfig = configSave.config;
 
   const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
@@ -129,6 +161,7 @@ export function CloudWorkersPage() {
 
   function canManage(): boolean {
     const configState = configProjection.read().state;
+    // Controls read saving separately; page eligibility must not join its optimistic lane.
     return Boolean(
       hasManageAccess() &&
       configState.configSnapshot?.hash &&
@@ -171,11 +204,9 @@ export function CloudWorkersPage() {
   }
 
   async function saveProfile(draft: CloudWorkerProfileDraft) {
-    const scope = gateway.capture();
-    const runtimeConfig = context.runtimeConfig;
     const editingId = view.editor?.kind === "edit" ? view.editor.profileId : null;
     const config = editableConfig();
-    if (!scope || !view.editor || !config || !canManage()) {
+    if (!view.editor || !config || !canManage()) {
       return;
     }
     const currentProfiles = Object.fromEntries(
@@ -187,11 +218,9 @@ export function CloudWorkersPage() {
       return;
     }
     const profileId = editingId ?? draft.id;
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await configSave.save({
       build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
       note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
-      canDispatch: isCurrent,
       failed: () => t("cloudWorkersPage.errors.saveFailed"),
       success: () => {
         setView((state) => {
@@ -230,11 +259,9 @@ export function CloudWorkersPage() {
       configSave.update({ error: t("cloudWorkersPage.errors.deleteFailed") });
       return;
     }
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await configSave.save({
       build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
       note: `cloud workers: delete ${profile.id}`,
-      canDispatch: isCurrent,
       failed: () => t("cloudWorkersPage.errors.deleteFailed"),
       success: () => {
         if (view.editor?.kind === "edit" && view.editor.profileId === profile.id) {
@@ -261,7 +288,7 @@ export function CloudWorkersPage() {
             t("cloudWorkersPage.operatingSystemFact", {
               value:
                 catalog()
-                  .value?.get(profile.id)
+                  ?.profiles.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -276,14 +303,33 @@ export function CloudWorkersPage() {
   }
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
-    const statusControl = () =>
-      catalog().pending ? (
-        <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : catalog().value?.has(profile.id) ? (
-        <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
-      ) : (
-        <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
-      );
+    const unavailable = () => (
+      <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
+    );
+    const statusControl = () => (
+      <Show
+        when={catalog()}
+        fallback={
+          <Show when={catalogLoad()} keyed fallback={unavailable()}>
+            {(request) => (
+              <Errored fallback={unavailable()}>
+                <Loading
+                  on={request}
+                  fallback={<SettingsStatus kind={"muted"} label={t("common.loading")} />}
+                >
+                  {catalogCompletion()}
+                  {unavailable()}
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+        }
+      >
+        <Show when={catalog()?.profiles.has(profile.id)} fallback={unavailable()}>
+          <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
+        </Show>
+      </Show>
+    );
 
     return (
       <SettingsRow
@@ -296,7 +342,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm"
               type="button"
               aria-label={`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => openEditor(profile)}
             >
               {t("cloudWorkersPage.editAction")}
@@ -305,7 +351,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm danger"
               type="button"
               aria-label={`${t("common.delete")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => void deleteProfile(profile)}
             >
               {t("common.delete")}
@@ -316,41 +362,38 @@ export function CloudWorkersPage() {
     );
   }
 
-  function renderDraftInput(
+  function DraftInput(props: {
     field:
       | "id"
       | "backend"
-      | "machineClass"
       | "ttl"
       | "idleTimeout"
       | "binary"
       | "setupEnv"
       | "readyWorkers"
-      | "suspendAfter",
-    options: {
-      description?: JSX.Element;
-      placeholder?: string;
-      type?: "text" | "number";
-    } = {},
-  ) {
-    const label = field === "id" ? "profileId" : field;
+      | "suspendAfter";
+    description?: JSX.Element;
+    placeholder?: string;
+    type?: "text" | "number";
+  }) {
+    const label = () => (props.field === "id" ? "profileId" : props.field);
     return (
       <SettingsRow
-        title={t(`cloudWorkersPage.fields.${label}`)}
-        description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
+        title={t(`cloudWorkersPage.fields.${label()}`)}
+        description={props.description ?? t(`cloudWorkersPage.fields.${label()}Help`)}
         control={
           <input
             class="settings-input mono"
-            aria-label={t(`cloudWorkersPage.fields.${label}`)}
-            placeholder={options.placeholder}
-            type={options.type}
-            min={field === "readyWorkers" ? "0" : undefined}
-            step={field === "readyWorkers" ? "1" : undefined}
+            aria-label={t(`cloudWorkersPage.fields.${label()}`)}
+            placeholder={props.placeholder}
+            type={props.type}
+            min={props.field === "readyWorkers" ? "0" : undefined}
+            step={props.field === "readyWorkers" ? "1" : undefined}
             autocomplete="off"
             spellcheck="false"
-            value={view.draft[field]}
-            disabled={saveState().busy}
-            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+            value={view.draft[props.field]}
+            disabled={saving()}
+            onInput={(event) => patchDraft({ [props.field]: event.currentTarget.value })}
           />
         }
       />
@@ -359,76 +402,114 @@ export function CloudWorkersPage() {
 
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
-    const systems = () =>
-      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
+    const advertised = createMemo(() => {
+      const snapshot = configProjection.read().state.configSnapshot;
+      const configured = profiles().find((profile) => profile.id === view.draft.id);
+      // Match resolved revisions; the raw-file hash is only the config write precondition.
+      if (
+        !editing() ||
+        !configured ||
+        !snapshot?.appliedConfigHash ||
+        snapshot.configRevisionHash !== snapshot.appliedConfigHash ||
+        catalog()?.appliedHash !== snapshot.appliedConfigHash ||
+        (["backend", "binary", "setup"] as const).some(
+          (key) => view.draft[key].trim() !== configured[key],
+        )
+      ) {
+        return undefined;
+      }
+      return { configured, summary: catalog()?.profiles.get(view.draft.id) };
+    });
+    const systems = () => advertised()?.summary?.operatingSystems ?? [];
+    const machines = createMemo(() => {
+      const current = advertised();
+      const options = current?.summary?.machines ?? [];
+      let os = view.draft.target;
+      if (current && !os && !current.configured.target) {
+        const advertisedSystems = current.summary?.operatingSystems;
+        os = advertisedSystems?.find((system) => system.default)?.id ?? "";
+        if (!advertisedSystems?.length) {
+          // The Gateway omits a singleton OS list; use its machine tags only if they agree.
+          const single = options.find((machine) => machine.os)?.os;
+          if (single && options.every((machine) => !machine.os || machine.os === single)) {
+            os = single;
+          }
+        }
+      }
+      return options
+        .filter((machine) => !machine.os || machine.os === os)
+        .map((machine) => ({ value: machine.id, label: machine.label }));
+    });
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
       <SettingsSection
         title={editing() ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile")}
       >
-        <Show when={editing()} fallback={renderDraftInput("id")}>
+        <Show when={editing()} fallback={<DraftInput field="id" />}>
           <SettingsRow
             title={t("cloudWorkersPage.fields.profileId")}
             description={t("cloudWorkersPage.fields.profileIdHelp")}
             control={<SettingsValue value={view.draft.id} mono />}
           />
         </Show>
-        {renderDraftInput("backend", {
-          description: (
+        <DraftInput
+          field="backend"
+          description={
             <>
               {t("cloudWorkersPage.fields.backendHelp")}{" "}
               <DocsLink url={CLOUD_WORKERS_DOCS_URL}>{t("cloudWorkersPage.providerList")}</DocsLink>
             </>
-          ),
-          placeholder: t("cloudWorkersPage.fields.backendPlaceholder"),
-        })}
+          }
+          placeholder={t("cloudWorkersPage.fields.backendPlaceholder")}
+        />
         <Show when={systems().length >= 2 || unadvertised()}>
           <SettingsRow
             title={t("cloudWorkersPage.fields.operatingSystem")}
             description={t("cloudWorkersPage.fields.operatingSystemHelp")}
             control={
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
-                disabled={saveState().busy}
+                options={[
+                  { value: "", label: t("cloudWorkersPage.fields.providerDefault") },
+                  ...systems().map((system) => ({
+                    value: system.id,
+                    label: `${system.label}${system.disabledReason ? ` — ${system.disabledReason}` : ""}`,
+                    disabled: Boolean(system.disabledReason),
+                  })),
+                  ...(unadvertised()
+                    ? [{ value: view.draft.target, label: view.draft.target }]
+                    : []),
+                ]}
+                disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
                   if (!systems().find((system) => system.id === target)?.disabledReason) {
                     patchDraft({ target });
                   }
                 }}
-              >
-                <option value="" selected={!view.draft.target}>
-                  {t("cloudWorkersPage.fields.providerDefault")}
-                </option>
-                <For each={systems()}>
-                  {(system) => (
-                    <option
-                      value={system.id}
-                      selected={view.draft.target === system.id}
-                      disabled={Boolean(system.disabledReason)}
-                    >
-                      {system.label}
-                      {system.disabledReason ? ` — ${system.disabledReason}` : ""}
-                    </option>
-                  )}
-                </For>
-                <Show when={unadvertised()}>
-                  <option value={view.draft.target} selected>
-                    {view.draft.target}
-                  </option>
-                </Show>
-              </select>
+              />
             }
           />
         </Show>
-        {renderDraftInput("machineClass")}
-        {renderDraftInput("ttl", { placeholder: t("cloudWorkersPage.fields.ttlPlaceholder") })}
-        {renderDraftInput("idleTimeout", {
-          placeholder: t("cloudWorkersPage.fields.idleTimeoutPlaceholder"),
-        })}
+        <SettingsRow
+          title={t("cloudWorkersPage.fields.machineClass")}
+          description={t("cloudWorkersPage.fields.machineClassHelp")}
+          control={
+            <CloudWorkerMachineClass
+              value={view.draft.machineClass}
+              options={machines()}
+              disabled={saving()}
+              onChange={(machineClass) => patchDraft({ machineClass })}
+            />
+          }
+        />
+        <DraftInput field="ttl" placeholder={t("cloudWorkersPage.fields.ttlPlaceholder")} />
+        <DraftInput
+          field="idleTimeout"
+          placeholder={t("cloudWorkersPage.fields.idleTimeoutPlaceholder")}
+        />
         <SettingsRow
           title={t("cloudWorkersPage.fields.setup")}
           description={t("cloudWorkersPage.fields.setupHelp")}
@@ -441,7 +522,7 @@ export function CloudWorkersPage() {
               autocomplete="off"
               spellcheck="false"
               value={view.draft.setup}
-              disabled={saveState().busy}
+              disabled={saving()}
               onInput={(event) => patchDraft({ setup: event.currentTarget.value })}
             />
           }
@@ -450,43 +531,30 @@ export function CloudWorkersPage() {
           title={t("cloudWorkersPage.fields.desktop")}
           description={t("cloudWorkersPage.fields.desktopHelp")}
           checked={view.draft.desktop}
-          disabled={saveState().busy}
+          disabled={saving()}
           onChange={(desktop) => patchDraft({ desktop })}
         />
-        {renderDraftInput("binary", {
-          placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
-        })}
+        <DraftInput field="binary" placeholder={t("cloudWorkersPage.fields.binaryPlaceholder")} />
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
-          <SettingsRow
+          <SettingsSelectRow
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("cloudWorkersPage.fields.warmImage")}
-                value={view.draft.warmImage}
-                disabled={saveState().busy}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  if (value === "auto" || value === "on" || value === "off") {
-                    patchDraft({ warmImage: value });
-                  }
-                }}
-              >
-                <For each={["auto", "on", "off"] as const}>
-                  {(value) => (
-                    <option value={value} selected={view.draft.warmImage === value}>
-                      {t(`cloudWorkersPage.warmImage.${value}`)}
-                    </option>
-                  )}
-                </For>
-              </select>
-            }
+            value={view.draft.warmImage}
+            disabled={saving()}
+            onChange={(value) => {
+              if (value === "auto" || value === "on" || value === "off") {
+                patchDraft({ warmImage: value });
+              }
+            }}
+            options={(["auto", "on", "off"] as const).map((value) => ({
+              value,
+              label: t(`cloudWorkersPage.warmImage.${value}`),
+            }))}
           />
           <For each={["setupEnv", "readyWorkers", "suspendAfter"] as const}>
-            {(field) =>
-              renderDraftInput(field, { type: field === "readyWorkers" ? "number" : "text" })
-            }
+            {(field) => (
+              <DraftInput field={field} type={field === "readyWorkers" ? "number" : "text"} />
+            )}
           </For>
         </SettingsSection>
         <Show when={saveState().error}>
@@ -503,12 +571,12 @@ export function CloudWorkersPage() {
               <button
                 class="btn primary"
                 type="button"
-                disabled={!canManage()}
+                disabled={saving() || !canManage()}
                 onClick={() => void saveProfile({ ...view.draft })}
               >
-                {saveState().busy ? t("common.saving") : t("common.save")}
+                {saving() ? t("common.saving") : t("common.save")}
               </button>
-              <button class="btn" type="button" disabled={saveState().busy} onClick={closeEditor}>
+              <button class="btn" type="button" disabled={saving()} onClick={closeEditor}>
                 {t("common.cancel")}
               </button>
             </>
@@ -526,19 +594,36 @@ export function CloudWorkersPage() {
           machines={() => (
             <>
               <Show when={!hasManageAccess()}>
-                <div class="callout warning" role="note">
-                  {t("cloudWorkersPage.adminRequired")}
-                </div>
+                <InlineAlert tone="warning" role="note">
+                  {t(
+                    !gateway.connected
+                      ? "cloudWorkersPage.reconnectRequired"
+                      : canPresentGatewayMethod(
+                            gateway.snapshot,
+                            "config.patch",
+                            "operator.admin",
+                            {
+                              requireAdvertisement: false,
+                            },
+                          )
+                        ? "cloudWorkersPage.unavailableAccess"
+                        : "cloudWorkersPage.adminRequired",
+                  )}
+                </InlineAlert>
               </Show>
-              <Show when={catalog().error}>
-                <div class="callout warning" role="status">
-                  {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-                </div>
-              </Show>
+              <Errored
+                fallback={(error) => (
+                  <InlineAlert tone="warning" role="status">
+                    {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
+                  </InlineAlert>
+                )}
+              >
+                <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
+              </Errored>
               <Show when={saveState().error && !view.editor}>
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {saveState().error}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={saveState().notice}>
                 <div class="callout" role="status">
@@ -547,9 +632,9 @@ export function CloudWorkersPage() {
               </Show>
               <SettingsSection
                 title={t("cloudWorkersPage.environments.machines")}
-                count={profiles().length}
+                count={editableConfig() ? profiles().length : undefined}
                 actions={
-                  <Show when={canManage()}>
+                  <Show when={!saving() && canManage()}>
                     <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
                       {t("cloudWorkersPage.addProfile")}
                     </button>
@@ -558,7 +643,27 @@ export function CloudWorkersPage() {
               >
                 <For
                   each={profiles()}
-                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                  fallback={
+                    <Switch>
+                      <Match when={editableConfig()}>
+                        <SettingsEmpty message={t("cloudWorkersPage.empty")} />
+                      </Match>
+                      <Match when={configProjection.read().state.configLoading}>
+                        <SettingsLoadingSkeleton rows={1} />
+                      </Match>
+                      <Match when={configProjection.read().state.lastError}>
+                        {(error) => (
+                          <InlineAlert tone="warning" role="alert">
+                            {error()}{" "}
+                            <RetryAction
+                              disabled={!gateway.connected}
+                              onRetry={() => void context.runtimeConfig.refresh()}
+                            />
+                          </InlineAlert>
+                        )}
+                      </Match>
+                    </Switch>
+                  }
                 >
                   {(profile) => renderProfile(profile)}
                 </For>

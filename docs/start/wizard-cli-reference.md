@@ -19,11 +19,13 @@ Fresh local guided onboarding shows a one-line pointer to the
 [security guide](/gateway/security) and one choice: **Quick start** or
 **Custom setup**. Quick start records the security acknowledgment; Custom setup
 shows the full security note and asks for confirmation. Quick start reuses
-detected AI access, verifies it, saves config, and opens the web
-dashboard with a foreground Gateway. It uses agent name `main` and full access,
-leaves telemetry consent unset, and skips route confirmation, memory import,
-and app recommendations. **Ctrl+C** stops the Gateway without removing config;
-`openclaw gateway install` enables background operation later.
+detected AI access, verifies it, offers to keep OpenClaw running in the
+background (default yes), saves config, and opens the web dashboard. It uses agent name
+`main` and full access, leaves telemetry consent unset, and skips route
+confirmation, memory import, and app recommendations. If you decline the
+background service, the Gateway runs in the foreground: **Ctrl+C** stops it
+without removing config, and `openclaw gateway install` enables background
+operation later.
 
 Custom setup keeps the full guided prompts. If Quick start finds no usable
 route, it continues with manual provider setup and the remaining guided steps,
@@ -146,6 +148,10 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac
     - Other bundled or separately installed channel plugins can add their own
       onboarding steps. See the complete [channel catalog](/channels).
+    - New or changed SecretRef-supported channel credentials entered directly
+      (including with `--secret-input-mode plaintext`) are saved in the
+      [shared secret store](/gateway/secrets/secret-store-and-egress), and
+      `openclaw.json` keeps a `store` SecretRef, as with `openclaw channels add`.
     - DM security: default is pairing. First DM sends a code; approve via
       `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
@@ -175,7 +181,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
       QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
@@ -267,15 +273,10 @@ on a different release.
     **Anthropic setup-token** during onboarding, or manage it later with
     [`openclaw models auth`](/cli/models#auth-profiles).
   </Accordion>
-  <Accordion title="OpenAI Code subscription (OAuth)">
-    Browser flow; paste `code#state`.
-
-    On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-6-astra` through the Codex runtime.
-
-  </Accordion>
-  <Accordion title="OpenAI Code subscription (device pairing)">
-    Browser pairing flow with a short-lived device code.
+  <Accordion title="OpenAI Codex login">
+    Shows a short-lived device code to enter in any browser. If OpenAI has
+    device-code login turned off, falls back to the browser flow; paste
+    `code#state` when prompted.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
     `openai/gpt-6-astra` through the Codex runtime.
@@ -294,13 +295,11 @@ on a different release.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
-    Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
-    recommended xAI path for most users. OpenClaw stores the resulting auth
-    profile for Grok models, Grok `web_search`, `x_search`, and `code_execution`.
-  </Accordion>
-  <Accordion title="xAI (Grok) device code">
-    Remote-friendly browser sign-in with a short code instead of a localhost
-    callback. Use this from SSH, Docker, or VPS hosts.
+    Device-code sign-in for eligible SuperGrok or X Premium accounts: enter a
+    short code in any browser, with no localhost callback, so it also works from
+    SSH, Docker, or VPS hosts. This is the recommended xAI path for most users.
+    OpenClaw stores the resulting auth profile for Grok models, Grok
+    `web_search`, `x_search`, and `code_execution`.
   </Accordion>
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider. Use this
@@ -525,6 +524,13 @@ in [CLI automation](/start/wizard-cli-automation).
 - `wizard.status`
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
+
+Guided channel setup (`wizard.start` with `flow: "channels"`) closes its input
+when the starting client disconnects, including when the first reply was lost.
+Pending writes and cleanup must finish before another setup can begin; there is
+no additional idle-expiry wait. Completed changes are retained. Reconnect and
+start channel setup again to continue. Full onboarding (`flow: "setup"`) remains
+reconnectable through its existing session ID.
 
 When setup admission is busy, `wizard.start` and the model setup start/activation
 methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This

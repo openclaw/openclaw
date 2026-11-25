@@ -27,7 +27,6 @@ export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
-  isRoomEncrypted: (roomId: string) => Promise<boolean>;
   downloadContent: (
     mxcUrl: string,
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
@@ -50,7 +49,6 @@ export function createMatrixCryptoFacade(deps: {
   }
 
   return {
-    isRoomEncrypted: deps.isRoomEncrypted,
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {

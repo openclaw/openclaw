@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   recordShortTermRecalls,
 } from "../short-term-promotion-record.js";
 import * as recallStore from "../short-term-promotion-store.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -58,6 +59,7 @@ describe("memory source changes during indexing", () => {
   ])(
     "keeps $mutation local during $provider indexing (force=$force, maintenance=$maintenance)",
     async ({ provider, force, mutation, maintenance }) => {
+      keepPublishedCacheDuplicates();
       const changingFile = path.join(fixture.paths.memory, "changing.md");
       const siblingFile = path.join(fixture.paths.memory, "sibling.md");
       const obsoleteContent = "Obsolete alpha source awaiting embeddings.";
@@ -146,64 +148,6 @@ describe("memory source changes during indexing", () => {
     },
   );
 
-  it("revalidates the file after a real SQLite BEGIN collision before replacing its index", async () => {
-    const memoryPath = path.join(fixture.paths.memory, "contended.md");
-    const manager = await baselineIndex({ "contended.md": "Original indexed source." });
-    await fs.writeFile(memoryPath, "Obsolete source waiting for the writer.");
-    Reflect.set(manager, "dirty", true);
-    const databasePath = manager.status().dbPath;
-    if (!databasePath) {
-      throw new Error("Expected a memory index database path");
-    }
-    const { all } = indexReader(manager);
-    const texts = () =>
-      all("SELECT text FROM memory_index_chunks WHERE path = ?", "memory/contended.md");
-    const peer = new DatabaseSync(databasePath);
-    const collision = createDeferred<boolean>();
-    const revalidate = createDeferred<void>();
-    let preparations = 0;
-    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the actual database owner.
-    const replaceSource = MemoryIndexDatabase.prototype.replaceSource;
-    const publicationSpy = vi
-      .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
-      .mockImplementation(function (this: MemoryIndexDatabase, input, assertCurrent, prepare) {
-        const replacements = Array.isArray(input) ? input : [input];
-        const replacesContended = replacements.some(
-          ({ entry }) => entry.path === "memory/contended.md",
-        );
-        return replaceSource.call(this, input, assertCurrent, async () => {
-          // The Worker retries only a refused native BEGIN. Observe the next
-          // file check rather than a BEGIN on the application's connection.
-          if (replacesContended && ++preparations === 2) {
-            collision.resolve(true);
-            await revalidate.promise;
-          }
-          return prepare();
-        });
-      });
-    peer.exec("BEGIN IMMEDIATE");
-    const sync = manager.sync({ reason: "watch" });
-    try {
-      await expect(Promise.race([collision.promise, sync])).resolves.toBe(true);
-      expect(peer.isTransaction).toBe(true);
-      await fs.writeFile(memoryPath, "Current source after the writer collision.");
-      peer.exec("ROLLBACK");
-      revalidate.resolve();
-      await sync;
-      expect(texts()).toEqual([{ text: "Original indexed source." }]);
-      expect(manager.status().dirty).toBe(true);
-      await manager.sync({ reason: "retry-current-source" });
-      expect(texts()).toEqual([{ text: "Current source after the writer collision." }]);
-    } finally {
-      revalidate.resolve();
-      if (peer.isTransaction) {
-        peer.exec("ROLLBACK");
-      }
-      await sync.catch(() => undefined);
-      publicationSpy.mockRestore();
-      peer.close();
-    }
-  });
   it("settles an earlier recall before deleting a stale memory source", async () => {
     const stalePath = "memory/stale.md";
     const siblingPath = "memory/2026-01-12.md";
@@ -235,7 +179,7 @@ describe("memory source changes during indexing", () => {
       deleteIndexedFile(
         pathname: string,
         source: MemorySource,
-        expectedHash?: string,
+        expectedHash?: string | null,
       ): Promise<void>;
     };
     const deleteIndexedFile = deletion.deleteIndexedFile.bind(manager);

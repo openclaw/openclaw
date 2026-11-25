@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import { rebindRewrittenClientCredentials } from "../infra/client-credential-restore.js";
 import {
   canonicalMigrationFilePath,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 /** Transfer existing recovery evidence only across Doctor's verified offline rewrite. */
 export function reconcileNoCowRecoveryIdentities(params: {
@@ -19,6 +21,23 @@ export function reconcileNoCowRecoveryIdentities(params: {
     ]),
   );
   const warnings: string[] = [];
+  const sharedPath = canonicalMigrationFilePath(resolveOpenClawStateSqlitePath(params.env));
+  const sharedBefore = previous.get(sharedPath);
+  if (sharedBefore) {
+    try {
+      rebindRewrittenClientCredentials({
+        env: params.env,
+        previousSharedFile: {
+          path: sharedPath,
+          dev: String(sharedBefore.dev),
+          ino: String(sharedBefore.ino),
+        },
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      warnings.push(`NOCOW credential identity left unchanged for ${sharedPath}: ${String(error)}`);
+    }
+  }
   const refresh = (pathname: string, identity: { dev: string; ino: string }): boolean => {
     const before = previous.get(canonicalMigrationFilePath(pathname));
     if (!before) {

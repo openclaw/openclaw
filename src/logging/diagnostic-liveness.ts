@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import type { DiagnosticLivenessWarningReason } from "../infra/diagnostic-events.js";
+import { roundDiagnosticMetric } from "./diagnostic-metric.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 
 // Standalone consumers sample native counters; the Gateway supplies its existing health snapshot.
@@ -31,14 +32,6 @@ let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
 let lastDiagnosticLivenessEventLoopUtilization: EventLoopUtilization | null = null;
 let lastDiagnosticLivenessEventAt = 0;
 let lastDiagnosticLivenessWarnAt = 0;
-
-function roundDiagnosticMetric(value: number, digits = 3): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
 
 function nanosecondsToMilliseconds(value: number): number {
   return roundDiagnosticMetric(value / 1_000_000, 1);

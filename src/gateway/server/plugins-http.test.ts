@@ -2,15 +2,20 @@ import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
+} from "../../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
+import { getGatewayRequestAuthorityV1 } from "../../plugin-sdk/gateway-request-authority.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import {
@@ -38,7 +43,7 @@ import {
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
+import { isApprovalRecordVisibleToClient } from "../server-methods/approval-record-lookup.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -88,15 +93,11 @@ async function dispatchPluginRequest(
   {
     path = SECURE_HOOK_PATH,
     authContext = trusted,
-  }: { path?: string; authContext?: PluginRequestAuthContext } = {},
+    req = { url: path } as IncomingMessage,
+  }: { path?: string; authContext?: PluginRequestAuthContext; req?: IncomingMessage } = {},
 ) {
   const response = makeMockHttpResponse();
-  const handled = await handler(
-    { url: path } as IncomingMessage,
-    response.res,
-    undefined,
-    authContext,
-  );
+  const handled = await handler(req, response.res, undefined, authContext);
   return { handled, ...response };
 }
 async function invoke(
@@ -121,6 +122,7 @@ describe("plugin HTTP route runtime scopes", () => {
           auth,
           handler: () => {
             scope = getPluginRuntimeGatewayRequestScope();
+            expect(getGatewayRequestAuthorityV1()).toBeUndefined();
             requireScope("agent", scope?.client?.connect.scopes);
             return true;
           },
@@ -141,57 +143,6 @@ describe("plugin HTTP route runtime scopes", () => {
     },
   );
 
-  it.each(["request policy", "visitor grant"] as const)(
-    "rechecks %s before the next matched route",
-    async (changed) => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const grant = new AbortController();
-      let requestSignal: AbortSignal | undefined;
-      let current = true;
-      const next = vi.fn(() => true);
-      const first = createRoute({
-        handler: async () => {
-          requestSignal = getPluginRuntimeGatewayRequestScope()?.signal;
-          expect(requestSignal?.aborted).toBe(false);
-          entered.resolve();
-          await release.promise;
-          return false;
-        },
-      });
-      const pending = invoke([first, { ...first, match: "prefix", handler: next }], {
-        ...trusted,
-        gatewayRequestAuth: {
-          trustDeclaredOperatorScopes: true,
-          hasCurrentClientAuthority: () => current,
-          operatorAccessAuthority: {
-            signal: grant.signal,
-            assertCurrent: () => grant.signal.throwIfAborted(),
-          },
-        },
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "request ended before the first route prepared",
-        );
-        if (changed === "request policy") {
-          current = false;
-        } else {
-          grant.abort();
-          expect(requestSignal?.aborted).toBe(true);
-        }
-      } finally {
-        release.resolve();
-      }
-      const response = await pending;
-      expect(response.handled).toBe(true);
-      expect(response.res.statusCode).toBe(changed === "request policy" ? 401 : 403);
-      expect(next).not.toHaveBeenCalled();
-    },
-  );
-
   it.each(["gateway", "plugin"] as const)(
     "preserves system authority only on gateway routes (%s)",
     async (auth) => {
@@ -200,6 +151,11 @@ describe("plugin HTTP route runtime scopes", () => {
         displayName: "Owner",
         hasAvatar: false,
         updatedAt: 1,
+      };
+      const device = {
+        kind: "owner" as const,
+        peerKey: `iroh:${"ef".repeat(32)}`,
+        authority: { clawId: "route-claw", rootPub: "route-root", listedSeq: 1 },
       };
       let scope: RuntimeScope;
       const response = await invoke(
@@ -217,6 +173,7 @@ describe("plugin HTTP route runtime scopes", () => {
             trustDeclaredOperatorScopes: false,
             authenticatedUserProfile: profile,
             operatorRoleActor: { kind: "system" },
+            openclawIdPrincipal: device,
           },
         },
       );
@@ -224,9 +181,103 @@ describe("plugin HTTP route runtime scopes", () => {
       expect(scope?.client?.internal?.operatorRoleActor).toEqual(
         auth === "gateway" ? { kind: "system" } : undefined,
       );
+      // Durable work dispatched from the route keeps the relayed device that authorized it.
+      expect(scope?.client?.internal?.openclawIdPrincipal).toEqual(
+        auth === "gateway" ? device : undefined,
+      );
       expect(scope?.client?.authenticatedUserProfile).toEqual(
         auth === "gateway" ? profile : undefined,
       );
+    },
+  );
+
+  it.each(["trusted-proxy", "token"] as const)(
+    "projects individual identity separately from attribution with %s",
+    async (authMethod) => {
+      const profileId = "profile-a";
+      let authority: ReturnType<typeof getGatewayRequestAuthorityV1>;
+      let grantCurrent = true;
+      const response = await invoke(
+        {
+          handler: async () => {
+            authority = getGatewayRequestAuthorityV1();
+            expect(authority?.attributionProfileId).toBe(profileId);
+            expect(authority?.personProfileId).toBe(
+              authMethod === "trusted-proxy" ? profileId : undefined,
+            );
+            expect(authority?.requiredGrantPluginId).toBe("policy");
+            await authority?.revalidate();
+            grantCurrent = false;
+            expect(() => authority?.assertCurrent()).not.toThrow();
+            await expect(authority?.revalidate()).resolves.toBeUndefined();
+            expect(() => authority?.assertCurrent("policy")).toThrow("grant ended");
+            expect(() => authority?.assertCurrent("other-policy")).toThrow(
+              GatewayOperatorAccessDeniedError,
+            );
+            return true;
+          },
+        },
+        {
+          ...trusted,
+          gatewayRequestAuth: {
+            authMethod,
+            trustDeclaredOperatorScopes: false,
+            ...(authMethod === "trusted-proxy" ? { personProfileId: profileId } : {}),
+            authenticatedUserProfile: {
+              profileId,
+              displayName: null,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            operatorAccessAuthority: {
+              requiredPolicyPlugin: "policy",
+              // Multiple contributing policies cannot be represented by one recovery grant.
+              gatewayAccessGrant: undefined,
+              signal: new AbortController().signal,
+              assertCurrent() {
+                if (!grantCurrent) {
+                  throw new Error("grant ended");
+                }
+              },
+            },
+          },
+        },
+      );
+      expect(response).toMatchObject({ handled: true, res: { statusCode: 200 } });
+      grantCurrent = true;
+      expect(() => authority?.assertCurrent()).toThrow("Gateway request authority expired");
+      expect(getGatewayRequestAuthorityV1()).toBeUndefined();
+    },
+  );
+
+  it.each(["ended", "unavailable"] as const)(
+    "maps original named grant failures (%s)",
+    async (cause) => {
+      const response = await invoke(
+        {
+          handler() {
+            getGatewayRequestAuthorityV1()?.assertCurrent("policy");
+            return true;
+          },
+        },
+        {
+          ...trusted,
+          gatewayRequestAuth: {
+            ...trusted.gatewayRequestAuth!,
+            operatorAccessAuthority: {
+              requiredPolicyPlugin: "policy",
+              signal: new AbortController().signal,
+              assertCurrent() {
+                if (cause === "unavailable") {
+                  throw new GatewayOperatorAccessUnavailableError();
+                }
+                throw new GatewayOperatorAccessDeniedError("grant-revoked");
+              },
+            },
+          },
+        },
+      );
+      expect(response.res.statusCode).toBe(cause === "ended" ? 403 : 503);
     },
   );
 
@@ -447,14 +498,15 @@ async function withCookieSessionReader(
             authGeneration: "http-generation",
           });
           expect(authorized).not.toBeNull();
-          const response = makeMockHttpResponse();
-          expect(
-            await handler(req, response.res, undefined, {
+          const response = await dispatchPluginRequest(handler, {
+            req,
+            authContext: {
               gatewayAuthSatisfied: true,
               gatewayRequestAuth: authorized!.requestAuth,
               gatewayRequestOperatorScopes: authorized!.operatorScopes,
-            }),
-          ).toBe(true);
+            },
+          });
+          expect(response.handled).toBe(true);
           return { statusCode: response.res.statusCode, result };
         };
         const dispatch: SessionDispatch = async (method, key) => {
@@ -529,7 +581,7 @@ describe("plugin HTTP authenticated session reads", () => {
   );
 
   it.each(["merge", "revoke"] as const)(
-    "refreshes %s authority during HTTP projection readiness",
+    "keeps admitted dispatch while refreshing %s identity and next-request authority",
     async (change) => {
       await withCookieSessionReader(
         true,
@@ -555,7 +607,8 @@ describe("plugin HTTP authenticated session reads", () => {
               expectSessionKeys(response.result!, ["own-draft", "foreign-draft", "shared"]);
               await expectSession(dispatch, "foreign-draft", { sharingRole: "owner" });
             } else {
-              expect(response).toEqual({ statusCode: 500, result: undefined });
+              expect(response.statusCode).toBe(200);
+              expect(response.result).toMatchObject({ ok: true });
               expectSessionKeys(await dispatch("sessions.list"), ["own-draft"]);
               expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
             }
@@ -855,8 +908,6 @@ describe("plugin suspension admission", () => {
       trackExecution: trackAsyncWork,
       cron,
       logGateway: { warn: vi.fn() },
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       terminalSessions: new Map(),
     } as unknown as GatewayRequestContext;
     const invokeSuspension = async (method: string, params: Record<string, unknown>) => {

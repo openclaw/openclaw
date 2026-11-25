@@ -10,28 +10,26 @@ const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
 const JSON_STRING_OR_NUMBER_RE =
   /"(?:\\[\s\S]|[^"\\])*"?|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
 
-function isUnsafeIntegerLiteral(token: string): boolean {
-  const digits = token[0] === "-" ? token.slice(1) : token;
-  return (
-    digits.length > MAX_SAFE_INTEGER_ABS_STR.length ||
-    (digits.length === MAX_SAFE_INTEGER_ABS_STR.length && digits > MAX_SAFE_INTEGER_ABS_STR)
-  );
-}
-
 /** Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse. */
 export function quoteUnsafeIntegerLiterals(input: string): string {
   if (!/(?:^|\D)\d{16}/.test(input)) {
     return input;
   }
-  return input.replace(JSON_STRING_OR_NUMBER_RE, (token, offset: number) =>
-    token[0] !== '"' &&
-    !/[.eE]/.test(token) &&
-    // An incomplete fraction/exponent is not an integer; callers classify malformed JSON separately.
-    !/[.eE]/.test(input.charAt(offset + token.length)) &&
-    isUnsafeIntegerLiteral(token)
+  return input.replace(JSON_STRING_OR_NUMBER_RE, (token, offset: number) => {
+    if (
+      token[0] === '"' ||
+      /[.eE]/.test(token) ||
+      // An incomplete fraction/exponent is not an integer; callers classify malformed JSON separately.
+      /[.eE]/.test(input.charAt(offset + token.length))
+    ) {
+      return token;
+    }
+    const digits = token[0] === "-" ? token.slice(1) : token;
+    return digits.length > MAX_SAFE_INTEGER_ABS_STR.length ||
+      (digits.length === MAX_SAFE_INTEGER_ABS_STR.length && digits > MAX_SAFE_INTEGER_ABS_STR)
       ? `"${token}"`
-      : token,
-  );
+      : token;
+  });
 }
 
 /** Parses JSON while preserving unsafe integer literals as strings. */

@@ -1,5 +1,30 @@
 import { createHash } from "node:crypto";
 
+export const CI_TIMING_PROFILES = ["blacksmith", "github", "boat"] as const;
+export type CiTimingProfile = (typeof CI_TIMING_PROFILES)[number];
+
+export function ciTimingRunnerProfile(labels: readonly string[]): CiTimingProfile | undefined {
+  if (labels.includes("boat-xlarge")) {
+    return labels.every((label) => ["boat-xlarge", "self-hosted", "Linux", "X64"].includes(label))
+      ? "boat"
+      : undefined;
+  }
+  const blacksmith = new Set(
+    labels.filter((label) => /^blacksmith-\d+vcpu-ubuntu-2404$/u.test(label)),
+  );
+  if (blacksmith.size > 0) {
+    return blacksmith.size === 1 &&
+      labels.every(
+        (label) => blacksmith.has(label) || ["self-hosted", "Linux", "X64"].includes(label),
+      )
+      ? "blacksmith"
+      : undefined;
+  }
+  return labels.length > 0 && labels.every((label) => label === "ubuntu-24.04")
+    ? "github"
+    : undefined;
+}
+
 export type RuntimePlacementTiming = {
   configs: string[];
   env: Record<string, string>;
@@ -59,14 +84,11 @@ export function createNativeSoloTimingKey(group: unknown): string | undefined {
 }
 
 export type CiTestTimings = {
-  compactGroupSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
-  runtimePlacementTimings: {
-    blacksmith: RuntimePlacementTiming[];
-    github: RuntimePlacementTiming[];
-  };
+  compactGroupSeconds: Record<CiTimingProfile, Record<string, number>>;
+  runtimePlacementTimings: Record<CiTimingProfile, RuntimePlacementTiming[]>;
   repoE2eFileSeconds: Record<string, number>;
   source: string;
-  toolingFileSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
+  toolingFileSeconds: Record<CiTimingProfile, Record<string, number>>;
   uiE2e: { fileSeconds: Record<string, number>; perFileOverheadSeconds: number };
   updatedAt: string;
   version: 1;
@@ -189,17 +211,16 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     isSecondsMap(uiE2e.fileSeconds) &&
     isSecondsMap(repoE2eFileSeconds) &&
     isRecord(toolingFileSeconds) &&
-    hasExactKeys(toolingFileSeconds, ["blacksmith", "github"]) &&
-    isSecondsMap(toolingFileSeconds.blacksmith) &&
-    isSecondsMap(toolingFileSeconds.github) &&
+    hasExactKeys(toolingFileSeconds, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) => isSecondsMap(toolingFileSeconds[profile])) &&
     isRecord(compactGroupSeconds) &&
-    hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
-    isSecondsMap(compactGroupSeconds.blacksmith) &&
-    isSecondsMap(compactGroupSeconds.github) &&
+    hasExactKeys(compactGroupSeconds, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) => isSecondsMap(compactGroupSeconds[profile])) &&
     isRecord(runtimePlacementTimings) &&
-    hasExactKeys(runtimePlacementTimings, ["blacksmith", "github"]) &&
-    isRuntimePlacementTimings(runtimePlacementTimings.blacksmith) &&
-    isRuntimePlacementTimings(runtimePlacementTimings.github)
+    hasExactKeys(runtimePlacementTimings, [...CI_TIMING_PROFILES]) &&
+    CI_TIMING_PROFILES.every((profile) =>
+      isRuntimePlacementTimings(runtimePlacementTimings[profile]),
+    )
   );
 }
 

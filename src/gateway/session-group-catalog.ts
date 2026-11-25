@@ -48,13 +48,13 @@ export async function readSessionGroupMembershipInWorker(
 ): Promise<SessionGroupMembershipSnapshot> {
   const result = await executeExistingOpenClawStateRead(
     { env },
-    { type: "sessionGroups.members", cfg: { agents: cfg.agents, session: cfg.session } },
+    {
+      type: "sessionGroups.members",
+      cfg: structuredClone({ agents: cfg.agents, session: cfg.session }),
+    },
   );
   if (!result) {
     return { stores: [], groups: [] };
-  }
-  if (!result.ok || result.type !== "sessionGroups.members") {
-    throw new Error("Session group membership worker returned an unexpected result");
   }
   return result.snapshot;
 }
@@ -171,10 +171,8 @@ export async function ensureSessionGroupCatalog(
         }
         if (!result) {
           install(catalog, { groups: [], defaults: [], sectionOrder: [] }, true);
-        } else if (result.ok && result.type === "sessionGroups.snapshot") {
-          install(catalog, result.snapshot);
         } else {
-          throw new Error("Session group catalog worker returned an unexpected result");
+          install(catalog, result.snapshot);
         }
       })().finally(() => {
         catalog.reading = undefined;

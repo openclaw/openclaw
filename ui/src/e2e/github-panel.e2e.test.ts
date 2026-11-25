@@ -84,6 +84,17 @@ const pull = {
   ],
   files: [file],
   filesTotal: 1,
+  checks: {
+    state: "failure",
+    summary: "Checks incomplete · 2 failed · 74 passed",
+    total: 90,
+    truncated: true,
+    items: [
+      { name: "checks-node-changed-10", state: "failure" },
+      { name: "openclaw/ci-gate", state: "failure" },
+    ],
+    url: pullUrl + "/checks",
+  },
 } satisfies ControlUiLinkReaderDocument;
 const commit = {
   url: commitUrl,
@@ -306,6 +317,34 @@ suite.define(() => {
         await waitText(active, "Keep the image beside this reviewed line.");
         await tabCount(panelHeader, 2);
 
+        const divider = page.getByRole("separator", { name: "Resize side panel" });
+        await divider.focus();
+        for (let i = 0; i < 12; i++) {
+          await page.keyboard.press("ArrowLeft");
+        }
+        for (const size of ["wide", "narrow"]) {
+          if (size === "narrow") {
+            await divider.focus();
+            for (let i = 0; i < 12; i++) {
+              await page.keyboard.press("ArrowRight");
+            }
+          }
+          const direct = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+          await direct.waitFor();
+          expect(await direct.getAttribute("href")).toBe(pull.url);
+          expect(
+            await direct
+              .locator(size === "wide" ? ".lr-external-label" : ".lr-external-provider")
+              .isVisible(),
+          ).toBe(true);
+          const checksSource = named(
+            panel.locator(".lr-note"),
+            "link",
+            "View all checks on GitHub",
+          );
+          expect(await checksSource.getAttribute("href")).toBe(pullUrl + "/checks");
+        }
+
         await named(chat, "link", "commit").click();
         await heading(panel, commit.title);
         await waitText(active, "Commit discussion is available here too.");
@@ -333,9 +372,11 @@ suite.define(() => {
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await active.locator(".lr-files .lr-file summary").click();
 
-        const external = page.waitForEvent("popup");
-        await named(panel, "link", "Open on GitHub").click();
-        const popup = await external;
+        const external = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+        expect(await external.getAttribute("href")).toBe(commit.url);
+        expect(await external.getAttribute("target")).toBe("_blank");
+        expect(await external.getAttribute("rel")).toBe("noopener noreferrer");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), external.click()]);
         await popup.waitForLoadState("domcontentloaded");
         expect(popup.url()).toBe(commit.url);
         await popup.close();
@@ -362,11 +403,51 @@ suite.define(() => {
         expect(mobileBox!.x).toBeGreaterThanOrEqual(0);
         expect(mobileBox!.x + mobileBox!.width).toBeLessThanOrEqual(391);
         expect(mobileBox!.width).toBeGreaterThanOrEqual(300);
+        const mobileExternal = named(panel.locator(".lr-toolbar"), "link", "Open on GitHub");
+        await mobileExternal.waitFor();
+        expect(await mobileExternal.getAttribute("href")).toBe(issue.url);
+        expect(await mobileExternal.locator(".lr-external-provider").isVisible()).toBe(true);
         await selectChatLayoutAction(page, "Minimize side panel");
         await expect.poll(() => panel.locator(".link-reader-panel").isVisible()).toBe(false);
       },
     );
   });
+  it("keeps unavailable GitHub checks compact and usable", async () => {
+    await suite.withPage({ viewport: { width: 1500, height: 940 } }, async ({ page }) => {
+      await installReader(page, `Review the [pull request](${pullUrl}).`, {
+        featureMethods: ["chat.startup", "chat.metadata", "github.detail"],
+        methodResponses: {
+          "github.detail": {
+            ...pull,
+            checks: {
+              state: "unavailable",
+              summary: "GitHub did not return check results.",
+              total: 106,
+              items: [],
+              url: pullUrl + "/checks",
+            },
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await named(page, "link", "pull request").click();
+      const panel = page.locator("openclaw-link-reader-panel");
+      const disclosure = panel.locator("details.lr-checks");
+      const summary = disclosure.locator("summary");
+      await waitText(summary, "Checks unavailable");
+      expect(await disclosure.getAttribute("open")).toBeNull();
+      const icon = await summary.locator(".lr-checks-icon svg").boundingBox();
+      expect(icon).not.toBeNull();
+      expect(Math.max(icon!.width, icon!.height)).toBeLessThanOrEqual(24);
+      const source = named(disclosure, "link", "View all checks");
+      await summary.press("Space");
+      await source.waitFor();
+      expect(await source.getAttribute("href")).toBe(pullUrl + "/checks");
+      await summary.click();
+      await source.waitFor({ state: "hidden" });
+    });
+  });
+
   it("does not fetch rejected image sources while parsing or mounting remote Markdown", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const requested: string[] = [];

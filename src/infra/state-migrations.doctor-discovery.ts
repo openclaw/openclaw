@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { safeStatSync } from "./path-guards.js";
 import {
   prepareAgentDatabaseMigrationDiscovery,
@@ -66,16 +66,12 @@ export async function detectManagedWorktreeStateMigration(params: {
   try {
     canonicalRoot = await fs.realpath(rawRoot);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     try {
       canonicalRoot = path.join(await fs.realpath(params.stateDir), "worktrees");
     } catch (stateDirError) {
-      if (hasErrnoCode(stateDirError, "ENOENT")) {
-        return { hasLegacy, legacyIds, pathRewrites: [] };
-      }
-      throw stateDirError;
+      ignoreMissingPath(stateDirError);
+      return { hasLegacy, legacyIds, pathRewrites: [] };
     }
   }
   if (rawRoot === canonicalRoot || !databaseExists) {

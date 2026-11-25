@@ -24,6 +24,7 @@ export type ResolvedCodexPluginPolicy = {
   marketplaceName: CodexPluginMarketplaceName;
   pluginName: string;
   enabled: boolean;
+  readOnly?: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 };

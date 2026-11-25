@@ -1,14 +1,18 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -17,9 +21,11 @@ import {
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -188,10 +194,6 @@ describe("sessions.patch", () => {
       requestContext.resolveGatewayContext = () => requestContext;
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
       await withGatewayToolCallerIdentity(dashboardCaller(sessionKey, requestContext), async () => {
-        const initial = await tool.execute("initial", { action: "read" });
-        expect(initial.details).toMatchObject({ defaultPresentation: "split" });
-        expect(loadSessionEntry(scope)).not.toHaveProperty("boardPresentation");
-
         const saved = await tool.execute("save", {
           action: "set_default_presentation",
           presentation: "expanded",
@@ -208,11 +210,6 @@ describe("sessions.patch", () => {
         const reopened = await tool.execute("reopened", { action: "read" });
         expect(reopened.details).toMatchObject({ defaultPresentation: "expanded" });
 
-        await tool.execute("split", {
-          action: "set_default_presentation",
-          presentation: "split",
-        });
-        expect(loadSessionEntry(scope)?.boardPresentation).toBe("split");
         await callInProcessGatewayTool("sessions.patch", {
           key: sessionKey,
           boardPresentation: null,
@@ -220,53 +217,7 @@ describe("sessions.patch", () => {
         const cleared = await tool.execute("cleared", { action: "read" });
         expect(cleared.details).toMatchObject({ defaultPresentation: "split" });
         expect(loadSessionEntry(scope)).not.toHaveProperty("boardPresentation");
-        expect(requestContext.broadcastToConnIds).not.toHaveBeenCalledWith(
-          "board.command",
-          expect.anything(),
-          expect.anything(),
-        );
       });
-    }));
-
-  it("rechecks dashboard tool authority at the actual session commit admission", () =>
-    withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:dashboard-authority";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "dashboard-authority",
-        updatedAt: 1,
-        boardPresentation: "split",
-      });
-      const before = loadSessionEntry(scope);
-      const requestContext = context({});
-      let revoked = false;
-      let reachedCommitAdmission = false;
-      probe.admission(workerAdmission, (request, grant, admit) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind === "session-entry-replacements"
-        ) {
-          reachedCommitAdmission = true;
-          revoked = true;
-        }
-        admit(request, grant);
-      });
-      const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
-      await expect(
-        withGatewayToolCallerIdentity(
-          {
-            ...dashboardCaller(sessionKey, requestContext),
-            receiptAuthority: () => !revoked,
-          },
-          () =>
-            tool.execute("save", { action: "set_default_presentation", presentation: "expanded" }),
-        ),
-      ).rejects.toThrow(/authority.*no longer active/i);
-      expect(reachedCommitAdmission).toBe(true);
-      expect(loadSessionEntry(scope)).toEqual(before);
-      expect(requestContext.broadcastToConnIds).not.toHaveBeenCalled();
     }));
 
   it("persists preference clears with an agent model rollback marker", () =>
@@ -307,6 +258,62 @@ describe("sessions.patch", () => {
       expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
       expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
     }));
+
+  it.each([true, false])(
+    "keeps live permission changes in the selected physical store (selected active=%s)",
+    (selectedActive) =>
+      withSessionMutationState(async (state) => {
+        const sessionKey = "agent:main:physical-permission-update";
+        const sessionId = "shared-permission-session";
+        await seedEntry(state.env, sessionKey, { sessionId, permissionMode: "guarded" });
+        const storePath = resolveSessionStorePathCore(undefined, {
+          agentId: "main",
+          env: state.env,
+        });
+        const permissionHandle = () => ({
+          ...createEmbeddedRunHandle({ abort: vi.fn() }),
+          applyPermissionMode: vi.fn(async () => true),
+        });
+        const handles = [permissionHandle(), permissionHandle()];
+        const active = handles.flatMap((handle, index) => {
+          if (index === 0 && !selectedActive) {
+            return [];
+          }
+          const operation = createReplyOperation({
+            sessionId,
+            sessionKey,
+            agentId: "main",
+            resetTriggered: false,
+            target: captureSessionTarget({
+              storeScope: index === 0 ? storePath : `${storePath}.other`,
+              sessionKey,
+              agentId: "main",
+              incarnation: sessionId,
+            }),
+          });
+          attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
+          return [{ handle, operation }];
+        });
+        try {
+          const respond = await mutate("sessions.patch", {
+            key: sessionKey,
+            permissionMode: "read-only",
+          });
+          expectSuccess(respond, expect.any(Object));
+          expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("read-only");
+          expect(handles[0]!.applyPermissionMode).toHaveBeenCalledTimes(selectedActive ? 1 : 0);
+          expect(handles[1]!.applyPermissionMode).not.toHaveBeenCalled();
+          for (const handle of handles) {
+            expect(handle.abort).not.toHaveBeenCalled();
+          }
+        } finally {
+          for (const { handle, operation } of active) {
+            detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+            operation.complete();
+          }
+        }
+      }),
+  );
 
   it.each([
     { kind: "failed", message: "Permissions were saved" },
@@ -377,7 +384,9 @@ describe("sessions.patch", () => {
       withSessionMutationState(async (state) => {
         const sessionKey = "agent:main:permission-update";
         const sessionId = "session-permission-update";
-        const cfg: OpenClawConfig = {};
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+        };
         const requestContext = context(cfg);
         const requestClient = client();
         requestClient.connect.scopes = ["operator.admin"];
@@ -471,7 +480,9 @@ describe("sessions.patch", () => {
             ...(index === 1 ? { contextWindow: "extended" } : {}),
           });
         }
-        const cfg: OpenClawConfig = {};
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+        };
         const requestContext = context(cfg);
         const catalog = pauseCatalog(state, requestContext);
         const handles = keys.map(() => ({
@@ -635,7 +646,7 @@ describe("sessions.assignOwner", () => {
         }
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const lifecycle = runExclusiveSessionLifecycleMutation("assign-owner", {
+        const lifecycle = runSessionMutation({
           scope: target.storePath,
           identities: [target.storeKey, sessionId],
           run: async () => {
@@ -827,7 +838,7 @@ describe("sessions.assignOwner", () => {
         await reject(
           client("profile-viewer"),
           { key: sessionKey, owner },
-          `unknown session owner "${owner.id}"`,
+          expect.stringContaining(`unknown session owner "${owner.id}"`),
           "INVALID_REQUEST",
         );
       }

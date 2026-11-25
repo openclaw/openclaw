@@ -65,6 +65,10 @@ installation, chat and local embeddings restore the same verified build before
 starting it. Custom server paths and installations from older releases still
 require manual repair or rerunning setup.
 
+On macOS, stopping a chat during orphaned managed-server recovery waits for
+process cleanup. Other pending chats can continue recovery with their own
+requests; cleanup failures still stop preparation and report the error.
+
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
@@ -153,6 +157,13 @@ GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
 embedding output buffer to one input; the context bound avoids reserving a custom
 model's full training context for short memory chunks.
 
+`memory.search.outputDimensionality` truncates local embedding vectors before
+L2 normalization, preserving the requested size in the index identity. Use a
+GGUF model that supports dimensionality reduction. Without this setting, vectors
+retain their native size; requesting a larger size than the model returns fails.
+If an existing index contains native-size vectors despite a smaller configured
+size, rebuild it with `openclaw memory index --force --agent <id>`.
+
 Existing context, batch, and slot settings in the embedding section, `[*]`, or
 the managed service's arguments or environment remain authoritative. OpenClaw adds
 the context bound only when no slot count or per-slot context is configured,
@@ -211,6 +222,8 @@ Add a model under `models.providers.llama-cpp.models`, select its
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
 cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
+Concurrent chats share pending GGUF verification or download work. Stopping one
+chat cancels only that chat's wait; the shared work continues for other chats.
 
 Setup resolves model aliases and account-qualified references to the selected
 authored model, and keeps that model even when it is not cached. It shows
@@ -328,6 +341,12 @@ timeout still applies.
 Choose **Existing llama-server** when another terminal, container, service
 manager, or machine owns the process.
 
+Setup and guided detection look for a server at `http://127.0.0.1:9931`.
+Native llama.cpp builds use port 9931 by default starting with `b11521`.
+The official Docker image still listens on port 8080 inside the container.
+When OpenClaw runs on the Docker host, publish `-p 127.0.0.1:9931:8080` for
+automatic detection, or enter `localhost:8080` if you already publish host port 8080.
+
 <Steps>
   <Step title="Start llama-server">
     Give the model a stable alias:
@@ -337,7 +356,7 @@ manager, or machine owns the process.
       --model /path/to/model.gguf \
       --alias my-model \
       --host 127.0.0.1 \
-      --port 8080
+      --port 9931
     ```
 
   </Step>
@@ -347,8 +366,9 @@ manager, or machine owns the process.
     requires it.
 
     The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
-    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
-    so you can correct the endpoint without restarting setup.
+    `localhost:9931`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup. For a native build
+    before `b11521`, enter `localhost:8080` if it uses its default port.
 
   </Step>
   <Step title="Select the model">
@@ -428,7 +448,7 @@ openclaw onboard \
   --non-interactive \
   --accept-risk \
   --auth-choice llama-cpp-existing-server \
-  --custom-base-url http://127.0.0.1:8080/v1 \
+  --custom-base-url http://127.0.0.1:9931/v1 \
   --custom-model-id my-model
 ```
 
@@ -447,7 +467,7 @@ shape is:
     mode: "merge",
     providers: {
       "llama-cpp": {
-        baseUrl: "http://127.0.0.1:8080/v1",
+        baseUrl: "http://127.0.0.1:9931/v1",
         api: "openai-completions",
         request: { allowPrivateNetwork: true },
         models: [],
@@ -470,10 +490,22 @@ constraints. Agent turns and standalone completions also map thinking-off
 requests to the server's chat-template flag and adapt JSON Schema requests
 for older llama-server builds.
 
+For tool continuations with an unchanged prompt prefix, OpenClaw uses the server's
+measured context usage plus newly appended content to budget the next response.
+This avoids charging historical reasoning that the chat template discards.
+The first request of an attempt, a request with a changed prefix, or a request with
+a response schema keeps the conservative payload estimate. Replayed reasoning is
+preserved for templates that need it, and genuinely full contexts still trigger
+output limits or compaction.
+
 Local memory embeddings require managed mode:
 
 For automated embedding-only setup, configure local memory and explicitly consent
 to downloading the embedding model and verified llama.cpp runtime:
+
+This unattended option is not available in v2026.10.5. If your installation
+rejects `--llama-cpp-embedding-only`, use the [interactive embedding-only
+setup](/plugins/llama-cpp#set-up-only-local-embeddings) instead.
 
 ```bash
 openclaw config set memory.search.provider local
@@ -525,6 +557,15 @@ model.
   tool-capable Jinja chat template.
 - Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
   builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- If a Linux upgrade removes a shared library, setup and embedding diagnostics
+  name the missing library and its runtime package. For `libssl.so.3` or
+  `libcrypto.so.3`, install OpenSSL 3 (`libssl3t64` or `libssl3` on Debian/Ubuntu);
+  for `libgomp.so.1`, install OpenMP (`libgomp1` on Debian/Ubuntu). OpenSSL 4 does
+  not replace OpenSSL 3 for the pinned build. Restore the missing runtime, rerun
+  llama.cpp setup, then verify with `openclaw memory status --deep` and retry
+  `openclaw memory index --force`. Re-downloading the same build does not supply
+  system libraries; existing memory indexes are preserved while embeddings are
+  unavailable.
 - A model that replies to a simple prompt but fails the setup tool check is
   not selected as the default. Retry after reviewing its tool support or choose
   another model.

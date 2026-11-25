@@ -124,7 +124,7 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
-            switch await self.present(alert, presentingSheetOn: window) {
+            switch await AppActivation.shared.response(to: alert, over: window) {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
@@ -159,16 +159,10 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: channel.label)
         }
         alert.addButton(withTitle: "Not Now")
-        let response = await self.present(alert, presentingSheetOn: window)
+        let response = await AppActivation.shared.response(to: alert, over: window)
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard channels.indices.contains(index) else { return nil }
         return channels[index]
-    }
-
-    private func present(_ alert: NSAlert, presentingSheetOn window: NSWindow?) async -> NSApplication.ModalResponse {
-        // Attaching onboarding alerts preserves their AX visibility and window-relative z-order.
-        guard let window else { return await AppActivation.shared.response(to: alert) }
-        return await alert.beginSheetModal(for: window)
     }
 
     private func installCLI(

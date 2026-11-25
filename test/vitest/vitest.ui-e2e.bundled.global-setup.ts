@@ -32,9 +32,9 @@ export default async function setup(project: TestProject) {
   const prebuilt = root.getProvidedContext().controlUiE2ePrebuiltAssets;
   // Publish native plugin fixtures before test transforms can borrow the shared
   // compiled-subprocess owner and seal its resolution namespace.
-  if (!prebuilt) {
-    await prepareNativeControlUiPluginFixtures(workboardUi.nativePlugins);
-  }
+  const nativePluginBuilds = prebuilt
+    ? []
+    : (await prepareNativeControlUiPluginFixtures(workboardUi.nativePlugins)).preparedBuilds;
   // Local full-suite runs can fan shards into separate processes in one checkout.
   // Keep every build out of canonical dist so those processes cannot clobber it.
   const tempDirs = createTempDirTracker();
@@ -50,6 +50,7 @@ export default async function setup(project: TestProject) {
   });
   try {
     root.provide("controlUiE2eServerBuildInfo", prebuilt?.buildInfo ?? null);
+    root.provide("controlUiE2eNativePluginBuilds", nativePluginBuilds);
     root.provide("controlUiE2eBuildRoot", buildRoot);
     root.provide("controlUiE2eServerBaseUrl", server.baseUrl);
     return async () => {

@@ -1,23 +1,16 @@
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatMissingCostEntries } from "../../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.types.js";
-import {
-  formatCostUsageCachePrefix,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
+import { formatCostUsageCachePrefix, formatUsd } from "../../utils/usage-format.js";
 
 export function renderGatewayCostUsageSummary(
   summary: CostUsageSummary,
   days: number,
   rich: boolean,
 ): string[] {
-  const formatTotals = (totals: CostUsageSummary["totals"]) => {
-    const known = `${formatUsd(totals.totalCost) ?? "$0.00"} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
-    return totals.usageReport?.state === "unavailable"
-      ? `unavailable (known subtotal: ${known})`
-      : known;
-  };
+  const formatTotals = (totals: CostUsageSummary["totals"]) =>
+    `${formatUsd(totals.totalCost) ?? "$0.00"} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),

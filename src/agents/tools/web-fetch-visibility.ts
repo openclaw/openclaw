@@ -23,7 +23,6 @@ const HIDDEN_STYLE_PATTERNS = (
     ["color", /^\s*hsla\s*\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
     // clip-path: none and inset(0%) remain visible.
     ["clip-path", /inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i],
-    ["transform", /scale\s*\(\s*0\s*\)|translate[XY]\s*\(\s*-\d{4,}px\s*\)/i],
     ["left", /^\s*-\d{4,}px\s*$/i],
     ["top", /^\s*-\d{4,}px\s*$/i],
   ] satisfies Array<[string, RegExp]>
@@ -63,6 +62,31 @@ function hasHiddenClass(className: string): boolean {
   return classes.some((cls) => HIDDEN_CLASS_NAMES.has(cls));
 }
 
+function isTransformHidden(transform: string): boolean {
+  if (/translate[XY]\s*\(\s*-\d{4,}px\s*\)/i.test(transform)) {
+    return true;
+  }
+  for (const match of transform.matchAll(/\b(scale(?:3d|[XY])?)\s*\(([^()]*)\)/gi)) {
+    const name = match[1]!.toLowerCase();
+    const values = match[2]!.split(",").map((value) => value.trim());
+    const validArity =
+      name === "scale"
+        ? values.length === 1 || values.length === 2
+        : values.length === (name === "scale3d" ? 3 : 1);
+    if (
+      !validArity ||
+      !values.every((value) => /^[+-]?(?:\d*\.)?\d+(?:e[+-]?\d+)?%?$/i.test(value))
+    ) {
+      continue;
+    }
+    // Only a collapsed X or Y axis hides text; a zero Z scale remains visible.
+    if (values.some((value, axis) => axis < 2 && Number.parseFloat(value) === 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isStyleHidden(style: string): boolean {
   for (const [propertyPattern, valuePattern] of HIDDEN_STYLE_PATTERNS) {
     const match = style.match(propertyPattern);
@@ -72,6 +96,10 @@ function isStyleHidden(style: string): boolean {
     }
   }
 
+  const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i)?.[1];
+  if (transform && isTransformHidden(transform)) {
+    return true;
+  }
   const width = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i);
   const height = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
   const overflow = style.match(/(?:^|;)\s*overflow\s*:\s*([^;]+)/i);

@@ -1,13 +1,38 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import type { PlaceBrowserOptions } from "./place-browser.ts";
+import { PickerSkeleton } from "./picker.tsx";
+import type { PlaceBrowserState } from "./place-browser-state.ts";
 export function PlaceBrowser(props: {
-  params: PlaceBrowserOptions;
+  params: {
+    browser: PlaceBrowserState;
+    id: string;
+    label: string;
+    registerProjectPath: string | null;
+    onBack: () => void;
+    onRegisterProject: (path: string) => void;
+    onClose: () => void;
+    onApplyFolder: (path: string) => void;
+  };
+  registeringProject: boolean;
   pathRef?: (node: HTMLInputElement) => void;
 }) {
   const options = new Map<string, HTMLButtonElement>();
+  // Keep receipt identity without asking this memo to consume its promise.
+  const readCompletion = createMemo(() => ({ promise: props.params.browser.readCompletion }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  const listingRead = createMemo(() => {
+    const completion = readCompletion().promise;
+    return completion?.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    });
+  });
   const view = createMemo(() => ({
     ...props.params.browser.view(),
     highlighted: props.params.browser.highlightedEntry(),
@@ -29,7 +54,6 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("newSession.browserUp")}
           aria-label={t("newSession.browserUp")}
           ref={nativeListener("click", () => {
             if (props.params.browser.listing?.parent) {
@@ -58,13 +82,17 @@ export function PlaceBrowser(props: {
           value={props.params.browser.draft}
           onInput={(event) => props.params.browser.setDraft(event.currentTarget.value)}
           ref={(node) => props.pathRef?.(node)}
+          onCompositionEnd={recordCompositionEnd}
           onKeyDown={(event) => {
+            if (isComposingKeyboardEvent(event)) {
+              return;
+            }
             switch (event.key) {
               case "ArrowDown":
               case "ArrowUp":
                 event.preventDefault();
                 props.params.browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
-                requestAnimationFrame(() => {
+                onSettled(() => {
                   const path = props.params.browser.highlightedEntry()?.path;
                   if (path) {
                     options.get(path)?.scrollIntoView({ block: "nearest" });
@@ -83,32 +111,40 @@ export function PlaceBrowser(props: {
             }
           }}
         />
-        {props.params.browser.loading ? (
-          <span class="new-session-page__browser-loading" role="status">
-            {t("common.loading")}
-          </span>
-        ) : undefined}
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("common.close")}
           aria-label={t("common.close")}
           ref={nativeListener("click", () => props.params.onClose())}
         >
           <Icon name="x" />
         </button>
       </div>
-      {props.params.browser.error ? (
-        <div class="new-session-page__error" role="alert">
-          {props.params.browser.error}
-        </div>
-      ) : undefined}
+      <Errored
+        fallback={(error) => (
+          <div class="new-session-page__error" role="alert">
+            {props.params.browser.error ?? formatUiError(error())}
+          </div>
+        )}
+      >
+        <Loading on={readCompletion()}>
+          {listingRead()}
+          {props.params.browser.error ? (
+            <div class="new-session-page__error" role="alert">
+              {props.params.browser.error}
+            </div>
+          ) : undefined}
+        </Loading>
+      </Errored>
       <div
         class="new-session-page__browser-list"
         role="listbox"
         id={`${props.params.id}-list`}
         aria-label={t("newSession.folder")}
       >
+        <Loading fallback={<PickerSkeleton />}>
+          {isPending(listingRead) ? <PickerSkeleton /> : undefined}
+        </Loading>
         {view().empty !== "none" ? (
           <div class="new-session-page__browser-empty">
             {t(
@@ -160,7 +196,7 @@ export function PlaceBrowser(props: {
           <button
             type="button"
             class="new-session-page__browser-register"
-            disabled={props.params.registeringProject}
+            disabled={props.registeringProject}
             ref={nativeListener("click", () => {
               const path = props.params.registerProjectPath;
               if (path) {
@@ -174,7 +210,7 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-use"
-          disabled={view().usablePath === null || props.params.registeringProject}
+          disabled={props.registeringProject || view().usablePath === null}
           ref={nativeListener("click", () => {
             const path = props.params.browser.usablePath();
             if (path !== null) {

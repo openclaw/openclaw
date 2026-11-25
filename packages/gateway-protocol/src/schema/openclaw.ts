@@ -15,7 +15,6 @@ import {
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
 import { withSince } from "./since.js";
-// Gateway Protocol schema module defines OpenClaw chat payloads.
 import { stringLiteralUnion } from "./string-literal-union.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
@@ -225,7 +224,9 @@ export const SystemChangesListResultSchema = closedObject({
  * access (CLI logins, env keys, existing config), then activate one choice.
  * Activation live-tests the candidate and persists it only on success, so a
  * client can walk the ladder candidate-by-candidate without ever leaving a
- * broken default model behind.
+ * broken default model behind. `openclaw.setup.options` takes the same params
+ * and returns the same result shape from config and manifests alone, without
+ * candidates or install suggestions, so clients can offer known choices first.
  */
 export const SystemAgentSetupDetectParamsSchema = closedObject({
   /** Agent whose model, credentials, and workspace are being inspected. */
@@ -319,6 +320,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
+        actionLabel: Type.Optional(NonEmptyString),
         hint: Type.Optional(Type.String()),
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
@@ -379,7 +381,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
 
 /** Live verification of the Gateway's current default-agent inference route. */
 export const SystemAgentSetupVerifyParamsSchema = closedObject({
-  modelTarget: Type.Optional(Type.Literal("utility")),
+  /** Primary verification must not fall back to setup-only utility inference. */
+  modelTarget: Type.Optional(Type.Union([Type.Literal("primary"), Type.Literal("utility")])),
   /** Agent whose configured inference route is being verified. */
   agentId: Type.Optional(NonEmptyString),
 });

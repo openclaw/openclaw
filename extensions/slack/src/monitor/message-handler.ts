@@ -20,7 +20,6 @@ import {
   createSlackMessageDispatchReplayGuard,
   SlackMessageDispatchRetryError,
   type SlackMessageDispatchReplayClaim,
-  type SlackMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
 import {
   buildSlackDebounceKey,
@@ -69,18 +68,15 @@ export function createSlackMessageHandler(params: {
   trackEvent?: () => void;
   /** Called after access/routing preparation accepts a human message. */
   onPrepared?: (prepared: PreparedSlackMessage) => void;
-  dispatchReplayGuard?: SlackMessageDispatchReplayGuard;
 }): SlackMessageHandler {
   const { ctx, trackEvent, onPrepared } = params;
   const readConfig = createRuntimeConfigReader(ctx.cfg);
-  const dispatchReplayGuard =
-    params.dispatchReplayGuard ??
-    createSlackMessageDispatchReplayGuard({
-      onDiskError: (error) =>
-        ctx.runtime.error?.(
-          `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
-        ),
-    });
+  const dispatchReplayGuard = createSlackMessageDispatchReplayGuard({
+    onDiskError: (error) =>
+      ctx.runtime.error?.(
+        `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
+      ),
+  });
   const { debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -316,6 +312,28 @@ export function createSlackMessageHandler(params: {
                     void turnAdoptionLifecycle?.onAbandoned();
                     void admissionLifecycle.onAbandoned();
                   },
+                  onDropped: turnAdoptionLifecycle?.onDropped
+                    ? async (reason) => {
+                        settlementHandedOff = true;
+                        // A policy discard is terminal for both the durable ingress
+                        // source and Slack's logical message/app_mention twin guard.
+                        // Commit the latter only after the durable settlement succeeds;
+                        // a failed settlement must be eligible for retry.
+                        const outcomes = await Promise.allSettled(
+                          [turnAdoptionLifecycle, admissionLifecycle].map(async (lifecycle) =>
+                            lifecycle?.onDropped
+                              ? lifecycle.onDropped(reason)
+                              : lifecycle?.onAbandoned?.(),
+                          ),
+                        );
+                        const failure = outcomes.find((result) => result.status === "rejected");
+                        if (failure?.status === "rejected") {
+                          releaseClaims(failure.reason);
+                          throw failure.reason;
+                        }
+                        await commitClaims();
+                      }
+                    : undefined,
                 };
                 onPrepared?.(prepared);
                 if (surviving.length > 1 && sourceMessageIds.length > 0) {

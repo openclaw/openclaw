@@ -12,7 +12,6 @@ export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
     maxSide?: number;
-    maxBytes?: number;
   },
 ): Promise<{
   buffer: Buffer;
@@ -20,7 +19,7 @@ export async function normalizeBrowserScreenshot(
   sourceDimensions: { width: number; height: number } | null;
 }> {
   const maxSide = Math.max(1, Math.round(opts?.maxSide ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE));
-  const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
+  const maxBytes = DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES;
 
   const meta = await getImageMetadata(buffer);
   const width = meta?.width ?? 0;

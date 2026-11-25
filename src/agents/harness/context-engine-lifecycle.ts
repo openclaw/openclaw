@@ -21,16 +21,25 @@ import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.j
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import {
+  readRunOperatorAuthority,
   runWithPreparedRunSourceScope,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
+import {
+  createFixedRequestTokenEstimator,
+  type FixedRequestTokenPressure,
+} from "../sessions/context-token-pressure.js";
 import {
   completedTurnMessageAnchor,
   type CompletedTurnMessageAnchor,
@@ -42,6 +51,7 @@ import {
   type ContextEngineAssemblySnapshot,
 } from "./context-engine-assembly-attempt.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
+import { captureContextEngineTurnOperatorSource } from "./context-engine-turn-authority.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -50,11 +60,18 @@ export {
 
 function preparePreTurnRuntimeContext(
   runtimeContext: ContextEngineRuntimeContext | undefined,
+  source: HarnessSourceScope,
 ): ContextEngineRuntimeContext | undefined {
-  if (!runtimeContext?.rewriteTranscriptEntries) {
+  if (!runtimeContext) {
     return runtimeContext;
   }
   const { rewriteTranscriptEntries: _rewriteTranscriptEntries, ...fenced } = runtimeContext;
+  attachCompactionAccountingRecorder(fenced, {
+    ...readCompactionAccountingRecorder(runtimeContext),
+    ...(source.admittedRunContext || source.preparedRunAdmission
+      ? { operatorAuthority: readRunOperatorAuthority(source) }
+      : {}),
+  });
   return fenced;
 }
 
@@ -90,6 +107,8 @@ function runWithHarnessSourceFence<T>(
 
 function buildHarnessContextEngineRuntimeSettings(
   params: HarnessRuntimeSettingsParams,
+  tokenBudget = params.tokenBudget,
+  maxOutputTokens = params.maxOutputTokens,
 ): ContextEngineRuntimeSettings {
   if (params.runtimeSettings !== undefined && params.runtimeSettings !== null) {
     return params.runtimeSettings;
@@ -107,8 +126,8 @@ function buildHarnessContextEngineRuntimeSettings(
     selectedContextEngineId: selectedId,
     contextEngineSelectionSource:
       selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
-    promptTokenBudget: params.tokenBudget,
-    maxOutputTokens: params.maxOutputTokens,
+    promptTokenBudget: tokenBudget,
+    maxOutputTokens,
     fallbackReason: params.fallbackReason,
     degradedReason: params.degradedReason,
   });
@@ -138,7 +157,7 @@ export async function bootstrapHarnessContextEngine(
   await runWithHarnessSourceFence(params, async () => {
     try {
       const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
       if (typeof params.contextEngine?.bootstrap === "function") {
         await params.contextEngine.bootstrap({
           sessionId: params.sessionId,
@@ -175,6 +194,7 @@ type HarnessContextEngineAssemblyParams = Omit<
   sessionKey?: string;
   agentId?: string;
   appendOnlyRuntimeContext?: boolean;
+  clearsTurnScopedSystemUpdates?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -202,11 +222,22 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
     return undefined;
   }
   const assembled = await runWithHarnessSourceFence(params, async () => {
-    const assembly = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+    const assembly = await assembleHarnessContextEngineWithinSourceScope(
+      params,
+      contextEngine,
+      tokenBudget,
+    );
     const bounded = boundContextEngineAssembly(
       assembly.result,
-      resolveContextEngineTranscriptByteLimit(contextEngine),
-      resolveAssemblyHistoryTokenBudget(params),
+      params.contextEngineHostSupport?.id === "codex-app-server" &&
+        params.runtimeId === "codex" &&
+        !contextEngine.info.ownsCompaction
+        ? undefined
+        : resolveContextEngineTranscriptByteLimit(contextEngine),
+      tokenBudget,
+      undefined,
+      params.clearsTurnScopedSystemUpdates,
     );
     return { result: bounded, snapshot: assembly.snapshot };
   });
@@ -214,7 +245,10 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
   return assembled.result;
 }
 
-function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyParams) {
+function resolveAssemblyHistoryTokenBudget(
+  params: HarnessContextEngineAssemblyParams,
+  fixedTokenPressure?: FixedRequestTokenPressure,
+) {
   const explicitBudget = params.runtimeSettings?.limits.promptTokenBudget ?? params.tokenBudget;
   const tokenBudget =
     params.tokenBudget === undefined
@@ -237,7 +271,7 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
     1,
     Math.max(1, budget - Math.max(0, Math.floor(reserveTokens))) -
       Math.max(0, Math.floor(inputTokens)) -
-      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt }),
+      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt, fixedTokenPressure }),
   );
   return tokenBudget === undefined ? historyBudget : Math.min(tokenBudget, historyBudget);
 }
@@ -245,23 +279,24 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
 async function assembleHarnessContextEngineWithinSourceScope(
   params: HarnessContextEngineAssemblyParams,
   contextEngine: ContextEngine,
+  tokenBudget: number | undefined,
+  inputMessages = params.messages,
 ) {
-  const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
   const maxOutputTokens = params.promptBudget
     ? Math.max(0, Math.floor(params.promptBudget.reserveTokens))
     : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
-  const messages = (
-    params.appendOnlyRuntimeContext
-      ? params.messages
-      : stripRuntimeContextCustomMessages(params.messages)
-  ).slice();
-  const runtimeSettings = buildHarnessContextEngineRuntimeSettings({
-    ...params,
-    maxOutputTokens,
+  const projectedMessages = params.appendOnlyRuntimeContext
+    ? inputMessages
+    : stripRuntimeContextCustomMessages(inputMessages);
+  // Filtering already isolates the plugin's working array from authoritative history.
+  const messages = projectedMessages === inputMessages ? inputMessages.slice() : projectedMessages;
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(
+    params,
     tokenBudget,
-  });
+    maxOutputTokens,
+  );
   const snapshot: ContextEngineAssemblySnapshot = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -269,7 +304,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
     modelId: params.modelId,
     tokenBudget,
   };
-  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
@@ -304,6 +339,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
 }
 
 type PreparedHarnessContextEnginePrompt = {
+  estimateFixedRequest: ReturnType<typeof createFixedRequestTokenEstimator>;
   messages: AgentMessage[];
   systemPrompt: string;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
@@ -320,6 +356,7 @@ export async function prepareHarnessContextEnginePrompt(
 ): Promise<PreparedHarnessContextEnginePrompt> {
   clearContextEngineAssemblySnapshot();
   const initial: PreparedHarnessContextEnginePrompt = {
+    estimateFixedRequest: createFixedRequestTokenEstimator(),
     messages: params.messages,
     systemPrompt: params.promptBudget.systemPrompt,
     contextEnginePromptAuthority: "assembled",
@@ -335,6 +372,10 @@ export async function prepareHarnessContextEnginePrompt(
   }
   let snapshot: ContextEngineAssemblySnapshot | undefined;
   const prepared = await runWithHarnessSourceFence(params, async () => {
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(
+      params,
+      initial.estimateFixedRequest({ systemPrompt: params.promptBudget.systemPrompt }),
+    );
     // Windowing and replay hooks can leave orphaned results before assembly.
     const pipelineMessages = params.repairToolUseResultPairing
       ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
@@ -351,13 +392,17 @@ export async function prepareHarnessContextEnginePrompt(
             : assembled.messages,
         },
         resolveContextEngineTranscriptByteLimit(contextEngine),
-        resolveAssemblyHistoryTokenBudget(params),
+        tokenBudget,
+        undefined,
+        params.clearsTurnScopedSystemUpdates,
       );
     let bounded: AssembleResult;
     try {
       const assembled = await assembleHarnessContextEngineWithinSourceScope(
-        { ...params, messages: pipelineMessages },
+        params,
         contextEngine,
+        tokenBudget,
+        pipelineMessages,
       );
       bounded = prepareAssembly(assembled.result);
       snapshot = assembled.snapshot;
@@ -367,6 +412,7 @@ export async function prepareHarnessContextEnginePrompt(
     }
     const authority = bounded.promptAuthority ?? "assembled";
     return {
+      estimateFixedRequest: initial.estimateFixedRequest,
       messages: bounded.messages,
       systemPrompt: bounded.systemPromptAddition
         ? prependSystemPromptAdditionAfterCacheBoundary({
@@ -429,9 +475,8 @@ export async function finalizeHarnessContextEngineTurn(
     sessionManager?: unknown;
     config?: OpenClawConfig;
     warn: (message: string) => void;
-    /** True when this turn belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
     modelContextWindow?: number;
+    abortSignal?: AbortSignal;
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
       terminalEntryId?: string | null;
@@ -447,21 +492,32 @@ export async function finalizeHarnessContextEngineTurn(
     const { admission, terminalEntryId, record } = params.turnCandidate;
     if (admission && terminalEntryId) {
       const committed = params.turnCandidate[completedTurnMessageAnchor];
+      if (!committed) {
+        // Recovery can rewrite away the append receipt before its projection is ready.
+        const { waitForSessionTranscriptProjection } =
+          await import("../../config/sessions/session-transcript-reconcile.js");
+        await waitForSessionTranscriptProjection(admission, params.abortSignal);
+        params.abortSignal?.throwIfAborted();
+      }
       // Reconstructed managers need one anchor snapshot, not a version that a later append can stale.
       const terminal = committed
         ? committed.anchor
-        : await readActiveTranscriptEntryAnchorAsync({ ...admission, entryId: terminalEntryId });
+        : await readActiveTranscriptEntryAnchorAsync(
+            { ...admission, entryId: terminalEntryId },
+            params.abortSignal,
+          );
+      params.abortSignal?.throwIfAborted();
       committed?.assertCurrent();
       if (terminal) {
         record({
           boundary: { admission, terminal },
+          operatorSource: captureContextEngineTurnOperatorSource(params.runtimeContext, params),
           sessionIdUsed: params.sessionIdUsed,
           sessionKey: params.sessionKey,
           sessionTarget: params.sessionTarget,
           promptError: params.promptError,
           aborted: params.aborted,
           yieldAborted: params.yieldAborted,
-          isHeartbeat: params.isHeartbeat,
           runtimeContext: {
             provider: params.providerId ?? undefined,
             modelId: params.modelId ?? undefined,
@@ -473,6 +529,9 @@ export async function finalizeHarnessContextEngineTurn(
                 provider: params.providerId,
                 modelId: params.modelId,
               }) ?? params.tokenBudget,
+            ...(params.runtimeContext?.promptCache
+              ? { promptCache: params.runtimeContext.promptCache }
+              : {}),
           },
         });
       }
@@ -500,7 +559,6 @@ export async function finalizeHarnessContextEngineTurn(
         tokenBudget: params.tokenBudget,
         runtimeSettings,
         runtimeContext,
-        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
@@ -517,7 +575,6 @@ export async function finalizeHarnessContextEngineTurn(
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
-            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -530,7 +587,6 @@ export async function finalizeHarnessContextEngineTurn(
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
-              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;

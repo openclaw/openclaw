@@ -29,6 +29,7 @@ export type SqliteWalHealth = {
   checkpointedFrames: number | null;
   lastCompletedAtMs: number | null;
   consecutiveBlocked: number;
+  bytePressure: boolean;
   warning: boolean;
   error?: string;
   activeReaders?: SqliteReaderDiagnostic[];
@@ -169,6 +170,7 @@ export function createSqliteWalCheckpoint(
     checkpointedFrames: null,
     lastCompletedAtMs: snapshot?.health.lastCompletedAtMs ?? null,
     consecutiveBlocked: 0,
+    bytePressure: false,
     warning: true,
   });
 
@@ -178,6 +180,7 @@ export function createSqliteWalCheckpoint(
       observedAtMs: Date.now(),
       state: "error",
       consecutiveBlocked: 0,
+      bytePressure: false,
       warning: true,
       error: formatErrorMessage(error),
     };
@@ -226,13 +229,14 @@ export function createSqliteWalCheckpoint(
           observation.error = formatErrorMessage(error);
         }
       }
-      // Allow the existing retained-WAL ceiling or two database images before warning early.
-      observation.warning =
+      observation.bytePressure =
         observation.state === "blocked" &&
-        (observation.consecutiveBlocked >= 2 ||
-          (observation.walBytes !== null &&
-            observation.databaseBytes !== null &&
-            observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
+        observation.walBytes !== null &&
+        observation.databaseBytes !== null &&
+        observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes);
+      observation.warning =
+        observation.bytePressure ||
+        (observation.state === "blocked" && observation.consecutiveBlocked >= 2);
       snapshot = {
         observedAtNs,
         lastCompletedAtNs:
@@ -251,9 +255,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    // Frequent checkpoint ticks expect readers to block some passes; only the
-    // reclaim cadence reports them, the health snapshot still records every one.
-    if ((busy || observation.warning) && !quiet) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(
@@ -312,6 +317,9 @@ export function createSqliteWalCheckpoint(
     },
     get health() {
       return snapshot ? structuredClone(snapshot.health) : undefined;
+    },
+    get observedAtNs() {
+      return snapshot?.observedAtNs;
     },
     get snapshot() {
       return snapshot ? structuredClone(snapshot) : undefined;

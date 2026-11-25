@@ -1,4 +1,3 @@
-// periphery:ignore - PR1b activates this preparatory local credential schema.
 enum OpenClawClientCredentialSchema {
     static let version: Int64 = 1
 

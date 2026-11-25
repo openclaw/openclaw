@@ -156,8 +156,7 @@ describe("promptGatewayConfig", () => {
       textQueue: ["18789", token],
       randomToken: "generated-token",
     });
-    expect(result.token).toBe("generated-token");
-    expect(result.config.gateway?.auth).toEqual({ mode: "token", token: result.token });
+    expect(result.config.gateway?.auth).toEqual({ mode: "token", token: "generated-token" });
     expect(mocks.password).toHaveBeenCalledOnce();
   });
 
@@ -325,7 +324,6 @@ describe("promptGatewayConfig", () => {
       mode: "token",
       token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
     });
-    expect(result.token).toBeUndefined();
   });
 });
 

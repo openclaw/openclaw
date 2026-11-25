@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -39,10 +41,7 @@ async function fixture() {
   const archivedContents = async (
     directory = path.join(root, "backups", "heartbeat-migration"),
   ) => {
-    const entries = await fs.readdir(directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const entries = (await listDirectoryTreeStrict(directory)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())
@@ -199,13 +198,48 @@ it.each(["before", "after"])(
       await writer.sync();
       expect((await writer.stat()).nlink).toBeGreaterThan(0);
       await f.migrate();
-      if (phase === "after") {
-        expect(await f.archivedContents()).toContain("Late edit after interruption");
-      } else {
-        expect(await fs.readFile(f.sourcePath, "utf8")).toBe("Late edit after interruption");
-      }
+      expect(await f.archivedContents()).toContain("Late edit after interruption");
+      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await writer.close();
     }
   },
 );
+
+it("retries the migration after a failed archive write", async () => {
+  const f = await fixture();
+  const checklist = "Checklist written before the disk filled";
+  await fs.writeFile(f.sourcePath, checklist);
+  const writeFile = fs.writeFile.bind(fs);
+  const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    if (data === checklist) {
+      await writeFile(file, checklist.slice(0, 8), options);
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    }
+    return writeFile(file, data, options);
+  });
+  expect((await f.migrate()).warnings.join("\n")).toContain("disk full");
+  fault.mockRestore();
+  expect(await f.archivedContents()).toEqual([]);
+  expect((await f.migrate()).warnings).toEqual([]);
+  expect(await f.archivedContents()).toContain(checklist);
+  await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([
+  ["repairs a partial archive left by an earlier release", "Checklis", false],
+  ["keeps a different existing archive", "Different notes", true],
+])("%s", async (_name, existing, collides) => {
+  const f = await fixture();
+  const checklist = "Checklist written before the disk filled";
+  await fs.writeFile(f.sourcePath, checklist);
+  const archiveDir = path.join(f.root, "backups", "heartbeat-migration");
+  const sha256 = createHash("sha256").update(checklist).digest("hex");
+  await fs.mkdir(archiveDir, { recursive: true });
+  await fs.writeFile(path.join(archiveDir, `main-${sha256}.md`), existing);
+  const warnings = (await f.migrate()).warnings.join("\n");
+  expect(warnings).toEqual(collides ? expect.stringContaining("archive collision") : "");
+  const archived = await f.archivedContents();
+  expect(archived).toContain(collides ? existing : checklist);
+  expect(archived).not.toContain(collides ? checklist : existing);
+});

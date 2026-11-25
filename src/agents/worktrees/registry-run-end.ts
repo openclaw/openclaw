@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import {
+  wrapSqliteWorkerError,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
@@ -10,6 +13,10 @@ import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-sta
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../../state/openclaw-state-worker-store.types.js";
+import {
+  installWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "../workspace-state-guard.js";
 import {
   readWorktreeRegistryWorkerReceipt,
   withWorktreeRegistryPublication,
@@ -83,9 +90,12 @@ export async function runWorktreeRegistryCommand<T>(
   options.mutation.settle(outcome?.kind === "unknown");
   options.onSettlement?.(outcome?.kind ?? "not-entered");
   if (outcome?.kind === "unknown") {
-    throw Object.assign(new SqliteWorkerError(options.unknownMessage, "outcome-unknown"), {
-      cause: ("error" in result ? result.error : undefined) ?? outcome.error,
-    });
+    throw wrapSqliteWorkerError(
+      options.unknownMessage,
+      "outcome-unknown",
+      "error" in result ? result.error : undefined,
+      outcome.error,
+    );
   }
   if ("value" in result) {
     return result.value;
@@ -234,13 +244,19 @@ export function runWorktreeRunEndCommand(
     ) {
       throw new Error("Worktree settlement lease set belongs to another database");
     }
-    const execute = (leases?: LeaseSetAdmission) =>
-      runWorktreeRegistryCommand(
+    const execute = async (leases?: LeaseSetAdmission) => {
+      const observed = await runWorktreeRegistryCommand(
         leaseSet?.context ?? context,
         (scope) =>
           scope.execute({
             type: command.type,
-            input: { ...command.input, predicates, leases: leases?.identities },
+            input: {
+              ...command.input,
+              predicates,
+              leases: leases?.identities,
+              workspaceEvidence: authority.workspaceEvidence,
+              stateOwnerPath: authority.stateOwnerPath,
+            },
           }),
         {
           signal: authority.signal,
@@ -248,10 +264,21 @@ export function runWorktreeRunEndCommand(
           createAdmission: leases?.createAdmission,
           mutation,
           unknownMessage: "Worktree settlement outcome is unknown; recovery custody retained",
-          recover: (receipt) =>
-            receipt.receipt === command.input.receipt ? { value: undefined } : undefined,
+          recover: (receipt) => {
+            if (receipt.receipt !== command.input.receipt || receipt.result.kind !== "known") {
+              return undefined;
+            }
+            return {
+              // SAFETY: This exact command's receipt carries its declared worker result.
+              value: receipt.result.value as readonly WorkspaceFilesystemEvidence[] | undefined,
+            };
+          },
         },
       );
+      if (authority.workspaceEvidence && observed) {
+        installWorkspaceFilesystemEvidence(authority.workspaceEvidence, observed);
+      }
+    };
     try {
       await (leaseSet
         ? withOpenClawStateLeasesWorkerAdmission(leaseSet.leases, leaseSet.context, execute, {

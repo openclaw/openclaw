@@ -29,10 +29,7 @@ import {
   userTextMessage,
 } from "./session-history-fixtures.test-support.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
-import {
-  readSessionHistorySnapshotAsync,
-  SessionHistorySseState,
-} from "./session-history-state.js";
+import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -118,7 +115,7 @@ describe("session history snapshot reads", () => {
       turnBoundaryPending: false,
       assistantErrorPending: true,
     },
-  ])("carries $name from the transcript worker into incremental SSE", async (fixture) => {
+  ])("carries $name from the transcript worker into its snapshot", async (fixture) => {
     await withHistoryState(async (state) => {
       const target = historyTarget(state, "history-pending-state");
       const entry = { sessionId: target.sessionId, updatedAt: 1 };
@@ -139,25 +136,6 @@ describe("session history snapshot reads", () => {
         assistantErrorPending: fixture.assistantErrorPending,
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
-      const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = (
-        await history.prepareInlineMessage({
-          message: {
-            role: "assistant",
-            content: textContent("The next reply"),
-            stopReason: "stop",
-            __openclaw: { runId: "run-pending" },
-          },
-        })
-      )();
-      if (fixture.assistantErrorPending) {
-        expect(appended).toEqual({ shouldRefresh: true });
-      } else {
-        expect(appended?.message).toMatchObject({
-          content: textContent("The next reply"),
-          __openclaw: { seq: 3, turnBoundary: true },
-        });
-      }
     });
   });
 

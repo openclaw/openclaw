@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import * as json5 from "json5";
+import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { registerSealedRuntime } from "../infra/sealed-runtime-registry.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
@@ -13,6 +14,7 @@ const control = path.join(root, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
+installDatabaseProcessRole("cli-oneshot");
 const writeJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const writeJsonFile = (file: string, value: unknown) =>
   fs.writeFileSync(file, JSON.stringify(value));
@@ -187,6 +189,31 @@ try {
     const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
     const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
     const runCommand = async () => {
+      if (process.argv[2] === "config-only-denial") {
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        await runWithLocalStateOwner({
+          method: "config set",
+          params: {},
+          target: "database",
+          databaseAccess: "none",
+          runLocal: async ({ env }) => {
+            openOpenClawStateDatabase({ env });
+          },
+        });
+        return;
+      }
+      if (process.argv[2] === "config-validation-only") {
+        const [{ ensureConfigReady }, { defaultRuntime }] = await Promise.all([
+          import("./program/config-guard.js"),
+          import("../runtime.js"),
+        ]);
+        await ensureConfigReady({
+          runtime: defaultRuntime,
+          commandPath: ["config", "validate"],
+          validateConfigOnly: true,
+        });
+        return;
+      }
       if (process.argv[2] === "config-unset-route") {
         const { tryRouteCli } = await import("./route.js");
         const routed = await tryRouteCli([

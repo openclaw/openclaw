@@ -1,21 +1,26 @@
-// Media-understanding runner resolves providers/models, local roots, auth, and
-// per-capability execution decisions for message attachments.
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { ok } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
-import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
 } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import type {
+  MediaAttachment,
+  MediaAttachmentDisposition,
+  MediaAttachmentProcessing,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
-import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
 import {
   buildModelAliasIndex,
@@ -37,17 +42,14 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { logWarn } from "../logger.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
+import { createAttachmentDispositions, selectAttachments } from "./attachments.select.js";
 import {
-  matchesMediaEntryCapability,
+  matchesImageEntryCapability,
   resolveConfiguredMediaEntryCapabilities,
 } from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
-import {
-  assertMediaExecutionCurrent,
-  hasProviderAuthAvailable,
-  type MediaExecutionContext,
-} from "./provider-execution.js";
+import { hasProviderAuthAvailable, type MediaExecutionContext } from "./provider-execution.js";
 import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
@@ -56,28 +58,14 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   resolveModelEntries,
   resolveScopeDecision,
   type ResolvedMediaModelEntry,
 } from "./resolve.js";
-import {
-  buildModelDecision,
-  formatDecisionSummary,
-  runCliEntry,
-  runProviderEntry,
-  type MediaRequestOverrides,
-} from "./runner.entries.js";
-import type {
-  MediaAttachment,
-  MediaAttachmentDisposition,
-  MediaAttachmentProcessing,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import { runAttachmentEntries } from "./runner.attachment.js";
+import type { MediaRequestOverrides } from "./runner.entries.js";
 
 export {
   createMediaAttachmentCache,
@@ -101,17 +89,13 @@ type LazyProviderRegistry = ProviderRegistry | (() => ProviderRegistry);
 function resolveProviderRegistry(registry: LazyProviderRegistry): ProviderRegistry {
   return typeof registry === "function" ? registry() : registry;
 }
-type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
-  typeof import("../agents/prepared-model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
-
 type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
 
 const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
-  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/model-catalog-lookup.js")),
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 
@@ -141,20 +125,6 @@ function resolveConfiguredImageModelId(params: {
   return providerCfg?.models
     ?.find((entry) => entry?.id?.trim() && entry.input?.includes("image"))
     ?.id.trim();
-}
-
-function resolveCatalogImageModelId(params: {
-  providerId: string;
-  catalog: ModelCatalog;
-  modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
-}): string | undefined {
-  const matches = params.catalog.filter(
-    (entry) =>
-      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
-      params.modelSupportsVision(entry),
-  );
-  const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
-  return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
 async function explicitImageModelVisionStatus(
@@ -241,11 +211,14 @@ async function resolveAutoImageModelId(
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  return resolveCatalogImageModelId({
-    providerId: params.providerId,
-    catalog,
-    modelSupportsVision,
-  });
+  const providerId = params.providerId;
+  const matches = catalog.filter(
+    (entry) =>
+      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(providerId) &&
+      modelSupportsVision(entry),
+  );
+  const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
+  return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
 function resolveImageModelFromAgentDefaults(params: {
@@ -261,10 +234,9 @@ function resolveImageModelFromAgentDefaults(params: {
   if (refs.length === 0) {
     return [];
   }
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  }).provider;
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })?.provider ??
+    DEFAULT_PROVIDER;
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
     const effectiveDefaultProvider = ref.includes("/")
@@ -307,9 +279,8 @@ function hasExplicitImageUnderstandingConfig(params: {
     if (configured) {
       return configured.includes("image");
     }
-    return matchesMediaEntryCapability({
+    return matchesImageEntryCapability({
       entry,
-      capability: "image",
       providerRegistry: resolveProviderRegistry(params.providerRegistry),
     });
   });
@@ -362,7 +333,7 @@ async function* resolveAutoAudioEntries(
       yield { entry };
     }
   }
-  const localAudio = await inspectLocalAudioSelection({ language: params.language });
+  const localAudio = await inspectLocalAudioSelection(params.language);
   for (const entry of localAudio.entries) {
     yield { entry };
   }
@@ -483,144 +454,24 @@ async function resolveAutoProviderModelEntry(
   };
 }
 
-async function runAttachmentEntries(
-  params: Omit<
-    Parameters<typeof runProviderEntry>[0],
-    "entry" | "attachmentIndex" | "secretOwnerId"
-  > & {
+export async function runCapability(
+  params: Omit<AutoModelSelectionParams, "providerRegistry"> & {
     ctx: MsgContext;
-    attachment: MediaAttachment;
-    entries: Iterable<ResolvedMediaModelEntry> | AsyncIterable<ResolvedMediaModelEntry>;
-    automaticAudio: boolean;
+    attachments: MediaAttachmentCache;
+    media: MediaAttachment[];
+    providerRegistry: LazyProviderRegistry;
+    assertCurrent?: () => void;
+    execution?: MediaExecutionContext;
+    config?: MediaUnderstandingConfig;
+    request?: MediaRequestOverrides;
   },
-): Promise<{
-  output: MediaUnderstandingOutput | null;
-  attempts: MediaUnderstandingModelDecision[];
-  processing: MediaAttachmentProcessing;
-}> {
-  const { entries, capability } = params;
-  const attachmentIndex = params.attachment.index;
-  const attempts: MediaUnderstandingModelDecision[] = [];
-  let processing: MediaAttachmentProcessing = "omitted";
-  for await (const candidate of entries) {
-    const { entry } = candidate;
-    const entryType = entry.type ?? (entry.command ? "cli" : "provider");
-    try {
-      const attempt =
-        entryType === "cli"
-          ? ok(await runCliEntry({ ...params, entry }))
-          : await runProviderEntry({
-              ...params,
-              entry,
-              attachmentIndex,
-              secretOwnerId: candidate.secretOwnerId,
-            });
-      assertMediaExecutionCurrent(params.execution);
-      if (!attempt.ok) {
-        if (
-          !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
-        ) {
-          attempts.push(
-            buildModelDecision({
-              entry,
-              entryType,
-              outcome: "failed",
-              reason: String(attempt.error),
-            }),
-          );
-        }
-        continue;
-      }
-      const result = attempt.value;
-      // Successful empty CLI/API output was processed; unavailable auth was not.
-      processing = "completed";
-      if (result?.text) {
-        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
-        if (result.provider) {
-          decision.provider = result.provider;
-        }
-        decision.model = result.model;
-        if (result.requestedBackend) {
-          decision.requestedBackend = result.requestedBackend;
-        }
-        if (result.observedBackend) {
-          decision.observedBackend = result.observedBackend;
-        }
-        attempts.push(decision);
-        return { output: result, attempts, processing };
-      }
-      attempts.push(
-        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
-      );
-    } catch (err) {
-      assertMediaExecutionCurrent(params.execution);
-      if (isMediaUnderstandingSkipError(err)) {
-        attempts.push(
-          buildModelDecision({
-            entry,
-            entryType,
-            outcome: "skipped",
-            reason: `${err.reason}: ${err.message}`,
-          }),
-        );
-        if (shouldLogVerbose()) {
-          logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
-        }
-      } else {
-        attempts.push(
-          buildModelDecision({
-            entry,
-            entryType,
-            outcome: "failed",
-            reason: String(err),
-          }),
-        );
-        if (shouldLogVerbose()) {
-          logVerbose(`${capability} understanding failed: ${String(err)}`);
-        }
-      }
-    }
-    if (params.automaticAudio && entryType === "provider") {
-      break;
-    }
-  }
-
-  return { output: null, attempts, processing };
-}
-
-function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachments"]): boolean {
-  return attachments.some((attachment) =>
-    attachment.attempts.some((attempt) => attempt.outcome === "failed"),
-  );
-}
-
-function createAttachmentDispositions(
-  indexes: readonly number[],
-  disposition: MediaAttachmentDisposition,
-): Record<number, MediaAttachmentDisposition> {
-  return Object.fromEntries(indexes.map((index) => [index, disposition]));
-}
-
-export async function runCapability(params: {
-  capability: MediaUnderstandingCapability;
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  attachments: MediaAttachmentCache;
-  media: MediaAttachment[];
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  providerRegistry: LazyProviderRegistry;
-  config?: MediaUnderstandingConfig;
-  activeModel?: ActiveMediaModel;
-  request?: MediaRequestOverrides;
-  execution?: MediaExecutionContext;
-}): Promise<RunCapabilityResult> {
+): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
   const selection = selectAttachments({
     capability,
     attachments: params.media,
+    previousDecisions: ctx.MediaUnderstandingDecisions,
     policy: config.attachments,
   });
   const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);
@@ -756,14 +607,14 @@ export async function runCapability(params: {
   // it once here (apply.ts's memoized factory builds it at most once per turn)
   // and reuse the concrete value for every remaining call below.
   const providerRegistry = resolveProviderRegistry(params.providerRegistry);
-  const entries = resolveModelEntries({
+  let resolvedEntries = resolveModelEntries({
     cfg,
     capability,
     config,
     providerRegistry,
+    modelOverride: params.request?.modelOverride,
   });
-  const automaticAudio = capability === "audio" && entries.length === 0;
-  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
+  const automaticAudio = capability === "audio" && resolvedEntries.length === 0;
   if (!automaticAudio && resolvedEntries.length === 0) {
     resolvedEntries = await resolveAutoEntries({
       ...params,
@@ -798,7 +649,7 @@ export async function runCapability(params: {
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts, processing } = await runAttachmentEntries({
+    const { output, attempts, processing, failed } = await runAttachmentEntries({
       ...params,
       attachment,
       providerRegistry,
@@ -812,6 +663,7 @@ export async function runCapability(params: {
           })
         : resolvedEntries,
       automaticAudio,
+      assertCurrent: params.assertCurrent,
       config,
     });
     if (output) {
@@ -821,7 +673,7 @@ export async function runCapability(params: {
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
-        ? { kind: "failed" }
+        ? (failed ?? { kind: "failed" })
         : { kind: "no-model" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,
@@ -832,7 +684,9 @@ export async function runCapability(params: {
   const result = await buildResult(
     outputs.length > 0
       ? "success"
-      : hasFailedMediaAttempt(attachmentDecisions)
+      : attachmentDecisions.some((attachment) =>
+            attachment.attempts.some((attempt) => attempt.outcome === "failed"),
+          )
         ? "failed"
         : "skipped",
     attachmentDecisions,
@@ -845,4 +699,3 @@ export async function runCapability(params: {
   }
   return result;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

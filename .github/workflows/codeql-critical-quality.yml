@@ -306,7 +306,7 @@ jobs:
               case "${file}" in
                 src/**/*.test.ts|src/**/*.test.tsx|extensions/**/*.test.ts|extensions/**/*.test.tsx)
                   ;;
-                packages/net-policy/src/*|packages/net-policy/src/**/*|src/cli/gateway-cli/run-loop.ts|src/infra/net/*|src/infra/net/**/*|src/infra/ssh-tunnel.ts|src/infra/gateway-lock.ts|src/infra/jsonl-socket.ts|src/infra/push-apns-http2.ts|src/proxy-capture/*|src/proxy-capture/**/*|extensions/codex/src/app-server/transport-websocket.ts|extensions/irc/src/*|extensions/qa-lab/src/*)
+                packages/net-policy/src/*|packages/net-policy/src/**/*|src/cli/gateway-cli/run-loop.ts|src/infra/net/*|src/infra/net/**/*|src/infra/ssh-tunnel.ts|src/infra/gateway-lock.ts|src/infra/exec-host.ts|src/infra/push-apns-http2.ts|src/proxy-capture/*|src/proxy-capture/**/*|extensions/codex/src/app-server/transport-websocket.ts|extensions/irc/src/*|extensions/qa-lab/src/*)
                   network_runtime=true
                   ;;
               esac
@@ -455,7 +455,7 @@ jobs:
           jq -r '.[].filename' "$file_metadata" > "$changed_files"
           jq -c '
             .[]
-            | select(.filename | test("^(src/cli/gateway-cli/run-loop\\.ts|src/infra/(gateway-lock|jsonl-socket|push-apns-http2|ssh-tunnel)\\.ts|src/infra/net/|src/proxy-capture/|extensions/codex/src/app-server/transport-websocket\\.ts|extensions/irc/src/|extensions/qa-lab/src/|packages/net-policy/src/)"))
+            | select(.filename | test("^(src/cli/gateway-cli/run-loop\\.ts|src/infra/(gateway-lock|exec-host|push-apns-http2|ssh-tunnel)\\.ts|src/infra/net/|src/proxy-capture/|extensions/codex/src/app-server/transport-websocket\\.ts|extensions/irc/src/|extensions/qa-lab/src/|packages/net-policy/src/)"))
             | select(.filename | test("(^|/)[^/]+\\.(?:e2e\\.)?test\\.tsx?$") | not)
           ' "$file_metadata" > "$monitored_sources"
           # GitHub patch data is optional; an unknown source diff cannot prove a safe skip.

@@ -15,7 +15,7 @@ export type BackgroundPreference = SchemaContract<Static<typeof BackgroundPrefer
 const BACKGROUND_VISIBILITY_MIN = 0;
 const BACKGROUND_VISIBILITY_MAX = 1;
 export const DEFAULT_BACKGROUND_PREFERENCE: BackgroundPreference = {
-  source: { kind: "theme" },
+  source: { kind: "none" },
   showOnNewSession: true,
   showInSessions: true,
   visibility: 0.5,

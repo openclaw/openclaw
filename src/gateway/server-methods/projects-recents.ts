@@ -58,7 +58,7 @@ export async function listProjectRecents(
       break;
     }
     const repositoryCandidates = batch.flatMap(({ key: sessionKey, entry, agentId }) => {
-      return entry.repositoryWorkspaceId ? [{ agentId, sessionKey }] : [];
+      return entry.repositoryWorkspaceId && !entry.spawnedBy ? [{ agentId, sessionKey }] : [];
     });
     const repositories = new Map(
       (repositoryCandidates.length
@@ -69,6 +69,10 @@ export async function listProjectRecents(
       ).map((repository) => [repository.workspaceId, repository]),
     );
     for (const { key: sessionKey, entry } of batch) {
+      // Agent-spawned helpers run in checkouts their parent chose, not places the person picked.
+      if (entry.spawnedBy) {
+        continue;
+      }
       if (entry.repositoryWorkspaceId) {
         const repository = repositories.get(entry.repositoryWorkspaceId);
         const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -94,7 +98,9 @@ export async function listProjectRecents(
       }
       const projectId = normalizeOptionalString(entry.projectId);
       const explicitProject = projectId ? projectsById.get(projectId) : undefined;
-      const worktreeRoot = normalizeOptionalString(entry.worktree?.repoRoot);
+      const worktreeRoot =
+        normalizeOptionalString(entry.worktree?.canonicalWorkspaceDir) ??
+        normalizeOptionalString(entry.worktree?.repoRoot);
       const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
       const execCwd = normalizeOptionalString(entry.execCwd);
       const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
@@ -105,10 +111,11 @@ export async function listProjectRecents(
         const workspace = indexed.byAgent.get(agentId);
         project = workspace?.repoRoot === folder ? workspace : indexed.byPath.get(folder);
       }
+      const execNode = project || !folder ? undefined : normalizeOptionalString(entry.execNode);
       const key = project
         ? `project:${project.id}`
         : folder
-          ? `folder:${normalizeOptionalString(entry.execNode) ?? ""}\0${folder}`
+          ? `folder:${execNode ?? ""}\0${folder}`
           : undefined;
       if (!key || seen.has(key)) {
         continue;
@@ -122,9 +129,7 @@ export async function listProjectRecents(
               kind: "folder",
               folder: folder!,
               displayName: folderDisplayName(folder!),
-              ...(normalizeOptionalString(entry.execNode)
-                ? { execNode: normalizeOptionalString(entry.execNode) }
-                : {}),
+              ...(execNode ? { execNode } : {}),
             },
       );
       if (recents.length === 8) {

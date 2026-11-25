@@ -31,6 +31,12 @@ Which protocol versions a client may negotiate, and the constants a reference cl
   - `pnpm protocol:gen:swift`
   - `pnpm protocol:check`
 
+Retiring a widget format does not change the connection protocol. Protocol-v4
+clients remain supported after A2UI retirement: surviving widgets keep their wire
+shape, and `board.widget.put` recognizes the retired `registered` request shape
+but rejects it with guidance to use HTML. This compatibility declaration does
+not restore the retired renderer or plugin registration API.
+
 ### Client constants
 
 The reference client implementation lives in `packages/gateway-client/src/`
@@ -69,6 +75,31 @@ unbounded requests keeps the tick watchdog active. If inbound events and
 responses remain silent past the tick-timeout threshold, the client closes the
 socket with code `4000`, rejects every pending request, and reconnects. It does
 not replay rejected requests after reconnecting.
+
+## Update consent and checkout identity
+
+`update-run-consent-identity-v1` in `hello-ok.features.capabilities` announces
+optional `update.run` fields without changing the protocol version:
+
+- `acceptCapabilities?: boolean` carries explicit consent for plugin capability
+  changes during update maintenance. Omission does not grant consent.
+- `checkout?: { gitCommonDir: string } | { packageRoot: string }` identifies the
+  invoking installation. Each object is closed, accepts exactly one non-empty
+  path, and rejects extra fields. Git installs use the common Git directory,
+  not the release worktree path, so identity survives release-layout changes.
+  Package installs use the package root.
+
+Clients send these fields only when the capability is advertised. The Gateway
+rejects a checkout mismatch before creating an update run and names the intended
+installation and the command to update it; nothing changes on refusal.
+
+With an older Gateway, the CLI sends the existing request unchanged. If
+`--accept-capabilities` was requested, it follows that update and then sends
+`update.run` with consent to the upgraded Gateway once the capability appears.
+If the capability is still absent, the CLI exits non-zero, reports that consent
+was not applied, and gives the retry command from the run record. Checkout
+identity cannot be proven for that first update through an older Gateway, so it
+can still update a different installation sharing the same state directory.
 
 ## Local state owner routing
 

@@ -14,29 +14,15 @@ afterAll(() => fs.rmSync(braveProfileDir, { recursive: true, force: true }));
 
 const chromeMcpMock = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => true),
-  countChromeMcpTabs: vi.fn<typeof import("./chrome-mcp.js").countChromeMcpTabs>(),
   ensureChromeMcpAvailable: vi.fn<typeof import("./chrome-mcp.js").ensureChromeMcpAvailable>(
-    async (profileName, profile, options) => {
-      if (!options?.pageProbe) {
-        return;
-      }
-      try {
-        options.pageProbe.onResult(
-          await chromeMcpMock.countChromeMcpTabs(profileName, profile, {
-            ephemeral: true,
-            signal: options.signal,
-          }),
-        );
-      } catch {
-        options.pageProbe.onResult(null);
-      }
-    },
+    async () => {},
   ),
   focusChromeMcpTab: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn<typeof import("./chrome-mcp.js").listChromeMcpTabs>(),
   openChromeMcpTab: vi.fn<typeof import("./chrome-mcp.js").openChromeMcpTab>(),
   closeChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
+  getChromeMcpStatus: vi.fn(() => ({ running: false, tabCount: null })),
 }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
@@ -106,7 +92,6 @@ beforeEach(() => {
     vi.stubEnv(key.toLowerCase(), "");
   }
   chromeMcp.listChromeMcpTabs.mockReset().mockResolvedValue([tab("7", "https://example.com")]);
-  chromeMcp.countChromeMcpTabs.mockReset().mockResolvedValue(1);
   chromeMcp.openChromeMcpTab.mockReset().mockResolvedValue(tab("8", "about:blank"));
   vi.clearAllMocks();
 });
@@ -137,6 +122,20 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
+  it("refuses strict-policy network tabs because Chrome MCP cannot fence redirect hops", async () => {
+    const { live } = setup((state) => {
+      state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    });
+
+    await expect(live.openTab("http://93.184.216.34/redirect")).rejects.toThrow(
+      /requires redirect-hop inspection.*existing-session/,
+    );
+    expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
+
+    await expect(live.openTab("about:blank")).resolves.toMatchObject({ targetId: "8" });
+    expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledTimes(1);
+  });
+
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
     const { ctx } = setup((state) => {
       state.resolved.ssrfPolicy = undefined;
@@ -151,11 +150,7 @@ describe("browser server-context existing-session profile", () => {
     expect(profiles).toMatchObject([
       { transport: "chrome-mcp", cdpPort: null, cdpUrl: "http://127.0.0.1:9222" },
     ]);
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
-      "chrome-live",
-      expect.objectContaining({ cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222" }),
-      expect.anything(),
-    );
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
   it("eagerly closes MCP while attach readiness is pending and prevents retry", async () => {
@@ -205,6 +200,32 @@ describe("browser server-context existing-session profile", () => {
     expectClosedSession(closeResults);
     expect(state.profiles.get("chrome-live")?.lastTargetId).toBe("7");
     expect(state.profiles.get("chrome-live")?.tabAliases).toEqual(aliasesBefore);
+  });
+
+  it("retains failed MCP cleanup for an explicit stop retry", async () => {
+    const { live } = setup();
+    await live.ensureBrowserAvailable();
+    chromeMcp.closeChromeMcpSession
+      .mockReset()
+      .mockRejectedValueOnce(new Error("MCP cleanup failed"))
+      .mockRejectedValueOnce(new Error("MCP cleanup failed"))
+      .mockResolvedValue(false);
+    try {
+      await expect(live.stopRunningBrowser()).rejects.toThrow("MCP cleanup failed");
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
+        ["chrome-live"],
+        ["chrome-live"],
+      ]);
+      await expect(live.stopRunningBrowser()).resolves.toEqual({ stopped: true });
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
+        ["chrome-live"],
+        ["chrome-live"],
+        ["chrome-live"],
+        ["chrome-live"],
+      ]);
+    } finally {
+      chromeMcp.closeChromeMcpSession.mockReset().mockResolvedValue(true);
+    }
   });
 
   it("expires Chrome MCP aliases instead of transferring them to a replacement tab", async () => {

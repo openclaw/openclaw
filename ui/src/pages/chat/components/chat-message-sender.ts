@@ -1,10 +1,15 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentsListResult } from "../../../api/types.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+
+registerChatSessionEnglish();
 
 export function isOwnSenderGroup(
   group: Pick<MessageGroup, "sender">,
@@ -29,7 +34,14 @@ export function resolveMessageGroupSenderLabel(
   group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients"> & {
     messages: ReadonlyArray<{ message: unknown }>;
   },
-  opts: { assistantName?: string; userId?: string | null; userName?: string | null },
+  opts: {
+    agentId?: string;
+    agents?: AgentsListResult["agents"];
+    assistantName?: string;
+    userId?: string | null;
+    userName?: string | null;
+  },
+  currentAgentId = opts.agentId ?? DEFAULT_AGENT_ID,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   if (isSourceOnlyUserGroup(group)) {
@@ -57,13 +69,19 @@ export function resolveMessageGroupSenderLabel(
       : t("common.system");
   }
   const resolvedUserName = resolveLocalUserName({ name: opts.userName });
+  const senderAgentId =
+    group.sender?.identity?.type === "agent" ? group.sender.identity.id : undefined;
   const userLabel = group.senderLabel?.trim();
   return normalizedRole === "user"
-    ? isOwnSenderGroup(group, opts.userId)
-      ? resolvedUserName
-      : (userLabel ?? t("chat.messages.unattributedSender"))
+    ? senderAgentId
+      ? (senderAgentId === currentAgentId ? opts.assistantName?.trim() : undefined) ||
+        opts.agents?.find((agent) => agent.id === senderAgentId)?.identity?.name?.trim() ||
+        senderAgentId
+      : isOwnSenderGroup(group, opts.userId)
+        ? resolvedUserName
+        : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"
-      ? (userLabel ?? opts.assistantName ?? "Assistant")
+      ? (userLabel ?? opts.assistantName ?? t("chat.messages.agentName"))
       : normalizedRole === "tool"
         ? t("chat.messages.toolSender")
         : normalizedRole;

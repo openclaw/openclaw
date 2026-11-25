@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult, SessionsPatchResult } from "../api/types.ts";
+import type { SessionPatchOutcome } from "../lib/sessions/patch.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -30,7 +31,6 @@ it.each([
   "introduced-terminal",
   "introduced-overlap",
   "introduced-event",
-  "introduced-swarm",
   "metadata",
   "replacement",
   "deletion",
@@ -94,7 +94,7 @@ it.each([
     patchReads = 0;
   let hold = false;
   let refresh: Promise<void> | undefined;
-  let readOperation: Promise<SessionsPatchResult | null> | undefined;
+  let readOperation: Promise<SessionPatchOutcome | null> | undefined;
   const { sidebar, provider, sessions, harness } = await mount(async (method, raw) => {
     const params = asOptionalRecord(raw);
     if (method === "sessions.patch") {
@@ -121,7 +121,6 @@ it.each([
   const selected = () => sidebar.querySelector(`[data-session-key="${key}"]`);
   const text = () => selected()?.textContent?.replace(/\s+/g, " ").trim();
   const keys = () => sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key);
-  const done = () => sidebar.querySelector(`[data-session-key="${key}"] [aria-label="Done"]`);
   try {
     await activateSessionMenuValue(sidebar, "owner:ada");
     await waitForFast(() => {
@@ -157,7 +156,6 @@ it.each([
             activeRunIds: overlap ? ["finishing-run", "remaining-run"] : ["finishing-run"],
           }
         : {}),
-      ...(mode === "introduced-swarm" ? { swarmGroupId: "synthetic-group" } : {}),
     };
     filtered = result(introduced ? [parent] : [parent, refreshed]);
     if (introduced) {
@@ -187,13 +185,6 @@ it.each([
           archived: false,
         });
         expect(canonical()?.status).toBe("running");
-      } else if (mode === "introduced-swarm") {
-        harness.publishEvent("sessions.changed", {
-          swarmGroupId: "synthetic-group",
-          kind: "log",
-          text: "Synthetic progress",
-        });
-        expect(canonical()?.swarmLog).toBe("Synthetic progress");
       }
       if (newer) {
         hold = false;
@@ -305,7 +296,7 @@ it.each([
       lastMessagePreview: listed?.lastMessagePreview,
       status: listed?.status,
     }).toStrictEqual({ ...presentation("Latest filtered child"), status: "done" });
-    expect(done()).not.toBeNull();
+    expect(selected()?.querySelector(".session-glyph--running")).toBeNull();
 
     await waitForFast(() => expect(selected()?.textContent).toContain("Latest filtered child"));
     expect(keys()).toEqual(initialRows.map((row) => row.key));

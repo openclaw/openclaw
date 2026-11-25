@@ -2,15 +2,18 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { SdkError, SdkErrorCode, Server } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginToolRegistryAcquisition } from "../plugins/tools.js";
-import { AsyncWorkScope, runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
@@ -140,12 +143,7 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
     shutdown();
   }
   failures.push(...(await shutdownComplete.promise));
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "MCP connection and transport shutdown failed");
-  }
+  throwCollectedErrors(failures, "MCP connection and transport shutdown failed");
 }
 
 /** Owns discovered registrations and nested SDK borrows for one terminal stdio service. */
@@ -155,7 +153,7 @@ export async function serveRegisteredToolsMcpServer(params: {
 }): Promise<void> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   sdkResourceHost.bindScheduler(scheduler);
   let acquisition: PluginToolRegistryAcquisition | undefined;
 
@@ -202,10 +200,5 @@ export async function serveRegisteredToolsMcpServer(params: {
   } catch (error) {
     failures.push(error);
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "MCP serving and registration cleanup failed");
-  }
+  throwCollectedErrors(failures, "MCP serving and registration cleanup failed");
 }

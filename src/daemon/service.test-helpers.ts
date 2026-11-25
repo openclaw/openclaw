@@ -84,6 +84,7 @@ export function createMockGatewayService(overrides: Partial<GatewayService> = {}
     stop: vi.fn(async () => {}),
     restart: vi.fn(async () => ({ outcome: "completed" as const })),
     isLoaded: vi.fn(async () => false),
+    isEnabled: vi.fn(async () => true),
     readCommand: vi.fn(async () => null),
     readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
     ...overrides,

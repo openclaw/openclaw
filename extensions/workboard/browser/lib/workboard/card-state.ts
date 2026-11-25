@@ -119,13 +119,27 @@ function parentDependencyIds(card: WorkboardCard): string[] {
   );
 }
 
+// Card writers replace the canonical array; retain its card references for fresh field reads.
+const dependencyCardsById = new WeakMap<
+  readonly WorkboardCard[],
+  ReadonlyMap<string, WorkboardCard>
+>();
+
 export function getWorkboardDependencyState(
   card: WorkboardCard,
   cards: readonly WorkboardCard[],
   complete = true,
 ): WorkboardDependencyState {
-  const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
-  const parents = parentDependencyIds(card).map((id) => {
+  const parentIds = parentDependencyIds(card);
+  if (!parentIds.length) {
+    return { parents: [], blockedParents: [] };
+  }
+  let cardsById = dependencyCardsById.get(cards);
+  if (!cardsById) {
+    cardsById = new Map(cards.map((entry) => [entry.id, entry]));
+    dependencyCardsById.set(cards, cardsById);
+  }
+  const parents = parentIds.map((id) => {
     const parent = cardsById.get(id);
     return {
       id,
@@ -178,7 +192,7 @@ export const WORKBOARD_DRAFT_DEFAULTS = {
   draftNotes: "",
   draftStatus: "todo",
   draftPriority: "normal",
-  draftLabels: "",
+  draftLabels: [],
   draftAgentId: "",
   draftSessionKey: "",
   draftTemplateId: "",
@@ -193,17 +207,13 @@ export function resetDraftState(state: WorkboardUiState) {
   }
 }
 
-export function normalizeDraftLabels(value: string): string[] {
-  return normalizeUniqueTrimmedStringList(value.split(",")).slice(0, 12);
-}
-
 export function draftPayload(state: WorkboardUiState) {
   return {
     title: state.draftTitle,
     notes: state.draftNotes,
     status: state.draftStatus,
     priority: state.draftPriority,
-    labels: normalizeDraftLabels(state.draftLabels),
+    labels: normalizeUniqueTrimmedStringList(state.draftLabels).slice(0, 12),
     agentId: state.draftAgentId,
     sessionKey: state.draftSessionKey,
     ...(state.draftTemplateId ? { templateId: state.draftTemplateId } : {}),
@@ -258,7 +268,7 @@ export function rebaseWorkboardDraft(state: WorkboardUiState, current: Workboard
     state.draftPriority = next.priority;
   }
   if (!changed.has("labels")) {
-    state.draftLabels = next.labels.join(", ");
+    state.draftLabels = [...next.labels];
   }
   if (!changed.has("agentId")) {
     state.draftAgentId = next.agentId;

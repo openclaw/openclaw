@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -7,8 +8,9 @@ import { createWebPushCapability } from "../app/web-push.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import { clearCronInventory, receiveCronInventoryEvent } from "../lib/cron/inventory-connection.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -18,6 +20,7 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import type { CommandPalette } from "./command-palette.tsx";
 
 export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
@@ -25,6 +28,7 @@ export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
   let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
     vi.useFakeTimers();
     restoreDialogPolyfill = installDialogPolyfill();
     scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
@@ -59,7 +63,10 @@ export function createGateway(
     ((method: string) =>
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
   const client = createTestGatewayClient((...args) => {
-    // Creation catalogs must not consume scripted search replies.
+    // Draft chrome reads must not consume scripted search replies.
+    if (args[0] === "agent.identity.get") {
+      return null;
+    }
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }
@@ -74,17 +81,15 @@ export function createGateway(
     }
     return request(...args);
   });
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    client,
-    phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: connected ? "connected" : "reconnecting",
+      hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
   Object.assign(gateway, {
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     setSessionKey: () => undefined,
@@ -92,9 +97,7 @@ export function createGateway(
   return {
     gateway,
     emit(this: void, event: string, payload: unknown = {}) {
-      if (event === "cron" || event === "config.changed") {
-        invalidateCronCatalog(client);
-      }
+      receiveCronInventoryEvent(client, { type: "event", event, payload });
       const invalidation = modelCatalogEventInvalidation({ event, payload });
       if (invalidation) {
         invalidateChatMetadataStore(client, undefined, undefined, invalidation);
@@ -103,7 +106,7 @@ export function createGateway(
     },
     setConnected(this: void, nextConnected: boolean) {
       if (!nextConnected) {
-        invalidateCronCatalog(client);
+        clearCronInventory(client);
         invalidateChatMetadataStore(client);
       }
       publish({
@@ -133,11 +136,21 @@ export function createContext(
     agents,
     agentIdentity: createAgentIdentityCapability(gateway),
     sessions: {
-      list,
+      // Scenarios script live search; the archived title lookup finds nothing.
+      list: (options: Parameters<ApplicationContext["sessions"]["list"]>[0]) =>
+        options?.archivedFilter === "archived" ? Promise.resolve(null) : list(options),
       state: { result: null },
       subscribe: () => () => undefined,
     },
   } as unknown as ApplicationContext;
+}
+
+/** Live session searches, without the archived title lookup that accompanies each one. */
+export function liveSessionSearches(list: ApplicationContext["sessions"]["list"]) {
+  return vi
+    .mocked(list)
+    .mock.calls.map(([options]) => options)
+    .filter((options) => options?.archivedFilter !== "archived");
 }
 
 export function createSessionResult(key: string, displayName: string): SessionsListResult {
@@ -148,6 +161,27 @@ export function createSessionResult(key: string, displayName: string): SessionsL
     defaults: {},
     sessions: [{ key, kind: "direct", displayName, updatedAt: 1 }],
   } as SessionsListResult;
+}
+
+export function transcriptResult(
+  roster: SessionsListResult,
+  snippet: string,
+): SessionsSearchResult {
+  const sessionKey = roster.sessions[0]!.key;
+  return {
+    sessions: roster.sessions,
+    results: [
+      {
+        sessionKey,
+        sessionId: sessionKey.split(":").at(-1)!,
+        messageId: "message",
+        role: "assistant",
+        timestamp: 1,
+        score: 1,
+        snippet,
+      },
+    ],
+  };
 }
 
 export async function mountPalette(context = createContext(createGateway(true).gateway)) {

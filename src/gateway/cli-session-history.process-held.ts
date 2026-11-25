@@ -6,37 +6,14 @@ import type {
   ChatHistoryMessageParams,
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
-  SessionHistorySubagentFacts,
 } from "../config/sessions/session-history-types.js";
-import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
-import type { CliHistoryReaders } from "./cli-session-history.js";
-import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
-import {
-  createPreparedSessionHistorySubagentProjection,
-  prepareSessionHistorySubagentFacts,
-} from "./session-history-delta-visibility.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import type { ProcessHeldCliHistoryRequest } from "./cli-session-history.process-held.worker.js";
+import { prepareSessionHistorySubagentFacts } from "./session-history-delta-visibility.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
-import type {
-  SessionTranscriptPageOptions,
-  SessionTranscriptPageReader,
-} from "./session-transcript-read.types.js";
 
 type MemoryHistoryRead = NonNullable<ReturnType<typeof captureSessionActorTranscriptRead>>;
-
-type Request =
-  | {
-      kind: "by-id";
-      messageId: string;
-      options: Parameters<SessionTranscriptPageReader["readSessionMessageByIdAsync"]>[2];
-    }
-  | { kind: "page"; options: SessionTranscriptPageOptions }
-  | {
-      kind: "around";
-      options: Parameters<
-        SessionTranscriptPageReader["readSessionMessagesAroundIdWithStatsAsync"]
-      >[1];
-    };
 
 /** Read canonical memory history from its actor while CLI matching stays in a compute worker. */
 export async function readProcessHeldCliHistory(
@@ -100,7 +77,7 @@ async function readProcessHeldCliHistoryQuery(
       requestSignal.throwIfAborted();
       assertCurrent();
       // SAFETY: The paired worker constructs this closed protocol; the host fixes and validates the source target.
-      const request = value as Request;
+      const request = value as ProcessHeldCliHistoryRequest;
       const readResult =
         request.kind === "page"
           ? await readers.readSessionMessagesPageWithStatsAsync(
@@ -170,64 +147,4 @@ async function readProcessHeldCliHistoryQuery(
   );
   assertCurrent();
   return { kind: "rpc", page };
-}
-
-export async function readProcessHeldCliHistoryInWorker(
-  history: ChatHistoryDisplayRequest,
-  channel: WorkerTaskChannel,
-): Promise<ChatHistoryDisplayResult> {
-  const params = history.params;
-  const facts: SessionHistorySubagentFacts = { sessions: [], runMessages: [] };
-  let subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
-  const request = async <T>(value: Request): Promise<T> => {
-    const response = await channel.request(value);
-    try {
-      // SAFETY: The paired host owns this typed response and validates the retained source before disclosure.
-      const reply = response.input as { result: T; facts: SessionHistorySubagentFacts };
-      facts.sessions.push(...reply.facts.sessions);
-      facts.runMessages.push(...reply.facts.runMessages);
-      subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
-      return reply.result;
-    } finally {
-      response.consumed();
-    }
-  };
-  const readers: CliHistoryReaders = {
-    subagentCoordination: {
-      isSubagentSession: (key) => subagents.isSubagentSession(key),
-      isSubagentRunMessage: (runId, seq) => subagents.isSubagentRunMessage(runId, seq),
-    },
-    readSessionMessageByIdAsync: (_scope, messageId, options) =>
-      request({ kind: "by-id", messageId, options }),
-    readRecentSessionMessagesWithStatsAsync: (_scope, options) =>
-      request({ kind: "page", options: { ...options, offset: 0 } }),
-    readSessionMessagesPageWithStatsAsync: (_scope, options) => request({ kind: "page", options }),
-    readSessionMessagesAroundIdWithStatsAsync: (_scope, options) =>
-      request({ kind: "around", options }),
-  };
-  const [
-    { prepareCliSessionHistoryReader, readChatHistoryMessageFromReaders },
-    { readChatHistoryPageKernel },
-  ] = await Promise.all([
-    import("./cli-session-history.js"),
-    import("./server-methods/chat-history-page-kernel.js"),
-  ]);
-  if (history.kind === "rpc-message") {
-    return {
-      kind: "rpc-message",
-      result: await readChatHistoryMessageFromReaders(history.params, readers),
-    };
-  }
-  const cli = await prepareCliSessionHistoryReader(params, readers);
-  try {
-    const page = await readChatHistoryPageKernel(params, {
-      readers: cli?.readers ?? readers,
-      deferProfileDisplay: true,
-      readMessageSequence: cli?.sequence,
-    });
-    cli?.applyPagination(page);
-    return { kind: "rpc", page };
-  } finally {
-    cli?.dispose();
-  }
 }

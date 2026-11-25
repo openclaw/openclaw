@@ -1,8 +1,10 @@
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  clientCapabilities?: string[];
   createdVia?: unknown;
   createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
@@ -11,12 +13,14 @@ export type SessionEntryCurrentFacts = {
   agentHarnessId?: SessionEntry["agentHarnessId"];
   agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
   initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
   deviceFolder?: SessionEntry["deviceFolder"];
   sandbox?: SessionEntry["sandbox"];
   sandboxMode?: SessionEntry["sandboxMode"];
   permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   sessionRoot?: SessionEntry["sessionRoot"];
   authProfileOverride?: SessionEntry["authProfileOverride"];
   authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
@@ -27,8 +31,10 @@ export type SessionEntryCurrentFacts = {
   previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
@@ -37,13 +43,12 @@ export type SessionEntryCurrentFacts = {
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
   inheritedToolPolicySource?: unknown;
+  delegatedOperatorSource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   delegatedToolPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
+  skillLibrarySelections?: unknown;
+  executionPolicy?: unknown;
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
@@ -52,6 +57,7 @@ export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
     sessionKey: string;
     sessionIdLookup?: string;
     projection?: "capability";
+    readCustody?: SessionStoreReadCustody;
   }>;
 
 /** A current-row restriction; the caller's existing admission still supplies authority. */

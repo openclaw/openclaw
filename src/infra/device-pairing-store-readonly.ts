@@ -58,11 +58,7 @@ async function readPairing<Command extends DevicePairingReadCommand>(
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
-    const preparedNodes =
-      prepareNodes && (!reply || "list" in reply)
-        ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
-        : undefined;
-    return { reply, nodes: preparedNodes };
+    return { reply, nodes: prepareNodes ? publication.readNodes() : undefined };
   };
   const observed = await read();
   if (observed) {
@@ -75,7 +71,7 @@ async function readPairing<Command extends DevicePairingReadCommand>(
       throw new Error("Device pairing read publication was replaced");
     }
     return refreshed;
-  });
+  }, command.type);
 }
 
 /** Current paired rows and prepared node bindings share the publication's revision and lifetime. */
@@ -154,7 +150,7 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   baseDir?: string,
 ) {
   const { reply } = await readPairing(
-    { type: "devicePairing.bootstrapContext", input },
+    { type: "devicePairing.bootstrapContext", input: { ...input } },
     baseDir,
     true,
   );

@@ -9,14 +9,18 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { createCopilotAgentHarness } from "../harness.js";
+import { makeCopilotModel, makeUserTurnRecorder } from "./attempt.test-support.js";
 import { createCopilotFaultPeer } from "./catalog-lifetime.test-support.js";
 import { createCopilotClientPool } from "./runtime.js";
-import { createCopilotToolBridge } from "./tool-bridge.js";
 import * as toolBridgeModule from "./tool-bridge.js";
 
 it("cancels a resumed Code Mode cell during real SDK session.error cleanup before host closure", async () => {
@@ -59,28 +63,10 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     sessionKey,
     storePath: path.join(state.sessionsDir(), "sessions.json"),
   };
-  const userMessage = {
-    role: "user" as const,
-    content: "Exercise the deterministic catalog lifetime fixture.",
-    timestamp: Date.now(),
-  };
-  let persisted = false;
-  let blocked = false;
-  const recorder: NonNullable<AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"]> = {
-    message: userMessage,
-    resolveMessage: async () => userMessage,
-    markRuntimePersistencePending: () => {},
-    markRuntimePersisted: () => void (persisted = true),
-    markBlocked: () => void (blocked = true),
-    hasPersisted: () => persisted,
-    isBlocked: () => blocked,
-    hasRuntimePersistencePending: () => false,
-    getAdmissionReceipt: () => undefined,
-    waitForRuntimePersistence: async () => {},
-    persistApproved: async () => {},
-    persistBlocked: async () => {},
-    persistFallback: async () => {},
-  };
+  const userMessage = makeUserMessage(
+    "Exercise the deterministic catalog lifetime fixture.",
+    Date.now(),
+  );
   const config = { tools: { codeMode: { enabled: true } } };
   const host = await createAdmittedHostCapabilityTestFixture({
     config,
@@ -92,7 +78,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     abortSignal: callController.signal,
   });
   let attempt: ReturnType<typeof harness.runAttempt> | undefined;
-  const realCreateToolBridge = createCopilotToolBridge;
+  const realCreateToolBridge = toolBridgeModule.createCopilotToolBridge;
   const constructBridge = vi
     .spyOn(toolBridgeModule, "createCopilotToolBridge")
     .mockImplementation(async (input) => {
@@ -123,18 +109,13 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       auth: { useLoggedInUser: true },
       provider: "github-copilot",
       modelId: "auto",
-      model: {
-        api: "openai-responses",
-        provider: "github-copilot",
+      model: makeCopilotModel({
         id: "auto",
         name: "Local protocol fixture",
         baseUrl: "http://127.0.0.1",
         reasoning: false,
-        input: ["text"],
-        contextWindow: 128000,
         maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
+      }),
       authStorage,
       authProfileStore: { version: 1, profiles: {} },
       modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -143,10 +124,13 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       timeoutMs: 60_000,
       abortSignal: callController.signal,
       observeToolTerminal: createContractToolTerminalObserver(runId),
-      userTurnTranscriptRecorder: recorder,
+      userTurnTranscriptRecorder: makeUserTurnRecorder(userMessage),
       onAgentToolResult: (event) => void observed.push(event),
     } satisfies AgentHarnessAttemptParamsV2 & { auth: { useLoggedInUser: true } };
-    attempt = harness.runAttempt(params).finally(() => {
+    // Gateway runs reach the harness inside an admitted session turn.
+    attempt = runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>
+      harness.runAttempt(admitted),
+    ).finally(() => {
       host.closeHost();
       host.closeAdmission();
     });

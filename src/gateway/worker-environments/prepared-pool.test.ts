@@ -156,7 +156,6 @@ describe("prepared worker reserve lifecycle", () => {
           return {
             providerId: fixture.provider.id,
             profileSnapshot: fixture.profile(),
-            preparationKey: PREPARATION_KEY,
           };
         },
         reconcile,
@@ -204,7 +203,6 @@ describe("prepared worker reserve lifecycle", () => {
         const intent = {
           providerId: fixture.provider.id,
           profileSnapshot: fixture.profile(path.basename(projectPath!)),
-          preparationKey: PREPARATION_KEY,
         };
         admittedAt.set(intent, generation);
         return intent;
@@ -224,9 +222,7 @@ describe("prepared worker reserve lifecycle", () => {
   it("runs only two preparations concurrently and drains admitted work after shutdown", async () => {
     fixture.developmentProfile.readyWorkers = 3;
     await activeSource("source");
-    const entered = createDeferred();
-    const release = createDeferred();
-    fixture.releases.push(() => release.resolve());
+    const { entered, release } = fixture.gate();
     const reconcile = vi.fn(async (_record: WorkerEnvironmentRecord, signal: AbortSignal) => {
       if (reconcile.mock.calls.length === 2) {
         entered.resolve();
@@ -354,9 +350,7 @@ describe("prepared worker reserve lifecycle", () => {
   it("keeps actual service reserve cleanup outside the installed placement fence while stop drains it", async () => {
     const reserve = await seedReady("expired", { reserve: true });
     fixture.nowMs = 2_000;
-    const entered = createDeferred();
-    const release = createDeferred();
-    fixture.releases.push(() => release.resolve());
+    const { entered, release } = fixture.gate();
     fixture.provider.destroy = vi.fn(async () => {
       entered.resolve();
       await release.promise;

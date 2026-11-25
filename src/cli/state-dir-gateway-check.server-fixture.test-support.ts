@@ -30,23 +30,17 @@ const close = () => {
   return (closePromise ??= (async () => {
     await Promise.allSettled([startup]);
     await runQaGatewayFixture(
-      async () => {
-        await server?.close();
-      },
-      async () => {
-        await startupOperations?.drain();
-      },
+      async () => server?.close(),
+      async () => startupOperations?.drain(),
     );
   })());
 };
+const fail = (error: unknown): never => {
+  console.error(error);
+  process.exit(1);
+};
 const stop = () => {
-  void close().then(
-    () => process.exit(0),
-    (error: unknown) => {
-      console.error(error);
-      process.exit(1);
-    },
-  );
+  void close().then(() => process.exit(0), fail);
 };
 process.once("SIGTERM", stop);
 process.once("SIGINT", stop);
@@ -100,10 +94,6 @@ try {
   await startup;
 } catch (error) {
   console.error(error);
-  try {
-    await close();
-  } catch (cleanupError) {
-    console.error(cleanupError);
-  }
+  await close().catch(console.error);
   process.exit(1);
 }

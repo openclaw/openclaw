@@ -48,8 +48,6 @@ import {
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
@@ -60,8 +58,16 @@ export type SessionMutationAuthorizationParams = {
   context: GatewayRequestContext;
   /** Trusted prepared identity; never adopt a later target while capturing authority. */
   expectedTarget?: ExpectedSessionMutationTarget;
+  /** Recorded-principal input requires an existing, unarchived physical destination. */
+  assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Resolve this pending requirement against the exact existing session. */
+  participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Database access classified by the host-owned method registry. */
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   preparedSharing?: PreparedMutationSharing;
   preparedTargets?: ReadonlyArray<{
@@ -136,6 +142,10 @@ export function prepareSessionMutationAuthorizationRequest(
   // Progress remains bound to its captured conversation even for administrators.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
+  // Administrator access still needs the exact Talk target for transport ownership.
+  const bindsTalkTarget =
+    resolveTalkSessionTargetInput(params.method, params.requestParams, params.client?.connId) !==
+    undefined;
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
   if (
     !adminBypass &&
@@ -154,6 +164,7 @@ export function prepareSessionMutationAuthorizationRequest(
       !adminBypass ||
       requiresCommunicationAuthority ||
       bindsProgressLifecycle ||
+      bindsTalkTarget ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
@@ -182,15 +193,6 @@ export type ExpectedSessionMutationTarget = Readonly<{
 }>;
 
 export type { PreparedMutationSharing } from "./session-sharing-read.js";
-
-export type SessionSharingLookupCaches = {
-  storeCache: GatewaySessionStoreCache;
-  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-};
-
-export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
-  return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.
 // The router still prevents view/suggest-capped callers from reassigning foreign sessions.
@@ -400,7 +402,7 @@ export function resolvePreparedTalkAuthorizationTarget(
 }
 
 export function findPreparedSharingTarget(
-  params: SessionMutationAuthorizationParams,
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
   targetRef: { sessionKey?: string; key?: string; agentId?: string },
 ) {
   const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);
@@ -408,6 +410,33 @@ export function findPreparedSharingTarget(
   return params.preparedTargets?.find(
     (target) => target.sessionKey === sessionKey && target.agentId === agentId,
   );
+}
+
+/** Resolve a canonical writer target back to its retained request identity. */
+export function bindSessionMutationSharingReader(
+  authorization: SessionMutationAuthorization,
+  params: SessionMutationAuthorizationParams,
+  targets: readonly AuthorizedSessionMutationTarget[],
+): void {
+  if (!params.preparedTargets) {
+    return;
+  }
+  authorization.readTargetSharing = (targetRef) => {
+    const expected = targets.find(
+      (target) =>
+        target.resolved?.canonicalKey === targetRef.sessionKey &&
+        target.resolved.agentId === targetRef.agentId,
+    );
+    if (!expected) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    authorization.assertTargetCurrent(expected);
+    const retained = findPreparedSharingTarget(params, expected);
+    if (!retained) {
+      throw sessionMutationTargetChanged(params.method, targetRef.sessionKey);
+    }
+    return retained.read();
+  };
 }
 
 export async function withCurrentSessionSharingSource<T>(params: {

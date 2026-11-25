@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
+import {
+  expectRpcError as expectError,
+  expectRpcResult as expectSuccess,
+} from "./rpc-response.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
@@ -41,7 +45,8 @@ import { channelPairingHandlers } from "./channel-pairing.js";
 const pairingPlugin = {
   id: "whatsapp",
   meta: { label: "WhatsApp" },
-  pairing: { idLabel: "Phone number", notifyApproval: vi.fn(async () => undefined) },
+  pairing: { idLabel: "Phone number" },
+  outbound: { deliveryMode: "gateway", sendText: vi.fn() },
   config: {
     listAccountIds: () => ["personal", "public", "unconfigured"],
     resolveAccount: (_cfg: unknown, accountId: string) => ({
@@ -88,13 +93,6 @@ function pairingEntry(id = senderId, meta?: Record<string, string>) {
 function approved(id = senderId, meta?: Record<string, string>) {
   return { id, entry: pairingEntry(id, meta) };
 }
-function expectError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-function expectSuccess(respond: ReturnType<typeof vi.fn>, result: object) {
-  expect(respond).toHaveBeenCalledWith(true, result, undefined);
-}
-
 async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,
@@ -244,6 +242,7 @@ it.each(["notification", "command-owner"])(
         cfg: expect.any(Object),
         pairingAdapter: pairingPlugin.pairing,
         meta,
+        gatewayOwnedDelivery: true,
       });
     }
     expectSuccess(respond, {
@@ -254,6 +253,13 @@ it.each(["notification", "command-owner"])(
     });
   },
 );
+
+it("does not notify a sender when the pairing request no longer exists", async () => {
+  mocks.approve.mockResolvedValue(null);
+  const respond = await invoke("channels.pairing.approve", { ...target, notify: true });
+  expectError(respond, { code: "INVALID_REQUEST" });
+  expect(mocks.notify).not.toHaveBeenCalled();
+});
 
 it("dismisses a request without approving the sender", async () => {
   mocks.dismiss.mockResolvedValue(approved());

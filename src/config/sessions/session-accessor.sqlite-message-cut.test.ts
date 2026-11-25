@@ -1,28 +1,32 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { assert, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  appendTranscriptEvent,
-  forkSessionAtMessage,
-  listSessionBranches,
-  listSessionParticipantsReadOnly,
-  loadSessionEntry,
-  loadTranscriptEvents,
-  readSessionTranscriptMessageEventPage,
-  readSessionTranscriptMessageEvents,
-  rewindSessionToMessage,
-  switchSessionBranch,
-  updateSessionEntry,
+  appendTranscriptEvent as appendEvent,
+  appendTranscriptMessage as appendMessage,
+  forkSessionAtMessage as fork,
+  listSessionBranches as branches,
+  listSessionParticipantsReadOnly as participantsFor,
+  loadSessionEntry as readEntry,
+  loadTranscriptEvents as readEvents,
+  readSessionTranscriptMessageEventPage as readPage,
+  readSessionTranscriptMessageEvents as readMessages,
+  rewindSessionToMessage as rewind,
+  switchSessionBranch as switchBranch,
+  updateSessionEntry as updateEntry,
+  upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
 import {
   agentId,
@@ -31,19 +35,17 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
-import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const fixtures = useSessionMessageCutFixtures();
-async function createSession() {
-  const fixture = await fixtures.createSession();
-  const { env } = fixture.scope;
-  return { ...fixture, params: { agentId, env, sessionKey, entryId: "user-2" } };
-}
+const { createSession, tempDirs } = useSessionMessageCutFixtures();
 
 async function retainLegacyCheckpoints(
-  scope: Parameters<typeof updateSessionEntry>[0] & { sessionId: string },
+  scope: Parameters<typeof updateEntry>[0] & { sessionId: string },
 ) {
   const checkpoints = [
     {
@@ -52,16 +54,79 @@ async function retainLegacyCheckpoints(
       postCompaction: { sessionId: scope.sessionId },
     },
   ];
-  await updateSessionEntry(scope, (entry) => ({ ...entry, compactionCheckpoints: checkpoints }));
+  await updateEntry(scope, (entry) => ({ ...entry, compactionCheckpoints: checkpoints }));
   return checkpoints;
 }
 
-function expectCreated(result: Awaited<ReturnType<typeof rewindSessionToMessage>>) {
-  expect(result.status).toBe("created");
-  if (result.status !== "created") {
-    throw new Error("expected created result");
-  }
-  return result;
+const activeMessageIds = (scope: Parameters<typeof readMessages>[0]) =>
+  readMessages(scope).flatMap(({ event }) =>
+    event && typeof event === "object" && "id" in event ? [event.id] : [],
+  );
+
+/**
+ * Install one stored shape whose canonical navigation is not its raw chain, through
+ * the append owner: no async writer produces these shapes today.
+ */
+async function seedLegacyNavigation(kind: "parentless" | "side-cursor" | "reset-boundary") {
+  const stateDir = tempDirs.make(`openclaw-message-cut-${kind}-`);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const sessionId = `${kind}-source`;
+  const key = `agent:main:${kind}`;
+  const scope = { agentId, env, sessionId, sessionKey: key };
+  const revision = `${kind}-revision`;
+  await upsertEntry(scope, { sessionId, lifecycleRevision: revision, updatedAt: 1 });
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-19T00:00:00Z") + second).toISOString();
+  const message = (id: string, parentId: string | null | undefined, second: number) => ({
+    type: "message",
+    ...(parentId === undefined ? {} : { parentId }),
+    id,
+    timestamp: at(second),
+    message: { role: id.startsWith("u") ? "user" : "assistant", content: id },
+  });
+  const shapes = {
+    // u2 has no `parentId` key, so the scanner continues it from the leaf a1.
+    parentless: [message("u2", undefined, 3)],
+    // A side append moves the cursor, not the leaf: u2 re-parents onto a1.
+    "side-cursor": [
+      {
+        type: "custom",
+        id: "s",
+        customType: "synthetic",
+        appendMode: "side",
+        parentId: "u1",
+        timestamp: at(2),
+        data: {},
+      },
+      message("u2", "s", 3),
+      message("a2", "u2", 4),
+    ],
+    // A reset taken while b1 was active re-roots navigation: a1 predates it.
+    "reset-boundary": [
+      message("b1", "u1", 2),
+      { type: "reset", id: "r1", parentId: "b1", firstKeptEntryId: "b1", timestamp: at(3) },
+      message("u2", "r1", 4),
+      message("a2", "u2", 5),
+    ],
+  }[kind];
+  const resolved = resolveSqliteScope(scope);
+  runOpenClawAgentWriteTransaction(
+    (database) =>
+      appendTranscriptEventsInTransaction(database, { ...resolved, sessionId }, [
+        message("u1", null, 0),
+        message("a1", "u1", 1),
+        ...shapes,
+      ]),
+    toDatabaseOptions(resolved),
+  );
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  const canonical = activeMessageIds(scope);
+  expect(canonical).toEqual(
+    kind === "parentless"
+      ? ["u1", "a1", "u2"]
+      : [...(kind === "side-cursor" ? ["u1", "a1"] : ["b1"]), "u2", "a2"],
+  );
+  return { env, scope, key, sessionId, revision, stateDir, canonical };
 }
 
 function expectEditorResult(result: unknown, key: string) {
@@ -81,15 +146,15 @@ afterEach(() => {
 it("returns missing-session for history navigation in an absent store", async () => {
   const { env } = await createSession();
   const missing = { env, agentId: "absent", sessionKey: "agent:absent:missing" };
-  await expect(rewindSessionToMessage({ ...missing, entryId: "user-2" })).resolves.toEqual({
+  await expect(rewind({ ...missing, entryId: "user-2" })).resolves.toEqual({
     status: "missing-session",
   });
-  await expect(switchSessionBranch({ ...missing, leafEntryId: "assistant-2" })).resolves.toEqual({
+  await expect(switchBranch({ ...missing, leafEntryId: "assistant-2" })).resolves.toEqual({
     status: "missing-session",
   });
   const denied = new Error("Missing-store navigation authority was revoked");
   await expect(
-    rewindSessionToMessage({
+    rewind({
       ...missing,
       entryId: "user-2",
       commitGuard() {
@@ -99,38 +164,46 @@ it("returns missing-session for history navigation in an absent store", async ()
   ).rejects.toBe(denied);
 });
 
-it("returns a committed rewind after identity publication retires its old authority", async () => {
-  const { scope, params } = await createSession();
-  let current = true;
+// Rewind keeps its transcript identity, so the fence retiring pre-rewind readers
+// and writers is the rotated transcript generation, not a new session id.
+it("rewinds in place and voids the pre-rewind transcript generation", async () => {
+  const { env, scope, params } = await createSession();
+  const readGeneration = () =>
+    readTranscriptGenerationInTransaction(
+      openOpenClawAgentDatabase({ agentId, env }),
+      scope.sessionId,
+    );
+  const before = readGeneration();
+  const rotatedSessionIds: Array<string | undefined> = [];
   const stop = onSessionIdentityMutation((event) => {
     if (
       event.kind !== "delete" &&
       event.previous.sessionKeys.includes(sessionKey) &&
       event.current.sessionId !== scope.sessionId
     ) {
-      current = false;
+      rotatedSessionIds.push(event.current.sessionId);
     }
   });
+  let result;
   try {
-    const result = await rewindSessionToMessage(
-      {
-        ...params,
-        commitGuard() {
-          if (!current) {
-            throw new Error("The old session authority ended after publication");
-          }
-        },
-      },
-      sourceExpectedState,
-    );
-    expect({ status: result.status, current, entry: loadSessionEntry(scope) }).toMatchObject({
-      status: "created",
-      current: false,
-      entry: { previousSessionId: scope.sessionId },
-    });
+    result = await rewind(params, sourceExpectedState);
   } finally {
     stop();
   }
+  assert(result.status === "created");
+  expect({
+    sessionId: result.entry.sessionId,
+    previousSessionId: result.entry.previousSessionId,
+    storedSessionId: readEntry(scope)?.sessionId,
+    generationRotated: Boolean(before) && readGeneration() !== before,
+    rotatedSessionIds,
+  }).toEqual({
+    sessionId: scope.sessionId,
+    previousSessionId: undefined,
+    storedSessionId: scope.sessionId,
+    generationRotated: true,
+    rotatedSessionIds: [],
+  });
 });
 
 it("refuses a valid physical store replacement before rewind preparation resumes", async () => {
@@ -141,21 +214,15 @@ it("refuses a valid physical store replacement before rewind preparation resumes
   const replacementPath = `${database.path}.replacement`;
   fs.copyFileSync(database.path, replacementPath, fs.constants.COPYFILE_EXCL);
   const readStoredState = (pathname: string) => {
-    const reader = new DatabaseSync(pathname, { readOnly: true });
-    try {
-      return {
-        entries: reader
-          .prepare(
-            "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
-          )
-          .all(),
-        transcripts: reader
-          .prepare("SELECT * FROM transcript_events ORDER BY session_id, seq")
-          .all(),
-      };
-    } finally {
-      reader.close();
-    }
+    using reader = new DatabaseSync(pathname, { readOnly: true });
+    return {
+      entries: reader
+        .prepare(
+          "SELECT session_key, current_session_id, entry_json FROM session_nodes ORDER BY session_key",
+        )
+        .all(),
+      transcripts: reader.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+    };
   };
   const before = readStoredState(database.path);
   expect(before.entries).toEqual([
@@ -166,7 +233,7 @@ it("refuses a valid physical store replacement before rewind preparation resumes
 
   let originalMoved = false;
   let replacementMoved = false;
-  const mutation = rewindSessionToMessage({
+  const mutation = rewind({
     ...scope,
     storePath: database.path,
     entryId: "user-2",
@@ -210,30 +277,26 @@ it("drains fixture resources before retiring native handles and removing the roo
   const { env } = await createSession();
   const agentDatabase = openOpenClawAgentDatabase({ agentId, env });
   const stateDatabase = openOpenClawStateDatabase({ env });
-  const closingSnapshots: Array<{ agentOpen: boolean; stateOpen: boolean; rootExists: boolean }> =
-    [];
+  const snapshot = () => [
+    agentDatabase.db.isOpen,
+    stateDatabase.db.isOpen,
+    fs.existsSync(env.OPENCLAW_STATE_DIR),
+  ];
+  const closingSnapshots: boolean[][] = [];
   registerOpenClawAgentDatabaseAsyncResource({
     agentId,
     path: agentDatabase.path,
     revoke: () => {},
     close: async () => {
       await Promise.resolve();
-      closingSnapshots.push({
-        agentOpen: agentDatabase.db.isOpen,
-        stateOpen: stateDatabase.db.isOpen,
-        rootExists: fs.existsSync(env.OPENCLAW_STATE_DIR),
-      });
+      closingSnapshots.push(snapshot());
     },
   });
 
   // Inspect real fixture teardown after both consumer and helper afterEach hooks run.
   onTestFinished(() => {
-    expect(closingSnapshots).toEqual([{ agentOpen: true, stateOpen: true, rootExists: true }]);
-    expect([
-      agentDatabase.db.isOpen,
-      stateDatabase.db.isOpen,
-      fs.existsSync(env.OPENCLAW_STATE_DIR),
-    ]).toEqual([false, false, false]);
+    expect(closingSnapshots).toEqual([[true, true, true]]);
+    expect(snapshot()).toEqual([false, false, false]);
   });
 });
 
@@ -243,7 +306,7 @@ it.each(["rewind", "fork"] as const)(
     const { scope, params } = await createSession();
     const ownerChangeGate = createDeferred();
     const ownerChangeStarted = createDeferred();
-    const ownerChange = updateSessionEntry(scope, async () => {
+    const ownerChange = updateEntry(scope, async () => {
       ownerChangeStarted.resolve();
       await ownerChangeGate.promise;
       return { lifecycleRevision: "replacement-lifecycle-revision" };
@@ -251,10 +314,7 @@ it.each(["rewind", "fork"] as const)(
     await ownerChangeStarted.promise;
 
     const targetKey = `${sessionKey}:raced-fork`;
-    const mutation =
-      mode === "rewind"
-        ? rewindSessionToMessage(params)
-        : forkSessionAtMessage({ ...params, targetKey });
+    const mutation = mode === "rewind" ? rewind(params) : fork({ ...params, targetKey });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -262,12 +322,12 @@ it.each(["rewind", "fork"] as const)(
 
     await ownerChange;
     await expect(mutation).resolves.toEqual({ status: "conflict" });
-    expect(loadSessionEntry(scope)).toMatchObject({
+    expect(readEntry(scope)).toMatchObject({
       lifecycleRevision: "replacement-lifecycle-revision",
       sessionId: sourceExpectedState.sessionId,
     });
-    expect(loadSessionEntry({ ...params, sessionKey: targetKey })).toBeUndefined();
-    await expect(listSessionBranches(params)).resolves.toMatchObject({
+    expect(readEntry({ ...params, sessionKey: targetKey })).toBeUndefined();
+    await expect(branches(params)).resolves.toMatchObject({
       status: "ok",
       branches: expect.arrayContaining([
         expect.objectContaining({ active: true, leafEntryId: "assistant-2" }),
@@ -281,24 +341,23 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
 
   const canonicalKey = "agent:main:canonical-message-cut";
-  const result = expectCreated(
-    await rewindSessionToMessage({
-      ...params,
-      sessionKey: canonicalKey,
-      sessionStoreKey: sessionKey,
-    }),
-  );
+  const result = await rewind({
+    ...params,
+    sessionKey: canonicalKey,
+    sessionStoreKey: sessionKey,
+  });
+  assert(result.status === "created");
 
   expectEditorResult(result, sessionKey);
   expect(
-    readSessionTranscriptMessageEventPage(
+    readPage(
       { agentId, env: scope.env, sessionId: result.entry.sessionId },
       { maxMessages: 0, offset: 0 },
     ).totalMessages,
   ).toBe(2);
-  expect(loadSessionEntry(params)?.sessionId).toBe(result.entry.sessionId);
-  expect(loadSessionEntry({ ...params, sessionKey: canonicalKey })).toBeUndefined();
-  expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+  expect(readEntry(params)?.sessionId).toBe(result.entry.sessionId);
+  expect(readEntry({ ...params, sessionKey: canonicalKey })).toBeUndefined();
+  expect(readEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
   expect(result.entry).toMatchObject({
     agentHarnessId: undefined,
     claudeCliSessionId: undefined,
@@ -312,8 +371,10 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     createdActor: { type: "human", source: "profile", id: "profile-1" },
     createdAt: 1_000,
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
-    previousSessionId: "message-cut-source",
+    // The rewound session keeps its transcript, so no generation is retired.
+    sessionId: "message-cut-source",
   });
+  expect(result.entry.previousSessionId).toBeUndefined();
   expect(deliveryContextFromSession(result.entry)).toEqual({
     channel: "telegram",
     to: "chat-123",
@@ -321,23 +382,102 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   });
 });
 
-it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
-  const { scope, params } = await createSession();
-  await appendTranscriptEvent(scope, {
-    type: "oversized-padding",
-    padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
+// Canonical navigation is neither the raw parent chain nor raw child links, and a
+// control resolves in file order: a side cursor re-parents u2 onto a1 ([u1,a1,u2,a2],
+// not [u1,s,u2,a2]); a parentless u2 continues a1, so a1 is not a tip; after a reset
+// a1 predates the boundary, so a control targeting it is rewritten onto the current
+// leaf. Selecting a1 refuses, and the projection keeps agreeing with a full rebuild.
+it.each(["parentless", "side-cursor", "reset-boundary"] as const)(
+  "keeps canonical navigation for a %s history",
+  async (kind) => {
+    const { env, scope, key, sessionId, revision, stateDir, canonical } =
+      await seedLegacyNavigation(kind);
+    expect(await switchBranch({ agentId, env, sessionKey: key, leafEntryId: "a1" })).toEqual({
+      status: "not-branch-tip",
+    });
+
+    const rewound = await rewind(
+      { agentId, env, sessionKey: key, entryId: "u2" },
+      { sessionId, lifecycleRevision: revision },
+    );
+
+    assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
+    expect(activeMessageIds(scope)).toEqual(kind === "reset-boundary" ? ["b1"] : ["u1", "a1"]);
+    if (kind === "side-cursor") {
+      // Switching back must publish what a full canonical rebuild publishes.
+      const switched = await switchBranch({ agentId, env, sessionKey: key, leafEntryId: "a2" });
+      assert(switched.status === "created", `switch refused: ${switched.status}`);
+      await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+      expect(activeMessageIds(scope)).toEqual(canonical);
+    }
+  },
+);
+
+// A rewind repoints incrementally, so oversized history must not send readers
+// through a full rebuild (which failed reads with "rebuilding"); the repoint also
+// refuses by retained bytes, so a large branch never materializes in the worker.
+it("repoints oversized history without hydrating it in one transaction", async () => {
+  const { env, scope, params } = await createSession();
+  // An oversized stored user turn: navigation never decodes it; the editor read
+  // refuses it by budget.
+  await appendMessage(scope, {
+    eventId: "oversized-branch-tip",
+    parentId: "off-path-user",
+    message: { role: "user", content: "x".repeat(SESSION_MESSAGE_CUT_MAX_BYTES) },
+    now: Date.parse("2026-07-18T02:00:00.000Z"),
   });
 
-  const result = expectCreated(await rewindSessionToMessage(params));
-  const targetScope = { ...scope, sessionId: result.entry.sessionId };
-  expect(() => readSessionTranscriptMessageEvents(targetScope)).toThrow(/projection is rebuilding/);
+  // The append made the oversized row the active leaf; leave it, then select it so
+  // the repoint must plan that branch back onto the active path.
+  const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
+  const stateDir = env.OPENCLAW_STATE_DIR as string;
+  expect(await select("assistant-2")).toMatchObject({ status: "created" });
+  const rewound = await rewind({ ...params, entryId: "user-2" });
+  assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
+  const target = { agentId, env, sessionId: rewound.entry.sessionId };
+  expect(readPage(target, { maxMessages: 0, offset: 0 }).totalMessages).toBe(2);
+  expect(await select("assistant-2")).toMatchObject({ status: "created" });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  // A switch needs navigation facts only, so it succeeds over the oversized row,
+  // and only a rewind reads that payload, after validating the selection.
+  expect(await select("oversized-branch-tip")).toMatchObject({ status: "created" });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  expect(activeMessageIds(scope)).toEqual(["user-1", "off-path-user", "oversized-branch-tip"]);
+  await expect(rewind({ ...params, entryId: "oversized-branch-tip" })).rejects.toThrow(
+    /read budget/,
+  );
+});
 
-  await waitForSessionTranscriptProjection(targetScope);
-  expect(readSessionTranscriptMessageEvents(targetScope)).toHaveLength(2);
+// The lifecycle revision is the fence that retires a live writer holding pre-rewind
+// state: without it an owner-fenced append resurrects the branch the cut left.
+it("fences a live writer that holds the pre-rewind incarnation", async () => {
+  const { scope, params } = await createSession();
+  const before = readEntry(scope);
+  assert(before);
+  // Captured by a live SessionManager before the cut.
+  const staleOwner = { lifecycleRevision: before.lifecycleRevision };
+  const result = await rewind(params);
+  assert(result.status === "created");
+  expect(result.entry.sessionId).toBe(scope.sessionId);
+  expect(result.entry.lifecycleRevision).not.toBe(before.lifecycleRevision);
+
+  await expect(
+    appendMessage(
+      { ...scope, expectedOwner: staleOwner },
+      {
+        eventId: "stale-assistant",
+        message: { role: "assistant", content: "resurrected tail" },
+        parentId: "assistant-2",
+      },
+    ),
+  ).rejects.toThrow("session writer claim changed before transcript persistence");
+
+  // The repoint survives and the stale event never reached the transcript.
+  expect(activeMessageIds(scope)).toEqual(["user-1", "assistant-1"]);
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {
-  const { env, scope, params } = await createSession();
+  const { scope, params } = await createSession();
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
   const canonicalSourceKey = "agent:main:canonical-message-cut-source";
   const targetKey = "agent:main:dashboard:message-cut-fork";
@@ -349,7 +489,7 @@ it("forks an exact active-path prefix without changing the source", async () => 
   const sql = observeHostDataSql();
   let result;
   try {
-    result = await forkSessionAtMessage({
+    result = await fork({
       ...params,
       sessionKey: canonicalSourceKey,
       sessionStoreKey: sessionKey,
@@ -361,8 +501,8 @@ it("forks an exact active-path prefix without changing the source", async () => 
   }
 
   expectEditorResult(result, targetKey);
-  result = expectCreated(result);
-  const forkEvents = await loadTranscriptEvents({
+  assert(result.status === "created");
+  const forkEvents = await readEvents({
     ...scope,
     sessionId: result.entry.sessionId,
     sessionKey: targetKey,
@@ -373,13 +513,14 @@ it("forks an exact active-path prefix without changing the source", async () => 
       event && typeof event === "object" && "id" in event ? [event.id] : [],
     ),
   ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
-  expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
-  expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
-  expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).not.toHaveProperty(
+  expect(readEntry(scope)?.sessionId).toBe(scope.sessionId);
+  expect(readEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+  expect(readEntry({ ...params, sessionKey: targetKey })).not.toHaveProperty(
     "compactionCheckpoints",
   );
-  expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
-  expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
+  const participants = participantsFor(scope);
+  expect(participants.get(targetKey)).toBeUndefined();
+  expect(participants.get(sessionKey)).toEqual([
     {
       identity: { type: "profile", id: "source-person" },
       contributionCount: 1,
@@ -397,6 +538,13 @@ it("forks an exact active-path prefix without changing the source", async () => 
   expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
   expect(result.entry.cliSessionBindings).toBeUndefined();
   expect(result.entry.previousSessionId).toBeUndefined();
+  // The copied prefix keeps the parent's CLI account record under the child's id.
+  expect(readEntry({ ...params, sessionKey: targetKey })?.cliHistoryBoundary).toEqual({
+    version: 1,
+    sessionId: result.entry.sessionId,
+    state: "known",
+    authFingerprint: "a".repeat(64),
+  });
   expect(result.entry).toMatchObject({
     parentSessionKey: canonicalSourceKey,
     modelOverride: "gpt-5",
@@ -408,5 +556,26 @@ it("forks an exact active-path prefix without changing the source", async () => 
     sessionId: "message-cut-source",
     entryId: "user-2",
   });
-  expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
+  expect(readEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
+});
+
+it("refuses an oversized history row without changing the session or losing the worker", async () => {
+  const { scope, params } = await createSession();
+  await appendEvent(scope, {
+    type: "custom",
+    id: "huge",
+    parentId: "assistant-2",
+    data: "x".repeat(8 * 1024 * 1024),
+  });
+  const before = readEntry(scope);
+  // Fork is the only cut that still copies history, so the read budget guards it.
+  await expect(
+    fork({ ...params, targetKey: "agent:main:dashboard:message-cut-oversized" }),
+  ).rejects.toBeInstanceOf(SqliteJsonlReadBudgetExceededError);
+  expect(readEntry(scope)).toEqual(before);
+  await updateEntry(scope, (entry) => ({ ...entry, label: "still writable" }));
+  expect(readEntry(scope)?.label).toBe("still writable");
+  // An in-place rewind never reads the oversized row, so no budget applies.
+  const rewound = await rewind(params);
+  expect(rewound.status).toBe("created");
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { PendingWorktreeSlot } from "./pending-slots.worker.js";
 import { readWorktreeRegistryCommand } from "./registry-read.js";
@@ -47,6 +48,7 @@ export function reservePendingWorktree(
             pid: process.pid,
             host: hostname(),
             startedAt: getFileLockProcessStartTime(process.pid),
+            processNamespace: readGatewayLockProcessNamespace(),
           },
         },
         receipt: randomUUID(),

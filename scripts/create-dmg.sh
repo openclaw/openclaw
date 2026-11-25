@@ -10,7 +10,7 @@ set -euo pipefail
 #   DMG_VOLUME_NAME        default: CFBundleName
 #   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
-#   DMG_WINDOW_BOUNDS      default: "400 100 1080 530" (680x430)
+#   DMG_WINDOW_BOUNDS      default: "400 100 1080 578" (680x478, including title bar)
 #   DMG_ICON_SIZE          default: 144
 #   DMG_APP_POS            default: "170 305"
 #   DMG_APPS_POS           default: "510 305"
@@ -44,7 +44,11 @@ DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
 DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/apps/macos/Packaging/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/apps/macos/Packaging/dmg-background.png}"
 
-DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"
+# Show the full 680x446 background below Finder's 32-point title bar. Finder counts
+# each 144-point icon with its label down to about 131 points below the icon's
+# center, so icons at y=305 need at least 436 points of content or Finder adds a
+# vertical scroll bar over the artwork.
+DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 578}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"
 DMG_APP_POS="${DMG_APP_POS:-170 305}"
 DMG_APPS_POS="${DMG_APPS_POS:-510 305}"
@@ -184,12 +188,35 @@ ln -s /Applications "$DMG_SOURCE/Applications"
 
 # Let -srcfolder account for filesystem overhead; du plus fixed slack can
 # underallocate bundles containing many small runtime files.
-hdiutil create \
-  -volname "$DMG_VOLUME_NAME" \
-  -srcfolder "$DMG_SOURCE" \
-  -ov \
-  -format UDRW \
-  "$DMG_RW_PATH"
+create_dmg_image() {
+  local attempt=1
+  local status=0
+  local stderr_path="$DMG_TEMP/create.stderr"
+  while true; do
+    if hdiutil create \
+      -volname "$DMG_VOLUME_NAME" \
+      -srcfolder "$DMG_SOURCE" \
+      -ov \
+      -format UDRW \
+      "$DMG_RW_PATH" 2>"$stderr_path"; then
+      cat "$stderr_path" >&2
+      rm -f "$stderr_path"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$stderr_path" >&2
+    if [[ "$attempt" -ge 3 ]] || ! grep -Fq "Resource busy" "$stderr_path"; then
+      return "$status"
+    fi
+    echo "WARN: hdiutil create reported Resource busy; retrying ($attempt/2)" >&2
+    rm -f "$DMG_RW_PATH"
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+  done
+}
+
+create_dmg_image
 
 DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse)"
 MOUNTED=1

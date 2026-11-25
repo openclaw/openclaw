@@ -3,14 +3,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
 const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
@@ -44,6 +42,7 @@ export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["send
           },
         }
       : {}),
+    ...(normalizeOptionalString(ctx.ForwardedFrom) ? { forwarded: true } : {}),
   };
 }
 
@@ -54,14 +53,22 @@ export function buildPersistedUserTurnMetadata(
   const senderId = normalizeOptionalString(input.sender?.id);
   const senderName = normalizeOptionalString(input.sender?.name);
   const senderUsername = normalizeOptionalString(input.sender?.username);
-  const senderIdentity =
-    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
-      ? readTranscriptSenderIdentity(input.sender?.identity)
-      : undefined;
+  const externalChannelTurn =
+    input.display !== false && (!input.provenance || input.provenance.kind === "external_user");
+  const senderIdentity = externalChannelTurn
+    ? readTranscriptSenderIdentity(input.sender?.identity)
+    : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
+  const requesterOrigin = input.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: input.requesterOrigin })
+    : undefined;
   return {
+    ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.subagentCompletions?.length
+      ? { subagentCompletions: input.subagentCompletions.map((completion) => ({ ...completion })) }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -73,10 +80,13 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(externalChannelTurn && input.sender?.forwarded === true ? { forwarded: true } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
+    ...(input.appContext ? { appContext: structuredClone(input.appContext) } : {}),
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
+    ...(input.humanAddressed ? { humanAddressed: true } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -158,6 +168,12 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (typeof preparedMeta?.chatRequestIdentity === "string") {
     runtimeMeta.chatRequestIdentity = preparedMeta.chatRequestIdentity;
   }
+  delete runtimeMeta.requesterOrigin;
+  if (preparedMeta?.requesterOrigin) {
+    runtimeMeta.requesterOrigin = captureRequesterOrigin({
+      requesterOrigin: preparedMeta.requesterOrigin,
+    });
+  }
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -176,11 +192,16 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   // A rewritten runtime input cannot retain an alternate copy of the original words.
   if (!contentUnchanged) {
     delete runtimeMeta.workContext;
+    delete runtimeMeta.appContext;
   }
   // Selections belong to the submitted bytes, not a hook's rewritten text.
   delete runtimeMeta.humanMentions;
   if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
     runtimeMeta.humanMentions = preparedMeta.humanMentions;
+  }
+  delete runtimeMeta.humanAddressed;
+  if (preparedMeta?.humanAddressed === true) {
+    runtimeMeta.humanAddressed = true;
   }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
@@ -230,11 +251,17 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
   const chatRequestIdentity = originalMeta?.chatRequestIdentity;
+  const requesterOrigin = originalMeta?.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: originalMeta.requesterOrigin })
+    : undefined;
   const originalContent =
-    originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
+    originalMeta?.humanMentions === undefined &&
+    originalMeta?.workContext === undefined &&
+    originalMeta?.appContext === undefined
       ? undefined
       : structuredClone(message.content);
   const workContext = structuredClone(originalMeta?.workContext);
+  const appContext = structuredClone(originalMeta?.appContext);
   const humanMentions = structuredClone(originalMeta?.humanMentions);
   const display = message.display;
   const intent = structuredClone(originalMeta?.intent);
@@ -251,6 +278,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     : undefined;
   const originalTransport = originalMeta?.transport;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(originalMeta?.steerTargetRunId);
+  const humanAddressed = originalMeta?.humanAddressed === true;
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
@@ -288,8 +316,16 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (intent === undefined) {
     delete protectedMeta.intent;
   }
+  delete protectedMeta.requesterOrigin;
+  if (requesterOrigin) {
+    protectedMeta.requesterOrigin = requesterOrigin;
+  }
   // A redacting hook must not leave an alternate copy of the original text visible.
   const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);
+  delete protectedMeta.appContext;
+  if (appContext !== undefined && contentUnchanged) {
+    protectedMeta.appContext = appContext;
+  }
   delete protectedMeta.workContext;
   if (workContext !== undefined && contentUnchanged) {
     protectedMeta.workContext = workContext;
@@ -301,6 +337,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
+  }
+  // Admission already skipped the agent turn; a rewrite cannot make the row disturb an active one.
+  delete protectedMeta.humanAddressed;
+  if (humanAddressed) {
+    protectedMeta.humanAddressed = true;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,

@@ -116,7 +116,10 @@ export function copySecretSentinelDecryptionKey(): Uint8Array {
 }
 
 /** Swaps every known sentinel substring and reports unknown sentinel-shaped values. */
-export function swapSecretSentinelsInText(text: string): { text: string; unknown: string[] } {
+export function swapSecretSentinelsInText(
+  text: string,
+  formatResolvedValue?: (value: string) => string,
+): { text: string; unknown: string[] } {
   if (!containsSecretSentinel(text)) {
     return { text, unknown: [] };
   }
@@ -127,7 +130,7 @@ export function swapSecretSentinelsInText(text: string): { text: string; unknown
       unknown.add(sentinel);
       return sentinel;
     }
-    return value;
+    return formatResolvedValue ? formatResolvedValue(value) : value;
   });
   return { text: swapped, unknown: [...unknown] };
 }

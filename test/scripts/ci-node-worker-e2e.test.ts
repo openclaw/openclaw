@@ -30,6 +30,7 @@ it("selects node-worker process proofs for their owners without static test impo
     "src/worker/worker-process.ts",
     "src/gateway/node-registry.ts",
     "src/cli/node-cli/register.ts",
+    "src/agents/openclaw-plugin-tools.ts",
   ];
   for (const file of [...owners, ...expectedFiles, "docs/ci.md"]) {
     mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });

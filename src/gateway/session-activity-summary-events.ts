@@ -43,7 +43,6 @@ export async function broadcastSessionActivitySummary(
         ...buildGatewaySessionSnapshot({
           sessionRow: row,
           agentId: target.agentId,
-          includeSession: true,
         }),
       },
       {
@@ -52,7 +51,11 @@ export async function broadcastSessionActivitySummary(
         agentId: target.agentId,
         dropIfSlow: true,
         ...(read && projection
-          ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+          ? {
+              prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                reuseEnvelope: true,
+              }),
+            }
           : {}),
       },
     );
@@ -60,9 +63,10 @@ export async function broadcastSessionActivitySummary(
   if (projection) {
     const publications = sessionEventPublicationRows(projection);
     const work = publications.track(
-      Promise.resolve().then(() =>
-        publications.withReadyRows(() => [query], publish, { includeAncestors: true }),
-      ),
+      // Leave publication/transport headroom within the one-second delivery budget.
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 750);
+      }).then(() => publications.withReadyRows(() => [query], publish, { includeAncestors: true })),
     );
     if (captured && key) {
       const owner = pendingSummaries.get(projection) ?? new Map<string, PendingSummary>();

@@ -9,11 +9,8 @@ import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import { compactToolInputHint } from "./tool-schema-hints.js";
-import type {
-  ToolSearchCatalogEntry,
-  ToolSearchToolContext,
-  UnknownToolErrorOptions,
-} from "./tool-search-types.js";
+import type { UnknownToolErrorOptions } from "./tool-search-protocol.js";
+import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 
 function tokenizeLookupValue(input: string): Set<string> {
   return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
@@ -79,7 +76,10 @@ export function formatUnknownToolIdError(
   const suggestions = uniqueStrings(
     entries
       .map((entry) => ({
-        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
+        value:
+          options.exactIdOnly || entry.requiresExactId || (nameCounts.get(entry.name) ?? 0) > 1
+            ? entry.id
+            : entry.name,
         score: scoreUnknownToolSuggestion(normalizedNeedle, needleTokens, entry),
       }))
       .filter((candidate) => candidate.score > 0)
@@ -132,6 +132,7 @@ export function formatCatalogInputError(
   entry: ToolSearchCatalogEntry,
   errors: JsonSchemaValidationError[],
   value: unknown,
+  recoverySurface?: ToolLookupErrorOptions["recoverySurface"],
 ): string {
   const executionSchema = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
   const schema = isRecord(executionSchema) ? executionSchema : undefined;
@@ -176,7 +177,11 @@ export function formatCatalogInputError(
   const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
   const input = compactToolInputHint(schema);
   const signature = input === "unknown" ? "" : ` Expected input: ${input}.`;
-  return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint}${signature}`;
+  const recovery =
+    recoverySurface === "catalog"
+      ? `Find ${JSON.stringify(entry.id)} with catalog.search, then call the tool handle's describe() for its input schema.`
+      : `Use tool_describe with id ${JSON.stringify(entry.id)} for its input schema.`;
+  return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint}${signature} ${recovery}`;
 }
 
 export function formatCatalogOutputError(

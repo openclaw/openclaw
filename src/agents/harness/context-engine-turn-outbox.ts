@@ -6,9 +6,26 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEnginePromptCacheInfo,
+  ContextEngineSessionTarget,
+} from "../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 
-export type PendingContextEngineTurn = Readonly<{
+export type ContextEngineTurnAttemptFacts = {
+  boundary: TranscriptTurnBoundary;
+  sessionIdUsed: string;
+  sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
+  promptError: boolean;
+  aborted: boolean;
+  yieldAborted: boolean;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
+  operatorSource?: QueuedOperatorRecoverySource;
+};
+
+type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
   payload_json: string;
   session_id: string;
@@ -20,27 +37,30 @@ export type ContextEngineTurnRuntimeContext = Readonly<{
   modelId?: string;
   modelContextWindow?: number;
   tokenBudget?: number;
+  /** The turn's last-call usage and cache observation; plain counters only. */
+  promptCache?: ContextEnginePromptCacheInfo;
 }>;
 
 type AdmittedContextEngineTurnOutboxPayload = Readonly<{
   admission: TranscriptTurnAdmission;
-  isHeartbeat: boolean;
   state: "admitted";
 }>;
 
 export type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   state: "accepted";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  /** Host-only original source; never included in plugin hook arguments. */
+  operatorSource?: QueuedOperatorRecoverySource;
 }>;
 
 export type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   messages: AgentMessage[];
   state: "ready";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  /** Host-only original source; never included in plugin hook arguments. */
+  operatorSource?: QueuedOperatorRecoverySource;
 }>;
 
 export type ContextEngineTurnReadFailureKind = Exclude<
@@ -51,7 +71,6 @@ export type ContextEngineTurnReadFailureKind = Exclude<
 export type BlockedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   failure: Exclude<ContextEngineTurnReadFailureKind, "projection-unavailable">;
-  isHeartbeat: boolean;
   state: "blocked";
 }>;
 
@@ -115,7 +134,10 @@ export async function drainContextEngineTurnOutbox(params: {
   sessionId?: string;
   limit?: number;
   /** Observe acknowledged turns without changing durable advancement on observer failure. */
-  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  onCommitted?: (
+    turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0],
+    operatorSource?: QueuedOperatorRecoverySource,
+  ) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
   return params.store.retain
@@ -162,7 +184,10 @@ async function drainRetainedContextEngineTurnOutbox(
 
 async function commitPendingContextEngineTurn(params: {
   engine: ContextEngine;
-  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  onCommitted?: (
+    turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0],
+    operatorSource?: QueuedOperatorRecoverySource,
+  ) => void;
   row: PendingContextEngineTurn;
   store: ContextEngineTurnOutboxStore;
   warn: (message: string) => void;
@@ -186,7 +211,6 @@ async function commitPendingContextEngineTurn(params: {
         sessionKey: payload.boundary.admission.sessionKey,
         storePath: payload.boundary.admission.storePath,
       },
-      isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
       runtimeSettings: buildContextEngineRuntimeSettings({
         contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -209,7 +233,7 @@ async function commitPendingContextEngineTurn(params: {
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
       params.store.assertReadable?.();
-      params.onCommitted?.(commonParams);
+      params.onCommitted?.(commonParams, payload.operatorSource);
     } catch (error) {
       params.warn(
         `[context-engine] committed turn notification failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -230,7 +254,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   prepareRun: {
     input: ContextEngineTurnOutboxFilter & {
       admission?: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
       sessionId: string;
     };
     output: { warnings: string[]; pending: boolean; admitted: boolean };
@@ -252,25 +275,26 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   enqueueIntent: {
     input: ContextEngineTurnOutboxFilter & {
       admission: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
     };
     output: undefined;
   };
   acceptIntent: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       runtimeContext?: ContextEngineTurnRuntimeContext;
+      /** Host-only original source; never included in plugin hook arguments. */
+      operatorSource?: QueuedOperatorRecoverySource;
     };
     output: undefined;
   };
   publishClosedTurn: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       maxBytes: number;
       maxEvents: number;
       runtimeContext?: ContextEngineTurnRuntimeContext;
+      /** Host-only original source; never included in plugin hook arguments. */
+      operatorSource?: QueuedOperatorRecoverySource;
     };
     output: ClosedTranscriptTurnReadResult["kind"];
   };

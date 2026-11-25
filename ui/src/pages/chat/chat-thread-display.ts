@@ -1,0 +1,108 @@
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
+import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
+import { projectSessionsYieldItems } from "./chat-sessions-yield.ts";
+import { projectSubagentCompletions } from "./chat-subagent-completions.ts";
+import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { createChatSearchMatcher, timestampAfterVisibleItems } from "./chat-thread-items.ts";
+import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import type { ChatReasoning } from "./tool-stream-contract.ts";
+
+export type ChatThreadDisplayProps = {
+  runId?: string | null;
+  reasoning?: ChatReasoning | null;
+  showReasoning?: boolean;
+  stream: string | null;
+  streamStartedAt: number | null;
+  showToolCalls: boolean;
+  searchOpen?: boolean;
+  searchQuery?: string;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
+};
+
+export function groupChatDisplayItems(
+  props: ChatThreadDisplayProps,
+  sourceItems: ChatItem[],
+  hidden?: ReadonlySet<string>,
+  facts?: ChatItemsFacts,
+  streamOnset?: Extract<ChatItem, { kind: "stream" }>,
+): Array<ChatItem | MessageGroup> {
+  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+    projectSessionsYieldItems(source, props.showToolCalls, complete);
+  // Keep real user boundaries even when search hides their rows.
+  const completionHidden = hidden ? new Set(hidden) : undefined;
+  const items = projectRunFailureStreaks(
+    projectSubagentCompletions(
+      sourceItems,
+      props.showToolCalls,
+      completionHidden,
+      hidden ? createChatSearchMatcher(props.searchQuery ?? "") : undefined,
+    ),
+  );
+  if (facts) {
+    facts.completionIds = new Set(
+      items.flatMap((item) =>
+        item.kind === "message"
+          ? messageSubagentCompletions(item.message).map(({ sessionKey, runId }) =>
+              JSON.stringify([sessionKey, runId]),
+            )
+          : [],
+      ),
+    );
+  }
+  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+  const projected = projectYields(coalesceToolActivityMessages(items, completionHidden), complete);
+  // Empty streams count as a resumed handoff. Seed only after that projection, without one.
+  const onset =
+    streamOnset &&
+    !complete &&
+    !projected.some((item) => item.kind === "notice" && item.handoffBoundary)
+      ? streamOnset
+      : undefined;
+  if (onset) {
+    projected.splice(
+      projected.findIndex((item) => item.kind === "reading-indicator" && item.key === onset.key),
+      0,
+      onset,
+    );
+  }
+  const grouped = groupMessages(
+    projected,
+    { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson, facts },
+    props.showReasoning ? props.reasoning : undefined,
+    props.showReasoning,
+  );
+  if (facts && onset) {
+    facts.streamOnset = onset;
+    grouped.splice(grouped.indexOf(onset), 1);
+  }
+  return grouped;
+}
+
+export function prepareChatStreamOnset(
+  props: ChatThreadDisplayProps,
+  items: ChatItem[],
+  indicator: Extract<ChatItem, { kind: "reading-indicator" }>,
+  hasEmptyLiveStream: boolean,
+): Extract<ChatItem, { kind: "stream" }> | undefined {
+  if (
+    props.runWorking === true &&
+    (hasEmptyLiveStream || (props.stream === null && props.runId != null)) &&
+    props.streamStartedAt !== null
+  ) {
+    return {
+      ...indicator,
+      kind: "stream",
+      text: "",
+      startedAt: timestampAfterVisibleItems(items, props.streamStartedAt),
+      isStreaming: true,
+    };
+  }
+  return undefined;
+}

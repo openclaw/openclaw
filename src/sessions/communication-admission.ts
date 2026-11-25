@@ -73,6 +73,7 @@ export function communicationEndpointBinding(endpoint: CommunicationEndpoint): s
 export function communicationEntryBinding(entry: SessionEntry | undefined): string {
   return JSON.stringify([
     entry?.sessionId,
+    entry?.previousSessionId,
     entry?.lifecycleRevision,
     entry?.archivedAt,
     entry?.communication,

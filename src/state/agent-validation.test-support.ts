@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
@@ -26,22 +25,6 @@ function assertNativeAgentDatabase(
   }
 }
 
-export function observeValidationPragmas(db: DatabaseSync) {
-  return trackSqliteStatementExecutions(
-    db,
-    ["data_version", "schema_version", "user_version"],
-    (sql) => {
-      if (/FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
-        return "data_version";
-      }
-      const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
-      return name === "data_version" || name === "schema_version" || name === "user_version"
-        ? name
-        : null;
-    },
-  );
-}
-
 export async function withReceiptFixture(
   populated: boolean,
   run: (
@@ -59,7 +42,7 @@ export async function withReceiptFixture(
         VALUES ('agent:main:existing', 'existing', '{"sessionId":"existing","updatedAt":1}', 1);
         UPDATE session_nodes SET entry_valid = 1;
         DELETE FROM session_canonical_validation_pending;`);
-      invalidateOpenClawAgentDatabaseValidation(database.path);
+      invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
       closeOpenClawAgentDatabaseByPath(database.path);
       database = openOpenClawAgentDatabase(options);
       assertNativeAgentDatabase(database);
@@ -78,6 +61,7 @@ export function independentWorkerReceipt(database: OpenClawAgentDatabase) {
     ...receipt,
     receiptId: randomUUID(),
     valid: receipt.valid.slice(0),
+    revokedBy: receipt.revokedBy.slice(0),
     canonicalReady: receipt.canonicalReady.slice(0),
   };
 }

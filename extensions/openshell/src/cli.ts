@@ -12,7 +12,7 @@ export type OpenShellExecContext = {
   timeoutMs?: number;
 };
 
-function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
+export function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
   const argv = [config.command];
   if (config.gateway) {
     argv.push("--gateway", config.gateway);

@@ -15,8 +15,8 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 ### Jobs
 
-1. `resolve_package` checks out `workflow_ref`, resolves one package candidate, writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the `package-under-test` artifact, and prints the source, workflow ref, package ref, version, SHA-256, and profile in the GitHub step summary.
-2. `package_integrity` downloads the `package-under-test` artifact and enforces the public package tarball contract with `scripts/check-openclaw-package-tarball.mjs`.
+1. `resolve_package` checks out `workflow_ref`, resolves one package candidate and unconditionally enforces the public tarball contract with `scripts/check-openclaw-package-tarball.mjs` from the captured qualification tooling, writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the `package-under-test` artifact, and prints the source, workflow ref, package ref, version, SHA-256, and profile in the GitHub step summary.
+2. `package_integrity` requires successful resolution, downloads the canonical `package-under-test` artifact by its exact artifact/run IDs, and verifies its SHA-256 against the resolver output. Every acceptance transport retains this gate; it does not repeat the resolver's full tarball check. Docker imports retain their independent full validation.
 3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard and enforces the installed-package tree budget.
 4. `docker_acceptance` calls `openclaw-live-and-e2e-checks-reusable.yml` with the resolved package source SHA (falling back to `workflow_ref`) and `package_artifact_name=package-under-test`. The reusable workflow downloads that artifact, validates the tarball inventory, prepares package-digest Docker images when needed, and runs the selected Docker lanes against that package instead of packing the workflow checkout. When a profile selects multiple targeted `docker_lanes`, the reusable workflow prepares the package and shared images once, then fans those lanes out as parallel targeted Docker jobs with unique artifacts.
 5. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when `telegram_mode` is not `none` and installs the same `package-under-test` artifact when Package Acceptance resolved one; standalone Telegram dispatch can still install a published npm spec.
@@ -39,6 +39,11 @@ dependency bumps, so the check fails while every shipped updater can still insta
 the candidate. Bytes are far from the cap but vary more with platform native
 prebuilds, so the byte budget keeps roughly 12% in reserve.
 
+The CI published-driver update cell, which runs on scheduled main validation,
+applies the same budget to the tree its published driver installed. That driver
+is newer than the frozen caps and does not refuse oversized trees itself, so this
+check is what turns main red when a change pushes the installed tree over budget.
+
 Newer updaters allow **500,000 entries / 8 GiB** and continue candidate activation
 and publication with directory identity, version, and launcher checks if a scan
 reaches those resource limits, warning that full package contents are unverified.
@@ -55,6 +60,10 @@ tmp="$(mktemp -d)"
 npm install -g --prefix "$tmp" ./openclaw.tgz
 node scripts/check-openclaw-installed-package-budget.mts "$tmp/lib/node_modules/openclaw"
 ```
+
+This check also verifies that the installed Anthropic SDK can resolve its required
+OpenTelemetry API dependency. An empty dependency directory fails even when npm
+reported a successful installation.
 
 On failure, reduce installed entries by trimming the largest dependencies or
 dist chunk and precompressed asset counts; reduce large files for a byte-budget
@@ -149,7 +158,13 @@ full Cartesian baseline/scenario matrix for deliberate manual proof. The
 selector provenance travels only as internal reusable-workflow metadata;
 there is no new manual-dispatch input.
 
-Expanded published-upgrade survivor and update-migration selections use one job per supported baseline/scenario pair, with at most 32 targeted Docker jobs active per matrix. The planner admits existing groups containing `update-restart-auth`, `plugin-update`, and `root-managed-vps-upgrade` first so those long update jobs do not wait behind the expanded scenario matrix. Within each expanded upgrade family, exact baseline cohorts run newest first, putting the measured slower recent upgrades ahead of older baselines. Scenarios within a cohort and other groups retain their input order; unresolved baseline tags preserve caller order. Grouping shares the execution planner's baseline-compatibility policy, so every supported scenario runs exactly once without creating empty shards for old baselines. Each scenario owns a fresh container and the unchanged npm resource limit; package and image identities remain shared across the matrix. `Update Migration` runs weekly on Sunday at 03:17 UTC and on manual dispatch. It defaults to `supported-lines` with both `plugin-deps-cleanup` and `legacy-operator-state`, keeps the existing cleanup coverage, and forwards no provider secrets. The weekly run keeps cleanup on the candidate-relative predecessor and exercises native operator state on each supported baseline. A planning allowance of 12 minutes per scenario plus 30 minutes for shared package/image preparation and controls gives about 78 runner-minutes weekly with three distinct baselines, or 90 with four; actual timing artifacts determine the observed cost.
+Expanded published-upgrade survivor and update-migration selections use one job per supported baseline/scenario pair. The targeted Docker matrix admits up to 64 jobs when it uses GitHub-hosted runners without a custom `runner_group`, consumes a validated package artifact, selects `published-upgrade-survivor` with a nonempty scenario list, and does not select `update-migration`. All other targeted matrices retain the 32-job cap, including self-hosted/custom-group, source-only, unexpanded, and update-migration work. Compared with the previous 48-job hosted cap, this raises peak demand by 16 jobs per matching matrix without adding rows or changing per-runner limits; available hosted and registry capacity still determine realized wall time. The planner admits existing groups containing `update-restart-auth`, `plugin-update`, and `root-managed-vps-upgrade` first so those long update jobs do not wait behind the expanded scenario matrix. Within each expanded upgrade family, exact baseline cohorts run newest first, putting the measured slower recent upgrades ahead of older baselines. Scenarios within a cohort and other groups retain their input order; unresolved baseline tags preserve caller order. Grouping shares the execution planner's baseline-compatibility policy, so every supported scenario runs exactly once without creating empty shards for old baselines. Each scenario owns a fresh container and the unchanged npm resource limit; package and image identities remain shared across the matrix. `Update Migration` runs weekly on Sunday at 03:17 UTC and on manual dispatch. It defaults to `supported-lines` with both `plugin-deps-cleanup` and `legacy-operator-state`, keeps the existing cleanup coverage, and forwards no provider secrets. The weekly run keeps cleanup on the candidate-relative predecessor and exercises native operator state on each supported baseline. A planning allowance of 12 minutes per scenario plus 30 minutes for shared package/image preparation and controls gives about 78 runner-minutes weekly with three distinct baselines, or 90 with four; actual timing artifacts determine the observed cost.
+
+Only at the 64-job hosted capacity, the long-job priority also admits
+`acpx-openclaw-tools-bridge` survivor rows after `plugin-update` and before
+`legacy-operator-state`. Smaller matrices retain their original ordering. This
+can shorten late waves without adding jobs or raising capacity, but cannot
+shorten a first-hop job that is already the longest path.
 
 Pass `baselines=all-since-2026.6.1` for exhaustive historical cleanup; `last-stable-4`, `release-history`, and exact historical versions remain explicit manual selections. Local aggregate runs can pass the resolved exact specs through `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. Existing scenarios retain their baked `openclaw config set` recipes and summary records. The new operator-state scenario instead uses the baseline's own agent, exec-approvals, cron, and plugin CLIs, then verifies preserved state and a mock-provider turn after upgrade. Gateway checks include `/healthz`, `/readyz`, and RPC status. See [Testing updates and plugins](/help/testing-updates-plugins) for the preserved-state and successful-upgrade requirements.
 
@@ -159,9 +174,8 @@ on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
 
 Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
-Node 24.21.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
-Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
-of the later libuv file-watcher regression. Both runtime variants consume the
+Node 24.22.1 and the Node 26.12.1 support floor across Linux, Windows, and macOS.
+Both runtime variants consume the
 same prepared candidate tarball. A focused `suite_filter` selects both Node
 variants; the Node 26 jobs and artifacts have distinct names. Installer and
 source-update lanes keep their existing Node 24 coverage. Explicitly selecting

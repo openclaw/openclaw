@@ -1,5 +1,7 @@
 use super::{managed_launcher, OpenClawCli};
-use crate::runtime_action::{bind_runtime, install_launcher, BundledRuntime, Purpose};
+use crate::runtime_action::{
+    bind_runtime, install_launcher, BundledRuntime, Purpose, RuntimeFlavor,
+};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
@@ -21,8 +23,10 @@ impl Fixture {
 
     fn runtime(&self) -> BundledRuntime {
         BundledRuntime {
-            bun: self.0.join("bun.exe"),
+            executable: self.0.join("bun.exe"),
             sqlite: None,
+            flavor: RuntimeFlavor::Jit,
+            entry: None,
         }
     }
 
@@ -51,7 +55,10 @@ fn windows_managed_launcher_invokes_bun_directly_with_literal_arguments() {
     let cli = OpenClawCli::new(managed_launcher(&fixture.0), fixture.0.clone());
     let payload = "literal & echo unwanted | %PATH% !delayed! \"quoted\"";
     let command = cli.command(["gateway", "status", payload]).unwrap();
-    assert_eq!(command.get_program(), fixture.runtime().bun.as_os_str());
+    assert_eq!(
+        command.get_program(),
+        fixture.runtime().executable.as_os_str()
+    );
     assert_eq!(
         command.get_args().collect::<Vec<_>>(),
         vec![

@@ -12,6 +12,11 @@ export function escapeTelegramHtmlAttr(text: string): string {
   return escapeTelegramHtml(text).replace(/"/g, "&quot;");
 }
 
+// `<tg-time>` attributes: positive Unix time and optional Bot API date-time format.
+// Shared so legacy HTML and rich date_time nodes use one attribute contract.
+export const TELEGRAM_TIME_TAG_ATTRS_PATTERN =
+  /^\s+unix="([1-9]\d*)"(?:\s+format="(r|w?[dD]?[tT]?)")?\s*$/;
+
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#(?:[xX][0-9A-Fa-f]+|\d+)|[A-Za-z0-9]+);/g;
 const TELEGRAM_HTML_ENTITY_AT = new RegExp(TELEGRAM_HTML_ENTITY_PATTERN.source, "y");
 
@@ -23,16 +28,12 @@ const TELEGRAM_NAMED_HTML_ENTITIES = new Map([
   ["apos", "'"],
 ]);
 
-// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
-const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+// Rich islands also form transcript line boundaries; named anchors are handled separately.
+export const TELEGRAM_HTML_BLOCK_ISLAND_TAGS: readonly string[] = [
   "aside",
   "audio",
   "blockquote",
-  "caption",
-  "col",
-  "colgroup",
   "details",
-  "figcaption",
   "figure",
   "footer",
   "h1",
@@ -43,24 +44,33 @@ const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
   "h6",
   "hr",
   "img",
-  "li",
   "ol",
   "p",
   "pre",
-  "summary",
   "table",
+  "tg-collage",
+  "tg-map",
+  "tg-math-block",
+  "tg-slideshow",
+  "ul",
+  "video",
+];
+
+// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
+const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
+  ...TELEGRAM_HTML_BLOCK_ISLAND_TAGS,
+  "caption",
+  "col",
+  "colgroup",
+  "figcaption",
+  "li",
+  "summary",
   "tbody",
   "td",
   "tfoot",
   "th",
   "thead",
-  "tg-collage",
-  "tg-map",
-  "tg-math-block",
-  "tg-slideshow",
   "tr",
-  "ul",
-  "video",
 ]);
 
 export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): boolean {

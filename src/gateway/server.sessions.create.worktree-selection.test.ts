@@ -18,7 +18,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   copyGitWorkspace,
@@ -39,6 +38,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
@@ -158,16 +158,7 @@ test.for([
             read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
           },
         });
-        registry.cliBackends.push({
-          pluginId: "anthropic",
-          source: "test",
-          backend: {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "claude" },
-            bundleMcp: false,
-          },
-        });
+        registry.cliBackends.push(createClaudeCliRegistrationFixture());
         setActivePluginRegistry(registry);
       }
       const { storePath } = await createSessionStoreDir();
@@ -200,7 +191,7 @@ test.for([
         }
       };
       const stopTitleObserver = sessionChanges.subscribe(checkTitle);
-      const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+      const context = {};
       const attachment = {
         type: "file",
         mimeType: "text/plain",
@@ -301,6 +292,7 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
         repoRoot,
       }),
       materialized: true,
+      sourceRoot: repoRoot,
     });
   try {
     const created = await createSession({
@@ -340,7 +332,7 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   }
 });
 
-test("sessions.create maps an admin-selected worktree cwd and rejects repository changes", async () => {
+test("sessions.create maps an admin-selected worktree cwd", async () => {
   const openClawState = await createState("openclaw-session-selected-workspace-");
   const selectedRoot = tempDirs.make(
     "openclaw-session-selected-repository-",
@@ -364,7 +356,7 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   await createSessionStoreDir();
   const createSpy = vi
     .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockResolvedValue({ record, materialized: true });
+    .mockResolvedValue({ record, materialized: true, sourceRoot: selectedWorkspace });
   const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
     const created = await createSession({ key, worktree: true, cwd: selectedWorkspace });
@@ -375,12 +367,6 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
     );
     expect(created.payload?.entry.spawnedCwd).toBe(worktreePath);
     expect(created.payload?.entry.worktree?.canonicalWorkspaceDir).toBe(selectedWorkspace);
-
-    const mismatched = await createSession({ key, worktree: true, cwd: configuredWorkspace });
-    expect(mismatched).toMatchObject({
-      ok: false,
-      error: { message: "session worktree belongs to a different repository" },
-    });
   } finally {
     createSpy.mockRestore();
     findSpy.mockRestore();

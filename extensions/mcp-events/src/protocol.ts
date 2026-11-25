@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** OpenAI's webhook profile, not the experimental polling/streaming extensions. */
 export const MCP_EVENTS_PROFILE = "openai-webhook-2026-07-28";
@@ -41,24 +42,21 @@ export class CallbackError extends Error {
   }
 }
 
-export function record(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  // SAFETY: non-null, non-array objects expose string-indexed values only as unknown.
-  return value as Record<string, unknown>;
-}
-
 function boundedString(value: unknown, maxBytes = 1024): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= maxBytes;
 }
 
 function isoTimestamp(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/u.test(value) &&
-    Number.isFinite(Date.parse(value))
-  );
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/u.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    return false;
+  }
+  // Validate the authored day before an offset or 24:00 can move it to another day.
+  const date = value.slice(0, 10);
+  return new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 }
 
 /** Canonical JSON gives subscribe and unsubscribe the same filter identity. */
@@ -165,9 +163,6 @@ export function parseCallback(
   webhookId: string,
   definition: EventDefinition,
 ): { kind: "verification"; challenge: string } | { kind: "event"; event: ApplicationEvent } {
-  if (body.length > MAX_EVENT_BYTES) {
-    throw new CallbackError(413, "Event exceeds 256 KiB");
-  }
   let value: Record<string, unknown> | undefined;
   try {
     value = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)));

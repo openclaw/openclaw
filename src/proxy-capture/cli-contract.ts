@@ -84,6 +84,15 @@ export const debugProxyCaptureWriteCommandSchema = z.discriminatedUnion("type", 
     .strict(),
 ]);
 
+export const captureQueryPresetSchema = z.enum([
+  "double-sends",
+  "retry-storms",
+  "cache-busting",
+  "ws-duplicate-frames",
+  "missing-ack",
+  "error-bursts",
+]);
+
 export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
   ...debugProxyCaptureWriteCommandSchema.options,
   z
@@ -103,14 +112,7 @@ export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
       type: z.literal("capture.queryPreset"),
       input: z
         .object({
-          preset: z.enum([
-            "double-sends",
-            "retry-storms",
-            "cache-busting",
-            "ws-duplicate-frames",
-            "missing-ack",
-            "error-bursts",
-          ]),
+          preset: captureQueryPresetSchema,
           sessionId: text.optional(),
         })
         .strict(),

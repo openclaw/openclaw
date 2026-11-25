@@ -163,56 +163,6 @@ fi
 `;
 }
 
-type InstalledSystemLaunchDaemonScan =
-  | { status: "absent" }
-  | { status: "installed"; plistPath: string }
-  | { status: "unverifiable"; detail: string };
-
-async function findInstalledSystemLaunchDaemon(
-  label: string,
-): Promise<InstalledSystemLaunchDaemonScan> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(SYSTEM_LAUNCH_DAEMON_DIR);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return { status: "absent" };
-    }
-    return { status: "unverifiable", detail: formatServiceInspectionDetail(error) };
-  }
-
-  for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
-    const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
-    try {
-      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
-        // Unreadable plists are foreign: bracketing queries catch loaded same-label daemons;
-        // an unloaded unreadable same-label plist is an accepted edge (#120481).
-        if (
-          isMissingPathError(error) ||
-          hasErrnoCode(error, "EACCES") ||
-          hasErrnoCode(error, "EPERM")
-        ) {
-          return null;
-        }
-        throw error;
-      });
-      if (contents === null) {
-        continue;
-      }
-      const plist = await decodeLaunchdPlistMetadata(contents);
-      if (plist?.Label === label) {
-        return { status: "installed", plistPath };
-      }
-    } catch (error) {
-      return {
-        status: "unverifiable",
-        detail: `${plistPath}: ${formatServiceInspectionDetail(error)}`,
-      };
-    }
-  }
-  return { status: "absent" };
-}
-
 function classifySystemLaunchDaemonQuery(
   serviceTarget: string,
   result: LaunchctlResult,
@@ -251,17 +201,51 @@ export async function inspectSystemLaunchDaemonOwnership(
     return { status: "absent", serviceTarget };
   }
 
-  const installed = await findInstalledSystemLaunchDaemon(label);
-  if (installed.status === "installed") {
-    return { status: "installed", serviceTarget, plistPath: installed.plistPath };
-  }
-  if (installed.status === "unverifiable") {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(SYSTEM_LAUNCH_DAEMON_DIR);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return { status: "absent", serviceTarget };
+    }
     return {
       status: "unverifiable",
       serviceTarget,
       operation: "filesystem",
-      detail: installed.detail,
+      detail: formatServiceInspectionDetail(error),
     };
+  }
+
+  for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
+    const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
+    try {
+      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
+        // Unreadable plists are foreign: the initial query catches loaded same-label daemons;
+        // an unloaded unreadable same-label plist is an accepted edge (#120481).
+        if (
+          isMissingPathError(error) ||
+          hasErrnoCode(error, "EACCES") ||
+          hasErrnoCode(error, "EPERM")
+        ) {
+          return null;
+        }
+        throw error;
+      });
+      if (contents === null) {
+        continue;
+      }
+      const plist = await decodeLaunchdPlistMetadata(contents);
+      if (plist?.Label === label) {
+        return { status: "installed", serviceTarget, plistPath };
+      }
+    } catch (error) {
+      return {
+        status: "unverifiable",
+        serviceTarget,
+        operation: "filesystem",
+        detail: `${plistPath}: ${formatServiceInspectionDetail(error)}`,
+      };
+    }
   }
   // Concurrent root installers are best effort; activation performs its own check.
   return { status: "absent", serviceTarget };

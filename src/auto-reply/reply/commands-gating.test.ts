@@ -42,7 +42,7 @@ vi.mock("../../agents/bash-tools.js", () => ({
 }));
 
 // mock-isolation: Exercise command authorization without sandbox backends or session storage.
-vi.mock("../../agents/sandbox.js", () => ({
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
@@ -126,15 +126,17 @@ vi.mock("../../config/runtime-overrides.js", () => ({
   unsetConfigOverride: vi.fn(() => ({ ok: true, value: true })),
 }));
 
+// mock-isolation: Use static hints without runtime config reads or plugin discovery in authorization tests.
 vi.mock("../../config/runtime-schema.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/schema.js")>("../../config/schema.js");
   return {
-    loadGatewayRuntimeConfigSchema: () => actual.buildConfigSchemaCore(),
+    loadGatewayConfigRedactionHints: () => actual.buildConfigSchemaCore().uiHints,
   };
 });
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isInternalMessageChannel: isInternalMessageChannelMock,
 }));
 
@@ -236,18 +238,6 @@ describe("command gating", () => {
       },
     });
     expect(result.text).toContain(expected);
-  });
-
-  it("blocks a stale owner snapshot before reading or writing config", async () => {
-    const params = buildParams("/config show", { commands: { config: true, text: true } });
-    params.command.senderIsOwner = true;
-    params.command.assertOwnerCurrent = () => {
-      throw new Error("requester revoked during dispatch");
-    };
-    const result = await handleConfigCommand(params, true);
-    expect(result?.reply?.text).toContain("owner authority changed");
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -6,6 +6,7 @@ import { GatewayClientRegistry } from "../client-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 export type GatewayTestResponseFrame = {
   type: "res";
@@ -14,6 +15,13 @@ export type GatewayTestResponseFrame = {
   payload?: unknown;
   error?: { code?: string; message?: string } & Record<string, unknown>;
 };
+
+export const requestFrame = (id: string, method: string, params: unknown = {}) => ({
+  type: "req",
+  id,
+  method,
+  params,
+});
 
 export function createOperatorWsClient(
   overrides: {
@@ -49,6 +57,7 @@ export function createDispatchTestHarness(
     buildRequestContext?: () => unknown;
     isClosed?: () => boolean;
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
+    getMethodRegistry?: GatewayWsMessageHandlerParams["getMethodRegistry"];
   } = {},
 ) {
   const clients = new GatewayClientRegistry();
@@ -80,6 +89,7 @@ export function createDispatchTestHarness(
     handler: {
       socket: { acceptsDeflatedSegments: false },
       clients,
+      nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
       buildRequestContext: () => (options.buildRequestContext?.() ?? context) as never,
@@ -87,6 +97,7 @@ export function createDispatchTestHarness(
       close,
       isClosed: options.isClosed ?? (() => false),
       getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
+      getMethodRegistry: options.getMethodRegistry,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,

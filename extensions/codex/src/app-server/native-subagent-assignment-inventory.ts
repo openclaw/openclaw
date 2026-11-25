@@ -1,6 +1,7 @@
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexNativeSubagentRunId } from "./native-subagent-assignment.js";
+import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
 import type {
   ChildState,
   ParentOwner,
@@ -17,12 +18,13 @@ import type { CodexNativeSubagentSubmission } from "./native-subagent-submission
 export class CodexNativeSubagentAssignmentInventory {
   private readonly writes = new Map<ParentState, Promise<void>>();
   private readonly snapshots = new WeakMap<ChildState, string>();
-  private readonly cancelled = new WeakSet<ChildState>();
+  private readonly acknowledged = new WeakSet<ChildState>();
 
   constructor(
     private readonly dependencies: {
       assertCurrent: (state: ParentState) => void;
       isCurrent: (state: ParentState) => boolean;
+      isNativeChildThread: (threadId: string) => Promise<boolean>;
       readHistory: (
         assignment: CodexNativeSubagentPendingAssignment,
       ) => Promise<ThreadRecovery | undefined>;
@@ -133,6 +135,7 @@ export class CodexNativeSubagentAssignmentInventory {
     if (
       !assignment ||
       !state.assignmentStore ||
+      this.acknowledged.has(child) ||
       (!child.nativeCompletionDelivered && (!child.subscriptionClosed || child.pendingCompletion))
     ) {
       return;
@@ -165,7 +168,31 @@ export class CodexNativeSubagentAssignmentInventory {
     });
   }
 
-  settleCancelled(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+  async settleNestedCompletion(
+    state: ParentState,
+    child: ChildState,
+    assertCurrent: () => void,
+  ): Promise<boolean> {
+    const owner = child.historyOwner;
+    if (
+      !owner ||
+      owner.parentThreadId === child.nativeParentThreadId ||
+      !(await this.dependencies.isNativeChildThread(child.nativeParentThreadId))
+    ) {
+      return false;
+    }
+    // Codex delivers to the immediate native parent. The root still owns the
+    // saved locator, but must not receive a second copy of a grandchild's result.
+    await this.acknowledge(state, child, () => {
+      assertCurrent();
+      assertHistoryOwnerMatchesRegistration(owner, state.historyOwner, owner.parentThreadId, true);
+    });
+    child.nativeCompletionDelivered = true;
+    child.pendingCompletion = undefined;
+    return true;
+  }
+
+  acknowledge(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
     return this.enqueue(state, async () => {
       const assertAdmission = () => {
         this.dependencies.assertCurrent(state);
@@ -173,14 +200,14 @@ export class CodexNativeSubagentAssignmentInventory {
       };
       assertAdmission();
       const assignment = this.fact(child);
-      if (!assignment || !state.assignmentStore || this.cancelled.has(child)) {
+      if (!assignment || !state.assignmentStore || this.acknowledged.has(child)) {
         return;
       }
       if (!(await state.assignmentStore.consume(assignment, assertAdmission))) {
-        throw new Error("Cancelled native assignment was not acknowledged.");
+        throw new Error("Native assignment was not acknowledged.");
       }
       // Remember a committed acknowledgement even if the following authority read fails.
-      this.cancelled.add(child);
+      this.acknowledged.add(child);
       assertAdmission();
     });
   }
@@ -195,6 +222,7 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
+      await this.drain(state);
       const assignments = await store.read();
       if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
         return;
@@ -224,6 +252,8 @@ export class CodexNativeSubagentAssignmentInventory {
         );
         if (surviving) {
           await this.dependencies.restore(state, surviving, recovery, custody);
+          // Restoring one child can queue binding writes needed by the next read's authority.
+          await this.drain(state);
         }
       }
     } catch (error) {

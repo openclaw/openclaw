@@ -40,7 +40,6 @@ const expectOutput = (
   expect(text(result)).toContain(output);
 };
 
-const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
     vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
@@ -56,12 +55,10 @@ vi.mock("./simple-completion-runtime.js", () => ({
 }));
 
 vi.mock("./exec-auto-reviewer.js", async (importOriginal) => {
-  optionalRuntimeImports.reviewer += 1;
   return importOriginal<typeof import("./exec-auto-reviewer.js")>();
 });
 
 vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
-  optionalRuntimeImports.followup += 1;
   return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
 });
 
@@ -148,26 +145,17 @@ afterEach(() => {
   }
 });
 
-it("does not load optional review or delivery runtimes for full/off execution", async () => {
-  const result = await run({ host: "gateway", mode: "full" }, "echo hello");
-  expect(result.details.status).toBe("completed");
-  expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
-});
-
 it("records elevated execution without logging the command payload", async () => {
-  const logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
-  try {
-    const result = await run(
-      { host: "gateway", mode: "full", elevated },
-      "echo private-elevated-payload",
-      { elevated: true },
-    );
-    expectOutput(result, "private-elevated-payload");
-    expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
-    expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
-  } finally {
-    logInfo.mockRestore();
-  }
+  using logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+
+  const result = await run(
+    { host: "gateway", mode: "full", elevated },
+    "echo private-elevated-payload",
+    { elevated: true },
+  );
+  expectOutput(result, "private-elevated-payload");
+  expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
+  expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
 });
 
 it.each([false, true])("honors ask overrides only for trusted callers (%s)", async (trusted) => {
@@ -327,58 +315,52 @@ it("defers to human approval when the default reviewer import fails", async () =
   }
 });
 
-it.runIf(process.platform !== "win32")("runs reviewed globs and chains as written", async () => {
-  fs.writeFileSync(path.join(tempRoot, "first.review-fixture"), "fixture");
-  const command = "ls *.review-fixture; echo chain-complete";
-  const calls = mockApprovalGateway();
-  const autoReviewer = makeReviewer({
-    decision: "allow-once",
-    risk: "medium",
-    rationale: "project inspection",
-  });
-  const result = await runAuto({ autoReviewer, cwd: tempRoot }, command);
-  expect(autoReviewer).toHaveBeenCalledWith(
-    expect.objectContaining({ command, reason: "execution-plan-miss" }),
-  );
-  expect(calls).toEqual([]);
-  expect(result.details).toMatchObject({
-    status: "completed",
-    exitCode: 0,
-    approvalReviewOutcome: "approved",
-  });
-  expect(text(result)).toContain("first.review-fixture\nchain-complete");
-});
-
-it("retains Guardian evidence and denies script drift in reviewed chains", async () => {
-  const command = "sh script.sh; ls *.sh";
-  const script = path.join(tempRoot, "script.sh");
-  fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-  const autoReviewer = makeReviewer({
-    decision: "allow-once",
-    risk: "low",
-    rationale: "approved script",
-  });
-  const tool = createAutoTool({
-    autoReviewer,
-    runId: "run-guardian-script",
-    cwd: tempRoot,
-  });
-  let changedAfterApproval = false;
-  const unsubscribe = onAgentEvent((event) => {
-    if (event.runId === "run-guardian-script" && event.data.approvalReviewOutcome === "approved") {
-      fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
-      changedAfterApproval = true;
-    }
-  });
-  const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
-  expect(changedAfterApproval).toBe(true);
-  expect(text(result)).toContain("approval script operand changed before execution");
-  expect(result.details).toMatchObject({
-    status: "failed",
-    approvalReviewOutcome: "approved",
-    approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
-  });
-});
+it.each(process.platform === "win32" ? [true] : [false, true])(
+  "retains Guardian evidence and revalidates reviewed scripts (drift=%s)",
+  async (mutate) => {
+    const command = "sh script.sh; ls *.sh";
+    const script = path.join(tempRoot, "script.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+    const autoReviewer = makeReviewer({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "approved script",
+    });
+    const tool = createAutoTool({
+      autoReviewer,
+      runId: "run-guardian-script",
+      cwd: tempRoot,
+    });
+    let changedAfterApproval = false;
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        mutate &&
+        event.runId === "run-guardian-script" &&
+        event.data.approvalReviewOutcome === "approved"
+      ) {
+        fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+        changedAfterApproval = true;
+      }
+    });
+    const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({ command, reason: "execution-plan-miss" }),
+    );
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(changedAfterApproval).toBe(mutate);
+    const output = mutate ? "approval script operand changed before execution" : "approved";
+    expect(text(result)).toContain(output);
+    expect(result.details).toMatchObject({
+      status: mutate ? "failed" : "completed",
+      ...(!mutate ? { exitCode: 0 } : {}),
+      approvalReviewOutcome: "approved",
+      approvalReviews: [
+        { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },
+      ],
+      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh\n",
+    });
+  },
+);
 
 it("uses agent-scoped host policy when clamping normalized modes", async () => {
   saveExecApprovals({

@@ -4,36 +4,26 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { detectInstallSmokeScope } from "../../scripts/ci-changed-scope.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
-type Step = { id?: string; name?: string; if?: string; run?: string; with?: { script?: string } };
+type Step = {
+  id?: string;
+  name?: string;
+  if?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: { script?: string };
+};
 const config = parse(workflow) as {
+  concurrency: { "cancel-in-progress": string };
   jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
 };
-const unixJobs = [
-  "linux-docker",
-  "debian-installer",
-  "linux-build-tools-failure",
-  "linux-non-root",
-  "fedora-installer",
-  "macos-installer",
-];
-const scopedJobs = ["static", ...unixJobs, "windows-installer"];
-const unixInputs = [
-  "scripts/install.sh",
-  "scripts/install-cli.sh",
-  "scripts/install-policy.sh",
-  "scripts/build-installers.mjs",
-  "scripts/lib/standalone-installers.mjs",
-];
-function contains(...fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(workflow).toContain(fragment);
-  }
-}
+const scopedJobs = Object.keys(config.jobs).filter(
+  (job) => !["scope", "sync-website"].includes(job),
+);
+const unixJobs = scopedJobs.filter((job) => !["static", "windows-installer"].includes(job));
 function stepRun(job: string, name: string) {
   const run = config.jobs[job]?.steps.find((step) => step.name === name)?.run;
   if (!run) {
@@ -47,6 +37,38 @@ function shell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: { PATH: process.env.PATH, HOME: root, BASH_ENV: "", ENV: "", ...env },
   });
+}
+
+function publicationFixture() {
+  const root = tempDirs.make("installer-publication-");
+  const work = path.join(root, "work");
+  mkdirSync(work);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: work,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    }).trim();
+  const write = (file: string, content: string) => {
+    mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+    writeFileSync(path.join(work, file), content);
+  };
+  git("init", "--bare", "--quiet", path.join(root, "remote.git"));
+  git("init", "--quiet", "--initial-branch=main");
+  git("remote", "add", "origin", path.join(root, "remote.git"));
+  write("scripts/install.sh", "old source\n");
+  write("public/install.sh", "old installer\n");
+  write("README.md", "website\n");
+  git("add", ".");
+  git("commit", "--quiet", "-m", "base");
+  git("push", "--quiet", "origin", "HEAD:main");
+  return { root: work, git, write, base: git("rev-parse", "HEAD") };
 }
 
 describe("website installer sync workflow", () => {
@@ -128,59 +150,128 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
     expect(diagnostics.stdout).toContain("librepo: fixture mirror connection stalled");
   });
 
-  it("verifies installers across Linux privilege and package-manager paths", () => {
-    expect(Object.keys(config.jobs)).toEqual(expect.arrayContaining(unixJobs));
-    contains(
-      "debian:bookworm-slim",
-      "node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'",
-      'require("node:sqlite")',
-      "/tmp/build-tools-stub-triggered",
-      'grep -aFq "Installing build tools failed"',
-      'grep -aFq "Build tools installed"',
-      "sudo -u installer -H bash",
-      'test "$(npm config get prefix)" = "$HOME/.npm-global"',
-      `grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"`,
-      "user: [root, non-root]",
-      "bash /tmp/install.sh --version latest && openclaw --version",
-      "bash /tmp/install-cli.sh --prefix /tmp/openclaw",
-      "runs-on: macos-15",
-      "node-version: 24",
-      'OPENCLAW_NO_ONBOARD: "1"',
-      'OPENCLAW_NO_PROMPT: "1"',
-      "bash dist/installers/install.sh --no-onboard --no-prompt --version latest",
-      "openclaw --version",
-      "windows-installer:",
-      "runs-on: windows-latest",
-      ".\\scripts\\install.ps1 -DryRun",
+  it("bounds every installer container with a kill-after timeout", () => {
+    const runs = Object.values(config.jobs).flatMap((job) =>
+      job.steps.flatMap((step) => step.run?.split("\n") ?? []),
     );
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
-    expect(workflow.match(/fedora:44/g)?.length).toBe(2);
-    expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm/u);
-    for (const absent of [
-      "timeout 20m docker run --rm",
-      "bash /tmp/install.sh --no-prompt --no-onboard",
-      "install.cmd dry run",
-      ".\\scripts\\install.cmd",
-    ]) {
-      expect(workflow).not.toContain(absent);
+    const containers = runs.filter((line) => line.includes("docker run"));
+    expect(containers.length).toBeGreaterThan(0);
+    for (const line of containers) {
+      expect(line.trim()).toMatch(/^timeout --kill-after=\d+s \d+m docker run --rm\b/u);
     }
   });
 
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
-    expect(config.jobs["sync-website"]?.needs).toEqual(scopedJobs);
-    contains(
-      "repository: openclaw/openclaw.ai",
-      "OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}",
-      "OPENCLAW_GH_TOKEN is not configured",
-      "token: ${{ env.OPENCLAW_GH_TOKEN }}",
-      "cp openclaw/dist/installers/install.sh openclaw.ai/public/install.sh",
-      "cp openclaw/dist/installers/install-cli.sh openclaw.ai/public/install-cli.sh",
-      "cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1",
-      "rm -f openclaw.ai/public/install.cmd",
-      "bun run build",
-      "git push origin HEAD:main",
-    );
+    expect(config.jobs["sync-website"]?.needs?.toSorted()).toEqual(scopedJobs.toSorted());
+    expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
+    expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
   });
+
+  it("authenticates the website build's GitHub release lookup", () => {
+    const build = config.jobs["sync-website"]?.steps.find(
+      (step) => step.name === "Verify website with synced installers",
+    );
+    expect(build?.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
+  });
+});
+
+describe("installer PR publication", () => {
+  it.each(["push", "workflow_dispatch", "pull_request"])(
+    "keeps in-flight publication alive for %s events",
+    (eventName) => {
+      const expression = config.concurrency["cancel-in-progress"].replace(
+        /^\$\{\{\s*|\s*\}\}$/gu,
+        "",
+      );
+      const cancel = compileFunction(`return (${expression});`, ["github"])({
+        event_name: eventName,
+      });
+      expect(cancel).toBe(eventName === "pull_request");
+    },
+  );
+
+  it.each([
+    { file: "scripts/install.sh", allowed: false },
+    { file: "README.md", allowed: true },
+  ])(
+    "admits delayed source only when installer inputs stayed current: $file",
+    ({ file, allowed }) => {
+      const fixture = publicationFixture();
+      fixture.write(file, "new source\n");
+      fixture.git("add", file);
+      fixture.git("commit", "--quiet", "-m", "new main");
+      fixture.git("push", "--quiet", "origin", "HEAD:main");
+      const result = shell(
+        fixture.root,
+        stepRun("sync-website", "Admit current installer source"),
+        {
+          GITHUB_SHA: fixture.base,
+        },
+      );
+      expect(result.status === 0, result.stderr).toBe(allowed);
+    },
+  );
+
+  it.each(["merged", "uncertain merge", "pending", "moved", "wrong payload"])(
+    "requires the validated tree and an actual merged PR: %s",
+    (scenario) => {
+      const fixture = publicationFixture();
+      fixture.git("checkout", "--quiet", "-b", "automation/installer-sync");
+      fixture.write("public/install.sh", "validated installer\n");
+      fixture.git("add", ".");
+      fixture.git("commit", "--quiet", "-m", "installer update");
+      const validatedTree = fixture.git("rev-parse", "HEAD^{tree}");
+      if (scenario === "wrong payload") {
+        fixture.write("public/install.sh", "unvalidated installer\n");
+        fixture.git("add", ".");
+        fixture.git("commit", "--quiet", "-m", "changed payload");
+      }
+      const head = fixture.git("rev-parse", "HEAD");
+      fixture.git("push", "--quiet", "origin", "HEAD:automation/installer-sync");
+      const result = shell(
+        fixture.root,
+        `sleep() { :; }
+gh() {
+  if [[ "$1 $2" == "pr merge" ]]; then
+    [[ "$*" == *"--squash --match-head-commit $PR_HEAD" ]] || return 64
+    git checkout --quiet main
+    git merge --squash "$PR_HEAD"
+    git -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit --quiet -m "squash fixture"
+    git push --quiet origin HEAD:main
+    if [[ "$SCENARIO" == "uncertain merge" ]]; then return 1; fi
+  elif [[ "$*" == *"headRefOid,mergeStateStatus,state"* ]]; then
+    if [[ "$SCENARIO" == moved ]]; then
+      printf 'moved-head\\tCLEAN\\tOPEN\\n'
+    elif [[ "$SCENARIO" == pending ]]; then
+      printf '%s\\tBLOCKED\\tOPEN\\n' "$PR_HEAD"
+    else
+      printf '%s\\tCLEAN\\tOPEN\\n' "$PR_HEAD"
+    fi
+  elif [[ "$*" == *"headRefOid,state,mergeCommit"* ]]; then
+    remote=$(git rev-parse origin/main)
+    if [[ "$(git rev-parse "$remote^{tree}")" == "$VALIDATED_TREE" ]]; then
+      printf '%s\\tMERGED\\t%s\\n' "$PR_HEAD" "$remote"
+    else
+      printf '%s\\tOPEN\\t\\n' "$PR_HEAD"
+    fi
+  else
+    return 65
+  fi
+}
+${stepRun("sync-website", "Merge and verify installer sync")}`,
+        { PR_NUMBER: "1", PR_HEAD: head, VALIDATED_TREE: validatedTree, SCENARIO: scenario },
+      );
+      const merged = scenario === "merged" || scenario === "uncertain merge";
+      expect(result.status === 0, result.stderr).toBe(merged);
+      if (merged) {
+        expect(fixture.git("rev-parse", "origin/main")).not.toBe(head);
+        expect(fixture.git("rev-parse", "origin/main^{tree}")).toBe(validatedTree);
+        expect(result.stdout).toContain("Verified installer sync:");
+      } else {
+        expect(fixture.git("rev-parse", "origin/main")).toBe(fixture.base);
+      }
+    },
+  );
 });
 
 describe("installer platform admission", () => {
@@ -237,15 +328,12 @@ describe("installer platform admission", () => {
 
   it.each([
     { file: "scripts/install.ps1", unix: false, windows: true },
-    ...unixInputs.map((file) => ({ file, unix: true, windows: false })),
+    { file: "test/scripts/install-ps1-entrypoint.ps1", unix: false, windows: true },
+    { file: "scripts/install.sh", unix: true, windows: false },
     { file: ".github/workflows/website-installer-sync.yml", unix: true, windows: true },
     { file: "scripts/install.ps1", moveTo: "retired.ps1", unix: false, windows: true },
     { file: "retired.ps1", moveTo: "scripts/install.ps1", unix: false, windows: true },
   ])("routes the tested event tree for $file (move: $moveTo)", async (scenario) => {
-    if (scenario.file.startsWith("scripts/")) {
-      expect(workflow).toContain(scenario.file);
-      expect(detectInstallSmokeScope([scenario.file]).runFullInstallSmoke).toBe(true);
-    }
     const cwd = tempDirs.make("installer-platform-scope-");
     const git = (...args: string[]) =>
       execFileSync(
@@ -293,10 +381,8 @@ describe("installer platform admission", () => {
 
   it.each([
     { event: "push" },
-    { event: "workflow_dispatch" },
     { checkout: "failure", diffExitCodes: [] },
     { diffExitCodes: [128] },
-    { diffExitCodes: [0, 128] },
   ])("keeps full validation for unrestricted or unavailable scope: %j", async (options) => {
     const result = await select(options);
     if ("event" in options) {

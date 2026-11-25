@@ -19,7 +19,10 @@ import type {
 } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
-import { workerPreparationSourceKey } from "./preparation-identity.schema.js";
+import {
+  readWorkerPreparation,
+  workerPreparationSourceKey,
+} from "./preparation-identity.schema.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentNativePatch } from "./store-projection.js";
 import { executeWorkerEnvironmentWrite } from "./store-write.js";
@@ -224,6 +227,63 @@ export function createPreparedEnvironmentStoreOps(options: {
 }) {
   const { db } = options;
   return {
+    refreshPreparedProject(
+      this: void,
+      input: WorkerEnvironmentMutationInput<"refreshPreparedProject">,
+    ): WorkerEnvironmentRecord {
+      const current = options.get(db, input.environmentId);
+      const preparation = current?.preparation;
+      const placement = findPlacement(db, input.sessionId);
+      if (
+        !current ||
+        current.state !== "ready" ||
+        current.ownerEpoch !== input.ownerEpoch ||
+        !current.leaseId ||
+        !current.nodeDeviceId ||
+        current.sharedHost !== false ||
+        current.destroyRequestedAtMs !== null ||
+        current.attachedSessionIds.length !== 0 ||
+        !preparation ||
+        preparation.key !== input.preparationKey ||
+        preparation.consumedAtMs === null ||
+        placement?.state !== "provisioning" ||
+        placement.environmentId !== current.environmentId ||
+        placement.generation !== input.expectedGeneration ||
+        placement.turnClaim !== null
+      ) {
+        throw new Error("Prepared worker changed during project refresh");
+      }
+      const previous = readWorkerPreparation(current.profileSnapshot);
+      const refreshed = readWorkerPreparation(input.profileSnapshot);
+      const withoutCommit = (profile: typeof input.profileSnapshot) => {
+        if (!isRecord(profile.project)) {
+          throw new Error("Prepared project refresh requires a project");
+        }
+        const { baseCommit: _baseCommit, ...project } = profile.project;
+        return { ...profile, project };
+      };
+      if (
+        previous?.key !== input.preparationKey ||
+        refreshed?.key !== input.preparationKey ||
+        previous.cacheKey !== refreshed.cacheKey ||
+        snapshotSourceKey(current.profileSnapshot) !== snapshotSourceKey(input.profileSnapshot) ||
+        !isDeepStrictEqual(
+          withoutCommit(current.profileSnapshot),
+          withoutCommit(input.profileSnapshot),
+        )
+      ) {
+        throw new Error("Prepared worker project refresh identity changed");
+      }
+      executeWorkerEnvironmentWrite(
+        db,
+        query(db)
+          .updateTable("worker_environments")
+          .set({ profile_snapshot_json: JSON.stringify(input.profileSnapshot) })
+          .where("environment_id", "=", current.environmentId),
+      );
+      return options.get(db, current.environmentId)!;
+    },
+
     ensurePreparedIntent(
       this: void,
       input: WorkerEnvironmentMutationInput<"ensurePreparedIntent">,
@@ -244,6 +304,7 @@ export function createPreparedEnvironmentStoreOps(options: {
           existing.profileId !== input.intent.profileId ||
           existing.provisionOperationId !== input.intent.provisionOperationId ||
           !isDeepStrictEqual(existing.profileSnapshot, input.intent.profileSnapshot) ||
+          !isDeepStrictEqual(existing.retention?.policy, input.intent.retention) ||
           existing.preparation?.key !== input.intent.preparation.key ||
           existing.preparation.purpose !== input.intent.preparation.purpose ||
           existing.preparation.demandAtMs !== input.intent.preparation.demandAtMs ||
@@ -259,11 +320,15 @@ export function createPreparedEnvironmentStoreOps(options: {
         return undefined;
       }
       if (build) {
-        const reusable = executeSqliteQueryTakeFirstSync(
+        const requestedProject = input.intent.profileSnapshot.project;
+        const requestedCommit = isRecord(requestedProject)
+          ? requestedProject.baseCommit
+          : undefined;
+        const reusable = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_environments")
-            .select("environment_id")
+            .select(["environment_id", "profile_snapshot_json"])
             .where("profile_id", "=", input.intent.profileId)
             .where("provider_id", "=", input.intent.providerId)
             .where("preparation_key", "=", input.intent.preparation.key)
@@ -272,9 +337,14 @@ export function createPreparedEnvironmentStoreOps(options: {
             .where("state", "not in", ["failed", "destroyed", "orphaned"])
             .where("preparation_expires_at_ms", ">", nowMs)
             .orderBy("created_at_ms")
-            .orderBy("environment_id")
-            .limit(1),
-        );
+            .orderBy("environment_id"),
+        ).rows.find((row) => {
+          const profile: unknown = JSON.parse(row.profile_snapshot_json);
+          return (
+            isRecord(profile) &&
+            (isRecord(profile.project) ? profile.project.baseCommit : undefined) === requestedCommit
+          );
+        });
         if (reusable) {
           // Explicit build demand must survive a disabled reserve target while
           // this allocation finishes. Reuse never renews its expiry window.

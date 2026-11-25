@@ -19,6 +19,8 @@ export type Entry = {
   actor?: ReturnType<typeof getSqliteWorkerActorIdentity>;
   bound?: boolean;
   cleanup?: SqliteWorkerAdmissionCleanup;
+  nativeLostListeners: Set<() => void>;
   activeOperations: number;
   idleTimer?: IdleTimer;
+  idleSince?: number;
 };

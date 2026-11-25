@@ -9,7 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -186,10 +186,19 @@ it.each([
 
 it("compacts after the reply releases its admission while its title is still generating", async () => {
   await withTitle(
-    { cfg: { agents: { entries: { main: {} } } }, writeConfig: true, legacyPath: true },
+    {
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+          entries: { main: {} },
+        },
+      },
+      writeConfig: true,
+      legacyPath: true,
+    },
     async ({ scope, context, append, start, finish }) => {
       await append("First question", "Follow-up question", "Final answer");
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},

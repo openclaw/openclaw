@@ -328,7 +328,7 @@ describe("scoped vitest configs", () => {
       createOwner: createAgentsVitestConfig,
       workerFiles: databaseWorkerCoreTestFiles,
       names: ["agents", "infra"],
-      existing: "src/agents/memory-write-provenance.test.ts",
+      existing: "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       createWorker: createInfraVitestConfig,
     },
     {

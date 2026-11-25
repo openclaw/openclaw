@@ -1,4 +1,4 @@
-import type { SessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
+import type { SessionRowAssistantMessageFact } from "../../gateway/session-row-transcript-preview.js";
 import type { SessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import type { SessionAccessScope, SessionEntrySummary } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
@@ -8,9 +8,10 @@ import type { SessionTranscriptWatermark } from "./session-history-read.types.js
 export type SessionRowDatabaseFacts = SessionEntrySummary & {
   hasBoard: boolean;
   activitySummaryWatermark?: SessionTranscriptWatermark;
+  transcriptHasMessages?: boolean;
   /** Undefined needs backfill; null is a completed, empty bounded projection. */
   transcriptPreview?: string | null;
-  transcriptAssistantMessage?: SessionRowAssistantMessage | null;
+  transcriptAssistantMessage: SessionRowAssistantMessageFact;
   transcriptTerminalModel?: SessionTranscriptTerminalModel | null;
 };
 

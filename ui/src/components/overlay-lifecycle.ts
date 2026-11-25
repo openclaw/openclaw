@@ -1,3 +1,4 @@
+import { focusProgrammatically } from "../lib/programmatic-focus.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { hideOverlayAnchor, showOverlayAnchor } from "./overlay-anchor.ts";
 import {
@@ -278,11 +279,7 @@ export function createOverlay(
         }
         const target = returnTarget ?? trigger;
         if (focus === "return" && target?.isConnected) {
-          if (options.onReturnFocus) {
-            options.onReturnFocus(target);
-          } else {
-            target.focus({ preventScroll: true });
-          }
+          focusProgrammatically(target, { preventScroll: true });
         }
         return true;
       }
@@ -431,7 +428,6 @@ export function createOverlay(
       if (next) {
         native.show(surface, trigger);
       } else {
-        options.beforeNativeHide?.();
         native.hide(surface);
       }
     } catch (error) {

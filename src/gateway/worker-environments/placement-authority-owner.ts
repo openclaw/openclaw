@@ -6,6 +6,7 @@ import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionTurnClaim,
+  type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type {
   ClaimChange,
@@ -35,6 +36,9 @@ export function notifyPlacementClaimRevoked(claim: RetainedClaim): void {
 
 export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
+  owner.localClaimSessions.clear();
+  owner.localAdmissionReservations.clear();
+  owner.localMutationSettlements.clear();
   owner.changeListeners.clear();
   owner.pending.clear();
   owner.published.clear();
@@ -50,7 +54,6 @@ export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): vo
   owner.claims.clear();
   owner.placements.clear();
   owner.observations.clear();
-  owner.placementReaders.clear();
   owner.projections.clear();
   owner.preservation = undefined;
   owner.recoveryCandidatesEmpty = undefined;
@@ -92,11 +95,13 @@ export function placementAuthorityOwnerFor(
   const owner: PlacementAuthorityOwner = {
     identity,
     active: true,
+    localClaimSessions: new Set(),
+    localAdmissionReservations: new Map(),
+    localMutationSettlements: new Map(),
     changeListeners: new Set(),
     claims: new Map(),
     placements: new Map(),
     observations: new Map(),
-    placementReaders: new Map(),
     pending: new Set(),
     sequence: 0,
     published: new Map(),
@@ -106,6 +111,81 @@ export function placementAuthorityOwnerFor(
   };
   placementAuthorityOwners.set(identity.key, owner);
   return owner;
+}
+
+/** Reserve before yielding: a local turn cannot enter while a durable writer or publisher owns it. */
+export function reserveLocalPlacementAdmission(owner: PlacementAuthorityOwner, sessionId: string) {
+  const reservations = owner.localAdmissionReservations;
+  reservations.set(sessionId, (reservations.get(sessionId) ?? 0) + 1);
+  return () => {
+    const count = reservations.get(sessionId) ?? 0;
+    if (count > 1) {
+      reservations.set(sessionId, count - 1);
+    } else {
+      reservations.delete(sessionId);
+    }
+  };
+}
+
+/** Local release follows a queued dispatch/failure receipt before changing its claim. */
+export function reserveLocalPlacementMutation(owner: PlacementAuthorityOwner, sessionId: string) {
+  const release = reserveLocalPlacementAdmission(owner, sessionId);
+  const pending = owner.localMutationSettlements.get(sessionId) ?? new Set<Promise<void>>();
+  const { promise, resolve } = Promise.withResolvers<void>();
+  pending.add(promise);
+  owner.localMutationSettlements.set(sessionId, pending);
+  return () => {
+    pending.delete(promise);
+    if (pending.size === 0) {
+      owner.localMutationSettlements.delete(sessionId);
+    }
+    release();
+    resolve();
+  };
+}
+
+/** Durable dispatch metadata cannot replace the local predecessor that its barrier is draining. */
+export function withLocalPlacementTurn(
+  owner: PlacementAuthorityOwner,
+  sessionId: string,
+  placement: WorkerSessionPlacementRecord | undefined,
+): WorkerSessionPlacementRecord | undefined {
+  if (!owner.localClaimSessions.has(sessionId)) {
+    return placement;
+  }
+  const current = owner.placements.get(sessionId)?.placement;
+  if (!placement) {
+    return current ? structuredClone(current) : undefined;
+  }
+  if (
+    placement.state === "local" ||
+    placement.state === "requested" ||
+    placement.state === "failed"
+  ) {
+    const claim = current?.turnClaim;
+    if (!claim || (claim.owner === "local" && claim.ownerEpoch === null)) {
+      // Local claims and releases never reach SQLite, so their in-memory stamp is the
+      // newest change; a persisted re-read must not move it back and fake a placement change.
+      const updatedAtMs = Math.max(placement.updatedAtMs, current?.updatedAtMs ?? 0);
+      return { ...placement, updatedAtMs, turnClaim: claim ? { ...claim } : null };
+    }
+  }
+  return placement;
+}
+
+export function withLocalPlacementTurns(
+  owner: PlacementAuthorityOwner,
+  records: Iterable<WorkerSessionPlacementRecord>,
+  sessionIds?: readonly string[],
+) {
+  const placements = new Map(Array.from(records, (record) => [record.sessionId, record]));
+  for (const sessionId of sessionIds ?? owner.localClaimSessions) {
+    const placement = withLocalPlacementTurn(owner, sessionId, placements.get(sessionId));
+    if (placement) {
+      placements.set(sessionId, placement);
+    }
+  }
+  return placements;
 }
 
 export function subscribePlacementChanges(

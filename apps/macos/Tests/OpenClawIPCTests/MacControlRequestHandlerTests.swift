@@ -1,11 +1,40 @@
 import Foundation
 import OpenClawIPC
+import OpenClawNativeState
 import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct MacControlRequestHandlerTests {
+    @Test func `unowned credential root returns only the definite predispatch refusal`() async throws {
+        let handler = MacControlRequestHandler(owner: MacControlLiveOwner(), credentialsOnly: true)
+        var request = MacControlRequest(operation: "client.credentials")
+        request.credentialRoot = "/synthetic-unowned-root"
+        var operation = ClientCredentialOperation(kind: .identityRead)
+        operation.identity_key = "primary"
+        request.credentialOperation = operation
+        #expect(try await Self.error(handler, request).code == "credential_root_unowned")
+    }
+
+    @Test func `credential-only host dispatches typed local operations and rejects Gateway mutations`() async throws {
+        let owner = FakeMacControlOwner()
+        let handler = MacControlRequestHandler(owner: owner, credentialsOnly: true)
+        var request = MacControlRequest(operation: "client.credentials")
+        request.credentialRoot = "/synthetic-client-root"
+        var operation = ClientCredentialOperation(kind: .identityRead)
+        operation.identity_key = "node"
+        request.credentialOperation = operation
+        let data = await handler.handle(request)
+        let response = try JSONDecoder().decode(MacControlResponse<ClientCredentialResult>.self, from: data)
+        #expect(response.ok)
+        #expect(response.result?.kind == .identity)
+        #expect(owner.credentialRoot == "/synthetic-client-root")
+        #expect(owner.credentialOperation?.identity_key == "node")
+        #expect(try await Self.error(handler, MacControlRequest(operation: "primary.clear")).code == "unavailable")
+        #expect(owner.selection == nil)
+    }
+
     @Test func `status removes credentials and raw connection errors from JSON`() async throws {
         let owner = FakeMacControlOwner()
         let sensitiveURL = "wss://operator:password-value@gateway.example/path?token=query-secret#fragment-secret"
@@ -19,7 +48,7 @@ struct MacControlRequestHandlerTests {
         #expect(response.ok)
         #expect(status.primary.url == "wss://gateway.example/path")
         #expect(status.gateways.first?.url == "wss://gateway.example/path")
-        let json = String(decoding: data, as: UTF8.self)
+        let json = try #require(String(bytes: data, encoding: .utf8))
         for secret in ["password-value", "query-secret", "fragment-secret", "error-secret"] {
             #expect(!json.contains(secret))
         }
@@ -66,7 +95,7 @@ struct MacControlRequestHandlerTests {
         let data = await handler.handle(request)
         let response = try JSONDecoder().decode(MacControlResponse<MacControlPrimaryStatus>.self, from: data)
         #expect(response.ok)
-        #expect(!String(decoding: data, as: UTF8.self).contains("submitted-secret"))
+        #expect(try !#require(String(bytes: data, encoding: .utf8)?.contains("submitted-secret")))
         guard case let .ssh(target, remotePort, localPort, identity, hostKeyPolicy, token, password) = owner.selection
         else {
             Issue.record("Primary selection was not passed to its owner")
@@ -175,8 +204,11 @@ struct MacControlRequestHandlerTests {
 @MainActor
 private final class FakeMacControlOwner: MacControlOwner {
     var primary = MacControlPrimaryStatus(
-        mode: "unconfigured", transport: nil, url: "",
-        tunnel: MacControlTunnelStatus(running: false), connection: MacControlConnectionStatus(state: "disconnected"))
+        mode: "unconfigured",
+        transport: nil,
+        url: "",
+        tunnel: MacControlTunnelStatus(running: false),
+        connection: MacControlConnectionStatus(state: "disconnected"))
     var profiles: [MacControlGatewayStatus] = []
     var selection: PrimaryGatewayControlConfiguration?
     var removedIDs: [String] = []
@@ -185,10 +217,19 @@ private final class FakeMacControlOwner: MacControlOwner {
     var failure: Error?
     var holdSignIn = false
     var signInContinuation: CheckedContinuation<Void, Never>?
+    var credentialRoot: String?
+    var credentialOperation: ClientCredentialOperation?
+
+    func credentials(root: URL, operation: ClientCredentialOperation) async throws -> ClientCredentialResult {
+        self.credentialRoot = root.path
+        self.credentialOperation = operation
+        return ClientCredentialResult(kind: .identity)
+    }
 
     func status() async throws -> MacControlStatus {
         MacControlStatus(
-            primary: self.primary, gateways: self.profiles,
+            primary: self.primary,
+            gateways: self.profiles,
             app: MacControlAppStatus(version: "1", build: "1", profile: "test"))
     }
 

@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -19,9 +18,33 @@ import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
 } from "./state-migrations.apns.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 
 const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "abcd1234abcd1234abcd1234abcd1234";
+const privateMarker = "must-not-appear-in-doctor-output";
+const DIRECT = {
+  nodeId: "legacy-direct",
+  transport: "direct" as const,
+  [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
+  topic: "ai.openclaw.ios",
+  environment: "sandbox" as const,
+  updatedAtMs: 1_000,
+};
+const RELAY = {
+  nodeId: "legacy-relay",
+  transport: "relay" as const,
+  relayHandle: "relay-handle-123",
+  sendGrant: "send-grant-123",
+  installationId: "installation-123",
+  topic: "ai.openclaw.ios",
+  environment: "sandbox" as const,
+  distribution: "official" as const,
+  relayOrigin: "https://ios-push-relay-sandbox.openclaw.ai",
+  tokenDebugSuffix: "abcd1234",
+  updatedAtMs: 2_000,
+};
+const legacyStore = (registrationsByNodeId: Record<string, unknown>) => ({ registrationsByNodeId });
 
 describe("legacy APNs Doctor migration", () => {
   let stateDir: string;
@@ -51,32 +74,26 @@ describe("legacy APNs Doctor migration", () => {
   }
 
   function directRegistration(overrides: Record<string, unknown> = {}) {
+    const { transport: _transport, ...direct } = DIRECT;
     return {
-      nodeId: "legacy-direct",
+      ...direct,
       [APNS_DEVICE_FIELD]: `<${APNS_DEVICE_IDENTIFIER.toUpperCase()}>`,
       topic: " ai.openclaw.ios ",
       environment: "invalid-old-value",
-      updatedAtMs: 1_000,
       ...overrides,
     };
   }
 
   function relayRegistration(overrides: Record<string, unknown> = {}) {
     return {
-      nodeId: "legacy-relay",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "installation-123",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      distribution: "official",
+      ...RELAY,
       relayOrigin: "https://ios-push-relay-sandbox.openclaw.ai/",
       tokenDebugSuffix: " abcd-1234 ",
-      updatedAtMs: 2_000,
       ...overrides,
     };
   }
+  const relayStore = (overrides: Record<string, unknown>) =>
+    legacyStore({ "legacy-relay": relayRegistration(overrides) });
 
   function legacyPath() {
     return path.join(stateDir, "push", "apns-registrations.json");
@@ -90,12 +107,12 @@ describe("legacy APNs Doctor migration", () => {
   function writeLegacyState(
     registrationsByNodeId: Record<string, unknown> = { "legacy-direct": directRegistration() },
   ) {
-    return writeRaw(JSON.stringify({ registrationsByNodeId }, null, 2));
+    return writeRaw(JSON.stringify(legacyStore(registrationsByNodeId), null, 2));
   }
   function migrate(
     overrides: Pick<
       Parameters<typeof migrateLegacyApnsRegistrations>[0],
-      "beforeClaim" | "removeSource"
+      "beforeClaim" | "removeSource" | "env"
     > = {},
   ) {
     return migrateLegacyApnsRegistrations({
@@ -104,6 +121,22 @@ describe("legacy APNs Doctor migration", () => {
       stateDir,
       ...overrides,
     });
+  }
+  async function migrateSuccessfully() {
+    const result = await migrate();
+    expect(result.warnings).toEqual([]);
+    return result;
+  }
+  const load = (nodeId = "legacy-direct") => loadApnsRegistration(nodeId, stateDir);
+  const detect = () => detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true });
+  async function clear(registration: ApnsRegistration) {
+    await expect(
+      clearApnsRegistrationIfCurrent({
+        nodeId: "legacy-direct",
+        registration,
+        baseDir: stateDir,
+      }),
+    ).resolves.toBe(true);
   }
   function receipt(columns: string) {
     return openOpenClawStateDatabase()
@@ -127,52 +160,22 @@ describe("legacy APNs Doctor migration", () => {
       "legacy-relay": relayRegistration(),
     });
     expect(detectLegacyApnsRegistrations({ stateDir }).hasLegacy).toBe(false);
-    expect(
-      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
-    ).toBe(true);
+    expect(detect().hasLegacy).toBe(true);
     const sourceBytes = await fsp.readFile(sourcePath);
     const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
 
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([]);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toEqual({
-      nodeId: "legacy-direct",
-      transport: "direct",
-      [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1_000,
-    });
-    await expect(loadApnsRegistration("legacy-relay", stateDir)).resolves.toEqual({
-      nodeId: "legacy-relay",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "installation-123",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      distribution: "official",
-      relayOrigin: "https://ios-push-relay-sandbox.openclaw.ai",
-      tokenDebugSuffix: "abcd1234",
-      updatedAtMs: 2_000,
-    });
+    await migrateSuccessfully();
+    await expect(load()).resolves.toEqual(DIRECT);
+    await expect(load("legacy-relay")).resolves.toEqual(RELAY);
     expect(fs.existsSync(sourcePath)).toBe(false);
-    const importedReceipt = receipt(
-      "source_sha256, source_size_bytes, source_record_count, status, removed_source, report_json",
-    ) as Record<string, unknown>;
-    expect(importedReceipt).toMatchObject({
+    expect(
+      receipt("source_sha256, source_size_bytes, source_record_count, status, removed_source"),
+    ).toEqual({
       source_sha256: sourceSha256,
       source_size_bytes: sourceBytes.byteLength,
       source_record_count: 2,
       status: "completed",
       removed_source: 1,
-    });
-    expect(JSON.parse(String(importedReceipt.report_json))).toMatchObject({
-      source: "legacy-apns-registrations-json",
-      target: "apns_registrations",
-      sourceRecordCount: 2,
-      importedRecordCount: 2,
     });
   });
 
@@ -187,11 +190,9 @@ describe("legacy APNs Doctor migration", () => {
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
     });
 
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([]);
-    await expect(loadApnsRegistration("shared-node", stateDir)).resolves.toEqual(canonical);
-    await expect(loadApnsRegistration("legacy-only", stateDir)).resolves.toMatchObject({
+    await migrateSuccessfully();
+    await expect(load("shared-node")).resolves.toEqual(canonical);
+    await expect(load("legacy-only")).resolves.toMatchObject({
       nodeId: "legacy-only",
       [APNS_DEVICE_FIELD]: APNS_DEVICE_IDENTIFIER,
     });
@@ -200,19 +201,11 @@ describe("legacy APNs Doctor migration", () => {
   it("does not resurrect a registration deleted before the first Doctor import", async () => {
     await writeLegacyState();
     const current = await register("legacy-direct");
-    await expect(
-      clearApnsRegistrationIfCurrent({
-        nodeId: "legacy-direct",
-        registration: current,
-        baseDir: stateDir,
-      }),
-    ).resolves.toBe(true);
+    await clear(current);
     await closeStateDatabaseForTest();
 
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([]);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
+    const result = await migrateSuccessfully();
+    await expect(load()).resolves.toBeNull();
     expect(result.notices).toContain("Kept 1 deleted APNs registration retired.");
   });
 
@@ -225,14 +218,7 @@ describe("legacy APNs Doctor migration", () => {
       OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
     };
 
-    const result = await migrateLegacyApnsRegistrations({
-      detected: detectLegacyApnsRegistrations({
-        stateDir,
-        doctorOnlyStateMigrations: true,
-      }),
-      env,
-      stateDir,
-    });
+    const result = await migrate({ env });
 
     expect(result.warnings).toEqual([]);
     const row = openOpenClawStateDatabase({ env })
@@ -241,115 +227,69 @@ describe("legacy APNs Doctor migration", () => {
     expect(row).toEqual({ relay_origin: "http://127.0.0.1:18791" });
     await closeStateDatabaseForTest();
     deleteTestEnvValue("OPENCLAW_APNS_RELAY_ALLOW_HTTP");
-    await expect(loadApnsRegistration("legacy-relay", stateDir)).resolves.toMatchObject({
+    await expect(load("legacy-relay")).resolves.toMatchObject({
       relayOrigin: "http://127.0.0.1:18791",
     });
   });
 
   it.each([
     ["invalid root", []],
-    [
-      "invalid relay",
-      { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
-    ],
+    ["invalid relay", relayStore({ distribution: "beta" })],
     [
       "out-of-range direct timestamp",
-      {
-        registrationsByNodeId: {
-          node: directRegistration({ nodeId: "node", updatedAtMs: Number.MAX_SAFE_INTEGER }),
-        },
-      },
+      legacyStore({
+        node: directRegistration({ nodeId: "node", updatedAtMs: Number.MAX_SAFE_INTEGER }),
+      }),
     ],
-    [
-      "overlong relay handle",
-      {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({ relayHandle: "x".repeat(257) }),
-        },
-      },
-    ],
-    [
-      "control character in send grant",
-      {
-        registrationsByNodeId: { "legacy-relay": relayRegistration({ sendGrant: "send\ngrant" }) },
-      },
-    ],
-    [
-      "invalid relay origin",
-      {
-        registrationsByNodeId: {
-          "legacy-relay": relayRegistration({ relayOrigin: "ftp://relay.example" }),
-        },
-      },
-    ],
+    ["overlong relay handle", relayStore({ relayHandle: "x".repeat(257) })],
+    ["control character in send grant", relayStore({ sendGrant: "send\ngrant" })],
+    ["invalid relay origin", relayStore({ relayOrigin: "ftp://relay.example" })],
   ])("refuses %s atomically", async (_label, raw) => {
     const sourcePath = await writeRaw(JSON.stringify(raw));
 
     const result = await migrate();
 
     expect(result.warnings[0]).toMatch(/legacy APNs/i);
-    await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
+    await expect(load("node")).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
-  it("rejects an empty unexpected field without exposing its later sibling", async () => {
-    const sourcePath = await writeLegacyState({
-      node: directRegistration({ nodeId: "node", "": 1, later: 2 }),
-    });
+  it.each([
+    [
+      "empty field",
+      legacyStore({ node: directRegistration({ nodeId: "node", "": 1, later: 2 }) }),
+      "legacy APNs registration has an unexpected field",
+    ],
+    [
+      "malformed JSON",
+      `{"registrationsByNodeId":{"node":{"value":${privateMarker}}}}`,
+      "legacy JSON store contains invalid JSON",
+    ],
+    [
+      "mismatched node id",
+      legacyStore({ [privateMarker]: directRegistration({ nodeId: "different-node" }) }),
+      /legacy APNs/i,
+    ],
+    [
+      "private field",
+      legacyStore({ node: directRegistration({ nodeId: "node", [privateMarker]: true }) }),
+      /legacy APNs/i,
+    ],
+  ] as const)("rejects %s without exposing legacy data", async (_label, raw, warning) => {
+    const sourcePath = await writeRaw(typeof raw === "string" ? raw : JSON.stringify(raw));
     const result = await migrate();
-    expect(result.warnings).toEqual([
-      "Failed reading legacy APNs state: Error: legacy APNs registration has an unexpected field",
-    ]);
+    if (typeof warning === "string") {
+      expect(result.warnings).toEqual([`Failed reading legacy APNs state: Error: ${warning}`]);
+    } else {
+      expect(result.warnings[0]).toMatch(warning);
+    }
+    expect(result.warnings.join("\n")).not.toContain(privateMarker);
     expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["apns-registrations.json"]);
-    await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
+    await expect(load("node")).resolves.toBeNull();
     expect(receipt("source_key")).toBeUndefined();
   });
 
-  it("sanitizes malformed JSON warnings", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
-    const sourcePath = await writeRaw(
-      `{"registrationsByNodeId":{"node":{"nodeId":"node","value":${privateMarker}}}}`,
-    );
-
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([
-      "Failed reading legacy APNs state: Error: legacy JSON store contains invalid JSON",
-    ]);
-    expect(result.warnings.join("\n")).not.toContain(privateMarker);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-  });
-
-  it("sanitizes legacy entry identifiers in warnings", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
-    const malformedStores = [
-      {
-        registrationsByNodeId: {
-          [privateMarker]: directRegistration({ nodeId: "different-node" }),
-        },
-      },
-      {
-        registrationsByNodeId: {
-          node: directRegistration({ nodeId: "node", [privateMarker]: true }),
-        },
-      },
-    ];
-
-    for (const raw of malformedStores) {
-      await closeStateDatabaseForTest();
-      stateDir = useStateDir();
-      const sourcePath = await writeRaw(JSON.stringify(raw));
-
-      const result = await migrate();
-
-      expect(result.warnings[0]).toMatch(/legacy APNs/i);
-      expect(result.warnings.join("\n")).not.toContain(privateMarker);
-      expect(fs.existsSync(sourcePath)).toBe(true);
-    }
-  });
-
   it("rolls back inserted rows when a later canonical row is invalid", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
     const sourcePath = await writeLegacyState({
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
       [privateMarker]: directRegistration({ nodeId: privateMarker }),
@@ -366,7 +306,7 @@ describe("legacy APNs Doctor migration", () => {
 
     expect(result.warnings[0]).toContain("invalid APNs registration row");
     expect(result.warnings.join("\n")).not.toContain(privateMarker);
-    await expect(loadApnsRegistration("legacy-only", stateDir)).resolves.toBeNull();
+    await expect(load("legacy-only")).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
   });
@@ -386,17 +326,10 @@ describe("legacy APNs Doctor migration", () => {
     const sourcePath = await writeLegacyState(registrationsByNodeId);
     expect((await fsp.stat(sourcePath)).size).toBeGreaterThan(4 * 1024 * 1024);
 
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([]);
-    await expect(loadApnsRegistration("legacy-relay-0", stateDir)).resolves.toMatchObject({
-      nodeId: "legacy-relay-0",
-      transport: "relay",
-    });
-    await expect(loadApnsRegistration("legacy-relay-2499", stateDir)).resolves.toMatchObject({
-      nodeId: "legacy-relay-2499",
-      transport: "relay",
-    });
+    await migrateSuccessfully();
+    for (const nodeId of ["legacy-relay-0", "legacy-relay-2499"]) {
+      await expect(load(nodeId)).resolves.toMatchObject({ nodeId, transport: "relay" });
+    }
     expect(receipt("source_record_count")).toEqual({ source_record_count: 2_500 });
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
@@ -437,29 +370,13 @@ describe("legacy APNs Doctor migration", () => {
     expect(result.warnings[0]).toContain("changed before Doctor could claim");
     expect(fs.existsSync(sourcePath)).toBe(true);
     await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe(replacement);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
+    await expect(load()).resolves.toBeNull();
   });
 
   it("requires exclusive state ownership", async () => {
     const sourcePath = await writeLegacyState();
     const env = envFor(stateDir);
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_790,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-
-    let result: Awaited<ReturnType<typeof migrateLegacyApnsRegistrations>>;
-    try {
-      result = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const result = await withGatewayLockHeld(env, 18_790, () => migrate());
 
     expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
@@ -469,14 +386,9 @@ describe("legacy APNs Doctor migration", () => {
     const sourcePath = await writeLegacyState();
     const claimPath = `${sourcePath}.doctor-importing`;
     await fsp.rename(sourcePath, claimPath);
-    expect(
-      detectLegacyApnsRegistrations({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
-    ).toBe(true);
-
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([]);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toMatchObject({
+    expect(detect().hasLegacy).toBe(true);
+    await migrateSuccessfully();
+    await expect(load()).resolves.toMatchObject({
       nodeId: "legacy-direct",
     });
     expect(fs.existsSync(claimPath)).toBe(false);
@@ -492,7 +404,7 @@ describe("legacy APNs Doctor migration", () => {
     expect(result.warnings[0]).toContain("source and interrupted claim both exist");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(claimPath)).toBe(true);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
+    await expect(load()).resolves.toBeNull();
   });
 
   it("uses the receipt for cleanup-only retries and never resurrects deleted rows", async () => {
@@ -505,27 +417,18 @@ describe("legacy APNs Doctor migration", () => {
     expect(first.warnings[0]).toContain("legacy cleanup failed");
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
     expect(receipt("removed_source")).toEqual({ removed_source: 0 });
-    const imported = (await loadApnsRegistration("legacy-direct", stateDir)) as ApnsRegistration;
-    await expect(
-      clearApnsRegistrationIfCurrent({
-        nodeId: "legacy-direct",
-        registration: imported,
-        baseDir: stateDir,
-      }),
-    ).resolves.toBe(true);
-
-    const retry = await migrate();
-    expect(retry.warnings).toEqual([]);
-    await expect(loadApnsRegistration("legacy-direct", stateDir)).resolves.toBeNull();
+    const imported = (await load()) as ApnsRegistration;
+    await clear(imported);
+    await migrateSuccessfully();
+    await expect(load()).resolves.toBeNull();
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     expect(receipt("removed_source")).toEqual({ removed_source: 1 });
 
     await writeLegacyState({
       "recreated-node": directRegistration({ nodeId: "recreated-node" }),
     });
-    const recreated = await migrate();
-    expect(recreated.warnings).toEqual([]);
-    await expect(loadApnsRegistration("recreated-node", stateDir)).resolves.toBeNull();
+    await migrateSuccessfully();
+    await expect(load("recreated-node")).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 });

@@ -29,7 +29,7 @@ type DavePassthroughTarget = {
           dave?: {
             lastTransitionId?: number;
             reinitializing?: boolean;
-            recoverFromInvalidTransition?: (transitionId: number) => void;
+            recoverFromInvalidTransition: (transitionId: number) => void;
             session?: {
               setPassthroughMode: (passthrough: boolean, expirySeconds: number) => void;
             };
@@ -102,10 +102,8 @@ export function analyzeVoiceReceiveError(err: unknown) {
   };
 }
 
-export function noteVoiceDecryptFailure(
-  state: VoiceReceiveRecoveryState,
-  now: number = Date.now(),
-) {
+export function noteVoiceDecryptFailure(state: VoiceReceiveRecoveryState) {
+  const now = Date.now();
   if (now - state.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
     state.decryptFailureCount = 0;
   }
@@ -144,8 +142,7 @@ export function recoverDaveZeroTransition(params: {
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
     networkingState?.code !== sdk.NetworkingStatusCode.Ready ||
     daveSession?.lastTransitionId !== 0 ||
-    daveSession.reinitializing !== false ||
-    typeof daveSession.recoverFromInvalidTransition !== "function"
+    daveSession.reinitializing !== false
   ) {
     return "not-attempted";
   }
@@ -169,7 +166,7 @@ export function enableDaveReceivePassthrough(params: {
   reason: string;
   expirySeconds: number;
   onWarn: (message: string) => void;
-}): boolean {
+}): void {
   const { target, sdk, reason, expirySeconds, onWarn } = params;
   const networkingState = target.connection.state.networking?.state;
   if (
@@ -178,19 +175,17 @@ export function enableDaveReceivePassthrough(params: {
     (networkingState.code !== sdk.NetworkingStatusCode.Ready &&
       networkingState.code !== sdk.NetworkingStatusCode.Resuming)
   ) {
-    return false;
+    return;
   }
   const daveSession = networkingState.dave?.session;
   if (!daveSession) {
-    return false;
+    return;
   }
   try {
     daveSession.setPassthroughMode(true, expirySeconds);
-    return true;
   } catch {
     onWarn(
       `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}`,
     );
-    return false;
   }
 }

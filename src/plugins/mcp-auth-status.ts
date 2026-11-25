@@ -1,14 +1,34 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { mergeConfiguredBundleMcpServers } from "../agents/bundle-mcp-config.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { resolveOperatorMcpOAuthConfig } from "../agents/mcp-operator-auth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
+import { loadEnabledBundleMcpConfig, loadPluginDeclaredMcpServers } from "./bundle-mcp.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMcpAuthDeclarations } from "./plugin-cache-metadata.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+
+/** The shared operator OAuth connection that Settings may inspect and sign in. */
+function resolveOperatorMcpOAuthConfig(serverName: string, server: unknown) {
+  const raw = asOptionalObjectRecord(server);
+  if (!raw || raw.enabled === false) {
+    return undefined;
+  }
+  const config = resolveMcpTransportConfig(serverName, raw, { logWarnings: false });
+  return config?.kind === "http" &&
+    config.auth === "oauth" &&
+    !config.oauth?.authProfileId &&
+    Object.hasOwn(
+      partitionMcpServersByConnectionScope({ [serverName]: raw }).staticServers,
+      serverName,
+    )
+    ? config
+    : undefined;
+}
 
 function resolvePluginMcpAuthDeclarations(
   config: OpenClawConfig,
@@ -68,6 +88,58 @@ export function resolveOperatorMcpOAuthConnection(params: {
     : params.config.mcp?.servers?.[params.serverName];
   const config = resolveOperatorMcpOAuthConfig(params.serverName, server);
   return config && server ? { config, server } : undefined;
+}
+
+/** A plugin-declared HTTP MCP endpoint whose stored sign-in belongs to that plugin. */
+export type PluginMcpOAuthEndpoint = { serverName: string; url: string };
+
+/** HTTP MCP endpoints the given plugins declare, read before their files are removed. */
+export function listPluginMcpOAuthEndpoints(
+  records: readonly PluginManifestRecord[],
+): PluginMcpOAuthEndpoint[] {
+  return records.flatMap((record) =>
+    Object.entries(loadPluginDeclaredMcpServers(record)).flatMap(([serverName, server]) => {
+      const transport = resolveMcpTransportConfig(serverName, server, { logWarnings: false });
+      return transport?.kind === "http" ? [{ serverName, url: transport.url }] : [];
+    }),
+  );
+}
+
+/**
+ * Clear sign-ins for endpoints of a removed plugin, as removing a configured server does.
+ * Without this, reinstalling the plugin silently reuses the previous account.
+ */
+export async function clearRemovedPluginMcpOAuth(params: {
+  endpoints: readonly PluginMcpOAuthEndpoint[];
+  config: OpenClawConfig;
+  /** The uninstall's live authority, checked again at each credential write. */
+  assertCurrent: () => void;
+}): Promise<string[]> {
+  const { clearMcpOAuthServer } = await import("../agents/mcp-oauth.js");
+  const warnings: string[] = [];
+  for (const { serverName, url } of params.endpoints) {
+    // A configured server with the same name and endpoint keeps using these credentials.
+    const configured = resolveMcpTransportConfig(
+      serverName,
+      params.config.mcp?.servers?.[serverName],
+      { logWarnings: false },
+    );
+    if (configured?.kind === "http" && configured.url === url) {
+      continue;
+    }
+    try {
+      await clearMcpOAuthServer(operatorMcpOAuthIdentity(serverName, url), {
+        assertCurrent: params.assertCurrent,
+      });
+    } catch {
+      // Lost authority stops the uninstall; only storage failures become warnings.
+      params.assertCurrent();
+      warnings.push(
+        `The saved sign-in for MCP server "${serverName}" could not be removed. Reinstall the plugin and select Sign out to remove it.`,
+      );
+    }
+  }
+  return warnings;
 }
 
 /** Project stored auth state only for a plugin's matching, operator-owned connections. */

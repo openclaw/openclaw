@@ -80,13 +80,11 @@ it("refuses replacement schema drift before reusing a warm canonical readiness r
     const replacement = `${database.path}.replacement`;
     await backup(requireNativeSqliteDatabase(database.db), replacement);
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
-    const peer = new DatabaseSync(replacement);
-    try {
+    {
+      using peer = new DatabaseSync(replacement);
       peer.exec(
         "CREATE TRIGGER unexpected_session_trigger AFTER INSERT ON session_nodes BEGIN SELECT 1; END",
       );
-    } finally {
-      peer.close();
     }
     renameSync(replacement, database.path);
     await expect(certifySessionCanonicalValidationPending(options)).rejects.toThrow(
@@ -222,7 +220,7 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { options, database } = seedPendingRows(1);
       if (change === "startup revoked") {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
       }
       let changed = false;
@@ -242,7 +240,7 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
             if (change === "row changed") {
               markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
             } else if (change === "receipt revoked") {
-              invalidateOpenClawAgentDatabaseValidation(database.path);
+              invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
             }
           }
         });
@@ -289,16 +287,12 @@ it.each([false, true])(
       const copiedPath = state.statePath("copied-agent.sqlite");
       database.db.prepare("VACUUM INTO ?").run(copiedPath);
       if (invalid) {
-        const imported = new DatabaseSync(copiedPath);
-        try {
-          // Untrusted copied derived state cannot certify its own source contents.
-          imported.exec(
-            "UPDATE session_nodes SET parent_session_key = 'agent:main:changed' WHERE session_key = 'agent:main:pending-0'",
-          );
-          imported.exec("DELETE FROM session_canonical_validation_pending");
-        } finally {
-          imported.close();
-        }
+        using imported = new DatabaseSync(copiedPath);
+        // Untrusted copied derived state cannot certify its own source contents.
+        imported.exec(
+          "UPDATE session_nodes SET parent_session_key = 'agent:main:changed' WHERE session_key = 'agent:main:pending-0'",
+        );
+        imported.exec("DELETE FROM session_canonical_validation_pending");
       }
       const copiedOptions = { ...options, path: copiedPath };
       const copied = openOpenClawAgentDatabase(copiedOptions);
@@ -328,7 +322,7 @@ it("forces a fresh worker to revalidate a canonical receipt revoked by its paren
       UPDATE session_nodes SET parent_session_key = 'agent:main:changed';
       DELETE FROM session_canonical_validation_pending;
     `);
-    invalidateOpenClawAgentDatabaseValidation(database.path);
+    invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
     await expect(
       withSqliteCanonicalValidationWorker((withWorker) =>
         certifySessionCanonicalValidationPending(options, withWorker),

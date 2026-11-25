@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
-import { imessageRpcSupportsMethod } from "./probe.js";
 
 afterEach(() => {
   vi.restoreAllMocks();

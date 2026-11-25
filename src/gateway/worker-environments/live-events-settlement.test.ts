@@ -64,21 +64,13 @@ it.each(["persisted", "failed", "revoked", "stopped"] as const)(
     });
 
     if (outcome === "failed") {
-      const warmupId = "warmup";
-      const warmupTarget = { ...target, sessionId: warmupId, sessionKey: "agent:main:warmup" };
-      await upsertSessionEntryCore(warmupTarget, { sessionId: warmupId, updatedAt: 1 });
-      const warmup = expectDefined(
-        await createTrajectoryRuntimeRecorder({
-          sessionId: warmupId,
-          sessionTarget: warmupTarget,
-        }),
-        "worker warmup recorder",
+      const probe = expectDefined(
+        await createTrajectoryRuntimeRecorder({ sessionId, sessionTarget: target }),
+        "worker fault probe",
       );
-      warmup.recordEvent("worker.warmup");
-      await warmup.flush();
       fault.enable();
-      warmup.recordEvent("worker.trigger-probe");
-      await expect(warmup.flush()).rejects.toThrow("synthetic trajectory persistence failure");
+      probe.recordEvent("worker.trigger-probe");
+      await expect(probe.flush()).rejects.toThrow("synthetic trajectory persistence failure");
     }
 
     const writer = holdWorkerTranscriptWriter(storePath);
@@ -144,8 +136,7 @@ it.each(["persisted", "failed", "revoked", "stopped"] as const)(
       }
 
       writer.release();
-      await writer.done;
-      await Promise.all([request, replay, stopped]);
+      await Promise.all([writer.done, request, replay, stopped]);
       if (outcome === "stopped") {
         releaseSource();
         expect(runContext(identity.runId!)).toBeUndefined();
@@ -178,8 +169,7 @@ it.each(["persisted", "failed", "revoked", "stopped"] as const)(
       }
     } finally {
       writer.release();
-      await writer.done;
-      await Promise.all([request, replay, stopped]);
+      await Promise.all([writer.done, request, replay, stopped]);
       await workerService.stop();
       releaseSource();
       unsubscribe();

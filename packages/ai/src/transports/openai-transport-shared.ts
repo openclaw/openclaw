@@ -32,6 +32,12 @@ const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
+  isEnabled(level: "debug" | "info" | "warn") {
+    return getAiTransportHost().isLogEnabled?.("openai-transport", level) !== false;
+  },
+  debugLazy(build: () => string) {
+    getAiTransportHost().logDebug("openai-transport", () => ({ message: build() }));
+  },
   debug(message: string, data?: Record<string, unknown>) {
     getAiTransportHost().logDebug("openai-transport", () => ({ message, data }));
   },
@@ -237,15 +243,16 @@ export function readOpenAICompletionsReasoningBatch(
       if (!isRecord(detail)) {
         continue;
       }
-      if (typeof detail.text !== "string" || !detail.text) {
+      const detailText = detail.type === "reasoning.summary" ? detail.summary : detail.text;
+      if (typeof detailText !== "string" || !detailText) {
         continue;
       }
-      if (detail.type === "reasoning.text") {
+      if (detail.type === "reasoning.text" || detail.type === "reasoning.summary") {
         deltas ??= [];
         appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "thinking",
           signature: "reasoning_details",
-          text: detail.text,
+          text: detailText,
         });
         continue;
       }
@@ -255,7 +262,7 @@ export function readOpenAICompletionsReasoningBatch(
         deltas ??= [];
         appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "text",
-          text: detail.text,
+          text: detailText,
           source: "reasoning_detail",
         });
       }

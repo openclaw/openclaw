@@ -9,6 +9,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   invalidateSqliteDatabaseCleanClose,
+  prepareSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
@@ -184,9 +185,13 @@ export function ensureOpenClawQuarantineStore(env: NodeJS.ProcessEnv): void {
 /** Runtime guards share the owner's decision; explicit repair may inspect disk. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
+  if (options.refreshIdentity) {
+    // Worker readers refresh the binding before using a retained auxiliary generation.
+    prepareSqliteDatabaseAdmission(storePath);
+  }
   const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
   const decision = options.fresh
     ? load()
@@ -310,7 +315,7 @@ function resolveQuarantineDecision(
 export function readOpenClawDatabaseQuarantineFailure(
   kind: OpenClawDatabaseKind,
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): Error | undefined {
   let quarantine: OpenClawDatabaseQuarantine | undefined;
   let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
@@ -340,6 +345,40 @@ export function readOpenClawDatabaseQuarantineFailure(
     failure.cause = cleanupFailure;
   }
   return failure;
+}
+
+/** A background integrity verdict survives later writes and restarts until Doctor clears it. */
+export function recordOpenClawDatabaseQuarantine(
+  pathname: string,
+  reason: string,
+  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+): void {
+  const env = options.env ?? process.env;
+  options.assertCurrent();
+  invalidateSqliteDatabaseCleanClose(pathname);
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(
+      database,
+      () => {
+        options.assertCurrent();
+        const decision: QuarantineDecision = {
+          kind: "agent",
+          reason,
+          quarantinedAt: Date.now(),
+          verifiedGenerationJson: null,
+        };
+        database
+          .prepare(`INSERT INTO quarantined_databases
+            (path, kind, reason, quarantined_at, verified_generation)
+            VALUES (?, 'agent', ?, ?, NULL)
+            ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, reason=excluded.reason,
+              quarantined_at=excluded.quarantined_at, verified_generation=NULL`)
+          .run(path.resolve(pathname), reason, decision.quarantinedAt);
+        publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(pathname), decision);
+      },
+      { databaseLabel: resolveQuarantineStorePath(env), operationLabel: "quarantine.record" },
+    ),
+  );
 }
 
 export function clearOpenClawDatabaseQuarantine(

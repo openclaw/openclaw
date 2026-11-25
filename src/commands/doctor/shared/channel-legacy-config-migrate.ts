@@ -1,5 +1,6 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
 
+import { z } from "zod";
 import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
@@ -14,13 +15,52 @@ import {
   collectDoctorConfigRepairPluginIds,
   isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
+import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
 import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
-function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+export const LegacyHeartbeatVisibilitySchema = z
+  .object({
+    showOk: z.boolean().optional(),
+    showAlerts: z.boolean().optional(),
+    useIndicator: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+/** Feishu owns visibility/intervalMs; only its shared heartbeat keys belong to retirement. */
+export function selectLegacyHeartbeatVisibility(
+  channel: string,
+  entry: Record<string, unknown> | undefined,
+) {
+  if (!entry) {
+    return undefined;
+  }
+  const keys =
+    channel === "feishu"
+      ? (["heartbeatVisibility", "heartbeat"] as const)
+      : (["heartbeatVisibility"] as const);
+  for (const key of keys) {
+    const value = entry[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (
+      channel === "feishu" &&
+      (!isRecord(value) ||
+        !["showOk", "showAlerts", "useIndicator"].some((field) => Object.hasOwn(value, field)))
+    ) {
+      continue;
+    }
+    return { key, value };
+  }
+  return undefined;
+}
+
+export function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
   if (!channels) {
     return;
@@ -36,6 +76,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
       !heartbeat ||
       (preserveEmptyPluginBlock && keys.length === 0) ||
       keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
+    ) {
+      return;
+    }
+    if (
+      preserveEmptyPluginBlock &&
+      entry.heartbeatVisibility !== undefined &&
+      selectLegacyHeartbeatVisibility("feishu", entry)?.key !== "heartbeatVisibility"
     ) {
       return;
     }
@@ -75,10 +122,19 @@ function resolveBundledChannelCompatibilityNormalizer(
   return getBootstrapChannelPlugin(channelId)?.doctor?.normalizeCompatibilityConfig;
 }
 
+export type ChannelDoctorCompatibilityOptions = {
+  pluginContracts?: boolean;
+  historicalWebhookListeners?: boolean;
+  pluginCompatibility?: {
+    pluginIds: readonly string[];
+    manifestRegistry: PluginManifestRegistry;
+  };
+};
+
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
-  options?: { pluginContracts?: boolean; historicalWebhookListeners?: boolean },
+  options?: ChannelDoctorCompatibilityOptions,
 ): {
   next: Record<string, unknown>;
   changes: string[];
@@ -116,9 +172,10 @@ export function applyChannelDoctorCompatibilityMigrations(
   const pluginIds =
     options?.pluginContracts === false
       ? []
-      : [
+      : (options?.pluginCompatibility?.pluginIds ??
+        [
           ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
-        ].toSorted();
+        ].toSorted());
   const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
     pluginIds.length || options?.historicalWebhookListeners
       ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
@@ -127,6 +184,7 @@ export function applyChannelDoctorCompatibilityMigrations(
             ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
             : pluginIds,
           historicalWebhookListeners: options?.historicalWebhookListeners,
+          manifestRegistry: options?.pluginCompatibility?.manifestRegistry,
         })
       : { config: bundled.config, changes: [] };
   // Bundled and installed contract views can report the same warning-only condition.

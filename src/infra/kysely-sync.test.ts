@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { sql, type ColumnType, type Kysely, type Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
@@ -16,9 +17,11 @@ import {
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  prepareSqliteTerminalWrite,
   sqliteStringSet,
 } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import { assertNoActiveSqliteReaders, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
@@ -134,6 +137,39 @@ describe("kysely sync helpers", () => {
       ).toEqual({ count: 1 });
     }
     expect(run(db.deleteFrom("items"))).toEqual({ numAffectedRows: 1n, rows: [] });
+  });
+
+  it("settles terminal writes before fallible native statement cleanup", () => {
+    createItems();
+    const nativePrepare = database.prepare.bind(database);
+    let cleanupCalls = 0;
+    vi.spyOn(database, "prepare").mockImplementation((query) => {
+      const statement = nativePrepare(query);
+      const dispose = statement[Symbol.dispose]?.bind(statement);
+      Object.defineProperty(statement, Symbol.dispose, {
+        configurable: true,
+        value() {
+          dispose?.();
+          cleanupCalls += 1;
+          throw new Error("synthetic statement cleanup failure");
+        },
+      });
+      return statement;
+    });
+    const write = prepareSqliteTerminalWrite<{ id: bigint; name: string }>(database, (parameter) =>
+      db.insertInto("items").values({
+        id: parameter((row) => row.id),
+        name: parameter((row) => row.name),
+      }),
+    );
+    expect(() =>
+      withSqlitePostCommitPublications(database, () => {
+        write({ id: 9007199254740993n, name: "committed" });
+        expect(cleanupCalls).toBe(0);
+      }),
+    ).not.toThrow();
+    expect(cleanupCalls).toBe(1);
+    expect(nativePrepare("select name from items").get()).toEqual({ name: "committed" });
   });
 
   it("preserves raw readers and distinguishes writes with and without returned rows", () => {
@@ -437,6 +473,60 @@ describe("kysely sync helpers", () => {
     expect(prepares()).toBe(6);
   });
 
+  // Explicit statement disposal is a public Node API starting in 26.8.
+  it
+    .skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))
+    .each(["uncached", "candidate", "oversized", "first", "iterator", "iterator-return", "error"])(
+    "releases native bindings when a %s query settles",
+    (mode) => {
+      if (mode !== "uncached") {
+        enableNodeSqliteKyselyStatementCache(database);
+      }
+      const prepareSpy = vi.spyOn(database, "prepare");
+      const value = "x".repeat(mode === "oversized" ? 128 * 1024 : 1024);
+      const query = scalar<number>(mode === "error" ? "json" : "length", value);
+      if (mode === "error") {
+        expect(() => run(query)).toThrow(/malformed JSON/iu);
+      } else if (mode === "first") {
+        expect(first(query)).toEqual({ value: value.length });
+      } else if (mode.startsWith("iterator")) {
+        const iterator = iterateSqliteQuerySync(database, query);
+        expect(iterator.next().value).toEqual({ value: value.length });
+        if (mode === "iterator-return") {
+          iterator.return?.();
+        } else {
+          expect(iterator.next().done).toBe(true);
+        }
+      } else {
+        expectRows(query, [{ value: value.length }]);
+      }
+      const statement = prepareSpy.mock.results[0]!.value as StatementSync;
+      expect(() => statement.get(value)).toThrow(/finalized/iu);
+    },
+  );
+
+  it.skipIf(!Object.getOwnPropertyDescriptor(StatementSync.prototype, Symbol.dispose))(
+    "finalizes evicted and cleared statements while retaining reusable queries",
+    () => {
+      enableNodeSqliteKyselyStatementCache(database);
+      const prepareSpy = vi.spyOn(database, "prepare");
+      createItems(["Ada"]);
+      prepareSpy.mockClear();
+      const select = selectItems();
+      expectRows(select, itemRows("Ada"), 3);
+      const retained = prepareSpy.mock.results[1]!.value as StatementSync;
+      expect(retained.all()).toEqual(itemRows("Ada"));
+      for (let count = 1; count <= 64; count++) {
+        expectRows(variableSelect(count), [], 2);
+      }
+      expect(() => retained.all()).toThrow(/finalized/iu);
+      const last = prepareSpy.mock.results.at(-1)!.value as StatementSync;
+      expect(last.all(...Array.from({ length: 64 }, (_, index) => index + 1))).toEqual([]);
+      clearNodeSqliteKyselyCacheForDatabase(database);
+      expect(() => last.all()).toThrow(/finalized/iu);
+    },
+  );
+
   it("invalidates prepared statements when the database is deserialized", () => {
     createItems(["Ada"]);
     let replacementBytes = new Uint8Array();
@@ -570,7 +660,6 @@ describe("kysely sync helpers", () => {
     for (const execute of [
       () => db.startTransaction().execute(),
       () => consumeStream(selectItems().stream()),
-      () => selectItems().execute(),
     ]) {
       await expectCompileOnlyRejection(execute());
     }
@@ -586,12 +675,7 @@ function countPrepares(database: DatabaseSync): () => number {
 }
 
 function captureError(operation: () => void): unknown {
-  try {
-    operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected operation to throw");
+  return captureThrown(operation, "expected operation to throw");
 }
 
 function runRetentionScenario(

@@ -63,6 +63,15 @@ that same resolved budget and adds another 30000 ms for response delivery.
 Stop, turn deadlines, lifecycle cancellation, and expired approval authority
 still end the affected work.
 
+`autoreview` follows the admitted initiating run's execution lifetime for its
+whole preparation, planned passes, and report completion. Its per-pass timeout
+arguments do not become a whole-call cap. The original parent deadline keeps
+running, including when a pending tool request is replayed; a tool call cannot
+restart it. An unlimited parent adds no execution or response watchdog, while
+Stop and authority revocation still cancel the operation. Canonical helper
+settings and the existing 600-second `openclaw agent exec` default per pass are
+unchanged. Reviews in `/btw` remain within that side question's ten-minute deadline.
+
 On timeout, OpenClaw aborts the tool signal where supported and returns a failed
 dynamic-tool response to Codex so the turn can continue instead of leaving the
 session in `processing`. These wait budgets never preserve approval authority
@@ -106,6 +115,11 @@ An unlimited native wait ends only on a native terminal outcome, an
 authoritative failure, or explicit Stop. Startup, app-server control requests,
 approvals, dynamic tools, and cancellation retain their independent deadlines.
 `/btw` side questions retain their separate ten-minute completion budget.
+
+When native ownership ends, OpenClaw gives the run its normal six-minute semantic
+stall window to finish instead of counting the native wait as inactivity. A run
+that remains stuck is still stopped. Explicit execution deadlines and the separate
+local-settlement budget below remain in effect.
 
 On receipt of the exact native terminal event, OpenClaw starts an absolute
 two-minute local-settlement budget before asynchronous transcript and media

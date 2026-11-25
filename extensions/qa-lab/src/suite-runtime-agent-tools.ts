@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import {
   appendQaChildOutputTail,
@@ -23,16 +24,14 @@ const MCP_REQUEST_TIMEOUT_MS = 180_000;
 
 async function resolvePluginToolsMcpArgs(repoRoot: string) {
   const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
-  try {
-    await fs.access(distEntry);
+  if (await canAccess(distEntry)) {
     return [distEntry];
-  } catch {
-    return [
-      "--import",
-      requireFromHere.resolve("tsx"),
-      path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
-    ];
   }
+  return [
+    "--import",
+    requireFromHere.resolve("tsx"),
+    path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
+  ];
 }
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
@@ -94,12 +93,9 @@ async function callPluginToolsMcp(params: {
     env: transportEnv,
   });
   const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
-  const stderr = transport.stderr;
-  if (stderr && typeof stderr.on === "function") {
-    stderr.on("data", (chunk: unknown) => {
-      appendQaChildOutputTail(stderrTail, chunk);
-    });
-  }
+  transport.stderr?.on("data", (chunk: unknown) => {
+    appendQaChildOutputTail(stderrTail, chunk);
+  });
   const client = new Client(
     { name: "openclaw-qa-suite", version: "0.0.0" },
     { versionNegotiation: { mode: "legacy" } },

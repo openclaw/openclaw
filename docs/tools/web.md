@@ -100,12 +100,18 @@ configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
+`tools.web.search.provider` is matched case-insensitively and ignores surrounding
+whitespace. For example, `SearXNG` selects the existing `searxng` provider.
+
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
   <Card title="Codex Hosted Search" icon="search" href="/plugins/codex-harness">
     AI-synthesized grounded answers through your Codex app-server account.
+  </Card>
+  <Card title="DeepSeek" icon="search" href="/providers/deepseek#web-search">
+    Structured results with model-oriented summaries. Uses the official installable DeepSeek plugin.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free provider. No API key needed. Unofficial HTML-based integration.
@@ -154,6 +160,7 @@ configured tools continue to read current credentials at execution time.
 | ------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | [Brave](/tools/brave-search)                     | Structured snippets                                | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
 | [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                       | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
+| [DeepSeek](/providers/deepseek#web-search)       | Structured results with model-oriented summaries   | Query operators: sites, language, dates          | `DEEPSEEK_API_KEY`                                                                      |
 | [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                         | Structured + extracted                             | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
 | [Firecrawl](/tools/firecrawl)                    | Structured snippets                                | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
@@ -243,6 +250,13 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Structured results share a 20,000-character budget for URLs and sanitized prose,
+excluding external-content envelopes. URLs are reserved first. Prose is allocated
+from shorter to longer sanitized rows without changing provider result order, so
+long early snippets cannot consume the entire budget before later rows receive a
+share. Sanitization expansion counts toward the budget; truncated output sets
+`truncated: true`.
+
 Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
 diagnostics, with reflected request credentials redacted. Review diagnostics
 before sharing them; redaction does not remove every kind of sensitive content.
@@ -276,9 +290,11 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
+11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` while that provider and its models use `https://api.deepseek.com` (order 80; install the official DeepSeek plugin first)
+
 Configured endpoint providers after that:
 
-11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If an auto-detected provider fails, OpenClaw tries the next eligible provider.
 If all attempts fail, it reports the first provider's error to help you diagnose
@@ -302,7 +318,7 @@ instead.
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  installed API-backed web search providers, including Brave, Exa, Firecrawl,
+  installed API-backed web search providers, including Brave, DeepSeek, Exa, Firecrawl,
   Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
@@ -431,6 +447,16 @@ stale enable override. Changing the native search setting updates the CLI
 session fingerprint so a resumed process cannot keep the old search policy.
 Turning search off for a session also removes it from OpenClaw's MCP tool list
 and invocation grant, while leaving unrelated tools available.
+
+On OpenClaw-managed Claude Code (`claude-cli`) turns, Claude Code's native
+`WebSearch` is kept by default, billed to the Claude login. It is kept only when
+the agent's tool policy allows `web_search` (so `tools.deny: ["group:web"]`
+removes it), search is enabled, and no OpenClaw provider is pinned or configured.
+A configured provider keeps priority: the agent then gets OpenClaw's `web_search`
+and no native duplicate. Turn native search off with
+`plugins.entries.anthropic.config.managedNativeTools.default: []`. Native
+`WebFetch` stays unavailable; use OpenClaw's `web_fetch`. See
+[CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
 
 Other external harnesses own their native tool behavior; configuring OpenClaw's
 managed provider does not establish that a third-party harness uses it.
@@ -613,10 +639,13 @@ active for the turn that actually calls it.
 
 ### x_search config
 
-With `enabled` omitted, `x_search` is exposed only when the active model's
-provider is `xai` and xAI credentials resolve. For an active model with a known
-non-xAI provider, set `plugins.entries.xai.config.xSearch.enabled` to `true` to
-opt in to cross-provider use. If the active model provider is missing or
+With `enabled` omitted, `x_search` is exposed when the active model's provider
+is `xai` and xAI credentials resolve. It is also exposed for a known non-xAI
+model provider when you signed in with Grok OAuth: those searches use only the
+OAuth credential, which draws on your SuperGrok or X Premium subscription, and
+never fall back to an API key. To use an xAI API key with a non-xAI model, set
+`plugins.entries.xai.config.xSearch.enabled` to `true` to opt in to
+cross-provider API billing. If the active model provider is missing or
 unresolved, the tool stays hidden. Set `enabled` to `false` to disable it for
 every provider. xAI credentials are always required.
 
@@ -627,7 +656,7 @@ every provider. xAI credentials are always required.
       xai: {
         config: {
           xSearch: {
-            enabled: true, // required for a known non-xAI model provider
+            enabled: true, // API-key billing with a non-xAI model; Grok OAuth needs no opt-in
             model: "grok-4.3",
             baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
@@ -669,6 +698,10 @@ expiry.
 | `enable_video_understanding` | Let xAI inspect videos attached to matching posts      |
 
 `allowed_x_handles` and `excluded_x_handles` are mutually exclusive.
+
+Date bounds are inclusive UTC calendar days. OpenClaw sends the following UTC day
+as xAI's exclusive `to_date` bound; the date reported in the tool result remains
+the date you supplied.
 
 ### x_search example
 

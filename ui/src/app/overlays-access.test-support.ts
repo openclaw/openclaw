@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
@@ -19,19 +21,17 @@ export function createGatewayHarness(
   initialClient: GatewayBrowserClient | null,
   initialConnected = initialClient !== null,
 ) {
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     assistantAgentId: "main",
     client: initialClient,
     phase: initialConnected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: { auth: { role: "operator" } } as ApplicationGatewaySnapshot["hello"],
-    lastError: null,
-    lastErrorCode: null,
     sessionKey: "main",
-  };
+  });
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  metadataObserver.synchronize(snapshot, snapshot);
   const connect = vi.fn();
   const gateway = {
     get snapshot() {
@@ -43,6 +43,7 @@ export function createGatewayHarness(
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
     connect,
+    defer: () => false,
     setSessionKey() {},
     start() {},
     stop() {},
@@ -59,13 +60,20 @@ export function createGatewayHarness(
     },
   } satisfies ApplicationGateway;
   const emitEvent = (event: string, payload: unknown) => {
-    const frame: GatewayEventFrame = { event, payload, type: "event" };
+    const frame = metadataObserver.receive({ event, payload, type: "event" }, snapshot);
+    if (!frame) {
+      return;
+    }
     for (const listener of eventListeners) {
       listener(frame);
     }
   };
   const update = (next: Partial<ApplicationGatewaySnapshot>) => {
+    const previous = snapshot;
     snapshot = { ...snapshot, ...next };
+    if (!metadataObserver.synchronize(previous, snapshot)) {
+      return;
+    }
     for (const listener of snapshotListeners) {
       listener(snapshot);
     }
@@ -110,7 +118,7 @@ export function client(request: RequestFn): GatewayBrowserClient {
   return { request } as unknown as GatewayBrowserClient;
 }
 
-export function createOverlayHarness(request: RequestFn, scopes?: string[] | null) {
+function createOverlayHarness(request: RequestFn, scopes?: string[] | null) {
   const harness = createGatewayHarness(client(request));
   if (scopes === null) {
     harness.update({ hello: null });
@@ -171,6 +179,30 @@ function pairingFixture(request: RequestFn, scopes?: string[] | null) {
 }
 
 export function registerOverlayPairingAccessTests() {
+  it.each(["reconnect", "replacement", "access revocation", "dispose"] as const)(
+    "does not open pairing when %s retires the pending interaction",
+    async (boundary) => {
+      const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+      const { harness, overlays } = createOverlayHarness(request, ["operator.admin"]);
+      const opening = overlays.openDevicePairSetup();
+      if (boundary === "reconnect") {
+        harness.update({ phase: "reconnecting" });
+        harness.update({ phase: "connected" });
+      } else if (boundary === "replacement") {
+        harness.update({ client: client(request) });
+      } else if (boundary === "access revocation") {
+        harness.setScopes(["operator.read"]);
+      } else {
+        overlays.dispose();
+      }
+
+      expect(await opening).toBe(false);
+      expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      overlays.dispose();
+    },
+  );
+
   it.each(["to-legacy", "to-scoped", "event"] as const)(
     "refreshes current pairing counts on %s",
     async (trigger) => {

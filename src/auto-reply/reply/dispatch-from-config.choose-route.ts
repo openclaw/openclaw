@@ -3,35 +3,41 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { PARTICIPATION_RUNTIME_ERROR } from "../../agents/participation-ceiling.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
+import { shouldDeferFinalTtsText } from "../../tts/captioned-final-eligibility.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
-  shouldDeferFinalTtsText,
 } from "../../tts/captioned-final.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import { commandTranscriptMirror } from "./channel-command-user-turn.js";
 import { resolveCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createDispatchCommentaryProgress } from "./dispatch-from-config.commentary.js";
+import {
+  acquireAcpDispatchTurn,
+  acquireDispatchTurn,
+} from "./dispatch-from-config.dispatch-admission.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -97,15 +103,15 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     trackDispatchLifecycleWork,
     turnLedger,
   } = state;
+  const { replyOptions } = params;
   const shouldSuppressProgressDelivery = async () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !(await shouldDeliverVerboseProgressDespiteSourceSuppression()));
   // The released reply_dispatch getter retains its synchronous contract.
   const shouldSendToolSummaries = () =>
-    params.replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
+    replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
   const shouldSendToolSummariesAsync = async () =>
-    params.replyOptions?.suppressToolProgressMessages !== true &&
-    (await shouldEmitVerboseProgressAsync());
+    replyOptions?.suppressToolProgressMessages !== true && (await shouldEmitVerboseProgressAsync());
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -122,7 +128,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
     allowsVerboseProgressDespiteSourceSuppression() &&
-    params.replyOptions?.forceToolResultProgress === true;
+    replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
   const prepareSessionWriterDelivery = createSessionWriterDeliveryPreparation({
     storePath: sessionStoreEntry.storePath,
@@ -166,7 +172,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     accountId: replyRoute.accountId,
     inboundAudio: state.inboundAudio,
   };
-  const deferFinalTtsText = shouldDeferFinalTtsText(captionedFinalTtsContext);
+  const deferFinalTtsText = await shouldDeferFinalTtsText(captionedFinalTtsContext);
   let commandReplyIndex = 0;
   const commandBlockMirror = (payload: ReplyPayload) => {
     const metadata = getReplyPayloadMetadata(payload);
@@ -195,8 +201,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         agentId: sessionAgentId,
         expectedSessionId: binding?.sessionId,
         storePath: binding?.storePath ?? sessionStoreEntry.storePath,
-        commandText,
-        commandId,
+        ...commandTranscriptMirror(state, commandText, commandId),
         preferText: true,
         idempotencyKey: `command-block:${commandId}:${++commandReplyIndex}`,
         deliveryMirror: { kind: "channel-final", sourceMessageId: commandId },
@@ -204,7 +209,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       payload,
     );
   };
-  const cleanDeferredFinalDirectives = shouldCleanTtsDirectiveText(captionedFinalTtsContext);
+  const cleanDeferredFinalDirectives = await shouldCleanTtsDirectiveText(captionedFinalTtsContext);
   type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
@@ -314,9 +319,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     throwIfFinalDeliveryAborted();
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
-      await suppressPendingFinalDelivery(inputPayload, {
-        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-      });
+      await suppressPendingFinalDelivery(inputPayload);
       return {
         queuedFinal: false,
         routedFinalCount: 0,
@@ -325,7 +328,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     const payload = renderPostCompactionModelFailurePayload(preparation.payload);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
+    const expectedWriterRunId = normalizeOptionalString(replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
     const transcriptWriterMetadata = (
       binding: ReturnType<typeof resolvePreparedTranscriptBinding>,
@@ -354,7 +357,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       markInboundDedupeReplayUnsafe();
       finalReplyDeliveryStarted = true;
     }
-    const shouldAttachDeferredText = deferFinalTtsText && isCaptionedFinalTextPayload(payload);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(payload);
     const deferredRawText = shouldAttachDeferredText
       ? mergeDeferredFinalText(options.deferredTtsText ?? "", payload.text)
       : undefined;
@@ -430,9 +433,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         text: undefined,
       });
       if (pendingBlock) {
-        await suppressPendingFinalDelivery(payload, {
-          preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
-        });
+        await suppressPendingFinalDelivery(payload);
       }
       if (pendingBlock || sourceRecovery) {
         setReplyPayloadMetadata(normalizedPayload, { pendingFinalDeliveryCompletion: undefined });
@@ -449,7 +450,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
     const transcriptMirrorSourceId =
       normalizeOptionalString(state.messageIdForHook) ??
-      normalizeOptionalString(params.replyOptions?.runId);
+      normalizeOptionalString(replyOptions?.runId);
     const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
       transcriptMirrorSessionKey,
     );
@@ -471,7 +472,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               agentId: sessionAgentId,
               ...transcriptWriterMetadata(transcriptMirrorSessionBinding),
               preferText: true,
-              ...(isCommandReply && commandText && commandId ? { commandText, commandId } : {}),
+              ...(isCommandReply && commandText && commandId
+                ? commandTranscriptMirror(state, commandText, commandId)
+                : {}),
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
               idempotencyKey: transcriptMirrorSourceId
                 ? `channel-final:${commandId ?? transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
@@ -549,14 +552,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
+  const restrictedRuntime =
+    replyOptions?.operatorAuthority?.participationCeiling ||
+    admittedSessionSettingsRestrictRuntime(replyOptions?.admittedSessionSettings);
   let takeover:
     | { payload: ReplyPayload; deliveryId: string; recordProcessed: () => void }
     | undefined;
-  if (
-    state.allowInboundHandlers &&
-    !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
-    hookRunner?.hasHooks("before_dispatch")
-  ) {
+  if (state.allowInboundHandlers && !restrictedRuntime && hookRunner?.hasHooks("before_dispatch")) {
     // This outer lookup key is resolved from the routed context; fields inside
     // sessionStoreEntry.entry cannot redirect hook or requester lineage.
     const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -619,13 +621,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  if (
-    !takeover &&
-    state.dispatchKind === "acp" &&
-    admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings)
-  ) {
-    const error =
-      "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
+  if (!takeover && state.dispatchKind === "acp" && restrictedRuntime) {
+    const error = replyOptions?.operatorAuthority?.participationCeiling
+      ? PARTICIPATION_RUNTIME_ERROR
+      : "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
     takeover = {
       payload: { text: error, isError: true },
       deliveryId: "restricted-runtime-takeover",
@@ -653,10 +652,16 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
-  const replyDispatchTakeover = await runReplyDispatchHook(state, {
-    shouldSendToolSummaries,
-    shouldSendToolSummariesAsync,
-  });
+  const acpRefusal = state.dispatchKind === "acp" ? await acquireAcpDispatchTurn(state) : undefined;
+  if (acpRefusal) {
+    return acpRefusal;
+  }
+  const replyDispatchTakeover = replyOptions?.operatorAuthority?.participationCeiling
+    ? undefined
+    : await runReplyDispatchHook(state, {
+        shouldSendToolSummaries,
+        shouldSendToolSummariesAsync,
+      });
   if (replyDispatchTakeover?.handled) {
     commitInboundDedupeIfClaimed();
     completeDispatchReplyOperation();
@@ -668,19 +673,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       }),
     };
   }
-
-  const dispatchPhase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";
-  const dispatchAcquisition = await traceReplyPhase(`reply.admit_${dispatchPhase}`, () =>
-    state.ensureDispatchReplyOperation(dispatchPhase),
-  );
-  if (dispatchAcquisition.status === "aborted") {
-    return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
-  }
-  if (dispatchAcquisition.status === "busy") {
-    return {
-      status: "complete" as const,
-      result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
-    };
+  const dispatchRefusal =
+    state.dispatchKind === "acp" ? undefined : await acquireDispatchTurn(state);
+  if (dispatchRefusal) {
+    return dispatchRefusal;
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,

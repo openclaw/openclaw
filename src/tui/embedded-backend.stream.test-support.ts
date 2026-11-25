@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -9,7 +10,6 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
-import { deferred } from "./embedded-backend.test-helpers.js";
 
 export function captureBackendEvents(backend: EmbeddedTuiBackend) {
   const events: Array<{ event: string; payload: unknown }> = [];

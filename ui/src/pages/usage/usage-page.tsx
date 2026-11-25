@@ -1,33 +1,47 @@
-import { createEffect, createMemo } from "solid-js";
+import { Show, createEffect, createMemo, createProjection } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context-types.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { UsagePageShell } from "./page-shell.tsx";
+import { UsageAgentScope, UsagePageShell } from "./page-shell.tsx";
 import type { UsageProps, UsageRouteData } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
+import { UsagePhoneActions } from "./view-actions.tsx";
 import { renderUsage as UsageView } from "./view.tsx";
 
 export function UsagePage(props: { routeData?: UsageRouteData }) {
+  const gateway = projectGateway(useApplication().gateway);
+  return (
+    <openclaw-usage-page>
+      <Show
+        when={hasOperatorReadAccess(gateway.read().snapshot.hello?.auth ?? null)}
+        fallback={<div class="callout">{formatMissingOperatorReadScopeMessage("usage")}</div>}
+      >
+        <UsagePageData routeData={props.routeData} />
+      </Show>
+    </openclaw-usage-page>
+  );
+}
+
+function UsagePageData(props: { routeData?: UsageRouteData }) {
   const context = useApplication();
   const page = createUsagePage(context);
   const routeData = createMemo(() => props.routeData);
   // Route receipts drive the usage owner's Gateway queries while preserving local presentation.
   createEffect(routeData, (data) => page.setRouteData(data));
-  return (
-    <openclaw-usage-page>
-      <UsagePageContent state={page.read()} context={context} result={page.result()} />
-    </openclaw-usage-page>
-  );
+  return <UsagePageContent state={page.read()} result={page.result()} />;
 }
 
-export function UsagePageContent(props: {
-  state: UsageProps;
-  context: ApplicationContext;
-  result: SessionsUsageResult | null;
-}) {
+export function UsagePageContent(props: { state: UsageProps; result: SessionsUsageResult | null }) {
+  // Session keys keep hydrated details from retargeting a shared roster row;
+  // other entities retain their existing id-based reconciliation.
+  const state = createProjection(() => props.state, null, {
+    key: (entry: { key?: unknown; id?: unknown }) => entry.key ?? entry.id,
+  });
   return (
-    <UsagePageShell context={props.context} result={props.result}>
-      <UsageView {...props.state} />
+    <UsagePageShell result={props.result} phoneActions={<UsagePhoneActions {...state} />}>
+      <UsageView {...state} agentScope={() => <UsageAgentScope result={props.result} />} />
     </UsagePageShell>
   );
 }

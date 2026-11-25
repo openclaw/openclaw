@@ -14,7 +14,6 @@ import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js"
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
-import { deriveContextEngineTurnOutboxState } from "./context-engine-turn-outbox-state.js";
 import {
   isRetryableContextEngineTurnReadFailure,
   type AcceptedContextEngineTurnOutboxPayload,
@@ -23,7 +22,6 @@ import {
   type ContextEngineTurnOutboxPayload,
   type ContextEngineTurnOutboxWorkerOperations,
   type ContextEngineTurnReadFailureKind,
-  type PendingContextEngineTurn,
   type ReadyContextEngineTurnOutboxPayload,
 } from "./context-engine-turn-outbox.js";
 
@@ -79,7 +77,7 @@ function writeContextEngineTurnOutboxPayload(
       ? params.payload.admission
       : params.payload.boundary.admission;
   const advancementKey = admission.logicalTurnId;
-  const payloadJson = JSON.stringify(params.payload);
+  let payloadJson = JSON.stringify(params.payload);
   const existing = executeSqliteQueryTakeFirstSync(
     params.database.db,
     db
@@ -100,6 +98,13 @@ function writeContextEngineTurnOutboxPayload(
         existingPayload.boundary.admission.entryId === admission.entryId &&
         existingPayload.boundary.terminal.entryId === params.payload.boundary.terminal.entryId);
     if (transitionMatches) {
+      if (params.payload.state === "ready" && existingPayload.state === "accepted") {
+        // Publication cannot replace or erase the source committed at acceptance.
+        payloadJson = JSON.stringify({
+          ...params.payload,
+          operatorSource: existingPayload.operatorSource,
+        });
+      }
       executeSqliteQuerySync(
         params.database.db,
         db
@@ -109,7 +114,7 @@ function writeContextEngineTurnOutboxPayload(
             last_attempt_at: null,
             last_error: null,
             payload_json: payloadJson,
-            payload_state: deriveContextEngineTurnOutboxState(params.payload),
+            payload_state: params.payload.state,
           })
           .where("advancement_key", "=", advancementKey),
       );
@@ -130,7 +135,7 @@ function writeContextEngineTurnOutboxPayload(
         owner_plugin_id: params.ownerPluginId ?? null,
         session_id: admission.sessionId,
         payload_json: payloadJson,
-        payload_state: deriveContextEngineTurnOutboxState(params.payload),
+        payload_state: params.payload.state,
         created_at: Date.now(),
         last_attempt_at: null,
         last_error: null,
@@ -144,7 +149,6 @@ export function enqueueContextEngineTurnIntent(params: OutboxKernelParams<"enque
     ...params,
     payload: {
       admission: params.admission,
-      isHeartbeat: params.isHeartbeat,
       state: "admitted",
     },
   });
@@ -155,9 +159,9 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
     ...params,
     payload: {
       boundary: params.boundary,
-      isHeartbeat: params.isHeartbeat,
       state: "accepted",
       runtimeContext: params.runtimeContext,
+      operatorSource: params.operatorSource,
     },
   });
 }
@@ -179,7 +183,6 @@ function blockContextEngineTurnIntent(
     boundary: TranscriptTurnBoundary;
     database: ContextEngineTurnOutboxConnection;
     failure: BlockedContextEngineTurnOutboxPayload["failure"];
-    isHeartbeat: boolean;
   },
 ): void {
   writeContextEngineTurnOutboxPayload({
@@ -187,7 +190,6 @@ function blockContextEngineTurnIntent(
     payload: {
       boundary: params.boundary,
       failure: params.failure,
-      isHeartbeat: params.isHeartbeat,
       state: "blocked",
     },
   });
@@ -239,7 +241,6 @@ function advanceAcceptedContextEngineTurn(
         database: owner.database,
         engineId: owner.engineId,
         failure: closedTurn.kind,
-        isHeartbeat: payload.isHeartbeat,
         ownerPluginId: owner.ownerPluginId,
       });
     }
@@ -251,9 +252,9 @@ function advanceAcceptedContextEngineTurn(
     ownerPluginId: owner.ownerPluginId,
     payload: {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       messages: closedTurn.messages,
       runtimeContext: payload.runtimeContext,
+      operatorSource: payload.operatorSource,
     },
   });
   return closedTurn.kind;
@@ -287,9 +288,6 @@ export function recoverContextEngineTurnOutbox(params: {
       pending = true;
       continue;
     }
-    if (payload.state === "blocked") {
-      continue;
-    }
     if (payload.state === "admitted") {
       // Admission proves provider dispatch only. Without the host-owned accepted
       // transition, later descendants may belong to a rejected fallback attempt.
@@ -321,32 +319,6 @@ export function recoverContextEngineTurnOutbox(params: {
     pending ||= result === "ok" || isRetryableContextEngineTurnReadFailure(result);
   }
   return pending;
-}
-
-function listPendingContextEngineTurnSessions(
-  database: ContextEngineTurnOutboxConnection,
-  filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
-): string[] {
-  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
-    .select("session_id")
-    .select((eb) => eb.fn.min("enqueue_sequence").as("oldest_enqueue_sequence"));
-  return executeSqliteQuerySync(
-    database.db,
-    query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
-  ).rows.map(({ session_id }) => session_id);
-}
-
-function readNextPendingContextEngineTurn(
-  database: ContextEngineTurnOutboxConnection,
-  filter: ContextEngineTurnOutboxFilter & { sessionId: string },
-): PendingContextEngineTurn | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    pendingContextEngineTurns(database, filter, filter.sessionId)
-      .select(["advancement_key", "payload_json", "session_id"])
-      .orderBy("enqueue_sequence", "asc")
-      .limit(1),
-  );
 }
 
 function completeContextEngineTurn(
@@ -436,10 +408,33 @@ export function executeContextEngineTurnOutboxCommand(
   switch (command.type) {
     case "prepareRun":
       return prepareContextEngineTurnRun({ ...command.input, database });
-    case "listPendingSessions":
-      return listPendingContextEngineTurnSessions(database, command.input);
-    case "readNextPending":
-      return readNextPendingContextEngineTurn(database, command.input);
+    case "listPendingSessions": {
+      const filter = command.input;
+      const pending = pendingContextEngineTurns(database, filter, filter.sessionId || undefined);
+      const heads = pending
+        .select((eb) => eb.fn.min("enqueue_sequence").as("head"))
+        .groupBy("session_id");
+      return executeSqliteQuerySync(
+        database.db,
+        pending
+          .select("session_id")
+          // Only ready heads consume retry slots; unresolved heads still preserve session FIFO.
+          .where("payload_state", "=", "ready")
+          .where("enqueue_sequence", "in", heads)
+          .orderBy("enqueue_sequence", "asc")
+          .limit(filter.limit),
+      ).rows.map(({ session_id }) => session_id);
+    }
+    case "readNextPending": {
+      const filter = command.input;
+      return executeSqliteQueryTakeFirstSync(
+        database.db,
+        pendingContextEngineTurns(database, filter, filter.sessionId)
+          .select(["advancement_key", "payload_json", "session_id"])
+          .orderBy("enqueue_sequence", "asc")
+          .limit(1),
+      );
+    }
     case "complete":
       completeContextEngineTurn(database, command.input.advancementKey);
       return undefined;

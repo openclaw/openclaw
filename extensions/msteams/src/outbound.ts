@@ -312,7 +312,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         createdAt: new Date().toISOString(),
         conversationId: result.conversationId,
         messageId: result.messageId,
-        votes: {},
       });
       return result;
     },

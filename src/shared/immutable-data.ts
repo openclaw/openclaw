@@ -1,4 +1,5 @@
 import { isProxy } from "node:util/types";
+import { isOwnedTranscriptPayload } from "./transcript-payload-ownership.js";
 
 const MAX_FROZEN_PLAIN_DATA_ADMISSIONS = 256 * 1024;
 let deeplyFrozenPlainData = new WeakSet<object>();
@@ -105,22 +106,41 @@ export function freezeTrustedJsonSnapshot<T>(value: T): T {
   if (!value || typeof value !== "object" || deeplyFrozenPlainData.has(value)) {
     return value;
   }
+  Object.freeze(value);
+  deeplyFrozenPlainData.add(value);
+  frozenPlainDataAdmissions++;
   const pending: object[] = [value];
   while (pending.length) {
     const candidate = pending.pop()!;
-    if (deeplyFrozenPlainData.has(candidate)) {
-      continue;
-    }
-    Object.freeze(candidate);
-    deeplyFrozenPlainData.add(candidate);
-    frozenPlainDataAdmissions++;
     for (const key in candidate) {
       const child: unknown = Reflect.get(candidate, key);
-      if (child && typeof child === "object") {
+      if (child && typeof child === "object" && !deeplyFrozenPlainData.has(child)) {
+        // Admit before queuing so shared frozen tails and cycles need no work item.
+        Object.freeze(child);
+        deeplyFrozenPlainData.add(child);
+        frozenPlainDataAdmissions++;
         pending.push(child);
       }
     }
   }
   boundFrozenPlainData(value);
   return value;
+}
+
+/** Reuse a pure projection only while its entire source graph is immutable. */
+export function memoizeFrozenPlainDataProjection<T extends object, R>(
+  project: (source: T) => R,
+): (source: T) => R {
+  const projections = new WeakMap<T, R>();
+  return (source) => {
+    if (projections.has(source)) {
+      return projections.get(source)!;
+    }
+    if (!isOwnedTranscriptPayload(source) && !isDeeplyFrozenPlainData(source)) {
+      return project(source);
+    }
+    const projected = freezeJsonSnapshot(project(source));
+    projections.set(source, projected);
+    return projected;
+  };
 }

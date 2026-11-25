@@ -2,6 +2,7 @@
  * Shared body-stream cleanup for guarded fetch consumers (`fetchWithSsrFGuard`
  * callers that re-wrap streaming responses).
  */
+import { runBestEffortCleanup } from "../non-fatal-cleanup.js";
 
 // Catches wrapper bodies abandoned without cancel/consume so guarded dispatchers
 // (and caller resources hooked into `cleanup`) do not leak with the stream.
@@ -82,40 +83,52 @@ function wrapBodyStream(
   };
   const cancel = async (reason: unknown) => await finalize(async () => await reader.cancel(reason));
   const wrappedBody = new ReadableStream<Uint8Array>(
-    {
-      async pull(controller) {
-        const signal = params.signal;
-        if (signal && !abortAttached) {
-          abortAttached = true;
-          detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
-        }
-        if (finalized) {
-          return;
-        }
-        try {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            controller.close();
+    // Keep controller-owning continuations out of the finalizer's closure scope.
+    (() => {
+      let onError: (error: unknown) => Promise<void>;
+      let onChunk: (chunk: ReadableStreamReadResult<Uint8Array>) => Promise<void> | undefined;
+      return {
+        start(controller: ReadableStreamDefaultController<Uint8Array>) {
+          onError = async (error: unknown) => {
+            if (finalized) {
+              return;
+            }
+            // The SDK response contract exposes release failures; guarded streams
+            // report the source failure immediately and release resources best-effort.
+            if (errorSource === "release") {
+              await finalize();
+            }
+            controller.error(error);
             await finalize();
-            return;
+          };
+          onChunk = (chunk) => {
+            try {
+              if (chunk.done) {
+                controller.close();
+                return finalize().catch(onError);
+              }
+              params.refreshTimeout?.();
+              controller.enqueue(chunk.value);
+              return undefined;
+            } catch (error) {
+              return onError(error);
+            }
+          };
+        },
+        pull(controller: ReadableStreamDefaultController<Uint8Array>) {
+          const signal = params.signal;
+          if (signal && !abortAttached) {
+            abortAttached = true;
+            detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
           }
-          params.refreshTimeout?.();
-          controller.enqueue(chunk.value);
-        } catch (error) {
           if (finalized) {
-            return;
+            return undefined;
           }
-          // The SDK response contract exposes release failures; guarded streams
-          // report the source failure immediately and release resources best-effort.
-          if (errorSource === "release") {
-            await finalize();
-          }
-          controller.error(error);
-          await finalize();
-        }
-      },
-      cancel,
-    },
+          return reader.read().then(onChunk, onError);
+        },
+        cancel,
+      };
+    })(),
     params.signal ? { highWaterMark: 0 } : undefined,
   );
   guardedBodyCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
@@ -128,33 +141,47 @@ export function wrapGuardedBodyStream(params: BodyStreamOptions): ReadableStream
 }
 
 /** Preserves post-header request cancellation around runtime fetch body streams. */
-export function responseWithAbortSignal(response: Response, signal?: AbortSignal): Response {
+export function responseWithAbortSignal(
+  response: Response,
+  signal?: AbortSignal,
+  cleanup: () => void = () => {},
+): Response {
   if (!response.body || !signal) {
+    cleanup();
     return response;
   }
   const wrapped = new Response(
-    wrapBodyStream({ body: response.body, cleanup: () => {}, signal }, "cancellation"),
+    wrapBodyStream({ body: response.body, cleanup, signal }, "cancellation"),
     {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
     },
   );
-  const applyMetadata = (target: Response): Response => {
-    Object.defineProperties(target, {
-      headers: { value: response.headers },
-      url: { value: response.url },
-      redirected: { value: response.redirected },
-      type: { value: response.type },
-      clone: {
-        configurable: true,
-        value: (): Response => applyMetadata(Response.prototype.clone.call(target)),
-        writable: true,
-      },
-    });
-    return target;
-  };
-  return applyMetadata(wrapped);
+  return preserveResponseMetadata(response, wrapped, response.headers);
+}
+
+function preserveResponseMetadata(
+  response: Response,
+  target: Response,
+  headers?: Headers,
+): Response {
+  // Abort wrappers retain the original header guard; release wrappers keep native header copies.
+  if (headers) {
+    Object.defineProperty(target, "headers", { value: headers });
+  }
+  Object.defineProperties(target, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+    type: { value: response.type },
+    clone: {
+      configurable: true,
+      value: (): Response =>
+        preserveResponseMetadata(response, Response.prototype.clone.call(target), headers),
+      writable: true,
+    },
+  });
+  return target;
 }
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
@@ -162,12 +189,21 @@ const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 /** Keeps request ownership through body completion, failure, or cancellation. */
 export function responseWithRelease(response: Response, release: () => Promise<void>): Response {
   if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void (async () => await release())();
+    // There is no body stream to carry a release failure back to the caller.
+    void runBestEffortCleanup({
+      cleanup: release,
+      onError(error) {
+        process.emitWarning(error instanceof Error ? error : String(error));
+      },
+    });
     return response;
   }
-  return new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return preserveResponseMetadata(
+    response,
+    new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  );
 }

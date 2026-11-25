@@ -4,19 +4,17 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as delivery from "../agents/tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  deleteSessionEntryLifecycle,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { drainSystemEvents } from "../infra/system-events.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   drainSessionToolsFixture,
   withSessionToolsFixture,
+  sessionToolsContext,
+  sessionToolsStorePath,
+  seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as sessionRowProjection from "./session-row-projection.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
@@ -83,23 +81,18 @@ async function withNotification(
       [TARGET, "notify-child-session", profileId],
       [FOREIGN, "notify-foreign-session", "another-person"],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: creatorId },
-          sandbox: "required",
-          ...(sessionKey !== REQUESTER ? { spawnedBy: REQUESTER } : {}),
-        },
-      );
+      await seedSessionToolsEntry(sessionKey, sessionId, {
+        visibility: "shared",
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: creatorId },
+        sandbox: "required",
+        ...(sessionKey !== REQUESTER ? { spawnedBy: REQUESTER } : {}),
+      });
     }
-    const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+    const context = sessionToolsContext();
     const source = new AbortController();
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
@@ -137,7 +130,7 @@ async function withNotification(
             deleteTarget: async () => {
               const removed = await deleteSessionEntryLifecycle({
                 agentId: "main",
-                storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+                storePath: sessionToolsStorePath(cfg),
                 target: { canonicalKey: TARGET, storeKeys: [TARGET] },
                 archiveTranscript: false,
                 deleteTranscriptWithoutArchive: true,
@@ -196,12 +189,12 @@ describe("session notification authority", () => {
   );
 
   it.each(["source revoked", "role changed", "target deleted"] as const)(
-    "cannot queue when %s during notification authorization",
+    "keeps admitted policy but honors target deletion (%s)",
     async (change) => {
       await withNotification(
         "operator.sessions.write",
         async ({ notify, revoke, changeRole, deleteTarget }) => {
-          const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+          const context = sessionToolsContext();
           const entered = createDeferredCore();
           const resume = createDeferredCore();
           const prepare = context.ensureSessionRowProjection;
@@ -234,20 +227,22 @@ describe("session notification authority", () => {
               await deleteTarget();
             }
             resume.resolve();
-            await expect(pending).rejects.toThrow(
-              change === "source revoked"
-                ? /notification source revoked/
-                : change === "role changed"
-                  ? /operator role changed/
-                  : /session target is unavailable/i,
-            );
+            if (change !== "target deleted") {
+              await expect(pending).resolves.toMatchObject({ details: { status: "queued" } });
+            } else {
+              await expect(pending).rejects.toThrow(/session target is unavailable/i);
+            }
           } finally {
             resume.resolve();
             await pending.catch(() => {});
             context.ensureSessionRowProjection = prepare;
             spy.mockRestore();
           }
-          expect(drainSystemEvents(TARGET)).toEqual([]);
+          expect(drainSystemEvents(TARGET)).toEqual(
+            change !== "target deleted"
+              ? [expect.stringContaining("Inspect the prepared change.")]
+              : [],
+          );
         },
       );
     },

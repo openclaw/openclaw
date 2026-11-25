@@ -52,6 +52,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
     const view = mountSolid(() => createComponent(DebugPage, {}), { wrapper: provider.wrapper });
     const page = view.container;
     flush();
+    await vi.dynamicImportSettled();
+    flush();
 
     const eventSection = page.querySelector(".settings-section:last-child");
     assert(eventSection);

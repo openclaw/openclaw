@@ -8,8 +8,10 @@ import {
 } from "../agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackResultClassification,
+} from "../model-fallback.types.js";
 import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
@@ -33,6 +35,7 @@ export type RunEntryTerminalBehavior =
 export type EmbeddedAgentRunEntryTerminal = {
   outcome: ReturnType<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>;
   metadata: Record<string, unknown> & {
+    suppressErrorNotice?: boolean;
     terminalReply?: AgentRunTerminalReplySnapshot;
     terminalReceipt?: AgentRunTerminalReceipt;
     terminalDelivery?: AgentRunTerminalDeliverySnapshot;
@@ -194,6 +197,9 @@ export function buildRunEntryTerminal(params: {
     terminalReply = { ...terminalReply, modelRouteChange };
   }
   const metadata: EmbeddedAgentRunEntryTerminal["metadata"] = { terminalReply };
+  if (typeof meta.suppressErrorNotice === "boolean") {
+    metadata.suppressErrorNotice = meta.suppressErrorNotice;
+  }
   if (terminalReceipt) {
     metadata.terminalReceipt = terminalReceipt;
     metadata.assistantTranscriptIdempotencyKey = terminalReceipt.assistantTranscriptIdempotencyKey;

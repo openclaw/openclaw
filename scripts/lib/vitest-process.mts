@@ -64,12 +64,22 @@ export function spawnOwnedVitestProcess(spec: {
     if (containingOwner) {
       parent = { root: containingOwner.root, release: containingOwner.claim() };
     }
-    tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    // Reserve 45 bytes for socket suffixes (Chromium's SingletonSocket), plus
+    // the NUL in macOS's 104-byte sun_path. os.tmpdir() also inherits TMPDIR.
+    const allocationRoot =
+      process.platform !== "win32" &&
+      Buffer.byteLength(path.join(containingRoot, "oc-vt-XXXXXX")) > 58
+        ? fs.realpathSync.native("/tmp")
+        : containingRoot;
+    tempRoot = tempDirs.make("oc-vt-", allocationRoot);
+    // Stop ancestor package scopes without forcing CommonJS: fixtures may use
+    // either extensionless CommonJS or Node's syntax-detected JavaScript modules.
+    fs.writeFileSync(path.join(tempRoot, "package.json"), "{}\n");
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
     if (mode !== "tooling") {
-      // The tooling shim avoids the shared tsx cache. Test children have this owned
-      // temp namespace, so source subprocesses can reuse transforms until cleanup.
+      // Source subprocesses share this owned cache until the invocation joins.
+      // Fixtures with descriptor-heavy source Workers can opt out locally.
       delete childEnv.TSX_DISABLE_CACHE;
     }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {

@@ -1,3 +1,4 @@
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
@@ -12,9 +13,10 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import {
   getSessionResourceOwnerId,
   registerSessionResourceCleanup,
+  type ProviderStateScope,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import type { Model, StreamOptions, UserMessage } from "../types.js";
+import type { ModelRequestHeaders, StreamOptions, UserMessage } from "../types.js";
 import {
   recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
@@ -24,20 +26,18 @@ import {
 } from "./openai-responses-continuation.js";
 import {
   parseOpenAIResponsesWebSocketServerError,
+  isResponsesTerminalEventType,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
-  type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
-import {
-  isOfficialOpenAIResponsesBaseUrl,
-  supportsNativeOpenAIResponsesEndpoint,
-} from "./openai-responses-endpoint.js";
+import { isOfficialOpenAIResponsesBaseUrl } from "./openai-responses-endpoint.js";
 import {
   responsesInputFingerprint,
   type ResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
 import { createResponsesSteering, omitAcceptedSteering } from "./openai-responses-steering.js";
+import type { OpenAIResponsesWebSocketMode } from "./openai-responses-websocket-options.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 import { sha256Hex } from "./transport-utils.js";
 
@@ -68,36 +68,6 @@ type SteeringContinuation = {
   instructions: unknown;
   tools: unknown;
 };
-
-export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "auto";
-
-export function resolveNativeOpenAIResponsesWebSocketMode(
-  model: Model,
-  transport: OpenAIResponsesOptions["transport"],
-): OpenAIResponsesWebSocketMode | undefined {
-  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
-    return undefined;
-  }
-  if (getAiTransportHost().requiresManagedTransport(model, "fetch")) {
-    return undefined;
-  }
-  return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
-}
-
-export function combineWebSocketTimeoutSignal(
-  signal: AbortSignal,
-  model: Model,
-  timeoutMs: number | undefined,
-) {
-  const resolvedTimeoutMs =
-    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? timeoutMs
-      : getAiTransportHost().resolveModelRequestTimeoutMs(model);
-  if (resolvedTimeoutMs === undefined || !Number.isFinite(resolvedTimeoutMs)) {
-    return signal;
-  }
-  return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
-}
 
 type OpenAIResponsesWebSocketStream = {
   stream: AsyncIterable<unknown>;
@@ -189,7 +159,7 @@ function markDegradedWebSocketConnection(
 
 type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
 
-function prepareWebSocketConnection(client: OpenAI, headers: Record<string, string> | undefined) {
+function prepareWebSocketConnection(client: OpenAI, headers: ModelRequestHeaders | undefined) {
   if (!isOfficialOpenAIResponsesBaseUrl(client.baseURL)) {
     throw new Error("OpenAI Responses WebSocket requires the official API endpoint");
   }
@@ -198,7 +168,7 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   }
   const owner = getAiTransportHost();
   const resolvedApiKey = owner.resolveSecretSentinel(client.apiKey);
-  const resolvedHeaders = { ...resolveAiTransportHeaderSentinels(headers) };
+  const resolvedHeaders = { ...omitNullRequestHeaders(resolveAiTransportHeaderSentinels(headers)) };
   for (const key of Object.keys(resolvedHeaders)) {
     const normalizedKey = key.toLowerCase();
     if (normalizedKey === "authorization" || normalizedKey === "traceparent") {
@@ -208,7 +178,12 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   if (!resolvedApiKey) {
     throw new Error("OpenAI Responses WebSocket requires a resolved API key");
   }
-  const resolvedClient = client.withOptions({ apiKey: resolvedApiKey });
+  // Cached sockets must not retain HTTP hooks, including the SDK logger bound to that client.
+  const resolvedClient = client.withOptions({
+    apiKey: resolvedApiKey,
+    fetch: undefined,
+    logger: undefined,
+  });
   return {
     client: resolvedClient,
     headers: resolvedHeaders,
@@ -377,8 +352,9 @@ export function createOpenAIResponsesWebSocketStream(params: {
   request: Record<string, unknown>;
   restoreRequest?: (request: ResponsesContinuationRequest) => ResponsesContinuationRequest;
   mode: OpenAIResponsesWebSocketMode;
-  sessionId?: string;
-  headers?: Record<string, string>;
+  /** The writer's scope; without one the socket and its continuation are transient. */
+  providerState?: ProviderStateScope;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;
@@ -386,9 +362,10 @@ export function createOpenAIResponsesWebSocketStream(params: {
   steeringInput?: (messages: readonly UserMessage[]) => ResponseInput | Promise<ResponseInput>;
 }): OpenAIResponsesWebSocketStream {
   const connection = prepareWebSocketConnection(params.client, params.headers);
+  const sessionId = params.providerState?.sessionId;
   let fullRequest = sanitizeWebSocketRequest(params.request);
   const requestModel = typeof fullRequest.model === "string" ? fullRequest.model : "";
-  const degradationKey = `${connection.ownerId}\0${params.sessionId ?? ""}\0${connection.identity}\0${requestModel}`;
+  const degradationKey = `${connection.ownerId}\0${sessionId ?? ""}\0${connection.identity}\0${requestModel}`;
   const degraded = degradedWebSocketConnections.get(degradationKey);
   if (degraded && degraded.retryAt > Date.now()) {
     throw new OpenAIResponsesWebSocketPreDispatchError(
@@ -403,12 +380,12 @@ export function createOpenAIResponsesWebSocketStream(params: {
     markDegradedWebSocketConnection(
       degradationKey,
       connection.owner,
-      params.sessionId,
+      sessionId,
       params.degradeCooldownMs,
     );
   let lease: ReturnType<typeof acquireWebSocket>;
   try {
-    lease = acquireWebSocket(params, connection);
+    lease = acquireWebSocket({ mode: params.mode, sessionId }, connection);
   } catch (error) {
     markDegraded();
     throw new OpenAIResponsesWebSocketPreDispatchError(error);
@@ -504,7 +481,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           onActiveResponse: params.onActiveResponse,
           toInput: params.steeringInput,
           send: (event) => lease.socket.sendRaw(JSON.stringify(event)),
-          needsContinuation: () => deferredInput,
+          needsContinuation: deferredInput,
           assertActive: () => {
             if (released || terminalReceived || params.signal?.aborted) {
               throw new Error("Responses steering is no longer active");
@@ -591,10 +568,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
-          terminalReceived =
-            event.type === "response.completed" ||
-            event.type === "response.incomplete" ||
-            event.type === "response.failed";
+          terminalReceived = isResponsesTerminalEventType(event.type);
           if (terminalReceived) {
             steering?.seal();
             if (event.type === "response.failed") {

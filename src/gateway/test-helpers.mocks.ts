@@ -23,16 +23,11 @@ function createEmbeddedRunMockExports() {
   const runtime = {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
-    isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
-    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedAgentRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
+    waitForNativeRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
       if (timeoutMs === null) {
         embeddedRunMock.endWaitCalls.push(sessionId);
         return await new Promise<boolean>((resolve) => {
@@ -51,7 +46,8 @@ function createEmbeddedRunMockExports() {
     },
   };
   return {
-    ...runtime,
+    compactEmbeddedAgentSession: runtime.compactEmbeddedAgentSession,
+    abortEmbeddedAgentRun: runtime.abortEmbeddedAgentRun,
     captureEmbeddedRunDrainTarget: (
       sessionId: string,
       owner: Parameters<
@@ -63,10 +59,10 @@ function createEmbeddedRunMockExports() {
             sessionId,
             agentId: owner.agentId,
             sessionKey: undefined,
-            isActive: () => runtime.isEmbeddedAgentRunActive(sessionId),
+            isActive: () => embeddedRunMock.activeIds.has(sessionId),
             abort: () => runtime.abortEmbeddedAgentRun(sessionId),
             waitForEnd: (timeoutMs: number | null) =>
-              runtime.waitForEmbeddedAgentRunEnd(sessionId, timeoutMs),
+              runtime.waitForNativeRunEnd(sessionId, timeoutMs),
             release: () => {},
           }
         : undefined,
@@ -127,25 +123,21 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
+  type RegistryForkArgs = Parameters<typeof modelSessions.ModelRegistry.prototype.fork>;
+
+  type ActualRegistry = {
+    getAll: () => Array<{ provider?: string; id?: string }>;
+    getAvailable: () => Array<{ provider?: string; id?: string }>;
+    find: (provider: string, modelId: string) => unknown;
+    getProviderMetadataOwners: () => unknown;
+    fork: (...args: RegistryForkArgs) => ActualRegistry;
+  };
+
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
-      create?: (
-        authStorage: unknown,
-        modelsFile: string,
-      ) => {
-        getAll: () => Array<{ provider?: string; id?: string }>;
-        getAvailable: () => Array<{ provider?: string; id?: string }>;
-        find: (provider: string, modelId: string) => unknown;
-      };
-      new (
-        authStorage: unknown,
-        modelsFile: string,
-      ): {
-        getAll: () => Array<{ provider?: string; id?: string }>;
-        getAvailable: () => Array<{ provider?: string; id?: string }>;
-        find: (provider: string, modelId: string) => unknown;
-      };
+      create?: (authStorage: unknown, modelsFile: string) => ActualRegistry;
+      new (authStorage: unknown, modelsFile: string): ActualRegistry;
     };
     if (typeof Registry.create === "function") {
       return Registry.create(args[0], modelsFile);
@@ -154,12 +146,56 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   };
 
   class MockModelRegistry {
-    private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
+    private readonly modelsFile: string;
+    private readonly actualRegistry?: ActualRegistry;
+    private readonly publishedModels?: RegistryForkArgs[1];
 
-    constructor(authStorage: unknown, modelsFile: string) {
+    constructor(
+      authStorage: unknown,
+      modelsFile: string,
+      forkedRegistry?: ActualRegistry,
+      publishedModels?: RegistryForkArgs[1],
+    ) {
+      this.modelsFile = modelsFile;
+      this.publishedModels = publishedModels;
+      if (forkedRegistry) {
+        this.actualRegistry = forkedRegistry;
+        return;
+      }
       if (!agentDiscoveryMock.enabled) {
         this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
       }
+    }
+
+    // Prepared model runtimes fork the lifecycle-owned template registry once per run
+    // (createStores in prepared-model-runtime.full-catalog.ts), so this stand-in has to
+    // offer fork too. The fork stays a mock so discovery keeps routing through the harness.
+    fork(...args: RegistryForkArgs) {
+      const published = args[1];
+      return new MockModelRegistry(
+        args[0],
+        this.modelsFile,
+        this.actualRegistry?.fork(...args),
+        published ? new Map([...(this.publishedModels ?? []), ...published]) : this.publishedModels,
+      );
+    }
+
+    private getMockModels() {
+      const models = agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      const published = this.publishedModels;
+      // Explicit publications replace providers; other fixtures remain live.
+      return published
+        ? [
+            ...models.filter((model) => !published.has(model.provider ?? "")),
+            ...Array.from(published.values()).flat(),
+          ]
+        : models;
+    }
+
+    // resolveExplicitModelWithRegistry reads the metadata owners unconditionally, so a
+    // forked stand-in must answer even when discovery is routed through the harness.
+    getProviderMetadataOwners() {
+      return this.actualRegistry?.getProviderMetadataOwners();
     }
 
     getAll() {
@@ -167,21 +203,21 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         return this.actualRegistry?.getAll() ?? [];
       }
       agentDiscoveryMock.discoverCalls += 1;
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.getMockModels();
     }
 
     getAvailable() {
       if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.getAvailable() ?? [];
       }
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.getMockModels();
     }
 
     find(provider: string, modelId: string) {
       if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.find(provider, modelId);
       }
-      return (agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>).find(
+      return this.getMockModels().find(
         (model) => model.provider === provider && model.id === modelId,
       );
     }
@@ -280,24 +316,9 @@ vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   >("../agents/embedded-agent-runner/runs.js");
 });
 
-vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
-  >()),
-  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-}));
-
-vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
-  >()),
-  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-}));
-
 // mock-isolation: Gateway fixtures must not collect real channel or session state.
-vi.mock("./health/collector.js", () => ({
+vi.mock("./health/collector.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health/collector.js")>()),
   collectGatewayHealthSnapshot: vi
     .fn<typeof import("./health/collector.js").collectGatewayHealthSnapshot>()
     .mockImplementation(async () => ({
@@ -312,8 +333,10 @@ vi.mock("./health/collector.js", () => ({
       sessions: { path: "/test/gateway/sessions", count: 0, recent: [] },
     })),
 }));
+// mock-isolation: Gateway fixtures own their status response and must not collect local state.
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+  prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,

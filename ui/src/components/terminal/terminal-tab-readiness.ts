@@ -1,5 +1,7 @@
 import type { TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 
+export const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
+
 export type TerminalTabReadinessState = {
   awaitFirstOutput: boolean;
   readyTimer: ReturnType<typeof setTimeout> | null;
@@ -8,7 +10,6 @@ export type TerminalTabReadinessState = {
 type ReadyTab = TerminalPanelTab & TerminalTabReadinessState;
 
 export function createTerminalTabReadiness<T extends ReadyTab>(options: {
-  timeoutMs: () => number;
   isCurrent: (tab: T) => boolean;
   onReady: (tab: T) => void;
   onTimeout: (tab: T) => void;
@@ -43,7 +44,7 @@ export function createTerminalTabReadiness<T extends ReadyTab>(options: {
         }
         tab.awaitFirstOutput = false;
         options.onTimeout(tab);
-      }, options.timeoutMs());
+      }, CATALOG_TERMINAL_READY_TIMEOUT_MS);
     },
   };
 }

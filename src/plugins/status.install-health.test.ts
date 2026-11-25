@@ -311,6 +311,9 @@ describe("plugin inventory install health", () => {
     }
     clearPluginMetadataLifecycleCaches();
     const status = buildPluginRegistrySnapshotReport({ config, env });
+    if (healthy) {
+      expect.soft(status.plugins[0]?.status).toBe("loaded");
+    }
     const management = await listManagedPlugins({
       config,
       env,

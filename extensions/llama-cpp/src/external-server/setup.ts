@@ -293,24 +293,26 @@ export async function prepareLlamaServerSetup(
 
 export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const defaultOrigin = resolveLlamaServerEndpoint(existing?.baseUrl).origin;
   const baseUrl = await ctx.prompter.text({
     message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
-    initialValue: defaultOrigin,
+    // Prefill only a saved URL: a prefilled default makes typed input append to it.
+    initialValue: existing?.baseUrl
+      ? resolveLlamaServerEndpoint(existing.baseUrl).origin
+      : undefined,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
     validate: (value) => {
-      if (!value?.trim()) {
-        return "Required";
+      if (!value.trim()) {
+        return undefined;
       }
       try {
         resolveLlamaServerEndpoint(value);
         return undefined;
       } catch {
-        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:8080).";
+        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:9931).";
       }
     },
   });
-  const endpoint = resolveLlamaServerEndpoint(baseUrl);
+  const endpoint = resolveLlamaServerEndpoint(baseUrl.trim() || existing?.baseUrl);
   const endpointChanged =
     Boolean(existing?.localService) || hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
   const resolvedHeaders = endpointChanged

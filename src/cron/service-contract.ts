@@ -22,16 +22,18 @@ import type {
   CronUpdateResult,
   CronWakeMode,
 } from "./service/state.js";
-import type { CronJob, CronPayload } from "./types.js";
+import type { CronDelivery, CronJob, CronPayload, CronStoredJob } from "./types.js";
 
-type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
+type CronWakeResult = { ok: true } | { ok: false; reason?: string };
 
 /** Result shape for direct/queued cron runs. */
 export type CronServiceRunResult = CronRunResult;
 export type CronServiceRunOptions = {
   payload?: CronPayload;
-  /** Internal event-source runs keep their persisted trigger on force execution. */
-  evaluateTrigger?: boolean;
+  /** Per-occurrence routing; stored delivery policy remains authoritative. */
+  delivery?: Partial<
+    Pick<CronDelivery, "mode" | "target" | "channel" | "to" | "threadId" | "accountId">
+  >;
   /** Current stream batch exposed to trigger scripts as trigger.streamBatch. */
   streamBatch?: string;
   /** Source schedule identity checked under the cron store lock before admission. */
@@ -71,10 +73,12 @@ export interface CronServiceContract {
     mode?: CronRunMode,
     opts?: CronCommitGuardOptions,
   ): Promise<CronServiceRunResult>;
-  getJob(id: string): CronJob | undefined;
-  readJob(id: string): Promise<CronJob | undefined>;
+  getJob(id: string): CronStoredJob | undefined;
+  readJob(id: string): Promise<CronStoredJob | undefined>;
   getDefaultAgentId(): string | undefined;
   wake(opts: {
+    expectedTarget?: import("../auto-reply/reply/session-event-contract.js").SessionEventTarget;
+    createIfMissing?: true;
     mode: CronWakeMode;
     text: string;
     sessionKey?: string;

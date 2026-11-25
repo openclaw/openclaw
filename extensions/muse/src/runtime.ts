@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   MspError,
   Session,
@@ -6,9 +8,9 @@ import {
   spawnMspConnection,
   type SpawnedMspConnection,
 } from "@muse-code/sdk";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import musePackage from "../package.json" with { type: "json" };
-import { museEnvironment } from "./environment.js";
 
 export type MuseOpenSession = {
   sessionId?: string;
@@ -28,6 +30,8 @@ export type MuseRuntime = {
   host: SpawnedMspConnection;
   credentialIdentity: string;
   sessions: Map<string, Session>;
+  /** MSP usage notices are consumer-folded, not routed to turn handles. */
+  usageObservers: Map<string, (params: unknown) => void>;
   dead: boolean;
   closing: boolean;
   users: number;
@@ -113,7 +117,37 @@ export class MusePool {
     if (this.disposed) {
       throw new Error("Muse runtime has been disposed");
     }
-    const { env, credentialSource } = await museEnvironment(apiKey);
+    const inherited = { ...process.env };
+    const managedHome = path.join(resolveStateDir(inherited), "muse");
+    const authPath = path.join(managedHome, "muse", "auth.json");
+    let credentialSource: string;
+    try {
+      const stat = await fs.stat(authPath);
+      credentialSource = JSON.stringify([
+        "managed",
+        authPath,
+        stat.dev,
+        stat.ino,
+        stat.size,
+        stat.mtimeMs,
+        stat.ctimeMs,
+      ]);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        credentialSource = "native";
+      } else {
+        throw error;
+      }
+    }
+    // An existing managed store remains authoritative even if its contents are unusable.
+    const env: NodeJS.ProcessEnv = {
+      ...inherited,
+      MUSE_NO_AUTO_UPDATE: "1",
+      ...(credentialSource !== "native"
+        ? { TBH_CREDENTIAL_BACKEND: "file", XDG_CONFIG_HOME: managedHome }
+        : {}),
+      ...(apiKey ? { META_API_KEY: apiKey } : {}),
+    };
     if (this.disposed) {
       throw new Error("Muse runtime was disposed during environment preparation");
     }
@@ -217,12 +251,16 @@ export class MusePool {
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
+        // OpenClaw never presents or answers userInput/request, and MSP treats an
+        // absent flag as capable, so a Muse question would block the turn until timeout.
+        capabilities: { userInputDialogs: false },
       });
       signal.throwIfAborted();
       const runtime: MuseRuntime = {
         host,
         credentialIdentity,
         sessions: new Map(),
+        usageObservers: new Map(),
         users: 0,
         dead: false,
         closing: false,
@@ -235,6 +273,9 @@ export class MusePool {
       host.connection.onNotification((event) => {
         const sessionId = event.params?.sessionId;
         if (typeof sessionId === "string") {
+          if (event.method === "session/tokenUsage") {
+            runtime.usageObservers.get(sessionId)?.(event.params);
+          }
           runtime.sessions.get(sessionId)?.apply(event);
         }
       });

@@ -25,7 +25,7 @@ import type {
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import { verifyTwilioWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
+import { assertVoiceCallProviderSetting, type VoiceCallProvider } from "./base.js";
 import { mapProviderStatusToEndReason, normalizeProviderStatus } from "./shared/call-status.js";
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import { TwilioApiError, createTwilioApi } from "./twilio/api.js";
@@ -45,6 +45,21 @@ export interface TwilioProviderOptions {
 
 const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
 const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
+
+function buildSpeechGather(webhookUrl: string, language?: string, turnToken?: string): string {
+  const actionUrl = new URL(webhookUrl);
+  if (turnToken) {
+    actionUrl.searchParams.set("turnToken", turnToken);
+  }
+  const locale = language || "en-US";
+  const redirectUrl = new URL(actionUrl);
+  redirectUrl.searchParams.set("flow", "listen");
+  // Consecutive silence callbacks have identical forms; give each Gather its own replay identity.
+  redirectUrl.searchParams.set("gatherToken", crypto.randomUUID());
+  redirectUrl.searchParams.set("language", locale);
+  return `<Gather input="speech" speechTimeout="auto" timeout="120" language="${escapeXml(locale)}" action="${escapeXml(actionUrl.toString())}" method="POST"></Gather>
+  <Redirect method="POST">${escapeXml(redirectUrl.toString())}</Redirect>`;
+}
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -71,12 +86,14 @@ type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
   region?: TwilioRegion;
+  record?: boolean;
 };
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
 
   private readonly authToken: string;
+  private readonly record: boolean;
   private readonly apiRequest: ReturnType<typeof createTwilioApi>["request"];
   readonly getCallStatus: VoiceCallProvider["getCallStatus"];
   private readonly callWebhookUrls = new Map<string, string>();
@@ -116,14 +133,11 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   constructor(config: TwilioProviderConfig, options: TwilioProviderOptions = {}) {
-    if (!config.accountSid) {
-      throw new Error("Twilio Account SID is required");
-    }
-    if (!config.authToken) {
-      throw new Error("Twilio Auth Token is required");
-    }
+    assertVoiceCallProviderSetting(config.accountSid, "Twilio Account SID is required");
+    assertVoiceCallProviderSetting(config.authToken, "Twilio Auth Token is required");
 
     this.authToken = config.authToken;
+    this.record = config.record === true;
     const api = createTwilioApi({
       accountSid: config.accountSid,
       authToken: config.authToken,
@@ -241,12 +255,15 @@ export class TwilioProvider implements VoiceCallProvider {
       const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
       const turnTokenFromQuery = normalizeOptionalString(ctx.query?.turnToken);
       const dedupeKey = createTwilioRequestDedupeKey(ctx, options?.verifiedRequestKey);
-      const event = this.normalizeEvent(params, {
+      let event = this.normalizeEvent(params, {
         callIdOverride: callIdFromQuery,
         dedupeKey,
         turnToken: turnTokenFromQuery,
         amdCallback: normalizeOptionalString(ctx.query?.type) === "amd",
       });
+      if (ctx.query?.flow === "listen" && event?.type === "call.answered") {
+        event = null;
+      }
 
       if (
         event?.direction === "inbound" &&
@@ -277,14 +294,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return "outbound";
     }
     return undefined;
-  }
-
-  private static parseConfidence(value: string | null): number {
-    const trimmed = value?.trim();
-    if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      return 0.9;
-    }
-    return Number(trimmed);
   }
 
   private normalizeEvent(
@@ -330,7 +339,6 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: TwilioProvider.parseConfidence(params.get("Confidence")),
       };
     }
 
@@ -402,6 +410,15 @@ export class TwilioProvider implements VoiceCallProvider {
     }
     if (isStatusCallback) {
       return TwilioProvider.EMPTY_TWIML;
+    }
+    if (ctx.query?.flow === "listen") {
+      const webhookUrl = callSid ? this.callWebhookUrls.get(callSid) : undefined;
+      if (!webhookUrl) {
+        return TwilioProvider.EMPTY_TWIML;
+      }
+      return `<?xml version="1.0" encoding="UTF-8"?><Response>
+  ${buildSpeechGather(webhookUrl, normalizeOptionalString(ctx.query?.language), normalizeOptionalString(ctx.query?.turnToken))}
+</Response>`;
     }
     if (direction === "inbound") {
       if (this.callStreamMap.size > 0) {
@@ -495,8 +512,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const url = new URL(input.webhookUrl);
     url.searchParams.set("callId", input.callId);
 
-    const statusUrl = new URL(input.webhookUrl);
-    statusUrl.searchParams.set("callId", input.callId);
+    const statusUrl = new URL(url);
     statusUrl.searchParams.set("type", "status");
 
     if (!input.inlineTwiml && input.preConnectTwiml) {
@@ -512,6 +528,7 @@ export class TwilioProvider implements VoiceCallProvider {
       StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
+      ...(this.record ? { Record: "true" } : {}),
     };
 
     if (input.voicemail?.detection === "twilio") {
@@ -601,12 +618,15 @@ export class TwilioProvider implements VoiceCallProvider {
     );
 
     const pollyVoice = mapVoiceToPolly(input.voice);
+    const gather = input.listenAfterPlayback
+      ? buildSpeechGather(webhookUrl, input.locale, input.turnToken)
+      : `<Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
+    <Say>.</Say>
+  </Gather>`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${pollyVoice}" language="${input.locale || "en-US"}">${escapeXml(input.text)}</Say>
-  <Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
-    <Say>.</Say>
-  </Gather>
+  ${gather}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
@@ -705,15 +725,8 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   async startListening(input: StartListeningInput): Promise<void> {
-    const actionUrl = new URL(this.requireCallWebhookUrl(input.providerCallId));
-    if (input.turnToken) {
-      actionUrl.searchParams.set("turnToken", input.turnToken);
-    }
-
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(actionUrl.toString())}" method="POST">
-  </Gather>
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
+  ${buildSpeechGather(this.requireCallWebhookUrl(input.providerCallId), input.language, input.turnToken)}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "startListening");

@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
-  errorShape,
   type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
@@ -34,11 +33,11 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayClient,
@@ -189,7 +188,7 @@ export function createSecretsHandlers(params: {
       client: GatewayClient | null,
     ) => Promise<unknown>,
   ) => {
-    const { params: requestParams, respond, client, context } = options;
+    const { params: requestParams, respond, client } = options;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     let assertOwner: (() => void) | undefined;
     try {
@@ -200,10 +199,10 @@ export function createSecretsHandlers(params: {
       respond(false, undefined, localStateOwnerChangedError(error));
       return Promise.resolve();
     }
-    const authority = createAgentRuntimeAuthorityGuard(client, context, respond, () => {
+    const assertCurrent = () => {
       requestAuthority.assertCurrent();
       assertOwner?.();
-    });
+    };
     let mutationResult: unknown;
     const attempt = async () => {
       if (action === "delete") {
@@ -212,22 +211,17 @@ export function createSecretsHandlers(params: {
           params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
         }
       }
-      if (!authority.ensureActive()) {
-        return false;
-      }
+      assertCurrent();
       holdGatewayPolicyResponse(respond);
-      mutationResult = await mutate(requestParams, authority.commitGuard, client);
-      return true;
+      mutationResult = await mutate(requestParams, assertCurrent, client);
     };
     return (async () => {
       const method = `secrets.store.${action}`;
       let committed = false;
       try {
-        if (!(await attempt())) {
-          return;
-        }
+        await attempt();
         committed = true;
-        authority.commitGuard?.();
+        assertCurrent();
         const result = {
           ok: true as const,
           ...(await params.storeWriteService.reloadReference(names)),
@@ -243,21 +237,18 @@ export function createSecretsHandlers(params: {
         respond(true, result);
       } catch (error) {
         if (!committed && error instanceof SecretStoreValidationError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
           return;
         }
         params.log?.warn?.(`${method} failed: ${errorMessage(error)}`);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            !committed
-              ? `${method} failed`
-              : action !== "delete"
-                ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
-                : "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          !committed
+            ? `${method} failed`
+            : action !== "delete"
+              ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
+              : "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload.",
         );
       }
     })();
@@ -270,25 +261,25 @@ export function createSecretsHandlers(params: {
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (error) {
         params.log?.warn?.(`secrets.reload failed: ${errorMessage(error)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.reload failed"));
+        respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.reload failed");
       }
     },
     "secrets.resolve": async ({ params: requestParams, respond }) => {
       if (!validateSecretsResolveParams(requestParams)) {
         const field = invalidSecretsResolveField(validateSecretsResolveParams.errors);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `invalid secrets.resolve params: ${field}`),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `invalid secrets.resolve params: ${field}`,
         );
         return;
       }
       const commandName = requestParams.commandName.trim();
       if (!commandName) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid secrets.resolve params: commandName"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "invalid secrets.resolve params: commandName",
         );
         return;
       }
@@ -315,13 +306,10 @@ export function createSecretsHandlers(params: {
       // so callers cannot probe arbitrary config paths through this method.
       for (const targetId of targetIds) {
         if (!isKnownCoreSecretTargetId(targetId) && !isKnownSecretTargetId(targetId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `invalid secrets.resolve params: unknown target id "${String(targetId)}"`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `invalid secrets.resolve params: unknown target id "${String(targetId)}"`,
           );
           return;
         }
@@ -350,7 +338,7 @@ export function createSecretsHandlers(params: {
         respond(true, payload);
       } catch (error) {
         params.log?.warn?.(`secrets.resolve failed: ${errorMessage(error)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
+        respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.resolve failed");
       }
     },
     "secrets.store.list": defineValidatedGatewayHandler(
@@ -372,11 +360,7 @@ export function createSecretsHandlers(params: {
           respond(true, result);
         } catch (error) {
           params.log?.warn?.(`secrets.store.list failed: ${errorMessage(error)}`);
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "secrets.store.list failed"),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.store.list failed");
         }
       },
     ),

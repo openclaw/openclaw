@@ -1,5 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseGitHubItemTarget, type GitHubItemTarget } from "./targets.js";
+import { parseGitHubTarget, type GitHubTarget } from "./targets.js";
 
 /** Host-prepared read identity; the plugin never discovers or selects managed credentials. */
 export type ControlUiGitHubPreviewIdentity = {
@@ -25,7 +25,7 @@ type ControlUiGitHubPreviewCoAuthor = {
   avatarDataUrl?: string;
 };
 
-export type ControlUiGitHubPreview = GitHubItemTarget & {
+export type ControlUiGitHubPreview = GitHubTarget & {
   stale?: boolean;
   additions?: number;
   avatarDataUrl?: string;
@@ -48,7 +48,7 @@ export type ControlUiGitHubPreview = GitHubItemTarget & {
 
 /** Validate the untyped dispatch payload before projecting it into a generic reader. */
 export function isControlUiGitHubPreview(value: unknown): value is ControlUiGitHubPreview {
-  if (!isRecord(value) || !parseGitHubItemTarget(value)) {
+  if (!isRecord(value) || !parseGitHubTarget(value)) {
     return false;
   }
   return (

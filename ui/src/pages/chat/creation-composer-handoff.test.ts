@@ -11,11 +11,11 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import * as actions from "./chat-send-actions.ts";
 import { finishChatDeliveryAdmission } from "./chat-send-queue-state.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { persistChatComposerState } from "./composer-draft-storage.ts";
 import {
   isIncognitoComposerScope,
   retainCreatedIncognitoComposerScope,
 } from "./composer-persistence-state.ts";
-import { persistChatComposerState } from "./composer-persistence.ts";
 import { admitCreatedComposerQueue } from "./creation-composer-handoff.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";

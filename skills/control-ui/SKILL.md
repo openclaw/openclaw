@@ -45,6 +45,8 @@ typed tool exists.
 Read [hosting.md](references/hosting.md) before opening or repairing a remote
 Control UI. Read [dashboards.md](references/dashboards.md) before creating or
 restructuring a board.
+For bulk session archiving with retained exceptions, use
+[session archive cleanup](references/session-archive.md).
 Use the `visualize` skill for widget composition, libraries, interactive code
 explanations, and dashboard content. Keep session and board organization here.
 

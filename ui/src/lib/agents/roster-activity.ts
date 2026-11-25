@@ -1,6 +1,10 @@
+import {
+  isSubagentSessionRow,
+  isSystemCreatedSessionRow,
+} from "../../../../src/shared/session-list-visibility.ts";
 import type { AgentIdentityResult, AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { resolveAgentAvatarUrl } from "../avatar.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import {
   resolveUiConversationIdentity,
   resolveUiSessionRowAgentId,
@@ -43,6 +47,8 @@ export function agentRosterCards(
     const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
       (latest, row) =>
         row.lastAssistantMessage &&
+        !isSubagentSessionRow(row.key, row) &&
+        !isSystemCreatedSessionRow(row) &&
         (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
           ? row.lastAssistantMessage
           : latest,
@@ -57,9 +63,7 @@ export function agentRosterCards(
       avatar: resolveAgentAvatarUrl(agent, identity),
       textAvatar: resolveAgentTextAvatar(agent, identity),
       mainKey,
-      activeNow: sessions.some(isSessionRunActive),
-      sessionCount: sessions.length,
-      unreadCount: sessions.filter((row) => row.unread && !row.archived).length,
+      activeNow: sessions.some(isSessionRunStateActive),
       lastActiveAt: recent?.updatedAt ?? 0,
       preview: (main ?? recent)?.lastMessagePreview,
       assistantPreview: lastAssistantMessage?.text,

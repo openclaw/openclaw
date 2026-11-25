@@ -16,7 +16,7 @@ import {
   type NativeSessionBindingStateStore,
   type NativeSessionBindingStateStoreV2,
 } from "./binding-leases.js";
-import { createNativeSessionBindingNativeSettlement } from "./binding-native-settlement.js";
+import { createNativeSessionBindingMemorySettlement } from "./binding-memory-settlement.js";
 import {
   bindNativeSessionDeletionParticipant,
   type NativeSessionDeletionParticipant,
@@ -218,11 +218,12 @@ function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionB
         },
       };
       if (source.version === 2) {
-        participant.nativeMutation = createNativeSessionBindingNativeSettlement({
+        participant.memoryMutation = createNativeSessionBindingMemorySettlement({
           plan: participant.binding!,
+          context: workerSource,
           env: store.options.env,
-          assertCurrent: () => participant.assertCurrent(),
-          settle: (outcome) => participant.settle(outcome),
+          readRecord: options.readRecord,
+          participant,
         });
       }
       return bindNativeSessionDeletionParticipant(mutation, participant);

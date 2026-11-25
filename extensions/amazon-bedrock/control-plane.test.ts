@@ -1,9 +1,8 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { BedrockClient, GetInferenceProfileCommand } from "@aws-sdk/client-bedrock";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { runBedrockControlPlaneRequest } from "./control-plane.js";
 
 describe("Bedrock control-plane transport", () => {
@@ -56,12 +55,10 @@ describe("Bedrock control-plane transport", () => {
         }),
       });
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address() as AddressInfo;
+    const port = await listenOnLoopback(server);
     const client = new BedrockClient({
       region: "us-east-1",
-      endpoint: `http://127.0.0.1:${address.port}`,
+      endpoint: `http://127.0.0.1:${port}`,
       credentials: { accessKeyId: "test", secretAccessKey: "test" },
       maxAttempts: 1,
     });

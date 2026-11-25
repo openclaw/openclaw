@@ -17,7 +17,6 @@ export function createQaRepairProgressObserver(
   onProgress: (progress: {
     phase: (typeof FINALIZATION_PHASES)[number];
     status: "in_progress" | "completed";
-    durationMs?: number;
   }) => void,
 ) {
   const decoder = new StringDecoder("utf8");
@@ -65,23 +64,10 @@ export function createQaRepairProgressObserver(
       // Repeated steps, warnings, partial lines and arbitrary output are not progress.
       if (boundary > lastBoundary) {
         lastBoundary = boundary;
-        const startedAt = "startedAtMs" in value ? value.startedAtMs : undefined;
-        const endedAt = "endedAtMs" in value ? value.endedAtMs : undefined;
-        const durationMs =
-          value.status === "completed" &&
-          typeof startedAt === "number" &&
-          Number.isSafeInteger(startedAt) &&
-          startedAt >= 0 &&
-          typeof endedAt === "number" &&
-          Number.isSafeInteger(endedAt) &&
-          endedAt >= startedAt
-            ? endedAt - startedAt
-            : undefined;
-        // Emit only the canonical phase and validated producer duration, never detail/output.
+        // Forward only canonical phase boundaries, never producer detail/output.
         onProgress({
           phase: FINALIZATION_PHASES[phase]!,
           status: value.status,
-          ...(durationMs !== undefined ? { durationMs } : {}),
         });
       }
     }

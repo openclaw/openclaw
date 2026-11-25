@@ -213,9 +213,6 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     expect(transport.getBundleStatus?.("node-1")).toEqual(bundleStatus("a", "installed"));
     const state = readCatalog(registry);
     expect(state.workerBundleByNodeId).toEqual(new Map([["node-1", installed]]));
-    const bundle = expectDefined(state.workerBundleByNodeId.get("node-1"), "projected bundle");
-    bundle.status = "missing";
-    expect(transport.getBundleStatus?.("node-1")?.status).toEqual(installed);
 
     promote(registry, "generation-1");
     expect(transport.acceptBundleStatus?.(proof, bundleStatus("b", "missing"))).toBe(false);

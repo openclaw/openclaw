@@ -85,6 +85,7 @@ it.each([
   [npmName + "@2026.6.33", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@next", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@^2026.6.0", "beta", npmName, "2026.8.1-beta.3"],
+  [npmName + "@^2026.6.0", "stable", npmName, "2026.8.1"],
   ["@acme/discord", "extended-stable", clawHubName, "2026.7.33"],
 ] as const)(
   "preserves explicit or third-party %s on %s",
@@ -105,6 +106,7 @@ it.each([
   ["2026.9.1-beta.1", "2026.9.2", "2026.9.2", "latest", "tag-behind-latest"],
   ["2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", "beta", undefined],
   ["2026.9.2", "2026.9.2", "2026.9.2", "beta", undefined],
+  ["2026.9.2", "2026.9.2-1", "2026.9.2-1", "latest", "tag-behind-latest"],
   [null, "2026.9.2", "2026.9.2", "latest", undefined],
   ["2026.9.3-beta.1", null, "2026.9.3-beta.1", "beta", undefined],
 ] as const)(
@@ -151,58 +153,44 @@ it.each(["beta", "latest"] as const)(
 );
 const clawSpec = "clawhub:" + clawHubName;
 it.each([
-  ["stable", false, "2026.7.33", undefined, false],
-  ["stable", false, "2026.7.33", "2026.7.33", true],
-  ["stable", true, "2026.7.33", "2026.7.33", false],
-  ["beta", false, "2026.8.1-beta.3", "beta", false],
-  ["extended-stable", false, "2026.7.33", "2026.7.33", false],
+  ["stable", false, false, true, undefined, undefined, false],
+  ["stable", false, true, true, undefined, "2026.7.33", true],
+  ["stable", true, false, true, undefined, "2026.7.33", false],
+  ["beta", false, false, true, undefined, "beta", true],
+  ["extended-stable", false, false, true, undefined, "2026.7.33", false],
+  ["stable", true, false, true, "2026.6.33", "2026.6.33", false],
+  ["beta", true, false, true, "next", "next", false],
+  ["extended-stable", true, false, true, "next", "next", false],
+  ["stable", false, false, false, undefined, undefined, false],
+  ["extended-stable", false, false, false, undefined, undefined, false],
 ] as const)(
-  "ClawHub resolves %s (bound=%s, core=%s, selector=%s, preferCore=%s)",
-  (updateChannel, versionBoundToCore, coreVersion, selector, preferCoreVersion) => {
-    for (const recordSpec of [clawSpec, clawSpec + "@latest"]) {
-      const installSpec = selector ? clawSpec + "@" + selector : recordSpec;
+  "ClawHub %s (bound=%s, preferCore=%s, official=%s, selector=%s) -> %s",
+  (
+    updateChannel,
+    versionBoundToCore,
+    preferCoreVersion,
+    official,
+    selector,
+    expected,
+    fallback,
+  ) => {
+    for (const suffix of selector ? [selector] : [undefined, "latest"]) {
+      const spec = suffix ? clawSpec + "@" + suffix : clawSpec;
+      const installSpec = expected ? clawSpec + "@" + expected : spec;
       expect(
         resolveClawHubInstallSpecsForUpdateChannel({
-          spec: recordSpec,
-          officialPackageName: clawHubName,
+          spec,
           updateChannel,
-          coreVersion,
           versionBoundToCore,
           preferCoreVersion,
+          officialPackageName: official ? clawHubName : undefined,
+          coreVersion: "2026.7.33",
         }),
       ).toEqual({
         installSpec,
-        recordSpec,
-        ...(updateChannel === "beta" || (updateChannel === "stable" && preferCoreVersion)
-          ? { fallbackSpec: recordSpec, fallbackLabel: installSpec }
-          : {}),
+        recordSpec: spec,
+        ...(fallback ? { fallbackSpec: spec, fallbackLabel: installSpec } : {}),
       });
     }
   },
 );
-
-it.each([
-  ["stable", true],
-  ["beta", true],
-  ["extended-stable", true],
-  ["stable", false],
-  ["extended-stable", false],
-] as const)("ClawHub preserves selectors on %s (official=%s)", (updateChannel, official) => {
-  const selectors = official ? ["2026.6.33", "next", "beta"] : [undefined];
-  for (const selector of selectors) {
-    const recordSpec = selector ? clawSpec + "@" + selector : clawSpec;
-    expect(
-      resolveClawHubInstallSpecsForUpdateChannel({
-        spec: recordSpec,
-        updateChannel,
-        ...(official
-          ? {
-              officialPackageName: clawHubName,
-              versionBoundToCore: true,
-              coreVersion: updateChannel === "beta" ? "2026.8.1-beta.3" : "2026.7.33",
-            }
-          : {}),
-      }),
-    ).toEqual({ installSpec: recordSpec, recordSpec });
-  }
-});

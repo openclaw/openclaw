@@ -1,11 +1,11 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { readAuthProfileDatabaseIdentityAsync } from "./file-state.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -13,18 +13,17 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { isSharedAuthProfileWrite } from "./shared-store-bootstrap.js";
 import { prepareAgentAuthProfileRowsRead, readSharedAuthProfileRows } from "./sqlite-read.js";
-import {
-  prepareAuthProfileWriteEnvironment,
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "./sqlite.js";
+import { prepareAuthProfileWriteEnvironment, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   findPersistedAuthProfileCredentialAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "./store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "./store-update.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import type {
   AuthProfileCredential,
@@ -77,10 +76,14 @@ async function loadAuthProfileWriteAuthorities(
   ];
   const reservation = reserveAuthProfileUsagePreparation(paths);
   const watches = paths.map((databasePath) => {
-    const watch = watchAuthProfileNativeCommits(databasePath);
-    return { dispose: () => watch.dispose(), unchanged: watch.capture() };
+    const watch = watchAuthProfileNativeCommits(
+      databasePath,
+      readAuthProfileDatabaseIdentityAsync(databasePath),
+    );
+    return { dispose: () => watch.dispose(), unchanged: watch.capture(), ready: watch.ready };
   });
   try {
+    await Promise.all(watches.flatMap((watch) => (watch.ready ? [watch.ready] : [])));
     await reservation.ready;
     await prepareSharedAuthStoreOwnership(env);
     const readStore = async (dir?: string) => {
@@ -90,9 +93,8 @@ async function loadAuthProfileWriteAuthorities(
       const reader =
         !dir && databasePath === resolveOpenClawStateSqlitePath(env)
           ? undefined
-          : prepareAgentAuthProfileRowsRead({
+          : await prepareAgentAuthProfileRowsRead({
               databasePath,
-              agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
               env,
             });
       try {
@@ -403,17 +405,7 @@ export async function persistAuthProfileBatch(
                   options: { filterExternalAuthProfiles: false, syncExternalCli: false },
                 };
               },
-              async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-                if (committed) {
-                  await publishAuthProfileStoreUpdate(
-                    owner,
-                    committed,
-                    assertCurrent,
-                    nativeCommits,
-                    committedIsCurrent,
-                  );
-                }
-              },
+              publish: createAuthProfileStoreUpdatePublisher(),
             });
             return { unrevertedProfileIds };
           })().catch((error: unknown) => {

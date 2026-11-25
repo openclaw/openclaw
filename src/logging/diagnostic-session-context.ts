@@ -50,10 +50,7 @@ async function withSessionDiagnosticContext(
   consume(context);
 }
 
-function formatSessionDiagnosticFields(
-  context: SessionDiagnosticContext,
-  cronNameLabel: "cronJob" | "stopped" = "cronJob",
-): string {
+function formatSessionDiagnosticFields(context: SessionDiagnosticContext): string {
   const quote = (value: string) => {
     const oneLine = value.replace(/\s+/g, " ").trim();
     const bounded = oneLine.length > 140 ? `${truncateUtf16Safe(oneLine, 137)}...` : oneLine;
@@ -62,7 +59,7 @@ function formatSessionDiagnosticFields(
   return [
     context.cronJobId ? `cronJobId=${context.cronJobId}` : "",
     context.cronRunId ? `cronRunId=${context.cronRunId}` : "",
-    context.cronJobName ? `${cronNameLabel}=${quote(context.cronJobName)}` : "",
+    context.cronJobName ? `cronJob=${quote(context.cronJobName)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -73,13 +70,12 @@ export function logWithSessionDiagnosticContext(
   params: SessionDiagnosticTarget & {
     level: "debug" | "warn";
     format: (fields: string) => string;
-    cronNameLabel?: "cronJob" | "stopped";
   },
 ): Promise<void> | undefined {
   if (!areDiagnosticsEnabledForProcess() || !diag.isEnabled(params.level)) {
     return undefined;
   }
   return withSessionDiagnosticContext(params, (context) => {
-    diag[params.level](params.format(formatSessionDiagnosticFields(context, params.cronNameLabel)));
+    diag[params.level](params.format(formatSessionDiagnosticFields(context)));
   });
 }

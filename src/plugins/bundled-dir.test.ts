@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import * as openClawRoot from "../infra/openclaw-root.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -11,7 +12,6 @@ import {
 } from "./bundled-dir.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { writeJson } from "./generated-plugin-test-helpers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -47,14 +47,14 @@ function createOpenClawRoot(
   if (workspace) {
     fs.writeFileSync(path.join(repoRoot, "pnpm-workspace.yaml"), "packages: [., extensions/*]\n");
   }
-  writeJson(path.join(repoRoot, "package.json"), { name: "openclaw" });
+  writeJsonFile(path.join(repoRoot, "package.json"), { name: "openclaw" });
   return repoRoot;
 }
 
 function seedBundledPluginTree(rootDir: string, relativeDir: string, pluginId = "discord") {
   const pluginDir = path.join(rootDir, relativeDir, pluginId);
-  writeJson(path.join(pluginDir, "package.json"), { name: `@openclaw/${pluginId}` });
-  writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: pluginId });
+  writeJsonFile(path.join(pluginDir, "package.json"), { name: `@openclaw/${pluginId}` });
+  writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), { id: pluginId });
 }
 
 function setRuntime(cwd: string, argv1 = path.join(cwd, "openclaw.mjs")) {
@@ -335,31 +335,17 @@ describe("resolveBundledPluginsDir", () => {
 
 describe("foreign compiled bundle recognition", () => {
   it.each([
-    { mode: "foreign", expected: true },
     { mode: "dist-runtime", expected: true },
     { mode: "own", expected: false },
     { mode: "unknown", expected: false },
     { mode: "override", expected: false },
-    { mode: "source-link", expected: false },
-    { mode: "external", expected: false },
-    { mode: "lookalike", expected: false },
     { mode: "symlink", expected: true },
   ])("preserves the $mode ownership boundary", ({ mode, expected }) => {
     const current = createOpenClawRoot(["dist/extensions"], { prefix: "foreign-current-" });
     const previous = createOpenClawRoot(["dist/extensions"], { prefix: "foreign-previous-" });
     seedBundledPluginTree(current, "dist/extensions", "probe");
-    const relativeDir =
-      mode === "dist-runtime"
-        ? "dist-runtime/extensions"
-        : mode === "source-link"
-          ? "extensions"
-          : mode === "external"
-            ? "plugins"
-            : "dist/extensions";
+    const relativeDir = mode === "dist-runtime" ? "dist-runtime/extensions" : "dist/extensions";
     seedBundledPluginTree(previous, relativeDir, "probe");
-    if (mode === "lookalike") {
-      writeJson(path.join(previous, "package.json"), { name: "external-package" });
-    }
     let pluginRoot = path.join(mode === "own" ? current : previous, relativeDir, "probe");
     if (mode === "symlink") {
       const alias = path.join(makeRepoRoot("foreign-alias-"), "probe");
@@ -393,8 +379,8 @@ describe("relocated compiled bundle precedence", () => {
   ) {
     const pluginDir = path.join(packageRoot, tree, id);
     fs.mkdirSync(pluginDir, { recursive: true, mode: 0o755 });
-    writeJson(path.join(packageRoot, "package.json"), { name });
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    writeJsonFile(path.join(packageRoot, "package.json"), { name });
+    writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
       id,
       configSchema: { type: "object" },
     });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { readRecentSessionConversationTextAsync } from "../../gateway/session-transcript-readers.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
@@ -16,6 +17,7 @@ import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { readLatestTranscriptAssistantTextAsync as latestAssistant } from "./session-transcript-assistant-read.js";
@@ -28,7 +30,7 @@ import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fen
 import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { readRecentUserAssistantTextForSession as recentText } from "./transcript.js";
-import type { InternalSessionEntry } from "./types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type InternalSessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -64,6 +66,24 @@ function message(id: string, parentId: string | null, role: string, content: str
     message: { role, content },
   };
 }
+function control(type: string, id: string, parentId: string, fields: Record<string, unknown>) {
+  return { type, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", ...fields };
+}
+
+const accounting = {
+  inputTokens: 10,
+  outputTokens: 20,
+  cacheRead: 30,
+  cacheWrite: 40,
+  estimatedCostUsd: 0.5,
+  totalTokens: 100,
+  totalTokensFresh: true,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+  contextBudgetStatus: contextBudgetStatusFixture({ route: "compact_only", shouldCompact: true }),
+  cliSessionIds: { synthetic: "old" },
+  cliSessionBindings: { synthetic: { sessionId: "old" } },
+  claudeCliSessionId: "old",
+} satisfies Partial<InternalSessionEntry>;
 const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) ? [event.id] : []));
 
@@ -108,31 +128,197 @@ async function fixture(sessionId = "one", agentId = "main", messages?: Transcrip
 }
 
 describe("memory transcript read adapters", () => {
-  it("reads sparse recent user context through the captured owner during a reply append", async () => {
-    const { binding, scope, append } = await fixture(
-      "snapshot",
-      "main",
-      Array.from({ length: 300 }, (_, index) =>
+  it("does not revive an abandoned branch when admission clips the current active leaf", async () => {
+    const { scope, actor, binding } = await fixture("branched-admission", "main", [
+      message("root", null, "user", "Root"),
+      control("custom_message", "root-carrier", "root", {
+        customType: "openclaw.runtime-context",
+        content: "Root facts",
+        display: false,
+      }),
+      message("abandoned", "root-carrier", "user", "Wrong branch"),
+      control("custom_message", "abandoned-carrier", "abandoned", {
+        customType: "openclaw.runtime-context",
+        content: "Wrong context",
+        display: false,
+      }),
+      message("current", "root-carrier", "user", "Current input"),
+    ]);
+    const anchor = actor
+      .snapshot(authority)!
+      .transcript.anchors.find((entry) => entry.entryId === "current");
+    assert(anchor);
+    const receipt = { ...anchor, role: "user" as const, logicalTurnId: "branch-turn" };
+    const read = () =>
+      withSessionTranscriptDeltaReader(scope, (reader) =>
+        reader.replayGroups({ entryIds: ["root", "abandoned", "current"] }),
+      );
+    const result = await runWithSessionActorStorage(binding, () =>
+      runWithSessionTranscriptReadFence(receipt, read),
+    );
+    expect(result).toMatchObject([
+      { entryId: "root", message: { content: "Root" }, carriers: [{ content: "Root facts" }] },
+    ]);
+    await expect(
+      runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, read),
+    ).rejects.toThrow("anchor changed");
+  });
+
+  it("reads bounded canonical user/carrier groups from memory without a database or worker", async () => {
+    const { scope } = await fixture("replay", "main", [
+      message("root", null, "user", "Root"),
+      message("abandoned", "root", "user", "Wrong branch"),
+      control("custom_message", "abandoned-carrier", "abandoned", {
+        customType: "openclaw.runtime-context",
+        content: "Wrong context",
+        display: false,
+      }),
+      message("selected", "root", "user", "Selected"),
+      control("thinking_level_change", "thinking", "selected", { thinkingLevel: "high" }),
+      control("custom", "snapshot", "thinking", {
+        customType: "model-snapshot",
+        data: { padding: "x".repeat(20_000) },
+      }),
+      control("custom_message", "runtime", "snapshot", {
+        customType: "openclaw.runtime-context",
+        content: "Runtime facts",
+        display: false,
+      }),
+      control("session_info", "info", "runtime", { name: "Canonical replay" }),
+      control("custom_message", "update", "info", {
+        customType: "openclaw.system-update",
+        content: "Operator facts",
+        display: false,
+      }),
+      message("assistant", "update", "assistant", "x".repeat(20_000)),
+      control("custom_message", "later-carrier", "assistant", {
+        customType: "openclaw.runtime-context",
+        content: "Later context",
+        display: false,
+      }),
+      {
+        ...message("pending", "later-carrier", "assistant", "Background result"),
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "automation-result",
+          content: "Background result",
+          excludeFromContext: true,
+          openclawModelPlacement: "pending",
+        },
+      },
+      message("placed-user", "pending", "user", "Before placement"),
+      control("custom", "placement", "placed-user", {
+        customType: "openclaw.background-result-placement",
+        data: { afterEntryId: "placed-user", resultEntryIds: ["pending"] },
+      }),
+      control("custom_message", "placed-carrier", "placement", {
+        customType: "openclaw.runtime-context",
+        content: "After placement",
+        display: false,
+      }),
+    ]);
+    await withSessionTranscriptDeltaReader(scope, async (reader) => {
+      const result = await reader.replayGroups({
+        entryIds: [
+          "selected",
+          "root",
+          "abandoned",
+          "assistant",
+          "missing",
+          "selected",
+          "placed-user",
+        ],
+        maxBytes: 2000,
+      });
+      expect(result).toMatchObject([
+        {
+          entryId: "selected",
+          message: { role: "user", content: "Selected" },
+          carriers: [
+            { role: "custom", content: "Runtime facts" },
+            { role: "custom", content: "Operator facts" },
+          ],
+        },
+        { entryId: "root", message: { role: "user", content: "Root" }, carriers: [] },
+        { entryId: "placed-user", message: { content: "Before placement" }, carriers: [] },
+      ]);
+      await expect(reader.replayGroups({ entryIds: ["selected"], maxBytes: 100 })).rejects.toThrow(
+        "exceeds maxBytes",
+      );
+    });
+  });
+
+  it.each(["restart", "compaction", "reset"] as const)(
+    "does not revive prompt updates retired by %s while retaining runtime facts",
+    async (boundary) => {
+      const { scope } = await fixture("retired-update", "main", [
+        message("user", null, "user", "Retained input"),
+        control("custom_message", "update", "user", {
+          customType: "openclaw.system-update",
+          content: "Retired override",
+          details: { kind: "prompt-update", turnScoped: false },
+          display: false,
+        }),
+        control("custom_message", "runtime", "update", {
+          customType: "openclaw.system-update",
+          content: "Retained facts",
+          details: { kind: "runtime-context", turnScoped: true },
+          display: false,
+        }),
+        control(
+          boundary === "restart" ? "custom" : boundary,
+          "boundary",
+          "runtime",
+          boundary === "restart"
+            ? {
+                customType: "openclaw.system-prompt",
+                data: { restart: true },
+              }
+            : { reason: "reset", firstKeptEntryId: "user", summary: "Summary", tokensBefore: 10 },
+        ),
+      ]);
+      const context = await readSessionTranscriptModelContextAsync(scope, (value) => value);
+      expect(
+        buildSessionContext(context.events.filter(isIndexedSessionEntry)).messages,
+      ).not.toContainEqual(expect.objectContaining({ content: "Retired override" }));
+      await withSessionTranscriptDeltaReader(scope, async (reader) => {
+        const groups = await reader.replayGroups({ entryIds: ["user"] });
+        expect(groups[0]?.carriers).toEqual([
+          expect.objectContaining({ role: "custom", content: "Retained facts" }),
+        ]);
+      });
+    },
+  );
+
+  it("reads sparse post-reset user context without custom messages during a reply append", async () => {
+    const { binding, scope, append } = await fixture("snapshot", "main", [
+      message("before", null, "user", "Before reset"),
+      control("reset", "boundary", "before", { reason: "reset" }),
+      control("custom_message", "notice", "boundary", {
+        customType: "notice",
+        content: "Visible control",
+        display: true,
+      }),
+      ...Array.from({ length: 300 }, (_, index) =>
         message(
           `snapshot-${index}`,
-          index === 0 ? null : `snapshot-${index - 1}`,
+          index === 0 ? "notice" : `snapshot-${index - 1}`,
           index === 0 || index === 50 ? "user" : "assistant",
           `Context ${index}`,
         ),
       ),
-    );
+    ]);
     await runWithSessionActorStorage(binding, async () => {
       const [recent] = await Promise.all([
-        recentText({ ...scope, role: "user", limit: 2 }),
+        recentText({ ...scope, role: "user", limit: 3 }),
         append(message("appended", "snapshot-299", "assistant", "Concurrent reply")),
       ]);
       expect(recent).toEqual([
         { id: "snapshot-0", role: "user", text: "Context 0" },
         { id: "snapshot-50", role: "user", text: "Context 50" },
       ]);
-      expect(await latestAssistant(scope)).toMatchObject({
-        text: "Concurrent reply",
-      });
+      expect(await latestAssistant(scope)).toMatchObject({ text: "Concurrent reply" });
     });
   });
 
@@ -154,9 +340,7 @@ describe("memory transcript read adapters", () => {
     expect(ids(context.events)).toContain("answer");
 
     await expect(readEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow("too large");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "Answer one",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
 
     let readAfterClose: (() => Promise<unknown>) | undefined;
     await withSessionTranscriptDeltaReader(scope, async (reader) => {
@@ -177,9 +361,7 @@ describe("memory transcript read adapters", () => {
       readAfterClose = () => reader.raw({});
     });
     await expect(readAfterClose!()).rejects.toThrow("no longer active");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "New answer",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "New answer" });
 
     const hydration = prepareHydration(scope, { maxBytes: 16384, maxEvents: 1 });
     const bounded = await hydration.read();
@@ -190,32 +372,6 @@ describe("memory transcript read adapters", () => {
     const stopped = prepareHydration(scope, undefined, cancelled.signal);
     cancelled.abort(new Error("caller cancelled"));
     await expect(stopped.read()).rejects.toThrow("caller cancelled");
-  });
-
-  it("reads recent text after a reset without leaking older or custom-message context", async () => {
-    const { scope } = await fixture("reset", "main", [
-      message("before", null, "user", "Before reset"),
-      {
-        type: "reset",
-        id: "boundary",
-        parentId: "before",
-        reason: "reset",
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "notice",
-        parentId: "boundary",
-        customType: "notice",
-        content: "Visible control",
-        display: true,
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      message("after", "notice", "user", "After marker"),
-    ]);
-    expect(await recentText({ ...scope, role: "user", limit: 2 })).toEqual([
-      { id: "after", role: "user", text: "After marker" },
-    ]);
   });
 
   it("selects sibling and retained historical windows without creating missing sessions", async () => {
@@ -253,10 +409,7 @@ describe("memory transcript read adapters", () => {
       kind: "missing",
     });
     expect(
-      await prepareHydration({
-        ...missing,
-        sessionKey: root.scope.sessionKey,
-      }).read(),
+      await prepareHydration({ ...missing, sessionKey: root.scope.sessionKey }).read(),
     ).toMatchObject({ kind: "full", snapshot: { events: [] } });
     expect(
       await prepareHydration(
@@ -281,24 +434,7 @@ describe("memory transcript read adapters", () => {
 
   it("manually compacts current rows and accounting while preserving a newer entry update", async () => {
     const { scope, owner, patch } = await fixture();
-    await patch({
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheRead: 30,
-      cacheWrite: 40,
-      estimatedCostUsd: 0.5,
-      totalTokens: 100,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 3,
-      contextBudgetStatus: contextBudgetStatusFixture({
-        route: "compact_only",
-        shouldCompact: true,
-      }),
-      cliSessionIds: { synthetic: "old" },
-      cliSessionBindings: { synthetic: { sessionId: "old" } },
-      claudeCliSessionId: "old",
-    });
+    await patch({ ...accounting, compactionCount: 3 });
     const source: SessionSourceAssertion = Object.assign(() => {}, {
       async prepareSessionSource() {
         await patch({ label: "Updated during preparation", model: "synthetic-model" });
@@ -328,21 +464,8 @@ describe("memory transcript read adapters", () => {
       updatedAt: 500,
       compactionCount: 3,
     });
-    for (const field of [
-      "inputTokens",
-      "outputTokens",
-      "cacheRead",
-      "cacheWrite",
-      "estimatedCostUsd",
-      "totalTokens",
-      "totalTokensFresh",
-      "totalTokensVersion",
-      "contextBudgetStatus",
-      "cliSessionIds",
-      "cliSessionBindings",
-      "claudeCliSessionId",
-    ] as const) {
-      expect(entry?.[field], field).toBeUndefined();
+    for (const field of Object.keys(accounting)) {
+      expect(Reflect.get(entry ?? {}, field), field).toBeUndefined();
     }
   });
 
@@ -380,9 +503,7 @@ describe("memory transcript read adapters", () => {
     await runWithSessionActorStorage(binding, () =>
       runWithSessionTranscriptReadFence(receipt, async () => {
         expect(ids(await readEvents(scope))).toEqual(["one", "user", "answer"]);
-        expect(await latestAssistant(scope)).toMatchObject({
-          text: "Answer one",
-        });
+        expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
         const hydrated = await prepareHydration(scope).read();
         expect(ids(hydrated.snapshot.events)).toEqual(["one", "user", "answer"]);
         await withSessionTranscriptDeltaReader(scope, async (reader) => {
@@ -392,8 +513,45 @@ describe("memory transcript read adapters", () => {
           const visible = await reader.visible({});
           assert(visible.kind === "page");
           expect(ids(visible.events.map((row) => row.event))).toEqual(["user", "answer"]);
+          expect(await reader.replayGroups({ entryIds: ["user", "current-user"] })).toMatchObject([
+            { entryId: "user", message: { role: "user", content: "Question" }, carriers: [] },
+          ]);
         });
       }),
     );
+  });
+});
+
+it("preflights incognito compaction through the explicit memory adapter without SQLite or workers", async () => {
+  const { scope, binding, actor } = await fixture("compaction", "main", [
+    message("first", null, "user", "Earlier request"),
+    message("last", "first", "user", "Current request"),
+  ]);
+  const { prepareGatewaySessionCompaction } =
+    await import("../../gateway/server-methods/sessions-compaction-runner.js");
+  const { attachCompactionAccountingRecorder, readCompactionAccountingRecorder } =
+    await import("../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js");
+  await runWithSessionActorStorage(binding, async () => {
+    const entry = actor.storage!.readCurrent({ type: "session.entry.read", input: {} }, authority)!;
+    const prepared = await prepareGatewaySessionCompaction({
+      ...scope,
+      cfg: { agents: { defaults: { model: { primary: "fixture/model" } } } },
+      sessionStoreKey: scope.sessionKey,
+      entry,
+    });
+    expect(prepared.reason).toBeUndefined();
+    expect(prepared.preparedSession?.source).toBeUndefined();
+    const memory = prepared.preparedSession?.memoryTranscript;
+    expect(memory?.sessionManager.getBranch().map((row) => row.id)).toEqual(["first", "last"]);
+    expect(memory?.sessionTarget).toMatchObject({
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+    });
+    const runtimeContext = {};
+    attachCompactionAccountingRecorder(runtimeContext, {
+      preparedSession: prepared.preparedSession,
+    });
+    expect(readCompactionAccountingRecorder(runtimeContext)?.memoryTranscript).toBe(memory);
+    memory!.assertActive();
   });
 });

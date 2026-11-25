@@ -51,7 +51,7 @@ export function createWorkerStartupRuntime(
     getPluginRegistry,
     getPortalRuntime: () => undefined,
     resolveGatewayContext: () => undefined,
-    desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+    desktopSessionRegistry: createDesktopSessionRegistry(),
     startup,
     log: { child: () => ({ info: () => {}, warn: () => {} }) },
     ...overrides,

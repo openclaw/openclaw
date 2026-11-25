@@ -1,8 +1,10 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -63,6 +65,7 @@ export type SessionResetCommitContext = SessionEntryCommitContext & {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  creationOperation?: SessionCreationOperation;
   /** Revalidate caller authority before preparation and synchronous reset commit. */
   commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
@@ -102,7 +105,7 @@ export type DeleteSessionEntryLifecycleParams = {
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
    */
-  commitGuard?: () => void;
+  commitGuard?: (operation?: RetainedWorkerTransactionAdmission) => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
@@ -189,11 +192,6 @@ export type SessionEntryLifecycleUpsert = {
       entry?: never;
     }
 );
-
-export type SessionArchivedTranscriptCleanupRule = {
-  reason: "deleted" | "reset";
-  olderThanMs: number;
-};
 
 export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;

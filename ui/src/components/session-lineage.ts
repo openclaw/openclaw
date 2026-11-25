@@ -79,11 +79,11 @@ export function sessionLineageIdentityHost(
 /** Owns routed ancestry requests and the selected descriptor's observation lease. */
 export class SessionLineageOwner {
   routeKey: string | null = null;
-  private loaded: ReturnType<typeof resolveUiConversationIdentity> | null = null;
-  private request: LineageRequest | null = null;
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private binding: DescriptorBinding | null = null;
-  private navigation: LineageNavigation | null = null;
+  #loaded: ReturnType<typeof resolveUiConversationIdentity> | null = null;
+  #request: LineageRequest | null = null;
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
+  #binding: DescriptorBinding | null = null;
+  #navigation: LineageNavigation | null = null;
 
   constructor(
     private readonly owner: LineageOwner,
@@ -91,16 +91,16 @@ export class SessionLineageOwner {
     private readonly childScope: () => object,
   ) {}
 
-  private selectedAgentId(): string | null {
+  #selectedAgentId(): string | null {
     const selected = this.owner.context?.agentSelection.state.selectedId?.trim();
     return selected ? normalizeAgentId(selected) : null;
   }
 
-  private identity(key: string) {
+  #identity(key: string) {
     return resolveUiConversationIdentity(sessionLineageIdentityHost(this.owner.context), key);
   }
 
-  private scopeIsCurrent(scope: LineageScope): boolean {
+  #scopeIsCurrent(scope: LineageScope): boolean {
     const context = this.owner.context;
     const route = this.route();
     return (
@@ -108,7 +108,7 @@ export class SessionLineageOwner {
       isSessionRouteId(route.routeId) &&
       route.key.trim() === scope.key &&
       this.routeKey === scope.key &&
-      this.selectedAgentId() === scope.selectedAgentId &&
+      this.#selectedAgentId() === scope.selectedAgentId &&
       context?.sessions === scope.sessions &&
       context.gateway === scope.gateway &&
       scope.sessions.captureConnectionScope() !== null &&
@@ -118,40 +118,40 @@ export class SessionLineageOwner {
     );
   }
 
-  private bindingIsCurrent(binding: DescriptorBinding): boolean {
-    const identity = this.identity(binding.key);
+  #bindingIsCurrent(binding: DescriptorBinding): boolean {
+    const identity = this.#identity(binding.key);
     return (
-      this.binding === binding &&
-      this.scopeIsCurrent(binding) &&
+      this.#binding === binding &&
+      this.#scopeIsCurrent(binding) &&
       identity.sessionKey === binding.target.key &&
       (identity.agentId ?? binding.selectedAgentId) === binding.target.agentId &&
       (binding.observation?.isCurrent() ?? true)
     );
   }
 
-  private retireWalk(): void {
-    this.request = null;
-    this.loaded = null;
-    if (this.retryTimer !== null) {
-      globalThis.clearTimeout(this.retryTimer);
-      this.retryTimer = null;
+  #retireWalk(): void {
+    this.#request = null;
+    this.#loaded = null;
+    if (this.#retryTimer !== null) {
+      globalThis.clearTimeout(this.#retryTimer);
+      this.#retryTimer = null;
     }
   }
 
-  private retire(): void {
-    const binding = this.binding;
-    this.binding = null;
+  #retire(): void {
+    const binding = this.#binding;
+    this.#binding = null;
     binding?.observation?.dispose();
-    this.retireWalk();
+    this.#retireWalk();
   }
 
-  private clearPresentation(): void {
+  #clearPresentation(): void {
     this.owner.activeSessionLineageRoot = null;
     this.owner.activeSessionLineageSelectedRow = null;
   }
 
-  private evictPreviousLineage(): void {
-    if (this.routeKey && this.identity(this.routeKey).sessionKey !== "global") {
+  #evictPreviousLineage(): void {
+    if (this.routeKey && this.#identity(this.routeKey).sessionKey !== "global") {
       evictArchivedSessionLineage(this.owner, this.routeKey);
     }
   }
@@ -160,11 +160,11 @@ export class SessionLineageOwner {
     const route = this.route();
     const context = this.owner.context;
     const key = isSessionRouteId(route.routeId) ? route.key.trim() : "";
-    const identity = key ? this.identity(key) : null;
-    const selectedAgentId = this.selectedAgentId();
-    const previous = this.navigation;
+    const identity = key ? this.#identity(key) : null;
+    const selectedAgentId = this.#selectedAgentId();
+    const previous = this.#navigation;
     if (!key || !identity || !context) {
-      this.navigation = null;
+      this.#navigation = null;
     } else if (
       previous?.key !== key ||
       previous.identity.sessionKey !== identity.sessionKey ||
@@ -174,7 +174,7 @@ export class SessionLineageOwner {
       previous.gateway !== context.gateway
     ) {
       // Navigation owns this token even while describes fail or a SID lease retires.
-      this.navigation = {
+      this.#navigation = {
         key,
         identity,
         selectedAgentId,
@@ -186,17 +186,17 @@ export class SessionLineageOwner {
       this.routeKey !== null &&
       (!isSessionRouteId(route.routeId) || route.key.trim() !== this.routeKey)
     ) {
-      this.evictPreviousLineage();
-      this.retire();
+      this.#evictPreviousLineage();
+      this.#retire();
       this.routeKey = null;
-      this.clearPresentation();
+      this.#clearPresentation();
       this.owner.requestSessionDataUpdate();
     } else if (
-      previous !== this.navigation ||
-      (this.binding && !this.bindingIsCurrent(this.binding))
+      previous !== this.#navigation ||
+      (this.#binding && !this.#bindingIsCurrent(this.#binding))
     ) {
-      this.retire();
-      this.clearPresentation();
+      this.#retire();
+      this.#clearPresentation();
       this.owner.requestSessionDataUpdate();
     }
   }
@@ -204,30 +204,30 @@ export class SessionLineageOwner {
   reset(preserveOperatorContext: boolean): void {
     // A list/filter generation does not retire a still-owned descriptor read.
     // The capability's ledger, route and connection decide that lease's lifetime.
-    if (this.binding && this.bindingIsCurrent(this.binding)) {
-      if (this.binding.target.key !== "global") {
-        this.retireWalk();
+    if (this.#binding && this.#bindingIsCurrent(this.#binding)) {
+      if (this.#binding.target.key !== "global") {
+        this.#retireWalk();
       }
-      this.publish(this.binding, this.binding.observation?.row ?? null);
+      this.#publish(this.#binding, this.#binding.observation?.row ?? null);
       return;
     }
-    this.retire();
+    this.#retire();
     if (!preserveOperatorContext) {
       this.routeKey = null;
-      this.clearPresentation();
+      this.#clearPresentation();
     }
   }
 
   disconnect(): void {
-    this.navigation = null;
-    this.retire();
+    this.#navigation = null;
+    this.#retire();
   }
 
-  private publish(binding: DescriptorBinding, row: GatewaySessionRow | null): void {
-    if (!this.bindingIsCurrent(binding)) {
+  #publish(binding: DescriptorBinding, row: GatewaySessionRow | null): void {
+    if (!this.#bindingIsCurrent(binding)) {
       return;
     }
-    const previous = this.selectedRow();
+    const previous = this.#selectedRow();
     if (row) {
       if (binding.target.key === "global") {
         publishObservedSessionRow(this.owner, row, binding.sessions.inheritRow);
@@ -235,38 +235,47 @@ export class SessionLineageOwner {
         retainActiveSessionRow(this.owner, row, previous, binding.sessions.inheritRow);
       }
     } else {
-      this.clearPresentation();
+      this.#clearPresentation();
     }
-    if (binding.target.key !== "global" && !this.request?.publishingSelected) {
-      this.retireChangedLineage(previous, row);
+    if (
+      binding.target.key !== "global" &&
+      !this.#request?.publishingSelected &&
+      previous &&
+      row &&
+      ((previous.sessionId && row.sessionId && previous.sessionId !== row.sessionId) ||
+        normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(previous)) !==
+          normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(row)))
+    ) {
+      // Pending ancestry belongs to the previous row as much as a completed walk does.
+      this.#retireWalk();
     }
   }
 
-  private observe(scope: LineageScope, target: SessionRowTarget): DescriptorBinding {
+  #observe(scope: LineageScope, target: SessionRowTarget): DescriptorBinding {
     const binding: DescriptorBinding = { ...scope, target, refreshRequested: false };
     // Registration may synchronously deliver a held live row.
-    this.binding = binding;
+    this.#binding = binding;
     binding.observation = scope.sessions.observeRow(
       target,
       (row) => {
-        if (this.binding !== binding) {
+        if (this.#binding !== binding) {
           return;
         }
-        if (!this.bindingIsCurrent(binding)) {
+        if (!this.#bindingIsCurrent(binding)) {
           this.synchronize();
           return;
         }
-        this.publish(binding, row);
-        if (!row && this.request === null) {
-          this.loaded = null;
+        this.#publish(binding, row);
+        if (!row && this.#request === null) {
+          this.#loaded = null;
         }
         this.owner.requestSessionDataUpdate();
       },
       {
         onInvalidate: (reason) => {
-          if (reason === "runner-availability" && this.bindingIsCurrent(binding)) {
+          if (reason === "runner-availability" && this.#bindingIsCurrent(binding)) {
             binding.refreshRequested = true;
-            this.loaded = null;
+            this.#loaded = null;
             if (this.owner.sessionLineageVisible) {
               // Join the event's shared descriptor before a later event retires its cache entry.
               void this.load(binding.key);
@@ -277,15 +286,15 @@ export class SessionLineageOwner {
       },
     );
     this.synchronize();
-    if (!this.bindingIsCurrent(binding)) {
+    if (!this.#bindingIsCurrent(binding)) {
       binding.observation.dispose();
       return binding;
     }
-    this.publish(binding, binding.observation.row);
+    this.#publish(binding, binding.observation.row);
     return binding;
   }
 
-  private selectedRow(): GatewaySessionRow | undefined {
+  #selectedRow(): GatewaySessionRow | undefined {
     return (
       this.owner.activeSessionLineageSelectedRow ??
       this.owner.sessionsResult?.sessions.find((row) =>
@@ -294,32 +303,16 @@ export class SessionLineageOwner {
     );
   }
 
-  private retireChangedLineage(
-    previous: GatewaySessionRow | undefined,
-    current: GatewaySessionRow | null,
-  ): void {
-    if (
-      previous &&
-      current &&
-      ((previous.sessionId && current.sessionId && previous.sessionId !== current.sessionId) ||
-        normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(previous)) !==
-          normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(current)))
-    ) {
-      // Pending ancestry belongs to the previous row as much as a completed walk does.
-      this.retireWalk();
-    }
-  }
-
   captureChildRead(sourceListScope?: SessionListScope): SidebarChildSessionRead {
     this.synchronize();
-    const navigation = this.navigation;
+    const navigation = this.#navigation;
     const key = navigation?.key;
     const sessions = this.owner.context?.sessions;
     const gateway = this.owner.context?.gateway;
     const connection = sessions?.captureConnectionScope();
     const identityHost = sessionLineageIdentityHost(this.owner.context);
     const global = navigation?.identity.sessionKey === "global";
-    const binding = global ? this.binding : null;
+    const binding = global ? this.#binding : null;
     const observed = binding?.observation?.captureReconcile();
     const read = !global ? sessions?.captureReconcile() : undefined;
     const reconcile: SessionCapability["reconcile"] | undefined = read
@@ -332,7 +325,7 @@ export class SessionLineageOwner {
       Boolean(connection && sessions?.isConnectionScopeCurrent(connection));
     const isSelected = () => {
       this.synchronize();
-      return isCurrent() && navigation !== null && navigation === this.navigation;
+      return isCurrent() && navigation !== null && navigation === this.#navigation;
     };
     return {
       isCurrent,
@@ -354,7 +347,7 @@ export class SessionLineageOwner {
           return { status: "selected", row: accepted };
         }
         // A retired incarnation is an admission rejection, not a navigation change.
-        if (!binding || !observed || !this.bindingIsCurrent(binding)) {
+        if (!binding || !observed || !this.#bindingIsCurrent(binding)) {
           return { status: "selected", row: null };
         }
         const outcome = observed(row);
@@ -362,7 +355,7 @@ export class SessionLineageOwner {
           return { status: "not-selected" };
         }
         if (outcome.status === "current") {
-          this.publish(binding, outcome.row);
+          this.#publish(binding, outcome.row);
           return { status: "selected", row: outcome.row };
         }
         this.synchronize();
@@ -380,18 +373,18 @@ export class SessionLineageOwner {
       return Promise.resolve();
     }
     if (key !== this.routeKey) {
-      this.evictPreviousLineage();
-      this.retire();
+      this.#evictPreviousLineage();
+      this.#retire();
       this.routeKey = key;
-      this.clearPresentation();
+      this.#clearPresentation();
       this.owner.requestSessionDataUpdate();
     }
-    if (this.request) {
-      return this.request.promise;
+    if (this.#request) {
+      return this.#request.promise;
     }
     const { gateway, sessions } = this.owner.context ?? {};
     const client = gateway?.snapshot.client;
-    if (!key || this.loaded || this.retryTimer !== null || !gateway || !sessions || !client) {
+    if (!key || this.#loaded || this.#retryTimer !== null || !gateway || !sessions || !client) {
       return Promise.resolve();
     }
     const scope: LineageScope = {
@@ -399,22 +392,22 @@ export class SessionLineageOwner {
       gateway,
       sessions,
       client,
-      selectedAgentId: this.selectedAgentId(),
+      selectedAgentId: this.#selectedAgentId(),
       connectionRevision: gateway.connectionRevision,
     };
-    if (!this.scopeIsCurrent(scope)) {
+    if (!this.#scopeIsCurrent(scope)) {
       return Promise.resolve();
     }
-    const identity = this.identity(key);
+    const identity = this.#identity(key);
     if (identity.sessionKey === "global" && !identity.agentId) {
       return Promise.resolve();
     }
     const agentId = identity.agentId ?? scope.selectedAgentId;
-    const retainedBinding = this.binding;
+    const retainedBinding = this.#binding;
     const binding = agentId
-      ? (retainedBinding ?? this.observe(scope, { key: identity.sessionKey, agentId }))
+      ? (retainedBinding ?? this.#observe(scope, { key: identity.sessionKey, agentId }))
       : null;
-    if (binding && !this.bindingIsCurrent(binding)) {
+    if (binding && !this.#bindingIsCurrent(binding)) {
       return Promise.resolve();
     }
     const globalBinding = identity.sessionKey === "global" ? binding : null;
@@ -429,15 +422,15 @@ export class SessionLineageOwner {
       publishingSelected: false,
       promise: Promise.resolve(),
     };
-    this.request = request;
+    this.#request = request;
     // Defer execution until the one public completion promise is installed.
     request.promise = Promise.resolve().then(async () => {
       const isCurrent = () =>
-        request === this.request &&
-        this.scopeIsCurrent(scope) &&
-        this.identity(key).sessionKey === identity.sessionKey &&
-        this.identity(key).agentId === identity.agentId &&
-        (globalBinding ? this.bindingIsCurrent(globalBinding) : childScope === this.childScope());
+        request === this.#request &&
+        this.#scopeIsCurrent(scope) &&
+        this.#identity(key).sessionKey === identity.sessionKey &&
+        this.#identity(key).agentId === identity.agentId &&
+        (globalBinding ? this.#bindingIsCurrent(globalBinding) : childScope === this.childScope());
       const lineage = await fetchSessionLineage({
         client,
         sessions,
@@ -449,7 +442,49 @@ export class SessionLineageOwner {
         ),
         isCurrent,
         ...(descriptorBinding
-          ? { readSelected: () => this.readDescriptor(descriptorBinding, isCurrent) }
+          ? {
+              readSelected: async () => {
+                const observation = descriptorBinding.observation;
+                if (!observation || !isCurrent()) {
+                  return undefined;
+                }
+                if (observation.row && !descriptorBinding.refreshRequested) {
+                  return observation.row;
+                }
+                descriptorBinding.refreshRequested = false;
+                const reconcile = observation.captureReconcile();
+                const described = await descriptorBinding.sessions
+                  .describe(
+                    {
+                      key: descriptorBinding.key,
+                      ...(isUiGlobalSessionKey(descriptorBinding.key)
+                        ? { agentId: descriptorBinding.target.agentId }
+                        : {}),
+                    },
+                    { client: descriptorBinding.client },
+                  )
+                  .catch((error: unknown) => {
+                    descriptorBinding.refreshRequested = true;
+                    throw error;
+                  });
+                if (!isCurrent()) {
+                  return undefined;
+                }
+                const outcome = reconcile(
+                  described?.session
+                    ? {
+                        ...described.session,
+                        runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+                      }
+                    : undefined,
+                );
+                if (outcome.status !== "current") {
+                  return observation.row ?? undefined;
+                }
+                this.#publish(descriptorBinding, outcome.row);
+                return outcome.row ?? undefined;
+              },
+            }
           : {
               publishSelected: (row, reconcile) => {
                 // This walk follows the admitted parent after synchronous observation delivery.
@@ -469,8 +504,8 @@ export class SessionLineageOwner {
             }),
       });
       if (!lineage || !isCurrent()) {
-        if (request === this.request) {
-          this.request = null;
+        if (request === this.#request) {
+          this.#request = null;
           this.synchronize();
         }
         return;
@@ -480,7 +515,7 @@ export class SessionLineageOwner {
         if (row) {
           publishObservedSessionLineage(this.owner, lineage, row, sessions.inheritRow);
         } else {
-          this.clearPresentation();
+          this.#clearPresentation();
         }
       } else {
         publishActiveSessionLineage(this.owner, key, lineage, sessions.inheritRow, isCurrent);
@@ -488,62 +523,19 @@ export class SessionLineageOwner {
       if (!isCurrent()) {
         return;
       }
-      this.request = null;
+      this.#request = null;
       if (lineage.lookupFailed) {
-        this.retryTimer = globalThis.setTimeout(() => {
-          this.retryTimer = null;
+        this.#retryTimer = globalThis.setTimeout(() => {
+          this.#retryTimer = null;
           if (this.routeKey === key) {
             this.owner.requestSessionDataUpdate();
           }
         }, 5_000);
       } else {
-        this.loaded = binding?.refreshRequested ? null : identity;
+        this.#loaded = binding?.refreshRequested ? null : identity;
       }
       this.owner.requestSessionDataUpdate();
     });
     return request.promise;
-  }
-
-  private async readDescriptor(
-    binding: DescriptorBinding,
-    isCurrent: () => boolean,
-  ): Promise<GatewaySessionRow | undefined> {
-    const observation = binding.observation;
-    if (!observation || !isCurrent()) {
-      return undefined;
-    }
-    if (observation.row && !binding.refreshRequested) {
-      return observation.row;
-    }
-    binding.refreshRequested = false;
-    const reconcile = observation.captureReconcile();
-    const described = await binding.sessions
-      .describe(
-        {
-          key: binding.key,
-          ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        },
-        { client: binding.client },
-      )
-      .catch((error: unknown) => {
-        binding.refreshRequested = true;
-        throw error;
-      });
-    if (!isCurrent()) {
-      return undefined;
-    }
-    const outcome = reconcile(
-      described?.session
-        ? {
-            ...described.session,
-            runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
-          }
-        : undefined,
-    );
-    if (outcome.status !== "current") {
-      return observation.row ?? undefined;
-    }
-    this.publish(binding, outcome.row);
-    return outcome.row ?? undefined;
   }
 }

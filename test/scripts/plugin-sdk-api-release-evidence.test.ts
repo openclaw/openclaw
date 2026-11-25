@@ -12,6 +12,7 @@ import {
   selectPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
+  findPluginSdkApiReleaseNoteOmissions,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -40,6 +41,58 @@ function evidence(exports: unknown[] = []) {
 }
 
 describe("Plugin SDK API release evidence", () => {
+  it("reports release-note omissions for removed entrypoints and exports", () => {
+    const payload = {
+      entrypointsAdded: [],
+      entrypointsRemoved: [
+        {
+          entrypoint: "legacy.ts",
+          exportNames: ["legacySend"],
+          importSpecifier: "openclaw/plugin-sdk/legacy",
+        },
+      ],
+      exports: [
+        {
+          change: "removed",
+          entrypoint: "index.ts",
+          exportName: "legacyReceive",
+          importSpecifier: "openclaw/plugin-sdk",
+        },
+        { change: "added", exportName: "replacement" },
+      ],
+    };
+    const receipt = createPluginSdkApiReleaseEvidence({
+      baseRef: "v2026.8.1",
+      baseSha,
+      diff: {
+        ...payload,
+        digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+      },
+      headSha,
+      workflowSha,
+    });
+
+    expect(
+      findPluginSdkApiReleaseNoteOmissions({
+        evidence: receipt,
+        releaseNotes:
+          "Removed `openclaw/plugin-sdk/legacy` and `legacyReceive`; use the supported replacements.",
+      }),
+    ).toEqual({
+      missing: [],
+      removals: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+    });
+    expect(
+      findPluginSdkApiReleaseNoteOmissions({
+        evidence: receipt,
+        releaseNotes: "Added `replacement`.",
+      }),
+    ).toEqual({
+      missing: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+      removals: ["openclaw/plugin-sdk/legacy", "legacyReceive"],
+    });
+  });
+
   it("enforces selectors acknowledgement through the release CLI", () => {
     const receipt = evidence([{ change: "added", exportName: "send" }]);
     const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");
@@ -266,6 +319,38 @@ describe("Plugin SDK API release evidence", () => {
     expect(() => validate("v2026.8.2", "c".repeat(40))).toThrow(
       "dist-tag target does not match the release SHA",
     );
+  });
+
+  it("publishes a moved predecessor only when the qualified predecessor is acknowledged", () => {
+    const receipt = evidence([{ change: "added", exportName: "newHelper" }]);
+    const reviewed = receipt.digest.slice(0, 8);
+    const validate = (acknowledgement: string, currentSelectorRef = "v2026.8.1-1") =>
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement,
+        currentSelectorRef,
+        currentSelectorSha: currentSelectorRef === "v2026.8.1" ? baseSha : "c".repeat(40),
+        evidence: receipt,
+        expectedHeadSha: headSha,
+        expectedWorkflowSha: workflowSha,
+        targetRef: "v2026.8.2",
+      });
+
+    expect(() => validate(reviewed)).toThrow(
+      "predecessor no longer matches the npm dist-tag (v2026.8.1 qualified, v2026.8.1-1 current); acknowledge <digest>@v2026.8.1",
+    );
+    expect(validate(`${reviewed}@v2026.8.1`)).toEqual({
+      acknowledgement: reviewed,
+      digest: receipt.digest,
+      hasChanges: true,
+      predecessorDrift: { qualifiedRef: "v2026.8.1", currentRef: "v2026.8.1-1" },
+      status: "checked",
+    });
+    expect(() => validate("@v2026.8.1")).toThrow(`require acknowledgement digest ${reviewed}`);
+    expect(() => validate(`${reviewed}@v2026.8.1-1`)).toThrow(
+      "names v2026.8.1-1, but the evidence compares against v2026.8.1",
+    );
+    expect(() => validate(`${reviewed}@`)).toThrow("must be <digest> or <digest>@<tag>");
+    expect(validate(`${reviewed}@v2026.8.1`, "v2026.8.1")).not.toHaveProperty("predecessorDrift");
   });
 
   it("requires the selected channel's predecessor and acknowledgement", () => {

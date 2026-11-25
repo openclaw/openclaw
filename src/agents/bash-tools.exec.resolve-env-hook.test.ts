@@ -1,5 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  captureAgent,
+  makeCall,
+  makeTool,
+} from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
@@ -8,8 +14,10 @@ import {
   environmentSandbox,
   sandboxExecSpec,
 } from "./bash-tools.exec-env.test-support.js";
+import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 declare module "../plugins/hook-types.js" {
@@ -20,6 +28,11 @@ declare module "../plugins/hook-types.js" {
 
 const sessionKey = "agent:main:telegram:chat-1";
 const channelContext = () => ({ sender: { id: "ou_1", unionId: "on_1" }, chat: { id: "oc_1" } });
+const messageContext = {
+  sessionKey,
+  sessionId: "session-1",
+  messageProvider: "telegram",
+};
 
 const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
@@ -81,6 +94,10 @@ function installResolveExecEnvHook(result: Record<string, string>) {
     runResolveExecEnv: vi.fn(async () => result),
   };
 }
+function expectNoExecution() {
+  expect(mocks.gatewayParams).toHaveLength(0);
+  expect(mocks.spawnInputs).toHaveLength(0);
+}
 
 function executeWrapped(
   tool: AnyAgentTool,
@@ -138,10 +155,8 @@ it("merges filtered plugin env into gateway execution and approval-visible reque
   });
 
   const tool = createTestExecTool({
+    ...messageContext,
     host: "auto",
-    sessionKey,
-    sessionId: "session-1",
-    messageProvider: "telegram",
     currentChannelId: "chat-1",
     channelContext: channelContext(),
   });
@@ -152,16 +167,10 @@ it("merges filtered plugin env into gateway execution and approval-visible reque
   });
 
   expect(mocks.hookRunner?.runResolveExecEnv).toHaveBeenCalledWith(
+    { sessionKey, toolName: "exec", host: "gateway" },
     {
-      sessionKey,
-      toolName: "exec",
-      host: "gateway",
-    },
-    {
+      ...messageContext,
       agentId: "main",
-      sessionKey,
-      sessionId: "session-1",
-      messageProvider: "telegram",
       channelId: "chat-1",
       channelContext: channelContext(),
     },
@@ -184,7 +193,7 @@ it("merges filtered plugin env into gateway execution and approval-visible reque
 
 it("retains plugin env when prepared arguments are prepared again", async () => {
   installResolveExecEnvHook({ PLUGIN_SAFE: "yes" });
-  const tool: AnyAgentTool = createExecTool({ host: "node", security: "full", ask: "off" });
+  const tool: AnyAgentTool = createTestExecTool({ host: "node" });
   const prepare = expectDefined(tool.prepareBeforeToolCallParams, "exec preparation");
   const prepared = await prepare({ command: "echo ok", host: "auto" }, {});
   const preparedAgain = await prepare(prepared, {});
@@ -216,10 +225,7 @@ it("does not validate backend sandbox workdirs before before_tool_call veto", as
   const validateWorkdir = vi.fn(async (workdir: string) => workdir);
   mocks.hookRunner = {
     hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
-    runBeforeToolCall: vi.fn(async () => ({
-      block: true,
-      blockReason: "blocked by test hook",
-    })),
+    runBeforeToolCall: vi.fn(async () => ({ block: true, blockReason: "blocked by test hook" })),
   };
   const result = await executeWrapped(backendTool({ validateWorkdir }), {
     workdir: "/remote/workspace/generated",
@@ -231,8 +237,7 @@ it("does not validate backend sandbox workdirs before before_tool_call veto", as
   });
   expect(mocks.hookRunner.runBeforeToolCall!).toHaveBeenCalledOnce();
   expect(validateWorkdir).not.toHaveBeenCalled();
-  expect(mocks.gatewayParams).toHaveLength(0);
-  expect(mocks.spawnInputs).toHaveLength(0);
+  expectNoExecution();
 });
 
 it("defers resolve_exec_env for backend sandboxes until workdir validation succeeds", async () => {
@@ -246,8 +251,7 @@ it("defers resolve_exec_env for backend sandboxes until workdir validation succe
   expect(hooks.runBeforeToolCall).toHaveBeenCalledOnce();
   expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/missing");
   expect(hooks.runResolveExecEnv).not.toHaveBeenCalled();
-  expect(mocks.gatewayParams).toHaveLength(0);
-  expect(mocks.spawnInputs).toHaveLength(0);
+  expectNoExecution();
 });
 
 it("preserves hook context when backend sandbox env resolution is deferred", async () => {
@@ -275,18 +279,36 @@ it("preserves hook context when backend sandbox env resolution is deferred", asy
   expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
   expect(hooks.runBeforeToolCall).toHaveBeenCalledOnce();
   expect(hooks.runResolveExecEnv).toHaveBeenCalledOnce();
-  expect(hooks.runResolveExecEnv.mock.calls[0]?.[0]).toMatchObject({
-    sessionKey: "agent:ctx-agent:telegram:chat-2",
-    toolName: "exec",
-    host: "sandbox",
-  });
-  expect(hooks.runResolveExecEnv.mock.calls[0]?.[1]).toMatchObject({
-    agentId: "ctx-agent",
-    sessionKey: "agent:ctx-agent:telegram:chat-2",
-    sessionId: "ctx-session",
-    channelId: "ctx-channel",
-  });
+  expect(hooks.runResolveExecEnv.mock.calls[0]).toMatchObject([
+    { sessionKey: "agent:ctx-agent:telegram:chat-2", toolName: "exec", host: "sandbox" },
+    {
+      agentId: "ctx-agent",
+      sessionKey: "agent:ctx-agent:telegram:chat-2",
+      sessionId: "ctx-session",
+      channelId: "ctx-channel",
+    },
+  ]);
   expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({ PLUGIN_SAFE: "yes" });
+});
+
+it.each([
+  [undefined, undefined, "/remote/workspace"],
+  [{ HOME: "/configured-home" }, undefined, "/configured-home"],
+  [{ HOME: "/configured-home" }, { HOME: "/requested-home" }, "/requested-home"],
+])("keeps sandbox HOME stable across task workdirs (%j, %j)", async (env, requested, home) => {
+  const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(async (params) =>
+    sandboxExecSpec(params.command),
+  );
+  const tool = backendTool({
+    env,
+    validateWorkdir: async (workdir) => workdir,
+    buildExecSpec,
+  });
+  for (const task of ["task-a", "task-b"]) {
+    const workdir = `/remote/workspace/.openclaw/tmp/${task}`;
+    await tool.execute(task, { command: "pwd", workdir, env: requested });
+    expect(buildExecSpec.mock.lastCall?.[0]).toMatchObject({ workdir, env: { HOME: home } });
+  }
 });
 
 it("lets lazy before_tool_call see invalid workdirs before failing unchanged params", async () => {
@@ -317,17 +339,17 @@ it("lets lazy before_tool_call see invalid workdirs before failing unchanged par
   expect(text).toContain('workdir "   " is unavailable or not a directory');
   expect(hooks.runBeforeToolCall).toHaveBeenCalledTimes(1);
   expect(hooks.runResolveExecEnv).not.toHaveBeenCalled();
-  expect(mocks.gatewayParams).toHaveLength(0);
-  expect(mocks.spawnInputs).toHaveLength(0);
+  expectNoExecution();
 });
 
 it.each([undefined, "/remote/node/workspace"])(
   "reroutes exec and recomputes plugin env for node workdir %s",
   async (workdir) => {
     const hooks = installWrappedHooks(
-      vi.fn(async (event: { params: Record<string, unknown> }) => ({
-        params: { ...event.params, host: "node" },
-      })),
+      vi.fn(async (event: { params: Record<string, unknown> }) => {
+        preparing();
+        return { params: { ...event.params, host: "node" } };
+      }),
       vi.fn(async (event: { host: "gateway" | "sandbox" | "node" }) =>
         event.host === "node" ? { NODE_PLUGIN_SAFE: "node" } : { GATEWAY_PLUGIN_SAFE: "gateway" },
       ),
@@ -338,10 +360,46 @@ it.each([undefined, "/remote/node/workspace"])(
         ? { host: "auto", sessionKey }
         : { host: "auto", agentId: "policy-agent", sessionKey: "global" },
     );
-    await executeWrapped(tool, {
-      env: { REQUEST_SAFE: "request" },
-      ...(workdir ? { workdir } : {}),
+    const release = createDeferred();
+    const sibling = {
+      ...makeTool("safe"),
+      interruptible: true as const,
+      execute: vi.fn(async (_id: string, _args: unknown, _signal?: AbortSignal) => {
+        await release.promise;
+        return { content: [], details: {} };
+      }),
+    };
+    const definition = expectDefined(
+      toToolDefinitions([tool], { agentId: "main", sessionKey })[0],
+      "exec",
+    );
+    const { agent } = captureAgent([sibling, wrapToolDefinition(definition)], {}, [
+      [
+        makeCall("safe"),
+        {
+          ...makeCall("exec"),
+          arguments: {
+            command: "echo ok",
+            env: { REQUEST_SAFE: "request" },
+            ...(workdir ? { workdir } : {}),
+          },
+        },
+      ],
+      [{ type: "text", text: "done" }],
+    ]);
+    const preparing = vi.fn(() => agent.getToolInterruptionStatus().blocked);
+    const sendNow = vi.fn(() => agent.interruptTools());
+    const runNode = vi.mocked(executeNodeHostCommand).getMockImplementation();
+    vi.mocked(executeNodeHostCommand).mockImplementationOnce(async (params) => {
+      sendNow();
+      release.resolve();
+      return expectDefined(runNode, "node fixture")(params);
     });
+    await agent.prompt("run");
+    const nodeCall = { toolCallId: "exec", toolName: "exec" };
+    expect(preparing).toHaveReturnedWith(expect.arrayContaining([nodeCall]));
+    expect(sendNow).toHaveReturnedWith({ status: "blocked", tools: [nodeCall] });
+    expect(sibling.execute.mock.calls[0]?.[2]?.aborted).toBe(false);
 
     expect(hooks.runBeforeToolCall).toHaveBeenCalledOnce();
     const hosts = workdir ? ["node"] : ["gateway", "node"];
@@ -360,8 +418,7 @@ it.each([undefined, "/remote/node/workspace"])(
     expect(mocks.nodeHostParams[0]?.requestedEnv).not.toHaveProperty("GATEWAY_PLUGIN_SAFE");
     if (workdir) {
       expect(mocks.nodeHostParams[0]?.workdir).toBe(workdir);
-      expect(mocks.gatewayParams).toHaveLength(0);
-      expect(mocks.spawnInputs).toHaveLength(0);
+      expectNoExecution();
     }
   },
 );

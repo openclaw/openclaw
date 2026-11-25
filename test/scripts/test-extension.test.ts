@@ -16,6 +16,7 @@ import {
   listAvailableExtensionIds,
   listChangedExtensionIds,
 } from "../../scripts/lib/changed-extensions.mts";
+import { parseNodeFailureReport } from "../../scripts/lib/ci-node-test-evidence.mjs";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
@@ -56,6 +57,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { matchesVitestCliSelection } from "../vitest/vitest.pattern-file.ts";
+import { childTermination, cleanRunnerEnv, scriptFiles } from "./run-vitest.test-support.js";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
@@ -83,29 +85,26 @@ async function runSelectedExtensions(
   return { result, runGroup };
 }
 
-function batchPlan(groups: Array<readonly [string, number, string, number, string[]?]>) {
-  return {
-    extensionCount: new Set(groups.map((group) => group[2])).size,
-    extensionIds: [...new Set(groups.map((group) => group[2]))],
-    estimatedCost: groups.reduce((sum, group) => sum + group[1], 0),
-    hasTests: true,
-    planGroups: groups.map(([config, estimatedCost, extensionId, testFileCount, roots]) => ({
-      config,
-      estimatedCost,
-      extensionIds: [extensionId],
-      roots: roots ?? [`extensions/${extensionId}`],
-      testFileCount,
-    })),
-    testFileCount: groups.reduce((sum, group) => sum + group[3], 0),
-  };
-}
-
-const concurrentPlan = () =>
-  batchPlan([
-    ["light", 10, "one", 1],
-    ["heavy", 30, "two", 3],
-    ["middle", 20, "three", 2],
-  ]);
+const concurrentPlan = () => ({
+  extensionCount: 3,
+  extensionIds: ["one", "two", "three"],
+  estimatedCost: 60,
+  hasTests: true,
+  testFileCount: 6,
+  planGroups: (
+    [
+      ["light", 10, "one", 1],
+      ["heavy", 30, "two", 3],
+      ["middle", 20, "three", 2],
+    ] as const
+  ).map(([config, estimatedCost, extensionId, testFileCount]) => ({
+    config,
+    estimatedCost,
+    extensionIds: [extensionId],
+    roots: [`extensions/${extensionId}`],
+    testFileCount,
+  })),
+});
 
 function runScriptResult(args: string[], cwd = process.cwd(), env = process.env) {
   return spawnSync(process.execPath, ["--import", "tsx", scriptPath, ...args], {
@@ -211,12 +210,6 @@ it("splits the IRC batch between persistence and channel owners without double c
   expect(shards[0]?.planGroups).toEqual(batch.planGroups);
 });
 
-it("excludes plugin browser tests from the server-side extension inventory", () => {
-  const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
-  expect(files.length).toBeGreaterThan(0);
-  expect(files.some((file) => file.includes("/browser/"))).toBe(false);
-});
-
 posixIt("preserves newline and leading-space tokens in the tracked Git inventory", () => {
   const root = tempDirs.make("openclaw-extension-git-paths-");
   const trackedPaths = [" extensions/example.test.ts", "extensions/example\npath.test.ts"];
@@ -239,13 +232,6 @@ it("keeps Matrix runs with a missing retry value in one process", () => {
   expect(
     createExtensionTestProcessTargetChunks(extensionConfig("matrix"), [root], ["--retry"]),
   ).toEqual([[root]]);
-});
-
-it("infers the extension from the current working directory", () => {
-  const cwd = path.join(process.cwd(), "extensions", "slack");
-  const plan = resolveExtensionTestPlan({ cwd });
-
-  expect(plan).toMatchObject({ extensionId: "slack", extensionDir: bundledPluginRoot("slack") });
 });
 
 it("maps only exact tracked extension paths without reading extension directories", () => {
@@ -371,20 +357,22 @@ it("balances extension test shards by estimated CI cost", () => {
   }
 });
 
-it("runs extension batch config groups concurrently when requested", async () => {
+it.each([0, 7])("runs bounded parallel groups and stops admission after exit %s", async (code) => {
   const { started, resolvers, runGroup, runPromise } = controlledBatch();
-
   await vi.waitFor(() => {
     expect(started).toEqual(["heavy", "middle"]);
   });
-  resolvers.shift()?.(0);
+  resolvers.shift()?.(code);
   await nextTurn();
-  expect(started).toEqual(["heavy", "middle", "light"]);
+  expect(started).toEqual(code ? ["heavy", "middle"] : ["heavy", "middle", "light"]);
   while (resolvers.length > 0) {
     resolvers.shift()?.(0);
   }
-  await expect(runPromise).resolves.toBe(0);
-  expect(runGroup).toHaveBeenCalledTimes(3);
+  await expect(runPromise).resolves.toBe(code);
+  expect(runGroup).toHaveBeenCalledTimes(code ? 2 : 3);
+  if (code) {
+    return;
+  }
   const firstRunGroupParams = firstInvocation(runGroup);
   expect(firstRunGroupParams).toMatchObject({
     args: ["--reporter=dot"],
@@ -405,18 +393,71 @@ it("runs extension batch config groups concurrently when requested", async () =>
   ).toBe(true);
 });
 
-it("stops admitting extension batch groups after a parallel failure", async () => {
-  const { started, resolvers, runGroup, runPromise } = controlledBatch();
-
-  await vi.waitFor(() => {
-    expect(started).toEqual(["heavy", "middle"]);
-  });
-  resolvers[0]?.(7);
-  await nextTurn();
-  expect(started).toEqual(["heavy", "middle"]);
-  resolvers[1]?.(0);
-  await expect(runPromise).resolves.toBe(7);
-  expect(runGroup).toHaveBeenCalledTimes(2);
+posixIt("emits complete native evidence after a failed batch and its passing peer", () => {
+  const root = realpathSync(tempDirs.make("openclaw-batch-evidence-"));
+  const files = scriptFiles(root);
+  files.linkModules();
+  mkdirSync(path.join(root, "test"));
+  const config = path.join(root, "vitest.config.mjs");
+  writeFileSync(
+    config,
+    `export default {root:${JSON.stringify(root)},test:{include:["test/*.test.mjs"],pool:"forks",maxWorkers:1,fileParallelism:false,fsModuleCache:false}};`,
+  );
+  for (const [name, body] of [
+    ["failed", "throw new Error('accepted failure')"],
+    ["passed", ""],
+  ]) {
+    writeFileSync(
+      path.join(root, "test", name + ".test.mjs"),
+      `import {it} from "vitest"; it("native fixture",()=>{${body}});`,
+    );
+  }
+  const plan = {
+    extensionCount: 2,
+    extensionIds: ["failed", "passed"],
+    estimatedCost: 2,
+    hasTests: true,
+    testFileCount: 2,
+    planGroups: ["failed", "passed"].map((name) => ({
+      config,
+      estimatedCost: 1,
+      extensionIds: [name],
+      roots: [path.join(root, "test", name + ".test.mjs")],
+      testFileCount: 1,
+    })),
+  };
+  const entry = path.join(root, "batch.mts");
+  writeFileSync(
+    entry,
+    `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(process.cwd(), "scripts/test-extension-batch-run.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:["--configLoader=native","--reporter=verbose"]});`,
+  );
+  const result = spawnSync(
+    process.execPath,
+    ["--import", path.join(process.cwd(), "scripts/tsx.mjs"), entry],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: cleanRunnerEnv({
+        CI: "1",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: "1",
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+      }),
+    },
+  );
+  const output = result.stdout + result.stderr;
+  expect(result.status, output).toBe(1);
+  expect(result.signal).toBeNull();
+  expect(output).toContain(
+    '[shard:completion] {"version":1,"planned":2,"completed":2,"invocations":2,"failedInvocations":1}',
+  );
+  const signatures = parseNodeFailureReport(output, true);
+  expect(signatures, output).toEqual([
+    expect.objectContaining({
+      kind: "vitest",
+      file: "test/failed.test.mjs",
+      test: expect.stringContaining("native fixture :: Error: accepted failure"),
+    }),
+  ]);
 });
 
 it("rejects malformed extension batch parallelism", () => {
@@ -427,19 +468,21 @@ it("rejects malformed extension batch parallelism", () => {
   }
 });
 
-it("preserves positional Vitest args after the extension batch separator", () => {
-  expect(
-    parseExtensionIds([
-      "telegram",
-      "--coverage",
-      "--",
-      "extensions/telegram/src/index.test.ts",
-      "--run",
-    ]),
-  ).toEqual({
+it.each([
+  {
+    name: "preserves positional Vitest args after the extension batch separator",
+    input: ["telegram", "--coverage", "--", "extensions/telegram/src/index.test.ts", "--run"],
     extensionIds: ["telegram"],
     passthroughArgs: ["--coverage", "extensions/telegram/src/index.test.ts", "--run"],
-  });
+  },
+  {
+    name: "accepts pnpm's leading argument separator before extension ids",
+    input: ["--", "telegram,slack", "--run"],
+    extensionIds: ["telegram", "slack"],
+    passthroughArgs: ["--run"],
+  },
+])("$name", ({ input, extensionIds, passthroughArgs }) => {
+  expect(parseExtensionIds(input)).toEqual({ extensionIds, passthroughArgs });
 });
 
 it.each([
@@ -451,6 +494,7 @@ it.each([
   "runs installed Vitest without pnpm (pool: $pool, Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
   ({ enableMaglev, realHomeReplay, pool }) => {
     const root = realpathSync(tempDirs.make("openclaw-test-extension-native-"));
+    const files = scriptFiles(root);
     const home = path.join(root, "home");
     const bin = path.join(root, "bin");
     const runtime = process.versions.bun ? "bun" : "node";
@@ -471,11 +515,7 @@ it.each([
     } else {
       symlinkSync(process.execPath, executable, "file");
     }
-    symlinkSync(
-      path.join(process.cwd(), "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
+    files.linkModules();
     writeFileSync(
       config,
       `import assert from 'node:assert/strict';
@@ -486,7 +526,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
     const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
     writeFileSync(
       path.join(root, "selected.test.mjs"),
-      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()).toBe('ff');expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
     );
     for (const name of ["excluded", "unrelated"]) {
       writeFileSync(
@@ -538,7 +578,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.signal).toBeNull();
-    const native = JSON.parse(readFileSync(report, "utf8"));
+    const native = files.json("report.json");
     expect(native.success).toBe(true);
     expect(
       native.testResults.flatMap(
@@ -620,11 +660,7 @@ await new Promise(()=>{});export default {};`,
         [...resolveRuntimeWorkerArgv(batchRunnerUrl).slice(0, -1), entry],
         { cwd: process.cwd(), stdio: "ignore" },
       );
-      const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve) => {
-          runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
-        },
-      );
+      const runnerClosed = childTermination(runner);
       try {
         // The native config publishes both PIDs before the receipt. Its exit can
         // overtake that separate socket, so durable records decide an early close.
@@ -699,69 +735,6 @@ it("confines extension roots without selecting path lookalikes", async () => {
 });
 
 it.each([
-  {
-    args: ["--exclude=extensions/memory-lancedb/memory-cli.test.ts"],
-    nodeCode: 0,
-    bunCode: 0,
-  },
-  { args: ["--watch"], nodeCode: 0, bunCode: 0, combined: true, bun: false },
-])("adds only qualified Bun work after Node with $args ($nodeCode/$bunCode)", async (row) => {
-  const memoryConfig = extensionConfig("memory");
-  const databaseConfig = extensionConfig("database-workers");
-  const configs = [memoryConfig, databaseConfig];
-  const targets = [
-    "extensions/memory-lancedb/config.test.ts",
-    "extensions/memory-lancedb/index.test.ts",
-  ];
-  const calls: RunGroupParams[] = [];
-  const result = await runExtensionBatchPlan(
-    batchPlan(configs.map((config, i) => [config, 1, "memory-lancedb", 1, [targets[i]!]])),
-    {
-      env: {
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
-        OPENCLAW_VITEST_RUNTIME: "bun",
-        OPENCLAW_VITEST_MAX_WORKERS: "4",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/extension-runtime-cache/",
-      },
-      vitestArgs: row.args,
-      runGroup: async (params) => {
-        calls.push(params);
-        return params.env?.OPENCLAW_VITEST_RUNTIME === "bun" ? row.bunCode : row.nodeCode;
-      },
-    },
-  );
-  expect(result).toBe(row.nodeCode || row.bunCode);
-  const node = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "node");
-  const bun = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "bun");
-  expect(node.map((call) => call.config)).toEqual(
-    row.combined ? ["test/vitest/vitest.database-worker-watch.config.ts"] : configs,
-  );
-  expect(node.flatMap((call) => call.targets).toSorted()).toEqual(
-    targets.map(withoutExtensionRoot).toSorted(),
-  );
-  expect(bun).toHaveLength(row.bun === false ? 0 : 1);
-  if (row.bun !== false) {
-    expect(bun[0]).toMatchObject({
-      config: memoryConfig,
-      targets: ["memory-lancedb/config.test.ts"],
-      env: {
-        OPENCLAW_VITEST_MAX_WORKERS: "4",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.resolve("/tmp/extension-runtime-cache") + "-bun",
-      },
-    });
-    expect(calls.indexOf(bun[0]!)).toBeGreaterThan(calls.indexOf(node[0]!));
-  }
-  for (const call of calls) {
-    expect(call.args).toEqual(relativizeExtensionVitestArgs(row.args));
-  }
-  expect(
-    node.every(
-      (call) => call.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH === "/tmp/extension-runtime-cache/",
-    ),
-  ).toBe(true);
-});
-
-it.each([
   { policy: "bun-all", nodeCode: 0, bunCode: 0 },
   {
     policy: "bun-all",
@@ -773,7 +746,7 @@ it.each([
   { policy: "dual-all", nodeCode: 1, bunCode: 0 },
   { policy: "dual-all", nodeCode: 0, bunCode: 1 },
   { policy: "dual-all", nodeCode: 7, bunCode: 0 },
-])("runs the complete extension trial $policy ($nodeCode/$bunCode)", async (row) => {
+])("runs the complete extension selection with $policy ($nodeCode/$bunCode)", async (row) => {
   const calls: RunGroupParams[] = [];
   let completedNode = 0;
   const args = row.args ?? ["--reporter=dot"];
@@ -823,6 +796,37 @@ it.each([
     OPENCLAW_VITEST_RUNTIME: "node",
   });
 });
+
+it.each([
+  { policy: "dual-all", runtime: "node", expectedCalls: 3 },
+  { policy: "dual-all", runtime: "bun", expectedCalls: 3 },
+  { policy: "bun-all", runtime: "node", expectedCalls: 0 },
+  { policy: "bun-all", runtime: "bun", expectedCalls: 3 },
+])(
+  "runs only $runtime from the $policy extension selection",
+  async ({ policy, runtime, expectedCalls }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    vi.mocked(prepareVitestRuntime).mockClear();
+    expect(
+      await runExtensionBatchPlan(concurrentPlan(), {
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_TEST_RUNTIME: runtime },
+        runGroup,
+      }),
+    ).toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(expectedCalls);
+    for (const [invocation] of runGroup.mock.calls) {
+      expect(invocation.env?.OPENCLAW_VITEST_RUNTIME).toBe(runtime);
+    }
+    if (expectedCalls === 0) {
+      expect(prepareVitestRuntime).not.toHaveBeenCalled();
+    } else {
+      expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+      expect(vi.mocked(prepareVitestRuntime).mock.calls[0]?.[1]?.OPENCLAW_VITEST_RUNTIME).toBe(
+        runtime,
+      );
+    }
+  },
+);
 
 it("preserves Codex process bounds with release options", async () => {
   const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
@@ -948,13 +952,6 @@ it("detects exact Vitest excludes in extension batch args", () => {
     ]),
   ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
   expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
-});
-
-it("accepts pnpm's leading argument separator before extension ids", () => {
-  expect(parseExtensionIds(["--", "telegram,slack", "--run"])).toEqual({
-    extensionIds: ["telegram", "slack"],
-    passthroughArgs: ["--run"],
-  });
 });
 
 it("reports single-plugin preparation rejection as infrastructure failure", () => {

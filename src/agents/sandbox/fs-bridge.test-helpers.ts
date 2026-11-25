@@ -123,10 +123,6 @@ export function mockContainerCanonicalPaths(paths: Readonly<Record<string, strin
   });
 }
 
-export function findCallByScriptFragment(fragment: string) {
-  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
-}
-
 export function findCallByDockerArg(position: number, value: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerArg(args, position) === value);
 }
@@ -138,18 +134,8 @@ export function dockerExecResult(stdout: string) {
 export function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
     overrides,
-    dockerOverrides: { image: "openclaw-sandbox:bookworm-slim", containerPrefix: "openclaw-sbx-" },
+    dockerOverrides: { image: "openclaw-sandbox:trixie-slim", containerPrefix: "openclaw-sbx-" },
   });
-}
-
-export async function createSeededSandboxFsBridge(stateDir: string, rootContents = "hello") {
-  const workspaceDir = path.join(stateDir, "workspace");
-  await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-  await fs.writeFile(path.join(workspaceDir, "from.txt"), rootContents, "utf8");
-  const bridge = createSandboxFsBridge({
-    sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-  });
-  return { workspaceDir, bridge };
 }
 
 export async function withTempDir<T>(

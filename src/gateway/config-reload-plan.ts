@@ -21,8 +21,6 @@ export type GatewayReloadPlan = {
   refreshHooksPolicy?: boolean;
   restartGmailWatcher: boolean;
   restartCron: boolean;
-  restartHeartbeat: boolean;
-  reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   /** Canonical config/install deltas that require a plugin replacement. */
   reloadPluginPaths?: string[];
@@ -35,7 +33,6 @@ export type GatewayReloadPlan = {
     waitForDrain?: boolean;
     drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
-    expectedInstallHashes?: Readonly<Record<string, string>>;
   };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
@@ -51,8 +48,6 @@ const RELOAD_ACTIONS = [
   "refreshHooksPolicy",
   "restartGmailWatcher",
   "restartCron",
-  "restartHeartbeat",
-  "reconcileSystemJobs",
   "reloadPlugins",
   "disposeMcpRuntimes",
 ] as const;
@@ -143,8 +138,6 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
 }
 
 const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
-  "restartHeartbeat",
-  "reconcileSystemJobs",
   "refreshHooksPolicy",
   "reloadInternalHooks",
 ];
@@ -155,6 +148,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
+  // Gateway tools capture this deployment policy when they are assembled.
+  { prefixes: ["tools.gatewayPolicy"], kind: "restart" },
   {
     // These policies use the published snapshot or an existing committed owner;
     // listener and service replacement requires an explicit action below.
@@ -164,6 +159,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.tools",
       "gateway.uploads",
       "gateway.cliAgents",
+      "gateway.sessionControl",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
@@ -174,7 +170,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
-      "gateway.controlUi.experimental.claws",
+      "gateway.controlUi.experimental.templates",
       "gateway.controlUi.experimental.chatBubbles",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
@@ -196,7 +192,9 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "models",
       "desktop.host",
+      "gateway.openclawId",
       "cloudWorkers",
     ],
     kind: "hot",
@@ -208,18 +206,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reloadInternalHooks"],
   },
   { prefixes: ["hooks"], kind: "hot", actions: ["reloadHooks"] },
-  {
-    prefixes: [
-      "agents.defaults.heartbeat",
-      "agents.defaults.models",
-      "agents.defaults.modelPolicy",
-      "agents.defaults.model",
-      "models",
-      "agent.heartbeat",
-    ],
-    kind: "hot",
-    actions: ["restartHeartbeat", "reconcileSystemJobs"],
-  },
   {
     prefixes: ["agents.entries"],
     kind: "hot",
@@ -240,6 +226,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reloadPlugins"],
   },
+  // Bundled plugins activated by this path (openclaw-id-access) load only through plugin selection.
+  { prefixes: ["gateway.openclawId.enabled"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
   { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
@@ -296,6 +284,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "update.checkOnStart",
       "update.channel",
       "update.auto.enabled",
+      "update.auto.schedule",
       "telemetry.enabled",
       "telemetry.consentedAt",
     ],
@@ -506,7 +495,7 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
-  const roleModelPolicyOnly =
+  const roleLivePolicyOnly =
     haveSameOperatorRoleSourcePolicies(
       options.previousConfig?.gateway?.roles,
       options.candidateConfig?.gateway?.roles,
@@ -526,8 +515,6 @@ export function buildGatewayReloadPlan(
     reloadInternalHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
-    reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     restartServices: new Set(),
@@ -538,11 +525,12 @@ export function buildGatewayReloadPlan(
 
   for (const path of changedPaths) {
     if (
-      roleModelPolicyOnly &&
+      roleLivePolicyOnly &&
       matchesReloadPrefix(path, "gateway.roles") &&
       !forceChangedPaths.has(path)
     ) {
-      // The committed snapshot notifies model bindings without replacing permitted runtimes.
+      // The committed snapshot notifies model bindings without replacing permitted runtimes;
+      // project grants are read live from it.
       plan.noopPaths.push(path);
       continue;
     }

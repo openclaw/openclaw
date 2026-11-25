@@ -1,5 +1,5 @@
 // Terminal Core tests cover decorative emoji behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decorativeEmoji,
   decorativePrefix,
@@ -8,41 +8,47 @@ import {
 } from "./decorative-emoji.js";
 
 describe("decorative emoji terminal helpers", () => {
+  const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    for (const key of ["TERM_PROGRAM", "WT_SESSION", "LC_ALL", "LC_CTYPE"]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("TERM", "xterm-256color");
+    vi.stubEnv("LANG", "en_US.UTF-8");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    if (ttyDescriptor) {
+      Object.defineProperty(process.stdout, "isTTY", ttyDescriptor);
+    } else {
+      delete (process.stdout as { isTTY?: boolean }).isTTY;
+    }
+  });
+
   it("disables decorative emoji without a TTY", () => {
-    expect(supportsDecorativeEmoji({ env: { TERM: "xterm-256color" }, isTty: false })).toBe(false);
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    expect(supportsDecorativeEmoji()).toBe(false);
   });
 
   it("formats decorative emoji prefixes conservatively", () => {
-    const badTerminal = {
-      env: { TERM: "xterm-256color", LANG: "en_US.UTF-8" },
-      isTty: true,
-      platform: "linux" as const,
-    };
-    const goodTerminal = {
-      env: { TERM_PROGRAM: "ghostty", LANG: "en_US.UTF-8" },
-      isTty: true,
-    };
-
-    expect(decorativeEmoji("🦞", badTerminal)).toBe("");
-    expect(decorativePrefix("🦞", "OpenClaw", badTerminal)).toBe("OpenClaw");
-    expect(decorativePrefix("🦞", "OpenClaw", goodTerminal)).toBe("🦞 OpenClaw");
+    expect(decorativeEmoji("🦞")).toBe("");
+    expect(decorativePrefix("🦞", "OpenClaw")).toBe("OpenClaw");
+    vi.stubEnv("TERM_PROGRAM", "ghostty");
+    expect(decorativePrefix("🦞", "OpenClaw")).toBe("🦞 OpenClaw");
   });
 
   it("strips decorative emoji from curated terminal text only when unsupported", () => {
-    const badTerminal = {
-      env: { TERM: "xterm-256color", LANG: "en_US.UTF-8" },
-      isTty: true,
-      platform: "linux" as const,
-    };
-    const goodTerminal = {
-      env: { TERM_PROGRAM: "iTerm.app", LANG: "en_US.UTF-8" },
-      isTty: true,
-    };
-
-    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞", badTerminal)).toBe(
+    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞")).toBe(
       "The lobster in your shell.",
     );
-    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞", goodTerminal)).toBe(
+    vi.stubEnv("TERM_PROGRAM", "iTerm.app");
+    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞")).toBe(
       "The lobster in your shell. 🦞",
     );
   });

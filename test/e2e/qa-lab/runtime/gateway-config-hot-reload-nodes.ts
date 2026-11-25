@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
-import path from "node:path";
 import { WebSocket } from "ws";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { rawDataToString } from "../../../../packages/gateway-client/src/websocket-data.js";
@@ -136,7 +135,7 @@ export async function proveHotReloadNodePolicies({
   const originalDeny = original?.commands?.deny ?? [];
   const baseAllow = [...new Set([...originalAllow, ECHO_COMMAND])];
   const identity = loadOrCreateDeviceIdentity({
-    path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+    env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
     identityKey: "runtime-policy-node",
   });
   let node: GatewayClient | undefined;

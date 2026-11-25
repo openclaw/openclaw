@@ -1,6 +1,5 @@
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import {
-  managementRequestSchema,
   parseWindowsManagementResponse,
   WINDOWS_MANAGEMENT_LIMIT,
   type WindowsManagementRequest,
@@ -9,14 +8,12 @@ import {
 
 /** No unverified transport output is ever projected as registration state. */
 export class WindowsManagementTransportError extends Error {
-  readonly outcome: "unknown" | "not-started";
   constructor(started: boolean) {
     super(
       started
         ? "Windows setup outcome is unknown. Inspect the same local context before retrying; no fallback was attempted."
         : "Windows bootstrap management is unavailable. Install a compatible helper; no fallback was attempted.",
     );
-    this.outcome = started ? "unknown" : "not-started";
   }
 }
 export async function runWindowsManagement(
@@ -24,8 +21,7 @@ export async function runWindowsManagement(
   request: WindowsManagementRequest,
   options: { signal?: AbortSignal } = {},
 ): Promise<WindowsManagementResponse> {
-  const admitted = managementRequestSchema.parse(request);
-  const input = JSON.stringify(admitted);
+  const input = JSON.stringify(request);
   if (Buffer.byteLength(input) > WINDOWS_MANAGEMENT_LIMIT) {
     throw new WindowsManagementTransportError(false);
   }
@@ -56,7 +52,7 @@ export async function runWindowsManagement(
     throw new WindowsManagementTransportError(true);
   }
   try {
-    return parseWindowsManagementResponse(result.stdout, result.code, admitted);
+    return parseWindowsManagementResponse(result.stdout, result.code, request);
   } catch {
     throw new WindowsManagementTransportError(true);
   }

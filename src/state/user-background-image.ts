@@ -63,14 +63,8 @@ export async function normalizeUserBackgroundImage(imageBase64: string, signal?:
     maxBytes: USER_BACKGROUND_MAX_OUTPUT_BYTES,
     search: { maxSide: [2560, 1920, 1280], quality: [85, 70] },
   });
-  if (
-    image.data.byteLength === 0 ||
-    image.data.byteLength > USER_BACKGROUND_MAX_OUTPUT_BYTES ||
-    image.width > 2560 ||
-    image.height > 2560 ||
-    image.format !== "jpeg" ||
-    image.metadata !== "stripped"
-  ) {
+  // The byte budget is a search target, not a guarantee.
+  if (image.data.byteLength > USER_BACKGROUND_MAX_OUTPUT_BYTES) {
     throw new UserBackgroundInputError("Image could not fit the 2 MiB background limit");
   }
   return { image: image.data, width: image.width, height: image.height };

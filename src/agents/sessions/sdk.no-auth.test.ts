@@ -58,7 +58,7 @@ it.each(["none", undefined] as const)(
       systemPrompt: "Synthetic no-auth session",
       thinkingLevel: "off",
       tools: [],
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
     });

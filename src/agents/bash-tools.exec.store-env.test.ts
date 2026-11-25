@@ -1,3 +1,4 @@
+import os from "node:os";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
@@ -27,6 +28,7 @@ const { mocks, EGRESS_ENV } = vi.hoisted(() => {
       GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
     },
     mocks: {
+      shellPath: vi.fn<() => string | null>(() => null),
       egressActive: false,
       gatewayParams: [] as CapturedEnvironment[],
       nodeHostParams: [] as CapturedEnvironment[],
@@ -54,9 +56,10 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
 }));
 
 // mock-isolation: Keep the host login shell out of secret-store environment fixtures.
-vi.mock("../infra/shell-env.js", async () =>
-  (await import("./bash-tools.exec-env.test-support.js")).shellEnvironmentMock(),
-);
+vi.mock("../infra/shell-env.js", async () => ({
+  ...(await import("./bash-tools.exec-env.test-support.js")).shellEnvironmentMock(),
+  getShellPathFromLoginShell: mocks.shellPath,
+}));
 // mock-isolation: Capture Gateway execution parameters without running host commands.
 vi.mock("./bash-tools.exec-host-gateway.js", async () =>
   (await import("./bash-tools.exec-env.test-support.js")).gatewayEnvironmentMock(mocks),
@@ -140,6 +143,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  mocks.shellPath.mockReset().mockReturnValue(null);
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-exec-store-env-"));
   vi.stubEnv("AWS_REGION", undefined);
   mocks.egressActive = false;
@@ -147,6 +151,97 @@ beforeEach(() => {
   mocks.nodeHostParams.length = 0;
   mocks.spawnInputs.length = 0;
   mocks.proxyBindings.length = 0;
+});
+
+type ExecParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
+const runGateway = (params: ExecParams) =>
+  createExecTool({ host: "gateway", security: "full", ask: "off" }).execute("exec", {
+    yieldMs: 120_000,
+    ...params,
+  });
+
+it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
+  const workdir = tempDirs.make("openclaw-exec-xml-");
+  const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+  const malformedArgs = {
+    command: "echo ok</arg_value>>",
+    workdir: `${workdir}</arg_value>>`,
+    host: "gateway</arg_value>>",
+    ask: "off</arg_value>>",
+    node: "node-1</arg_value>>",
+    yieldMs: 120_000,
+  } as unknown as ExecParams;
+  expect(await tool.prepareBeforeToolCallParams?.(malformedArgs, {})).toMatchObject({
+    command: "echo ok",
+    workdir,
+    host: "gateway",
+    ask: "off",
+    node: "node-1",
+  });
+  await expect(tool.execute("call-xml-conflict", malformedArgs)).rejects.toThrow(
+    'exec node="node-1" conflicts with host="gateway"',
+  );
+  const result = await tool.execute("call-xml-suffix", { ...malformedArgs, node: undefined });
+  expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe("ok");
+});
+
+it("rejects the unsupported cwd alias before command execution", async () => {
+  await expect(runGateway({ command: "echo ok", cwd: os.tmpdir() } as never)).rejects.toThrow(
+    'exec parameter "cwd" is unsupported; use "workdir" instead',
+  );
+});
+
+it.runIf(process.platform !== "win32")("merges login-shell PATH for host=gateway", async () => {
+  vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
+  vi.stubEnv("PATH", "/usr/bin");
+  mocks.shellPath.mockReturnValue("/custom/bin:/opt/bin");
+  await runGateway({ command: "echo $PATH" });
+  expect(mocks.spawnInputs[0]?.env?.PATH?.split(/[:\s]+/).filter(Boolean)).toEqual([
+    "/custom/bin",
+    "/opt/bin",
+    "/usr/bin",
+  ]);
+  expect(mocks.shellPath).toHaveBeenCalledTimes(1);
+});
+
+it("runs exact no-pager requests with empty rather than executable pager values", async () => {
+  await runGateway({ command: "echo GIT_PAGER PAGER", env: { GIT_PAGER: "cat", PAGER: "cat" } });
+  expect(mocks.spawnInputs[0]?.env).toMatchObject({ GIT_PAGER: "", PAGER: "" });
+});
+
+it.each([
+  [{ PATH: "/explicit/bin" }, /Security Violation: Custom 'PATH' variable is forbidden/],
+  [{ LD_DEBUG: "1" }, /Security Violation: Environment variable 'LD_DEBUG' is forbidden/],
+  [
+    { HTTPS_PROXY: "http://proxy.example.test:8080", NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
+  ],
+] satisfies Array<[NonNullable<ExecParams["env"]>, RegExp]>)(
+  "blocks unsafe host overrides %j before reading login PATH",
+  async (env, error) => {
+    if (process.platform === "win32" && "PATH" in env) {
+      return;
+    }
+    await expect(runGateway({ command: "echo $PATH", env })).rejects.toThrow(error);
+    expect(mocks.shellPath).not.toHaveBeenCalled();
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "strips dangerous inherited env vars from host execution",
+  async () => {
+    vi.stubEnv("SSLKEYLOGFILE", "/tmp/openclaw-ssl-keys.log");
+    await runGateway({ command: "printf '%s' \"${SSLKEYLOGFILE:-}\"" });
+    expect(mocks.spawnInputs[0]?.env).not.toHaveProperty("SSLKEYLOGFILE");
+  },
+);
+
+it("rejects /approve nested in shell wrappers", async () => {
+  await expect(
+    runGateway({
+      command: "sudo -u root OPENCLAW_APPROVE=1 bash -lc '/approve abc123 allow-once'",
+    }),
+  ).rejects.toThrow(/exec cannot run \/approve commands/);
 });
 
 it("reuses a lazy exec instance's store snapshot and refreshes it for a new run", async () => {

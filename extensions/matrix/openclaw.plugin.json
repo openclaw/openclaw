@@ -2,12 +2,14 @@
   "id": "matrix",
   "categories": ["channels"],
   "doctorContract": {
+    "recoveryCli": [["matrix", "doctor"]],
     "configRepair": true,
     "stateMigrations": [
       { "id": "matrix-crypto-unsafe-state" },
       { "id": "matrix-account-sqlite-schema" },
       { "id": "matrix-credentials-json-to-plugin-state" },
       { "id": "matrix-inbound-dedupe-to-claimable-dedupe" },
+      { "id": "matrix-replay-guard-to-ingress" },
       { "id": "matrix-sync-cache-json-to-plugin-state" }
     ]
   },

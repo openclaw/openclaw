@@ -3,8 +3,11 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
@@ -17,6 +20,7 @@ import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-byte
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
   resolveOutboundMediaLocalRoots,
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
@@ -319,37 +323,6 @@ export function resolveAttachmentMediaPolicy(params: {
   };
 }
 
-function buildAttachmentMediaLoadOptions(params: {
-  policy: AttachmentMediaPolicy;
-  maxBytes?: number;
-  optimizeImages?: boolean;
-}) {
-  if (params.policy.mode === "sandbox") {
-    const sandboxRoot = params.policy.sandboxRoot.trim();
-    let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile =
-      params.policy.mediaReadFile ??
-      createBoundedOutboundMediaReadFile(async (filePath, options) => {
-        sandboxFsPromise ??= root(sandboxRoot);
-        const sandboxFs = await sandboxFsPromise;
-        return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
-      });
-    return {
-      maxBytes: params.maxBytes,
-      ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
-      sandboxValidated: true,
-      readFile: readSandboxFile,
-    };
-  }
-  return buildOutboundMediaLoadOptions({
-    maxBytes: params.maxBytes,
-    mediaAccess: params.policy.mediaAccess,
-    mediaLocalRoots: params.policy.mediaLocalRoots,
-    mediaReadFile: params.policy.mediaReadFile,
-    optimizeImages: params.optimizeImages,
-  });
-}
-
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   mediaPolicy: AttachmentMediaPolicy;
@@ -421,9 +394,13 @@ export async function hydrateAttachmentParamsForAction(params: {
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
-  if (params.action === "send") {
+  if (params.action === "send" || params.action === "thread-reply") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
+      const contentType = readAttachmentContentType(args);
+      if (contentType) {
+        args.contentType = contentType;
+      }
       delete args.buffer;
       return;
     }
@@ -538,14 +515,38 @@ export async function hydrateAttachmentParamsForAction(params: {
 
   if (!params.dryRun && !rawBuffer && mediaSource) {
     const maxBytes = resolveAttachmentMaxBytes(params);
-    const media = await loadWebMedia(
-      mediaSource,
-      buildAttachmentMediaLoadOptions({
-        policy: params.mediaPolicy,
+    let mediaOptions: Exclude<Parameters<typeof loadWebMedia>[1], number | undefined>;
+    if (params.mediaPolicy.mode === "sandbox") {
+      const sandboxRoot = params.mediaPolicy.sandboxRoot.trim();
+      let sandboxFsPromise: ReturnType<typeof root> | undefined;
+      const readSandboxFile =
+        params.mediaPolicy.mediaReadFile ??
+        createBoundedOutboundMediaReadFile(async (filePath, options) => {
+          sandboxFsPromise ??= root(sandboxRoot);
+          const sandboxFs = await sandboxFsPromise;
+          return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+        });
+      mediaOptions = {
         maxBytes,
+        ...(optimizeImages !== undefined ? { optimizeImages } : {}),
+        sandboxValidated: true,
+        readFile: readSandboxFile,
+      };
+    } else {
+      mediaOptions = buildOutboundMediaLoadOptions({
+        maxBytes,
+        mediaAccess: params.mediaPolicy.mediaAccess,
+        mediaLocalRoots: params.mediaPolicy.mediaLocalRoots,
+        mediaReadFile: params.mediaPolicy.mediaReadFile,
         optimizeImages,
-      }),
-    );
+      });
+    }
+    // The sandbox branch builds its own options, so apply the configured deny list for both here.
+    const blockedHostnames = resolveOutboundMediaAccessForConfig(params.cfg)?.blockedHostnames;
+    const media = await loadWebMedia(mediaSource, {
+      ...mediaOptions,
+      ...(blockedHostnames ? { ssrfPolicy: { blockedHostnames: [...blockedHostnames] } } : {}),
+    });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -578,5 +579,19 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
     params[key] = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error(`--${key} must be valid JSON`);
+  }
+}
+
+/** Normalization drops a captionless table; reject it before any part is sent. */
+export function requirePresentationTableCaptions(params: Record<string, unknown>): void {
+  const blocks = asOptionalRecord(params.presentation)?.blocks;
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    const record = asOptionalRecord(block);
+    if (record && normalizeOptionalLowercaseString(record.type) === "table") {
+      readToolStringParam(record, "caption", {
+        required: true,
+        label: "presentation.blocks[].caption",
+      });
+    }
   }
 }

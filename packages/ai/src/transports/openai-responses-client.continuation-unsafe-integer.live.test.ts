@@ -1,5 +1,7 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { writerState } from "../provider-state.test-support.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
@@ -8,18 +10,10 @@ import { captureOpenAIResponses } from "./openai-responses-live-capture.test-sup
 const apiKey = process.env.OPENAI_API_KEY ?? "";
 const describeLive = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey ? describe : describe.skip;
 const modelId = process.env.OPENCLAW_LIVE_RESPONSES_MODEL || "gpt-5.6-luna";
-const model = {
-  id: modelId,
-  name: modelId,
-  api: "openai-responses",
-  provider: "openai",
+const model = makeProviderModel("openai-responses", "openai", modelId, {
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 const tool = {
   name: "record_value",
   description: "Record the supplied integer value.",
@@ -30,6 +24,7 @@ async function run(messages: Context["messages"]) {
   const options = {
     apiKey,
     sessionId: "live-unsafe-integer-continuation",
+    ...writerState("live-unsafe-integer-continuation"),
     transport: "sse",
     reasoningEffort: "low",
     maxTokens: 256,

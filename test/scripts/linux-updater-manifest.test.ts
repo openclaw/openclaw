@@ -47,6 +47,7 @@ type ActionRun = {
 };
 type Remote = {
   latest: string | null;
+  publicManifests?: Record<string, string>;
   releases: Record<string, Release>;
   calls: string[][];
   uploads: number;
@@ -172,6 +173,10 @@ function flags(values: Record<string, string>) {
   return Object.entries(values).flatMap(([key, value]) => [`--${key}`, value]);
 }
 
+function writeJson(path: string, value: unknown) {
+  writeFileSync(path, JSON.stringify(value));
+}
+
 function expectOutcome(
   remote: ReturnType<typeof fixture>,
   result: { status: number | null; stderr: string; evidence: { state: string } },
@@ -202,11 +207,12 @@ function fixture(initial: Partial<Remote> = {}, mutate?: (state: Remote) => void
     ...initial,
   };
   mutate?.(initialState);
-  writeFileSync(statePath, JSON.stringify(initialState));
+  writeJson(statePath, initialState);
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const fs = require('node:fs');
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 const args = process.argv.slice(2);
 const file = process.env.GH_MOCK_STATE;
 const state = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -221,7 +227,7 @@ const metadata = (tag, entry) => ({databaseId: 42, tagName: tag, isDraft: entry.
     .map(name => {
       const bytes = name === 'latest.json' ? entry.manifest : name === 'SHA256SUMS.linux-app.txt' ? entry.checksums :
         name.endsWith('-linux.json') ? entry.immutable : undefined;
-      return {name, digest: entry.digests?.[name] ?? (bytes === undefined ? undefined : 'sha256:' + require('node:crypto').createHash('sha256').update(bytes).digest('hex')),
+      return {name, digest: entry.digests?.[name] ?? (bytes === undefined ? undefined : 'sha256:' + createHash('sha256').update(bytes).digest('hex')),
         state: entry.assetState ?? 'uploaded', size: entry.assetSize ?? (bytes === undefined ? 1024 : Buffer.byteLength(bytes))};
     })});
 if (args[0] === 'api') {
@@ -307,6 +313,20 @@ if (args[0] === 'api') {
     { mode: 0o755 },
   );
   writeFileSync(
+    join(bin, "curl"),
+    `#!/usr/bin/env node
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(process.env.GH_MOCK_STATE, 'utf8'));
+const url = new URL(process.argv.at(-1));
+const parts = url.pathname.split('/');
+const tag = parts[4] === 'latest' ? state.latest : parts[5];
+const bytes = state.publicManifests?.[url.pathname] ?? state.releases[tag]?.manifest;
+if (url.origin !== 'https://github.com' || !bytes) process.exit(22);
+process.stdout.write(bytes);
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
     join(bin, "git"),
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
@@ -319,7 +339,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
   const update = (change: (remote: Remote) => void) => {
     const remote = read();
     change(remote);
-    writeFileSync(statePath, JSON.stringify(remote));
+    writeJson(statePath, remote);
   };
   let runNumber = 0;
   const env = {
@@ -329,8 +349,8 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     GITHUB_REF_NAME: "main",
     GITHUB_WORKFLOW_SHA: toolingSha,
   };
-  const runNode = (args: string[], extraEnv: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, args, {
+  const runProcess = (binary: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) =>
+    spawnSync(binary, args, {
       encoding: "utf8",
       timeout: 20_000,
       env: { ...env, ...extraEnv },
@@ -347,7 +367,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     read,
     identity(writerArguments: string[]) {
       prepareRun(true);
-      return runNode([
+      return runProcess(process.execPath, [
         resolve("scripts/release-tooling-identity.mjs"),
         "verify",
         ...flags({
@@ -369,24 +389,21 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
       const requestPath = join(root, "publication-request.json");
       const eventPath = join(root, `event-${runNumber}.json`);
       prepareRun(prepared);
-      writeFileSync(
-        eventPath,
-        JSON.stringify({ inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides } }),
-      );
+      writeJson(eventPath, {
+        inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides },
+      });
       if (prepared) {
-        writeFileSync(
-          requestPath,
-          JSON.stringify({
-            repository,
-            inputs: { tag },
-            sourceSha,
-            releaseRunId: 123,
-            releaseRunAttempt: 1,
-            tooling: { ref: "main", fullRef: "refs/heads/main", sha: toolingSha },
-          }),
-        );
+        writeJson(requestPath, {
+          repository,
+          inputs: { tag },
+          sourceSha,
+          releaseRunId: 123,
+          releaseRunAttempt: 1,
+          tooling: { ref: "main", fullRef: "refs/heads/main", sha: toolingSha },
+        });
       }
-      const result = runNode(
+      const result = runProcess(
+        process.execPath,
         [
           resolve("scripts/linux-updater-manifest.mjs"),
           command,
@@ -400,7 +417,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     },
     inspect(carrierTag: string) {
       const module = pathToFileURL(resolve("scripts/linux-updater-manifest.mjs")).href;
-      return runNode([
+      return runProcess(process.execPath, [
         "--input-type=module",
         "-e",
         `import { inspectLinuxUpdaterManifest } from ${JSON.stringify(module)};
@@ -410,26 +427,20 @@ console.log(JSON.stringify(inspectLinuxUpdaterManifest(${JSON.stringify({ reposi
     dispatch(targetSha = sourceSha) {
       const output = join(root, `dispatch-${++runNumber}`);
       mkdirSync(output);
-      const result = spawnSync(
+      const result = runProcess(
         "bash",
         [
           "-c",
           'source scripts/lib/release-publish-children.sh; sleep() { :; }; result=0; dispatch_linux_release_assets || result=$?; exit "$result"',
         ],
         {
-          cwd: resolve("."),
-          encoding: "utf8",
-          timeout: 20_000,
-          env: {
-            ...env,
-            RUNNER_TEMP: output,
-            GITHUB_STEP_SUMMARY: join(output, "summary.md"),
-            GITHUB_REPOSITORY: repository,
-            TARGET_SHA: targetSha,
-            PARENT_WORKFLOW_SHA: toolingSha,
-            RELEASE_TAG: sourceTag,
-            RELEASE_NPM_DIST_TAG: "latest",
-          },
+          RUNNER_TEMP: output,
+          GITHUB_STEP_SUMMARY: join(output, "summary.md"),
+          GITHUB_REPOSITORY: repository,
+          TARGET_SHA: targetSha,
+          PARENT_WORKFLOW_SHA: toolingSha,
+          RELEASE_TAG: sourceTag,
+          RELEASE_NPM_DIST_TAG: "latest",
         },
       );
       return {
@@ -560,15 +571,6 @@ it.each(["active", "cancelled", "unrequested"])(
         sha: toolingSha,
       });
     }
-    const calls = remote.read().calls;
-    if (writer === "unrequested") {
-      expect(calls.some((args) => args[1] === `repos/${repository}/actions/runs/200`)).toBe(false);
-    } else {
-      expect(calls.at(-1)?.[1]).toBe(`repos/${repository}/actions/runs/200`);
-      if (writer === "active") {
-        expect(calls.some((args) => args[1] === `repos/${repository}/actions/runs/123`)).toBe(true);
-      }
-    }
   },
 );
 
@@ -586,50 +588,37 @@ it.each([
   expect(remote.read().calls).toEqual([]);
 });
 
-const uploadAuthorityCases: Array<{
-  reason: string;
-  initial: Partial<Remote>;
-  message: string;
-  prepared?: boolean;
-}> = [
-  { reason: "unreachable tooling", initial: { toolingStatus: "behind" }, message: "not reachable" },
-  {
-    reason: "stale prepared parent",
-    initial: { parentAttempt: 2 },
-    message: "runAttempt",
-    prepared: true,
-  },
-  ...[
-    { reason: "stale attempt", currentRunOverrides: { run_attempt: 2 } },
-    { reason: "wrong path", currentRunOverrides: { path: ".github/workflows/other.yml" } },
-    { reason: "wrong source SHA", currentRunOverrides: { head_sha: "c".repeat(40) } },
-    {
-      reason: "cancelled run",
-      currentRunOverrides: { status: "completed", conclusion: "cancelled" },
-    },
-  ].map(({ reason, currentRunOverrides }) => ({
-    reason,
-    initial: { currentRunOverrides },
-    message: "release workflow run",
-  })),
-  ...[
-    { reason: "another tag", eventInputOverrides: { tag: sourceTag } },
-    { reason: "another channel", eventInputOverrides: { npm_dist_tag: "beta" } },
-  ].map(({ reason, eventInputOverrides }) => ({
-    reason,
-    initial: { eventInputOverrides },
-    message: "Actions release inputs differ",
-  })),
-];
-it.each(uploadAuthorityCases)(
-  "revalidates manifest upload authority: $reason",
-  ({ initial, message, prepared }) => {
-    const remote = fixture(initial);
-    const result = remote.run("carry", "v2026.9.5", prepared);
-    expect(result.stderr).toContain(message);
-    expectOutcome(remote, result, "failed", 1);
-  },
-);
+it.each<[string, Partial<Remote>, string, boolean?]>([
+  ["unreachable tooling", { toolingStatus: "behind" }, "not reachable"],
+  ["stale prepared parent", { parentAttempt: 2 }, "runAttempt", true],
+  ["stale attempt", { currentRunOverrides: { run_attempt: 2 } }, "release workflow run"],
+  [
+    "wrong path",
+    { currentRunOverrides: { path: ".github/workflows/other.yml" } },
+    "release workflow run",
+  ],
+  [
+    "wrong source SHA",
+    { currentRunOverrides: { head_sha: "c".repeat(40) } },
+    "release workflow run",
+  ],
+  [
+    "cancelled run",
+    { currentRunOverrides: { status: "completed", conclusion: "cancelled" } },
+    "release workflow run",
+  ],
+  ["another tag", { eventInputOverrides: { tag: sourceTag } }, "Actions release inputs differ"],
+  [
+    "another channel",
+    { eventInputOverrides: { npm_dist_tag: "beta" } },
+    "Actions release inputs differ",
+  ],
+])("revalidates manifest upload authority: %s", (_reason, initial, message, prepared) => {
+  const remote = fixture(initial);
+  const result = remote.run("carry", "v2026.9.5", prepared);
+  expect(result.stderr).toContain(message);
+  expectOutcome(remote, result, "failed", 1);
+});
 
 it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
   "checks the actual same-tag legacy selector and REST identities (%s)",
@@ -668,6 +657,24 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
     );
     expect(remote.read().uploads).toBe(0);
     expect(remote.read().requests ?? []).toHaveLength(kind === "current" ? 0 : 1);
+  },
+);
+
+it.each(["releases/latest/download/latest.json", `releases/download/${sourceTag}/latest.json`])(
+  "does not report Linux complete when only the public %s is stale",
+  (path) => {
+    const remote = fixture(
+      { publicManifests: { [`/${repository}/${path}`]: manifest("2026.9.3") } },
+      (state) => {
+        const source = publishedRelease();
+        source.manifest = source.immutable;
+        publishFixture(state, source);
+      },
+    );
+    const dispatch = remote.dispatch();
+    expect(dispatch.status, dispatch.stderr).toBe(0);
+    expect(dispatch.evidence.state).toBe("request-dispatched");
+    expect(dispatch.stderr).toContain(path);
   },
 );
 

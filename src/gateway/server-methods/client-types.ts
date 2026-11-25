@@ -1,5 +1,7 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
@@ -15,6 +17,9 @@ export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
+  requesterOrigin?: RequesterOrigin;
+  /** Parent audit binding captured with this caller; never grants execution authority. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Exact admitted requester lifetime; identity alone does not establish live authority. */
   assertCurrent?: () => void;
 }>;
@@ -37,10 +42,14 @@ export type GatewayClient = Pick<
   | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
+  | "presenceSnapshot"
+  | "includeSessionMessageBodies"
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
   | "authenticatedFactoryGitHubAccountId"
+  | "authenticatedGitHubAccountId"
+  | "authenticatedRepositoryCredentialSource"
   | "authenticatedUserIsTailscaleProvider"
   | "authenticatedGitHubIdentitySync"
   | "preparedSessionProfile"
@@ -73,7 +82,6 @@ export type GatewayClient = Pick<
     approvalRuntime?: boolean;
     /** Host-bound owner for one plugin approval request, without reviewer authority. */
     pluginApprovalRequestOwnerId?: string;
-    cronRunContinuation?: boolean;
     pluginRuntimeOwnerId?: string;
     /** Host-attested session provenance for a trusted official plugin node invocation. */
     nodeInvokeApprovalSessionKey?: string;

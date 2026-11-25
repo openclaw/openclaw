@@ -102,14 +102,7 @@ describe("bundled plugin sources", () => {
       plugins: [{ id: "feishu", rootDir: appBundledPluginRoot("feishu") }],
     });
     snapshot.bundledManifestRegistry = snapshot.manifestRegistry;
-    setCurrentPluginMetadataSnapshotState(
-      snapshot,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "gateway",
-    );
+    setCurrentPluginMetadataSnapshotState(snapshot, undefined, undefined, undefined, "gateway");
 
     const first = getProcessBundledPluginSources();
     const second = getProcessBundledPluginSources();

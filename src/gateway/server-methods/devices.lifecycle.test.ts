@@ -7,7 +7,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
-import { getNodeWakeStateSnapshot } from "../node-wake-state.test-support.js";
+import { getNodeWakeStateSnapshot, seedNodeWakeState } from "../node-wake-state.test-support.js";
 import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import {
@@ -19,16 +19,31 @@ import {
   mockRotateOperatorTokenSuccess,
   expectDeviceError,
   captureSecurityEvents,
-  seedNodeWakeState,
   resetDeviceHandlerTestState,
+  invokeDevice,
+  expectPrivate,
 } from "./devices.test-support.js";
 
 const { pairing, tokens } = mocks;
 
-const { deviceHandlers } = await import("./devices.js");
-
-function invokeDevice(opts: ReturnType<typeof createOptions>) {
-  return expectDefined(deviceHandlers[opts.req.method], `${opts.req.method} test invariant`)(opts);
+function nodeRemovalOptions(
+  method: string,
+  deviceId = "device-1",
+  client: Parameters<typeof createOptions>[2] = createDeviceClient(
+    ["operator.admin"],
+    "admin-device",
+  ),
+) {
+  const revoking = method === "device.token.revoke";
+  if (revoking) {
+    tokens.revokeDeviceToken.mockResolvedValue({
+      ok: true,
+      entry: { role: "node", revokedAtMs: 456 },
+    });
+  } else {
+    pairing.removePairedDevice.mockResolvedValue({ deviceId: deviceId.trim() });
+  }
+  return createOptions(method, { deviceId, ...(revoking ? { role: "node" } : {}) }, client);
 }
 
 beforeEach(resetDeviceHandlerTestState);
@@ -74,7 +89,7 @@ it.each(
     }
   });
   try {
-    await expectDefined(deviceHandlers[method], method)(opts);
+    await invokeDevice(opts);
   } finally {
     stop();
   }
@@ -115,10 +130,7 @@ it.each(
     control: { id: method, family: "auth" },
     attributes: { role: role.trim() },
   });
-  const serialized = JSON.stringify(events);
-  expect(serialized).not.toContain("device-1");
-  expect(serialized).not.toContain("device-2");
-  expect(serialized).not.toContain("operator.admin");
+  expectPrivate(events, ["device-1", "device-2", "operator.admin"]);
   expect(opts.context.logGateway.info).not.toHaveBeenCalled();
   expect(opts.context.broadcast).not.toHaveBeenCalled();
   expect(opts.context.invalidateClientsForDevice).not.toHaveBeenCalled();
@@ -129,19 +141,14 @@ it.each(
 it.each(["remove", "revoke"] as const)("clears node runtime state after %s", async (operation) => {
   const revoking = operation === "revoke";
   const nodeId = revoking ? "revoked-node-device" : "disconnected-node-device";
-  pairing.removePairedDevice.mockResolvedValue({ deviceId: nodeId });
-  tokens.revokeDeviceToken.mockResolvedValue({
-    ok: true,
-    entry: { token: "raw-node-token", role: "node", scopes: [], revokedAtMs: 456 },
-  });
+  const opts = nodeRemovalOptions(
+    revoking ? "device.token.revoke" : "device.pair.remove",
+    nodeId,
+    revoking ? createDeviceClient(["operator.admin"], "admin-device") : null,
+  );
   await seedNodeWakeState(nodeId);
   enqueueNodePendingWork({ nodeId, type: "location.request" });
   const wake = captureNodeWakeLifecycle(nodeId);
-  const opts = createOptions(
-    revoking ? "device.token.revoke" : "device.pair.remove",
-    { deviceId: nodeId, ...(revoking ? { role: "node" } : {}) },
-    revoking ? createDeviceClient(["operator.admin"], "admin-device") : null,
-  );
   const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
   const reconciled: string[] = [];
   if (revoking) {
@@ -178,11 +185,7 @@ it.each(
   "finishes $method teardown when callerRetired=$callerRetired",
   async ({ method, callerRetired }) => {
     const revoking = method === "device.token.revoke";
-    const opts = createOptions(
-      method,
-      { deviceId: " device-1 ", ...(revoking ? { role: "node" } : {}) },
-      createDeviceClient(["operator.admin"], "admin-device"),
-    );
+    const opts = nodeRemovalOptions(method, " device-1 ");
     const client = Object.assign(expectDefined(opts.client, "removal caller"), {
       invalidated: false,
       socket: { close: vi.fn() },
@@ -239,14 +242,9 @@ it.each(
 it.each(["device.pair.remove", "device.token.revoke"])(
   "tears down revoked clients when worker cleanup fails in %s",
   async (method) => {
-    pairing.removePairedDevice.mockResolvedValue({ deviceId: "device-1" });
-    tokens.revokeDeviceToken.mockResolvedValue({
-      ok: true,
-      entry: { role: "node", revokedAtMs: 456 },
-    });
-    const opts = createOptions(
+    const opts = nodeRemovalOptions(
       method,
-      { deviceId: "device-1", ...(method === "device.token.revoke" ? { role: "node" } : {}) },
+      "device-1",
       createClient(["operator.admin"], "admin-device"),
     );
     const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
@@ -377,9 +375,7 @@ it.each(["shared", "self"] as const)("revokes normalized tokens for %s callers",
       control: { id: "device.token.revoke", family: "auth" },
       attributes: { role: "operator" },
     });
-    const serialized = JSON.stringify(events);
-    expect(serialized).not.toContain("device-1");
-    expect(serialized).not.toContain("raw-revoked-token");
+    expectPrivate(events, ["device-1", "raw-revoked-token"]);
   }
 });
 

@@ -1,3 +1,5 @@
+import { createSignal } from "@solidjs/signals";
+
 const TRAITS = [
   ["pluginEmbed", "content--plugin-embed"],
   ["hubHeader", "content--hub-header"],
@@ -5,10 +7,12 @@ const TRAITS = [
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],
+  ["cronEditor", "content--cron-editor"],
   ["memoryPage", "content--memory-page"],
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],
   ["terminalPage", "content--terminal-page"],
+  ["portalsPage", "content--portals-page"],
 ] as const;
 
 export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boolean>>;
@@ -23,7 +27,11 @@ export function shellLayoutOwnerForHost(host: Element): ShellLayoutOwner | undef
 /** Both renderers publish to this synchronous owner before measuring descendants. */
 export class ShellLayoutOwner {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
+  private readonly footerControls = new Set<HTMLElement>();
   private content?: Element;
+  private readonly headerActions = createSignal<HTMLElement | undefined>(undefined, {
+    ownedWrite: true,
+  });
 
   readonly contentRef = (content: Element | undefined) => {
     if (content === this.content) {
@@ -62,6 +70,45 @@ export class ShellLayoutOwner {
     }
   }
 
+  /** The floating header's slot for page buttons; absent wherever the header does not float. */
+  readonly headerActionsSlot = (): HTMLElement | undefined => this.headerActions[0]();
+
+  readonly registerHeaderActions = (slot: HTMLElement): (() => void) => {
+    this.headerActions[1](() => slot);
+    return () => this.headerActions[1](() => undefined);
+  };
+
+  registerFooterControlSurface(element: HTMLElement): () => void {
+    this.footerControls.add(element);
+    return () => this.footerControls.delete(element);
+  }
+
+  readonly footerControlsOverlap = (
+    bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">,
+  ): boolean => {
+    for (const surface of this.footerControls) {
+      if (
+        !surface.isConnected ||
+        !this.content?.contains(surface) ||
+        !surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        continue;
+      }
+      const rect = surface.getBoundingClientRect();
+      if (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left < bounds.right &&
+        rect.right > bounds.left &&
+        rect.top < bounds.bottom &&
+        rect.bottom > bounds.top
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   get current(): ShellLayoutTraits {
     const traits: ShellLayoutTraits = {};
     for (const [token, reporter] of this.reporters) {
@@ -86,6 +133,7 @@ export class ShellLayoutOwner {
   }
 
   dispose() {
+    this.footerControls.clear();
     this.reporters.clear();
     this.apply();
   }

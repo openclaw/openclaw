@@ -1,27 +1,22 @@
 // Control UI tests cover session goal behavior.
 import { describe, expect, it } from "vitest";
-import type { SessionGoal } from "../api/types.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import {
   formatGoalDetail,
   formatGoalElapsed,
   formatGoalSummary,
   goalElapsedMs,
-} from "./session-goal.ts";
+} from "../../../src/shared/session-goal-display.js";
+import type { SessionGoal } from "../api/types.ts";
 
 function buildGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id: "goal-1",
-    objective: "Ship the web goal indicator",
-    status: "active",
-    createdAt: 1,
+  return createSessionGoalFixture("goal-1", "Ship the web goal indicator", {
     updatedAt: 2,
     tokenStart: 100,
     tokensUsed: 12_400,
     tokenBudget: 50_000,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 describe("session goal formatting", () => {
@@ -62,9 +57,19 @@ describe("session goal formatting", () => {
     expect(formatGoalElapsed(0)).toBe("0s");
     expect(formatGoalElapsed(15_000)).toBe("15s");
     expect(formatGoalElapsed(59_999)).toBe("59s");
-    expect(formatGoalElapsed(60_000)).toBe("1m 00s");
-    expect(formatGoalElapsed(3_540_000)).toBe("59m 00s");
-    expect(formatGoalElapsed(3_600_000)).toBe("1h 00m 00s");
-    expect(formatGoalElapsed(3_909_000)).toBe("1h 05m 09s");
+    expect(formatGoalElapsed(60_000)).toBe("1m");
+    expect(formatGoalElapsed(259_000)).toBe("4m");
+    expect(formatGoalElapsed(7_500_000)).toBe("2h 5m");
+    expect(formatGoalElapsed(93_900_000)).toBe("1d 2h 5m");
+    expect(formatGoalElapsed(3_540_000)).toBe("59m");
+    expect(formatGoalElapsed(3_600_000)).toBe("1h");
+    expect(formatGoalElapsed(3_909_000)).toBe("1h 5m");
+    expect(formatGoalElapsed(86_399_999)).toBe("23h 59m");
+    expect(formatGoalElapsed(86_400_000)).toBe("1d 0h 0m");
+    expect(formatGoalElapsed(176_400_000)).toBe("2d 1h 0m");
+    expect(formatGoalElapsed(604_799_999)).toBe("6d 23h 59m");
+    expect(formatGoalElapsed(604_800_000)).toBe("1wk 0d 0h 0m");
+    expect(formatGoalElapsed(1_098_939_000)).toBe("1wk 5d 17h 15m");
+    expect(formatGoalElapsed(1_209_600_000)).toBe("2wk 0d 0h 0m");
   });
 });

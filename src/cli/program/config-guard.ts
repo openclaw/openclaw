@@ -1,4 +1,3 @@
-// CLI config readiness guard and invalid-config recovery.
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import type {
   StartupConfigPreflightOptions,
@@ -38,6 +37,25 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "stop",
   "restart",
 ]);
+// Legacy-key notices end with doctor repair advice. Doctor cannot write a read-only config,
+// so keep the step it would take ("move it to ...") and drop the command.
+const TRAILING_DOCTOR_HINT =
+  /(;\s*|(?<=[.!?])\s+)(?:re)?run\s+["`]openclaw doctor(?:\s+--fix)?["`](?:\s+to\s+((?:(?![.!?]\s).)+?))?[.!?]?$/iu;
+
+function withoutTrailingDoctorCommand(message: string): string {
+  const match = TRAILING_DOCTOR_HINT.exec(message);
+  if (!match) {
+    return message;
+  }
+  const [, separator = "", step] = match;
+  const head = message.slice(0, match.index);
+  if (!step) {
+    return /[.!?]$/u.test(head) ? head : `${head}.`;
+  }
+  const action = separator.startsWith(";") ? step : step.charAt(0).toUpperCase() + step.slice(1);
+  return `${head}${separator}${action}.`;
+}
+
 let didRunStartupConfigPreflight = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
   null;
@@ -165,12 +183,12 @@ export async function ensureConfigReady(params: {
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
-  const configSnapshotOptions =
-    params.validateConfigOnly || commandName === "logs"
-      ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime || commandName === "status" || isRestartController
-        ? ({ observe: false } as const)
-        : undefined;
+  const isPassiveConfigOnly = params.validateConfigOnly || commandName === "logs";
+  const configSnapshotOptions = isPassiveConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : isManagedNodeRuntime || commandName === "status" || isRestartController
+      ? ({ observe: false } as const)
+      : undefined;
   const snapshot =
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   const isBareGatewayForegroundRun =
@@ -183,15 +201,6 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
-    import("../../config/issue-format.js"),
-    import("../../config/issue-location.js"),
-  ]);
-  const issues =
-    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
-
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
@@ -206,18 +215,34 @@ export async function ensureConfigReady(params: {
   }
 
   const [
+    { formatConfigIssueLines },
+    { renderConfigValidationIssueLines },
     { colorize, isRich, theme },
     { shortenHomePath },
     { formatCliCommand },
     { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
     { formatPluginPackagingRuntimeOutputRecoveryHint },
   ] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
     import("../../../packages/terminal-core/src/theme.js"),
     import("../../utils.js"),
     import("../command-format.js"),
     import("../../config/recovery-policy.js"),
     import("../config-recovery-hints.js"),
   ]);
+  const issues = renderConfigValidationIssueLines(snapshot);
+  // Externally managed config: only its source can fix it, so omit local command hints.
+  const isReadOnlyConfig = resolveIsConfigReadOnly();
+  const legacyIssues = formatConfigIssueLines(
+    isReadOnlyConfig
+      ? snapshot.legacyIssues.map((issue) => ({
+          ...issue,
+          message: withoutTrailingDoctorCommand(issue.message),
+        }))
+      : snapshot.legacyIssues,
+    "-",
+  );
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
@@ -237,7 +262,6 @@ export async function ensureConfigReady(params: {
   }
   params.runtime.error("");
   const isPluginPackagingFailure = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot);
-  const isReadOnlyConfig = resolveIsConfigReadOnly();
   const isGatewayStartup =
     commandName === "gateway" &&
     (subcommandName === undefined ||
@@ -263,16 +287,18 @@ export async function ensureConfigReady(params: {
         : commandText(formatCliCommand("openclaw doctor --fix"));
     params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   }
-  params.runtime.error(
-    `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
-  );
-  params.runtime.error(
-    muted(
-      readFailure
-        ? "Audit, status, health, logs, and doctor commands still run when config cannot be read."
-        : "Audit, status, health, logs, and doctor commands still run with invalid config.",
-    ),
-  );
+  if (!isReadOnlyConfig) {
+    params.runtime.error(
+      `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
+    );
+    params.runtime.error(
+      muted(
+        readFailure
+          ? "Audit, status, health, logs, and doctor commands still run when config cannot be read."
+          : "Audit, status, health, logs, and doctor commands still run with invalid config.",
+      ),
+    );
+  }
   if (
     mustBlockInvalid &&
     (await import("../json-output-mode.js")).isJsonOutputModeActive(process.argv)

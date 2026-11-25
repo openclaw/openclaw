@@ -8,17 +8,20 @@ import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../skills/loading/workspace-skill-source-reader.js";
 import { syncWorkspaceSkills } from "../skills/loading/workspace-skill-sync.runtime.js";
-import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
+import {
+  closeSkillsWatchers,
+  prepareSandboxFsContext,
+  refreshSkillsDiscovery,
+} from "../skills/runtime/refresh.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
 } from "../skills/test-support/home-env.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
-import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./sandbox/fs-paths.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 
@@ -73,9 +76,7 @@ it.each(
     };
     const sandbox = createAgentToolsSandboxContext({
       workspaceDir: workspace,
-      agentWorkspaceDir: workspace,
       skillsWorkspaceDir: sandboxDir,
-      workspaceAccess: "rw",
       containerWorkdir: "/guest/repo",
     });
     sandbox.backend = {
@@ -98,10 +99,9 @@ it.each(
       },
       loadSkills: async (request) => readWorkspaceSkillSources(request),
     });
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
     });
     const bind = async () => {
       const snapshot = await buildSkillSnapshot(workspace, options);
@@ -111,6 +111,7 @@ it.each(
         targetWorkspaceDir: sandboxDir,
         skillsSnapshot: snapshot,
       });
+      sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
       const prepared = resolveSandboxSkillRuntimeInputs({
         sandbox,
         skillsAnchorWorkspace: workspace,
@@ -122,7 +123,6 @@ it.each(
         authority,
       })(() => {});
       return {
-        snapshot,
         capabilities,
         tool: factory!.create({
           ...capabilities,
@@ -131,14 +131,13 @@ it.each(
       };
     };
     try {
+      const helperPath = path.join("scripts", "autoreview");
+      const helperText = "# protected helper fixture\n";
       await writeSkill({ dir: original, name: "autoreview", description: "Installed reviewer" });
       await fs.mkdir(path.dirname(installation), { recursive: true });
       await fs.symlink(original, installation, "dir");
       await fs.mkdir(path.join(installation, "scripts"));
-      await fs.writeFile(
-        path.join(installation, "scripts", "autoreview"),
-        "# protected helper fixture\n",
-      );
+      await fs.writeFile(path.join(installation, helperPath), helperText);
       if (access === "ro-instructions") {
         const metadata = path.join(original, "metadata");
         await fs.mkdir(metadata);
@@ -152,42 +151,13 @@ it.each(
         await fs.symlink(mountedSource, alias, "dir");
         sandbox.docker.binds = [`${alias}:/installed-source:${access === "ro" ? "ro" : "rw"}`];
       }
-      const installed = await bind();
-      expect(installed.snapshot.discoverySkills).toEqual([
-        expect.objectContaining({
-          source: source === "personal" ? "agents-skills-personal" : "openclaw-managed",
-          fileHost: "gateway",
-        }),
-      ]);
-      expect(installed.snapshot.skills[0]?.source).toEqual({
-        filePath: path.join(await fs.realpath(installation), "SKILL.md"),
-        fileHost: "gateway",
-      });
-      if (access !== "unmounted") {
-        expect(
-          resolveSandboxFsPathWithMounts({
-            filePath: access === "scripts-rw" ? path.join(original, "scripts") : original,
-            cwd: workspace,
-            defaultWorkspaceRoot: workspace,
-            defaultContainerRoot: "/guest/repo",
-            mounts: buildSandboxFsMounts(sandbox),
-          }).writable,
-        ).toBe(access !== "ro");
-      }
-      expect(installed.capabilities.sandbox?.installedSkillRoots).toEqual(
+      const { capabilities, tool } = await bind();
+      expect(capabilities.sandbox?.installedSkillRoots).toEqual(
         admitted ? { autoreview: "/guest/repo/.openclaw/sandbox-skills/skills/autoreview" } : {},
       );
-      if (admitted) {
-        expect(installed.tool).not.toBeNull();
-      } else {
-        expect(installed.tool).toBeNull();
-      }
-      expect(
-        await fs.readFile(
-          path.join(sandboxDir, "skills", "autoreview", "scripts", "autoreview"),
-          "utf8",
-        ),
-      ).toBe("# protected helper fixture\n");
+      expect(tool === null).toBe(!admitted);
+      const syncedHelper = path.join(sandboxDir, "skills", "autoreview", helperPath);
+      expect(await fs.readFile(syncedHelper, "utf8")).toBe(helperText);
       if (source === "personal" && access === "unmounted") {
         await writeSkill({
           dir: path.join(workspace, ".agents", "skills", "autoreview"),
@@ -196,9 +166,6 @@ it.each(
         });
         await refreshSkillsDiscovery({ workspaceDir: workspace });
         const project = await bind();
-        expect(project.snapshot.discoverySkills).toEqual([
-          expect.objectContaining({ source: "agents-skills-project", fileHost: "workspace" }),
-        ]);
         expect(project.capabilities.sandbox?.installedSkillRoots).toEqual({});
         expect(project.tool).toBeNull();
       }

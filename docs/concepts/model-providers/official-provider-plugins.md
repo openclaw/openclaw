@@ -130,7 +130,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.7-code`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -167,7 +167,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
   standard `google/*` model.
 
 OpenClaw does not create Gemini CLI OAuth or Antigravity OAuth profiles. Connect
-Google through an AI Studio API key or Vertex AI. If you explicitly choose the
+Google through a Gemini API key or Vertex AI. If you explicitly choose the
 Gemini CLI runtime, it can use the selected Google API-key profile. Existing
 valid Gemini CLI OAuth profiles remain runtime-compatible, but they are not a
 setup or recovery route.
@@ -196,6 +196,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 | Provider                                | Id                               | Auth env                                       | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| [Abliteration](/providers/abliteration) | `abliteration`                   | `ABLITERATION_API_KEY` or `ABLIT_KEY`          | `abliteration/abliterated-model-large-flash`               |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |
@@ -217,6 +218,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                                   |
 | OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                          |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                    |
+| [Requesty](/providers/requesty)         | `requesty`                       | `REQUESTY_API_KEY`                             | `requesty/claude-sonnet-5-5`                               |
 | Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                             |
 | Together                                | `together`                       | `TOGETHER_API_KEY`                             | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`         |
 | Venice                                  | `venice`                         | `VENICE_API_KEY`                               | -                                                          |
@@ -235,7 +237,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo-auto/balanced` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
   </Accordion>
   <Accordion title="MiniMax">
-    API-key onboarding writes explicit M3 and M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
+    API-key onboarding writes an explicit M3 chat model definition; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
   </Accordion>
   <Accordion title="NVIDIA">
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the normalized key sent to the API stays single-prefixed.

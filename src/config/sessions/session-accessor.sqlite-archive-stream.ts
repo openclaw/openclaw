@@ -3,26 +3,58 @@ export const MAX_TASK_ARCHIVE_RECORD_BYTES = 8 * 1024 * 1024;
 const TASK_ARCHIVE_RECORD_CAPACITY_ERROR =
   "Archived transcript is unavailable because a record exceeds the task-history read capacity.";
 
-/** Frame JSONL and retained multiline JSON as bytes; the caller owns strict JSON validation. */
+/** Decode framed JSONL/multiline records before yielding; the caller owns strict JSON validation. */
 export async function* readTranscriptArchiveRecords(
   source: AsyncIterable<Uint8Array>,
   maxRecordBytes?: number,
 ) {
-  let fragments: Uint8Array[] = [];
+  let fragments: Buffer[] = [];
   let bytes = 0;
   let depth = 0;
   let quoted = false;
   let escaped = false;
   let hasContent = false;
-  for await (const chunk of source) {
+  for await (const input of source) {
+    const chunk = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
     let start = 0;
+    let nextQuote = -1;
+    let nextEscape = -1;
+    let nextNewline = -1;
     for (let index = 0; index < chunk.byteLength; index += 1) {
+      if (quoted && !escaped) {
+        // Ordinary string bytes cannot change framing. Search for only the next
+        // delimiter, escape, or invalid raw newline. Retain each search result so
+        // dense delimiters cannot repeatedly scan the rest of the chunk.
+        if (nextQuote < index) {
+          const found = chunk.indexOf(34, index);
+          nextQuote = found < 0 ? chunk.byteLength : found;
+        }
+        if (nextEscape < index) {
+          const found = chunk.indexOf(92, index);
+          nextEscape = found < 0 ? chunk.byteLength : found;
+        }
+        if (nextNewline < index) {
+          const found = chunk.indexOf(10, index);
+          nextNewline = found < 0 ? chunk.byteLength : found;
+        }
+        index = Math.min(nextQuote, nextEscape, nextNewline);
+        if (maxRecordBytes !== undefined && bytes + index - start > maxRecordBytes) {
+          throw new Error(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
+        }
+        if (index === chunk.byteLength) {
+          break;
+        }
+      }
       const byte = chunk[index];
       if (byte === 10 && (depth <= 0 || quoted)) {
-        fragments.push(chunk.subarray(start, index));
-        bytes += index - start;
         if (hasContent) {
-          yield Buffer.concat(fragments, bytes);
+          // The parser needs a string, not an isolated copy of bytes already in one chunk.
+          if (fragments.length === 0) {
+            yield chunk.toString("utf8", start, index);
+          } else {
+            fragments.push(chunk.subarray(start, index));
+            yield Buffer.concat(fragments, bytes + index - start).toString("utf8");
+          }
         }
         fragments = [];
         bytes = 0;
@@ -59,6 +91,8 @@ export async function* readTranscriptArchiveRecords(
     }
   }
   if (hasContent) {
-    yield Buffer.concat(fragments, bytes);
+    yield (fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments, bytes)).toString(
+      "utf8",
+    );
   }
 }

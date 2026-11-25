@@ -71,17 +71,17 @@ function takeTailByEstimatedChars(text: string, budget: number): string {
   return text.slice(start);
 }
 
-export function chunkMarkdown(
-  content: string,
-  chunking: { tokens: number; overlap: number; perEntry?: boolean },
-): MemoryChunk[] {
-  const lines = content.split("\n");
+/** Incremental text chunking: callers retain only the current chunk and overlap. */
+export function createMarkdownChunker(
+  chunking: { tokens: number; overlap: number },
+  onChunk: (chunk: MemoryChunk) => void,
+) {
   const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
   const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
-  const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  let pendingLine = "";
 
   const flush = () => {
     const firstEntry = current[0];
@@ -92,7 +92,7 @@ export function chunkMarkdown(
     const text = current.map((entry) => entry.line).join("\n");
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
-    chunks.push({
+    onChunk({
       startLine,
       endLine,
       text,
@@ -147,18 +147,18 @@ export function chunkMarkdown(
     currentChars += lineSize;
   };
 
-  const entries = chunking.perEntry
-    ? curatedMarkdownEntrySpans(lines)
-    : [{ startLine: 1, endLine: lines.length, kind: "section" }];
-  for (const entry of entries) {
-    const firstChunk = chunks.length;
-    for (let i = entry.startLine - 1; i < entry.endLine; i += 1) {
-      const line = lines[i] ?? "";
-      const lineNo = i + 1;
-      if (line.length === 0) {
+  return {
+    appendLine(part: string, lineNo: number, endOfLine = true) {
+      const line = pendingLine + part;
+      pendingLine = "";
+      if (line.length === 0 && endOfLine) {
         appendSegment("", lineNo, 0);
       } else {
         for (let start = 0; start < line.length;) {
+          if (!endOfLine && line.length - start <= maxChars) {
+            pendingLine = line.slice(start);
+            break;
+          }
           const coarse = truncateUtf16Safe(line.slice(start), maxChars);
           const coarseChars = estimateStringChars(coarse);
           if (coarseChars > maxChars) {
@@ -184,17 +184,36 @@ export function chunkMarkdown(
           start += coarse.length;
         }
       }
-    }
-    flush();
-    if (entry.kind === "entry") {
-      // Size fragments inherit the full curated entry's annotation span.
-      for (const chunk of chunks.slice(firstChunk)) {
+    },
+    flush() {
+      flush();
+      current = [];
+      currentChars = 0;
+    },
+  };
+}
+
+export function chunkMarkdown(
+  content: string,
+  chunking: { tokens: number; overlap: number; perEntry?: boolean },
+): MemoryChunk[] {
+  const lines = content.split("\n");
+  const chunks: MemoryChunk[] = [];
+  const entries = chunking.perEntry
+    ? curatedMarkdownEntrySpans(lines)
+    : [{ startLine: 1, endLine: lines.length, kind: "section" }];
+  for (const entry of entries) {
+    const chunker = createMarkdownChunker(chunking, (chunk) => {
+      if (entry.kind === "entry") {
         chunk.entryStartLine = entry.startLine;
         chunk.entryEndLine = entry.endLine;
       }
+      chunks.push(chunk);
+    });
+    for (let i = entry.startLine - 1; i < entry.endLine; i += 1) {
+      chunker.appendLine(lines[i] ?? "", i + 1);
     }
-    current = [];
-    currentChars = 0;
+    chunker.flush();
   }
   return chunks;
 }

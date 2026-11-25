@@ -3,6 +3,7 @@ import {
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -10,20 +11,6 @@ import {
   type OnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
-
-type AcknowledgeOnboardRecommendationsOptions = {
-  agent?: string;
-  retry?: readonly string[];
-};
-
-type OnboardRecommendationsOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-type RefreshOnboardRecommendationsOptions = {
-  agent?: string;
-};
 
 const SAFE_INSTALL_ID_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
 
@@ -38,7 +25,7 @@ async function createDefaultOnboardingRecommendationsStore(
 ): Promise<OnboardingRecommendationsStore> {
   const requested = requestedAgentId?.trim();
   if (requestedAgentId !== undefined && !requested) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
   const agentId = requested ? resolveConfiguredAgentId(cfg, requested) : resolveDefaultAgentId(cfg);
@@ -80,7 +67,10 @@ function bootstrapRecommendations(
 }
 
 export async function onboardRecommendationsCommand(
-  opts: OnboardRecommendationsOptions,
+  opts: {
+    agent?: string;
+    json?: boolean;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const store = await createDefaultOnboardingRecommendationsStore(opts.agent);
@@ -119,7 +109,10 @@ export async function onboardRecommendationsCommand(
 }
 
 export async function acknowledgeOnboardRecommendationsCommand(
-  opts: AcknowledgeOnboardRecommendationsOptions,
+  opts: {
+    agent?: string;
+    retry?: readonly string[];
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const store = await createDefaultOnboardingRecommendationsStore(opts.agent);
@@ -158,7 +151,9 @@ export async function acknowledgeOnboardRecommendationsCommand(
 }
 
 export async function refreshOnboardRecommendationsCommand(
-  opts: RefreshOnboardRecommendationsOptions,
+  opts: {
+    agent?: string;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const store = await createDefaultOnboardingRecommendationsStore(opts.agent);

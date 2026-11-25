@@ -8,6 +8,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
@@ -246,7 +247,6 @@ function withGitHubPublicationReceipt(
   publish?: (facts: unknown) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
-    const owner = createAdmission(operation);
     let pending: ReturnType<typeof publication.begin>;
     const lifecycleOwner = ownerFor(context.admission.identity.key);
     const previousDeletion = lifecycleOwner.pendingDeletion;
@@ -261,23 +261,26 @@ function withGitHubPublicationReceipt(
         // Deletion owns personal/repository tombstones, never shared or replacement rows.
         mutation ? undefined : (key, fact) => isPublicationFact(key, fact, false),
       );
-    } catch (error) {
-      owner.admission.finish();
-      throw error;
     } finally {
       lifecycleOwner.pendingDeletion = previousDeletion;
     }
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
+    try {
+      owner = createAdmission(operation);
+    } catch (error) {
       try {
-        finish();
-      } finally {
-        if (owner.admission.settlement) {
-          const confirmed = owner.admission.settlement.kind === "completed";
-          pending.finish(confirmed, confirmed && !owner.admission.committed);
-        }
+        pending.finish(true, true);
+      } catch {
+        // The writer never started; preserve the original constructor failure.
       }
-    };
+      throw error;
+    }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (owner.admission.settlement) {
+        const confirmed = owner.admission.settlement.kind === "completed";
+        pending.finish(confirmed, confirmed && !owner.admission.committed);
+      }
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       pending.finish(known, known && !owner.admission.committed);

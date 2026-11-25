@@ -1,15 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { Errored, lazy, Loading, Show } from "solid-js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import {
+  providerDisplayLabel,
   providerFallbackLetter,
-  resolveCloudProfileIconData,
+  type ProviderPresentation,
   resolveProviderIconName,
-  type CloudProfileIdentity,
 } from "../provider-icon-data.ts";
-import { Icon } from "./icon.tsx";
 
-function ProviderAsset(props: { icon: string; assetPath: string; class?: JSX.ClassValue }) {
+export function ProviderAsset(props: { icon: string; assetPath: string; class?: JSX.ClassValue }) {
   return (
     <span
       class={["provider-brand-icon", props.class]}
@@ -31,40 +30,37 @@ export function ProviderFallbackIcon(props: { label: string; class?: JSX.ClassVa
   );
 }
 
-export function ProviderBrandIcon(props: { provider: string; class?: JSX.ClassValue }) {
-  const icon = createMemo(() => resolveProviderIconName(props.provider));
+const ConfiguredProviderIcon = lazy(() => import("./configured-provider-icon.tsx"));
+
+export function ProviderBrandIcon(props: {
+  provider: string;
+  presentation?: ProviderPresentation;
+  class?: JSX.ClassValue;
+}) {
+  const defaultIcon = () => {
+    const icon = resolveProviderIconName(props.provider);
+    return icon ? (
+      <ProviderAsset
+        icon={icon}
+        assetPath={inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`)}
+        class={props.class}
+      />
+    ) : (
+      <ProviderFallbackIcon
+        label={providerDisplayLabel(props.provider, props.presentation)}
+        class={props.class}
+      />
+    );
+  };
   return (
-    <Show
-      when={icon()}
-      fallback={<ProviderFallbackIcon label={props.provider} class={props.class} />}
-    >
-      {(name) => (
-        <ProviderAsset
-          icon={name()}
-          assetPath={inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${name()}.svg`)}
-          class={props.class}
-        />
+    <Show when={props.presentation?.providerIcon} keyed fallback={defaultIcon()}>
+      {(_selected) => (
+        <Errored fallback={defaultIcon}>
+          <Loading fallback={defaultIcon()}>
+            <ConfiguredProviderIcon {...props} />
+          </Loading>
+        </Errored>
       )}
     </Show>
-  );
-}
-
-export function CloudProfileIcon(props: { profile?: CloudProfileIdentity; class?: string }) {
-  const data = createMemo(() => resolveCloudProfileIconData(props.profile));
-  return (
-    <span class={["cloud-profile-icon", props.class]} aria-hidden="true">
-      <Show
-        when={data().providerId}
-        fallback={<Show when={data().iconName}>{(name) => <Icon name={name()} />}</Show>}
-      >
-        {(providerId) => (
-          <ProviderAsset
-            icon={providerId()}
-            assetPath={inferControlUiPublicAssetPath(`cloud-provider-icons/${providerId()}.svg`)}
-            class="cloud-provider-icon"
-          />
-        )}
-      </Show>
-    </span>
   );
 }

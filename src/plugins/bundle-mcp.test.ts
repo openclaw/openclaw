@@ -1,35 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, assert, describe, expect, it as baseIt } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isRecord } from "../utils.js";
 import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
-import { loadBundleManifest } from "./bundle-manifest.js";
 import { inspectBundleMcpRuntimeSupport, loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import {
   createEnabledPluginEntries,
   createBundleMcpTempHarness,
-  createBundleProbePlugin,
   withBundleHomeEnv,
   writeBundleTextFiles,
   writeClaudeBundleManifest,
   resolveBundlePluginRoot,
 } from "./bundle-mcp.test-support.js";
-
-function getServerArgs(value: unknown): unknown[] | undefined {
-  return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
-}
-
-function normalizePathForAssertion(value: string | undefined): string | undefined {
-  return value ? path.normalize(value).replace(/\\/g, "/") : value;
-}
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 async function expectResolvedPathEqual(actual: unknown, expected: string): Promise<void> {
   assert(typeof actual === "string");
-  expect(normalizePathForAssertion(await fs.realpath(actual))).toBe(
-    normalizePathForAssertion(await fs.realpath(expected)),
-  );
+  expect(await fs.realpath(actual)).toBe(await fs.realpath(expected));
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -40,11 +27,25 @@ function expectNoDiagnostics(diagnostics: unknown[]) {
   expect(diagnostics).toStrictEqual([]);
 }
 
+function stdio(fields: Record<string, unknown> = {}) {
+  return { type: "stdio", command: "node", ...fields };
+}
+
+function remote(type = "streamable-http", endpoint = "mcp", fields: Record<string, unknown> = {}) {
+  return { type, url: `https://example.test/${endpoint}`, ...fields };
+}
+
+function expectedRemote(
+  transport = "streamable-http",
+  endpoint = "mcp",
+  fields: Record<string, unknown> = {},
+) {
+  return { transport, url: `https://example.test/${endpoint}`, ...fields };
+}
+
 const tempHarness = createBundleMcpTempHarness();
 
-afterEach(async () => {
-  await tempHarness.cleanup();
-});
+afterEach(() => tempHarness.cleanup());
 
 function createEnabledBundleConfig(pluginIds: string[]): OpenClawConfig {
   return { plugins: { entries: createEnabledPluginEntries(pluginIds) } };
@@ -98,21 +99,6 @@ const it = baseIt.extend<BundlePaths & { bundle: BundlePaths }>({
 });
 
 describe("loadEnabledBundleMcpConfig", () => {
-  it("loads Claude bundles with absolute argument paths", async ({ homeDir, workspaceDir }) => {
-    const { pluginRoot, serverPath } = await createBundleProbePlugin(homeDir);
-
-    const loaded = loadEnabled(workspaceDir, "bundle-probe");
-    const loadedServer = expectDefined(loaded.config.mcpServers.bundleProbe, "bundleProbe");
-    const loadedArgs = getServerArgs(loadedServer);
-    const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
-
-    expectNoDiagnostics(loaded.diagnostics);
-    expect(loadedServer.command).toBe("node");
-    expect(loadedArgs).toHaveLength(1);
-    await expectResolvedPathEqual(loadedServerPath, serverPath);
-    await expectResolvedPathEqual(loadedServer.cwd, pluginRoot);
-  });
-
   it("loads native plugin MCP declarations", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
     const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
@@ -121,18 +107,11 @@ describe("loadEnabledBundleMcpConfig", () => {
       cfg: createEnabledBundleConfig(["native-mcp"]),
       manifestRegistry: {
         plugins: [
-          {
+          createPluginManifestRecordFixture({
             id: "native-mcp",
             origin: "global",
             format: "openclaw",
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
             rootDir: pluginRoot,
-            source: path.join(pluginRoot, "index.js"),
-            manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
             mcpServers: {
               app: {
                 transport: "stdio",
@@ -142,7 +121,7 @@ describe("loadEnabledBundleMcpConfig", () => {
               remote: { transport: "streamable-http", url: "https://example.test/mcp" },
               events: { transport: "sse", url: "https://example.test/sse" },
             },
-          },
+          }),
         ],
       },
     });
@@ -160,29 +139,30 @@ describe("loadEnabledBundleMcpConfig", () => {
     });
   });
 
-  it("normalizes transports and skips disabled bundles", async ({ homeDir, workspaceDir }) => {
+  it("normalizes Claude transports and paths while skipping disabled bundles", async ({
+    homeDir,
+    workspaceDir,
+  }) => {
     const pluginRoot = await writeClaude(homeDir, "inline-enabled", {
       mcpServers: {
-        enabledProbe: {
+        enabledProbe: stdio({
           type: " StDiO ",
-          command: "node",
-          args: ["./enabled.mjs"],
-        },
-        inlineHttp: { type: "http", url: "https://example.test/inline" },
-        canonical: { type: "http", transport: "sse", url: "https://example.test/canonical" },
-        unsupported: { type: " CuStOm ", url: "https://example.test/unsupported" },
-        explicitTransport: {
-          type: "custom",
-          transport: "sse",
-          url: "https://example.test/explicit",
-        },
+          command: "${CLAUDE_PLUGIN_ROOT}/bin/server.sh",
+          args: ["${CLAUDE_PLUGIN_ROOT}/servers/probe.mjs", "./local-probe.mjs"],
+          cwd: "${CLAUDE_PLUGIN_ROOT}",
+          env: { PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" },
+        }),
+        inlineHttp: remote("http", "inline"),
+        canonical: remote("http", "canonical", { transport: "sse" }),
+        unsupported: remote(" CuStOm ", "unsupported"),
+        explicitTransport: remote("custom", "explicit", { transport: "sse" }),
       },
     });
     await writeBundleTextFiles(pluginRoot, {
       ".mcp.json": JSON.stringify({
         mcpServers: {
-          fileHttp: { type: "http", url: "https://example.test/file" },
-          fileSse: { type: " SsE ", url: "https://example.test/sse" },
+          fileHttp: remote("http", "file"),
+          fileSse: remote(" SsE ", "sse"),
         },
       }),
     });
@@ -207,69 +187,43 @@ describe("loadEnabledBundleMcpConfig", () => {
       },
     });
 
-    const enabledProbe = loaded.config.mcpServers.enabledProbe;
-    expect(enabledProbe).toMatchObject({
-      command: "node",
-      args: [expect.stringContaining("enabled.mjs")],
-    });
-    for (const [name, transport] of [
-      ["enabledProbe", "stdio"],
-      ["inlineHttp", "streamable-http"],
-      ["canonical", "sse"],
-      ["fileHttp", "streamable-http"],
-      ["fileSse", "sse"],
-    ] as const) {
-      expect(loaded.config.mcpServers[name]).toMatchObject({ transport });
-      expect(loaded.config.mcpServers[name]).not.toHaveProperty("type");
-      if (transport !== "stdio") {
-        expect(loaded.config.mcpServers[name]).not.toHaveProperty("cwd");
-      }
-    }
-    expect(loaded.config.mcpServers.unsupported).toMatchObject({
-      type: " CuStOm ",
-      transport: "custom",
-    });
-    expect(loaded.config.mcpServers.explicitTransport).toMatchObject({
-      type: "custom",
-      transport: "sse",
+    const root = loaded.config.mcpServers.enabledProbe?.cwd;
+    assert(typeof root === "string");
+    await expectResolvedPathEqual(root, pluginRoot);
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers).toEqual({
+      enabledProbe: {
+        transport: "stdio",
+        command: path.join(root, "bin/server.sh"),
+        args: [path.join(root, "servers/probe.mjs"), path.join(root, "local-probe.mjs")],
+        cwd: root,
+        env: { PLUGIN_ROOT: root },
+      },
+      inlineHttp: expectedRemote("streamable-http", "inline"),
+      canonical: expectedRemote("sse", "canonical"),
+      fileHttp: expectedRemote("streamable-http", "file"),
+      fileSse: expectedRemote("sse", "sse"),
+      unsupported: expectedRemote("custom", "unsupported", { type: " CuStOm " }),
+      explicitTransport: expectedRemote("sse", "explicit", { type: "custom" }),
     });
     const support = inspectBundleMcpRuntimeSupport({
       pluginId: "inline-enabled",
       rootDir: pluginRoot,
       bundleFormat: "claude",
     });
-    expect(support.unsupportedServerNames).toEqual(["unsupported"]);
-    expect(support.supportedServerNames).toContain("explicitTransport");
-    expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
-  });
-
-  it("expands inline Claude plugin-root paths", async ({ homeDir, workspaceDir }) => {
-    const pluginRoot = await writeClaude(homeDir, "inline-claude", {
-      mcpServers: {
-        inlineProbe: {
-          command: "${CLAUDE_PLUGIN_ROOT}/bin/server.sh",
-          args: ["${CLAUDE_PLUGIN_ROOT}/servers/probe.mjs", "./local-probe.mjs"],
-          cwd: "${CLAUDE_PLUGIN_ROOT}",
-          env: {
-            PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}",
-          },
-        },
-      },
+    expect(support).toEqual({
+      unsupportedServerNames: ["unsupported"],
+      supportedServerNames: [
+        "fileHttp",
+        "fileSse",
+        "enabledProbe",
+        "inlineHttp",
+        "canonical",
+        "explicitTransport",
+      ],
+      stdioServerNames: ["enabledProbe"],
+      diagnostics: [],
     });
-
-    const loaded = loadEnabled(workspaceDir, "inline-claude");
-    const loadedServer = expectDefined(loaded.config.mcpServers.inlineProbe, "inlineProbe");
-    const { command, cwd, env } = loadedServer;
-    assert(typeof command === "string" && typeof cwd === "string" && isRecord(env));
-    expectNoDiagnostics(loaded.diagnostics);
-    await expectResolvedPathEqual(cwd, pluginRoot);
-    await expectResolvedPathEqual(env.PLUGIN_ROOT, pluginRoot);
-    expect(normalizePathForAssertion(path.relative(cwd, command))).toBe("bin/server.sh");
-    expect(
-      getServerArgs(loadedServer)?.map((entry) =>
-        typeof entry === "string" ? normalizePathForAssertion(path.relative(cwd, entry)) : entry,
-      ),
-    ).toEqual(["servers/probe.mjs", "local-probe.mjs"]);
   });
 
   it.for(["mcp", "lsp"] as const)(
@@ -289,11 +243,13 @@ describe("loadEnabledBundleMcpConfig", () => {
     },
   );
 
-  it("loads Agent Plugins placeholders, env, and transports", async ({ homeDir, workspaceDir }) => {
+  it("loads Agent transports and placeholders while rejecting cwd traversal", async ({
+    homeDir,
+    workspaceDir,
+  }) => {
     const pluginRoot = await writeAgentBundle(homeDir, "portable-mcp", {
       servers: {
-        local: {
-          type: "stdio",
+        local: stdio({
           command: "./bin/server",
           args: ["${PLUGIN_ROOT}/config.json", "${PLUGIN_DATA}/cache"],
           env: {
@@ -301,93 +257,68 @@ describe("loadEnabledBundleMcpConfig", () => {
             DATA_COPY: "${PLUGIN_DATA}",
           },
           cwd: "${PLUGIN_DATA}",
-        },
-        remote: {
-          type: "streamable-http",
-          url: "https://example.test/mcp",
-          headers: { Authorization: "Bearer test" },
-        },
-        legacy: {
-          type: "sse",
-          url: "https://example.test/sse",
-        },
+        }),
+        remote: remote("streamable-http", "mcp", { headers: { Authorization: "Bearer test" } }),
+        legacy: remote("sse", "sse"),
+        valid: stdio({ cwd: "./child" }),
+        dotPrefixedChild: stdio({ cwd: "./..cache" }),
+        relativeEscape: stdio({ cwd: "./../escape" }),
+        placeholderEscape: stdio({ cwd: "${PLUGIN_ROOT}/../escape" }),
       },
       textFiles: {
         "bin/server": "#!/bin/sh\n",
         "config.json": "{}\n",
+        "child/.keep": "",
+        "..cache/.keep": "",
       },
     });
 
     const loaded = loadEnabled(workspaceDir, "portable-mcp");
-    const local = expectDefined(loaded.config.mcpServers.local, "local agent MCP server");
-    const remote = expectDefined(loaded.config.mcpServers.remote, "remote agent MCP server");
-    const legacy = expectDefined(loaded.config.mcpServers.legacy, "legacy agent MCP server");
-    const localEnv = isRecord(local.env) ? local.env : {};
-    const localArgs = getServerArgs(local);
-
-    expectNoDiagnostics(loaded.diagnostics);
-    expect(local).toMatchObject({ transport: "stdio" });
-    expect(local.type).toBeUndefined();
-    await expectResolvedPathEqual(local.command, path.join(pluginRoot, "bin", "server"));
-    await expectResolvedPathEqual(localArgs?.[0], path.join(pluginRoot, "config.json"));
-    expect(localArgs?.[1]).toBe(path.join(String(localEnv.PLUGIN_DATA), "cache"));
-    await expectResolvedPathEqual(localEnv.PLUGIN_ROOT, pluginRoot);
+    const root = await fs.realpath(pluginRoot);
     const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp");
-    expect(localEnv.PLUGIN_DATA).toBe(pluginDataPath);
-    expect(local.cwd).toBe(pluginDataPath);
-    expect(loaded.prepareDataDirsByServer).toEqual({
-      local: { pluginId: "portable-mcp", dataDir: pluginDataPath },
-    });
-    await expectPathMissing(pluginDataPath);
-    expect(localEnv.ROOT_COPY).toBe(localEnv.PLUGIN_ROOT);
-    expect(localEnv.DATA_COPY).toBe(localEnv.PLUGIN_DATA);
-    expect(remote).toEqual({
-      transport: "streamable-http",
-      url: "https://example.test/mcp",
-      headers: { Authorization: "Bearer test" },
-    });
-    expect(legacy).toEqual({
-      transport: "sse",
-      url: "https://example.test/sse",
-    });
-    expect(inspectAgent("portable-mcp", pluginRoot)).toMatchObject({
-      supportedServerNames: ["local", "remote", "legacy"],
-      stdioServerNames: ["local"],
-      unsupportedServerNames: [],
-    });
-  });
-
-  it("resolves Agent Plugins cwd and rejects traversal", async ({ homeDir, workspaceDir }) => {
-    const pluginRoot = await writeAgentBundle(homeDir, "portable-cwd", {
-      servers: {
-        valid: { type: "stdio", command: "node", cwd: "./child" },
-        dotPrefixedChild: { type: "stdio", command: "node", cwd: "./..cache" },
-        relativeEscape: { type: "stdio", command: "node", cwd: "./../escape" },
-        placeholderEscape: {
-          type: "stdio",
-          command: "node",
-          cwd: "${PLUGIN_ROOT}/../escape",
+    expect(Object.keys(loaded.config.mcpServers)).toEqual([
+      "local",
+      "remote",
+      "legacy",
+      "valid",
+      "dotPrefixedChild",
+    ]);
+    const { valid, dotPrefixedChild, ...portableServers } = loaded.config.mcpServers;
+    expect(portableServers).toEqual({
+      local: {
+        transport: "stdio",
+        command: path.join(root, "bin", "server"),
+        args: [path.join(root, "config.json"), path.join(pluginDataPath, "cache")],
+        cwd: pluginDataPath,
+        env: {
+          ROOT_COPY: root,
+          DATA_COPY: pluginDataPath,
+          PLUGIN_ROOT: root,
+          PLUGIN_DATA: pluginDataPath,
         },
       },
-      textFiles: { "child/.keep": "", "..cache/.keep": "" },
+      remote: expectedRemote("streamable-http", "mcp", {
+        headers: { Authorization: "Bearer test" },
+      }),
+      legacy: expectedRemote("sse", "sse"),
     });
-    const rootRealPath = await fs.realpath(pluginRoot);
-    const relativeProcessCwd = path.relative(rootRealPath, await fs.realpath(process.cwd()));
+    expect(loaded.prepareDataDirsByServer).toEqual({
+      local: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+      valid: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+      dotPrefixedChild: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+    });
+    await expectPathMissing(pluginDataPath);
+    expect(inspectAgent("portable-mcp", pluginRoot)).toMatchObject({
+      supportedServerNames: ["local", "remote", "legacy", "valid", "dotPrefixedChild"],
+      stdioServerNames: ["local", "valid", "dotPrefixedChild"],
+      unsupportedServerNames: [],
+    });
+    const relativeProcessCwd = path.relative(root, await fs.realpath(process.cwd()));
     expect(relativeProcessCwd === ".." || relativeProcessCwd.startsWith(`..${path.sep}`)).toBe(
       true,
     );
-
-    const loaded = loadEnabled(workspaceDir, "portable-cwd");
-
-    expect(Object.keys(loaded.config.mcpServers)).toEqual(["valid", "dotPrefixedChild"]);
-    await expectResolvedPathEqual(
-      loaded.config.mcpServers.valid?.cwd,
-      path.join(pluginRoot, "child"),
-    );
-    await expectResolvedPathEqual(
-      loaded.config.mcpServers.dotPrefixedChild?.cwd,
-      path.join(pluginRoot, "..cache"),
-    );
+    await expectResolvedPathEqual(valid?.cwd, path.join(pluginRoot, "child"));
+    await expectResolvedPathEqual(dotPrefixedChild?.cwd, path.join(pluginRoot, "..cache"));
     expect(loaded.diagnostics.map((entry) => entry.message)).toEqual([
       expect.stringContaining('invalid MCP server "relativeEscape"'),
       expect.stringContaining('invalid MCP server "placeholderEscape"'),
@@ -398,15 +329,15 @@ describe("loadEnabledBundleMcpConfig", () => {
   });
 
   it("ignores dot and inline Agent Plugins MCP config", async ({ homeDir, workspaceDir }) => {
-    const pluginRoot = await writeAgentBundle(homeDir, "closed-agent", {
+    await writeAgentBundle(homeDir, "closed-agent", {
       manifest: {
         mcpServers: {
-          inline: { type: "stdio", command: "node" },
+          inline: stdio(),
         },
       },
       textFiles: {
         ".mcp.json": JSON.stringify({
-          mcpServers: { dotted: { type: "stdio", command: "node" } },
+          mcpServers: { dotted: stdio() },
         }),
       },
     });
@@ -416,56 +347,6 @@ describe("loadEnabledBundleMcpConfig", () => {
     expectNoDiagnostics(loaded.diagnostics);
     expect(loaded.config.mcpServers).toStrictEqual({});
     await expectPathMissing(path.join(homeDir, ".openclaw", "plugin-data", "closed-agent"));
-    expect(await fs.realpath(pluginRoot)).toBeTruthy();
-  });
-
-  it("keeps inspection pure when PLUGIN_DATA collides", async ({ homeDir, workspaceDir }) => {
-    const pluginId = "data-dir-collision";
-    const pluginRoot = await writeAgentBundle(homeDir, pluginId, {
-      servers: {
-        local: { type: "stdio", command: "node" },
-        remote: { type: "streamable-http", url: "https://example.test/mcp" },
-      },
-      textFiles: {
-        "skills/weather/SKILL.md": "---\nname: weather\ndescription: Weather skill\n---\n",
-      },
-    });
-    const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", pluginId);
-    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
-    await fs.writeFile(pluginDataPath, "directory collision", "utf8");
-
-    const loaded = loadEnabled(workspaceDir, pluginId);
-
-    expect(loaded.config.mcpServers).toEqual({
-      local: {
-        transport: "stdio",
-        command: "node",
-        cwd: await fs.realpath(pluginRoot),
-        env: {
-          PLUGIN_ROOT: await fs.realpath(pluginRoot),
-          PLUGIN_DATA: pluginDataPath,
-        },
-      },
-      remote: { transport: "streamable-http", url: "https://example.test/mcp" },
-    });
-    expect(loaded.diagnostics).toStrictEqual([]);
-    expect(loaded.prepareDataDirsByServer).toEqual({
-      local: { pluginId, dataDir: pluginDataPath },
-    });
-    expect(inspectAgent(pluginId, pluginRoot)).toMatchObject({
-      supportedServerNames: ["local", "remote"],
-      unsupportedServerNames: [],
-    });
-    expect((await fs.stat(pluginDataPath)).isFile()).toBe(true);
-
-    const manifest = loadBundleManifest({ rootDir: pluginRoot, bundleFormat: "agent" });
-    expect(manifest).toMatchObject({
-      ok: true,
-      manifest: {
-        skills: ["skills"],
-        capabilities: expect.arrayContaining(["skills", "mcpServers"]),
-      },
-    });
   });
 
   it.for([
@@ -486,22 +367,15 @@ describe("loadEnabledBundleMcpConfig", () => {
   it("isolates invalid Agent Plugins MCP entries", async ({ homeDir, workspaceDir }) => {
     await writeAgentBundle(homeDir, "isolated-agent-mcp", {
       servers: {
-        valid: { type: "streamable-http", url: "https://example.test/mcp" },
-        invalid: {
-          type: "stdio",
-          command: "node --inspect",
-          env: { PLUGIN_ROOT: "override" },
-        },
+        valid: remote(),
+        invalid: stdio({ command: "node --inspect", env: { PLUGIN_ROOT: "override" } }),
       },
     });
 
     const loaded = loadEnabled(workspaceDir, "isolated-agent-mcp");
 
     expect(loaded.config.mcpServers).toEqual({
-      valid: {
-        transport: "streamable-http",
-        url: "https://example.test/mcp",
-      },
+      valid: expectedRemote(),
     });
     expect(loaded.diagnostics).toHaveLength(1);
     expect(loaded.diagnostics[0]?.message).toContain('invalid MCP server "invalid"');

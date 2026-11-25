@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  abortEmbeddedAgentRun,
   buildCompactParams,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
@@ -13,7 +12,6 @@ import {
   requireResolveAgentDirCall,
   requireResolveSessionAgentIdCall,
   resetCompactCommandMocks,
-  waitForEmbeddedAgentRunEnd,
 } from "./commands-compact.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -81,8 +79,8 @@ describe("handleCompactCommand", () => {
         ...params,
         ctx: {
           ...params.ctx,
-          CommandBody: "/compact: focus on decisions",
-          commandText: "/compact: focus on decisions",
+          CommandBody: "/compact: focus on decisions\nAda: keep this label",
+          commandText: "/compact: focus on decisions\nAda: keep this label",
           From: "+15550001",
           To: "+15550002",
           SenderName: "Alice",
@@ -113,7 +111,7 @@ describe("handleCompactCommand", () => {
       sessionKey: "agent:main:main",
       allowGatewaySubagentBinding: true,
       trigger: "manual",
-      customInstructions: "focus on decisions",
+      customInstructions: "focus on decisions\nAda: keep this label",
       messageChannel: "whatsapp",
       groupId: "group-1",
       groupChannel: "#general",
@@ -132,8 +130,6 @@ describe("handleCompactCommand", () => {
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
     expect(call).not.toHaveProperty("senderIsOwner");
     expect(params.command.ownerList).toEqual(ownerIds);
-    expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
-    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -229,6 +225,22 @@ describe("handleCompactCommand", () => {
     );
 
     expect(requireCompactEmbeddedAgentSessionCall().agentHarnessId).toBe("codex");
+  });
+
+  it("explains a refusal trim and how to continue after manual compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 80_000,
+        tokensAfter: 2_000,
+        details: { readFiles: [], modifiedFiles: [], qualityDegraded: true, summaryRefused: true },
+      },
+    });
+    const result = await handleCompactCommand(compactParams(), true);
+    expect(result?.reply?.text).toContain("Context trimmed because the summarizer refused");
+    expect(result?.reply?.text).toContain("Resend essential older details");
+    expect(result?.sessionCompaction?.compacted).toBe(true);
   });
 
   it("reports server-side compaction with before and after tokens", async () => {

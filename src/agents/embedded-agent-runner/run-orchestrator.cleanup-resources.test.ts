@@ -14,10 +14,8 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { captureAsyncWorkTracker, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
@@ -48,6 +46,7 @@ it.each([
   "required-timeout",
   "ordinary-error",
   "parent-cancel",
+  "dispose-failure",
 ] as const)(
   "keeps candidate registration and cleanup within execution authority for %s",
   async (mode) => {
@@ -58,7 +57,12 @@ it.each([
     const records = new Map<string, Registration>();
     Object.defineProperty(globalThis, fixtureKey, {
       configurable: true,
-      value: { records, next: 0, deferred: createDeferred },
+      value: {
+        records,
+        next: 0,
+        deferred: createDeferred,
+        failDispose: mode === "dispose-failure",
+      },
     });
     const cleanupStarted = createDeferred();
     const finishCleanup = createDeferred();
@@ -69,6 +73,8 @@ it.each([
     const finishInitialWriter = createDeferred();
     let initialWriterDisposals = 0;
     const warnings: string[] = [];
+    const expectWarning = (...parts: string[]) =>
+      expect(warnings.some((warning) => parts.every((part) => warning.includes(part)))).toBe(true);
     const cleanupScope = createAgentCleanupScope();
     let selected: Registration | undefined;
     let nested: Promise<number> | undefined;
@@ -76,6 +82,7 @@ it.each([
     let workSignal: AbortSignal | undefined;
     let logical: Promise<EmbeddedAgentRunResult> | undefined;
     let actualCleanup: Promise<void> | undefined;
+    let cleanupSettlement: Promise<void> | undefined;
     let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
     const cliResources = mode === "parent-cancel" ? new CliPluginInvocationResources() : undefined;
     let parentSignal: AbortSignal | undefined;
@@ -106,6 +113,7 @@ it.each([
           record.disposed++;
           db.close();
           record.close.resolve();
+          if (state.failDispose) throw new Error("candidate dispose failure");
         } });
       } };`,
       );
@@ -143,6 +151,7 @@ it.each([
       };
       setRuntimeConfigSnapshot(cfg);
       loop.mockImplementation(async (_refresh, input) => {
+        cleanupSettlement = input.runParams.runCleanupSettlement;
         const prepared = input.preparedModelRuntime;
         assert(prepared, "Runner did not supply its prepared candidate runtime");
         const label = prepared.pluginRegistry?.providers.find(
@@ -205,10 +214,9 @@ it.each([
       const runId = `candidate-cleanup-${mode}`;
       const operatorAuthority =
         mode === "model-denied"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               profileId: "candidate-reader",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
               modelPolicy: prepareOperatorModelPolicy({
                 cfg,
                 policy: {
@@ -267,7 +275,7 @@ it.each([
         logical,
         "Run completed before cleanup started",
       );
-      if (mode === "ordinary-error") {
+      if (mode === "ordinary-error" || mode === "dispose-failure") {
         finishCleanup.resolve();
       }
       if (mode === "required-timeout" || mode === "ordinary-error") {
@@ -281,12 +289,12 @@ it.each([
       }
       assert(selected, "Candidate registry source was not selected");
       admission.close();
+      const generationCleanup = cleanupSettlement;
+      assert(generationCleanup, "Attempt did not receive its generation cleanup settlement");
       expect.soft([selected.disposed, workSignal?.aborted ?? false]).toEqual([0, false]);
-      expect(cleanupScope.outcome).toBe("uncertain");
-      if (mode !== "ordinary-error") {
-        expect(
-          warnings.some((warning) => warning.includes("step=candidate-fixture timeoutMs=25")),
-        ).toBe(true);
+      expect(cleanupScope.outcome).toBe(mode === "dispose-failure" ? "closed" : "uncertain");
+      if (mode !== "ordinary-error" && mode !== "dispose-failure") {
+        expectWarning("step=candidate-fixture timeoutMs=25");
       }
       if (cliResources) {
         parentClose = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
@@ -316,22 +324,27 @@ it.each([
       if (cliResources) {
         expect(parentClosed).toBe(true);
       }
-      expect([selected.disposed, cleanupScope.outcome]).toEqual([1, "uncertain"]);
+      if (mode === "dispose-failure") {
+        await expect(generationCleanup).rejects.toThrow(
+          "Prepared plugin generation cleanup failed",
+        );
+        const embeddedRunState = Reflect.get(
+          globalThis,
+          Symbol.for("openclaw.embeddedRunState"),
+        ) as { pendingCleanupOwners?: Set<{ runId: string }> } | undefined;
+        expect(embeddedRunState?.pendingCleanupOwners).toBeUndefined();
+      } else {
+        await generationCleanup;
+      }
+      expect([selected.disposed, cleanupScope.outcome]).toEqual([
+        1,
+        mode === "dispose-failure" ? "closed" : "uncertain",
+      ]);
       if (mode === "late-failure") {
-        expect(
-          warnings.some(
-            (warning) =>
-              warning.includes("rejected after timeout") &&
-              warning.includes("candidate cleanup failure"),
-          ),
-        ).toBe(true);
+        expectWarning("rejected after timeout", "candidate cleanup failure");
       }
-      const reopened = new DatabaseSync(selected.file, { readOnly: true });
-      try {
-        expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
-      } finally {
-        reopened.close();
-      }
+      using reopened = new DatabaseSync(selected.file, { readOnly: true });
+      expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
     } finally {
       finishCleanup.resolve();
       finishNested.resolve();

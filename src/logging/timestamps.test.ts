@@ -33,9 +33,9 @@ describe("formatTimestamp", () => {
     ] as const) {
       expect(formatTimestamp(new Date(time), { style: "long", timeZone })).toBe(expected);
     }
-    expect(() => formatTimestamp(new Date(Number.NaN), { timeZone: "America/New_York" })).toThrow(
-      RangeError,
-    );
+    expect(() =>
+      formatTimestamp(new Date(Number.NaN), { style: "long", timeZone: "America/New_York" }),
+    ).toThrow(RangeError);
   });
 
   it("falls back to a valid offset when the timezone is invalid", () => {

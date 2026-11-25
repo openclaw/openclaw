@@ -10,8 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
@@ -25,7 +24,6 @@ import {
 } from "./plugin-cache-files.js";
 import {
   createPluginCache,
-  getPluginCacheRoot,
   getPluginCacheSource,
   getProcessPluginCache,
   invalidatePluginCacheMetadata,
@@ -36,6 +34,7 @@ import {
 import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   getPluginLoaderCacheState,
@@ -55,10 +54,6 @@ function readFile(
   return readPluginCacheFile({ rootDir, relativePath, rejectHardlinks, maxBytes });
 }
 
-function writeJson(dir: string, name: string, value: object) {
-  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
-}
-
 function symlinkDir(target: string, alias: string) {
   fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
 }
@@ -66,10 +61,7 @@ function symlinkDir(target: string, alias: string) {
 function fixture(files: Record<string, string> = {}, aliases: Record<string, string> = {}) {
   const root = fs.realpathSync(tempDirs.make("plugin-cache-"));
   const file = (name: string) => path.join(root, name);
-  for (const [name, contents] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(file(name)), { recursive: true });
-    fs.writeFileSync(file(name), contents);
-  }
+  writeArtifacts(root, files);
   for (const [name, target] of Object.entries(aliases)) {
     if (fs.statSync(file(target)).isDirectory()) {
       symlinkDir(file(target), file(name));
@@ -106,9 +98,41 @@ function installedFixture(id: string) {
   return { file, root, write, env };
 }
 
-function callsFor(calls: unknown[][], ...paths: string[]) {
-  return calls.filter(([target]) => paths.includes(String(target)));
-}
+it("keeps registry metadata and index fingerprints on the captured generation", () => {
+  const id = "generation-owner";
+  const { root: pluginDir, write, env } = installedFixture(id);
+  const first = write("1.0.0");
+  const discovery = discoverOpenClawPlugins({ env, installRecords: {} });
+  expect(discovery.candidates.find((candidate) => candidate.idHint === id)).toBeDefined();
+  write("2.0.0");
+  const registry = loadPluginManifestRegistryCore({ env, discovery, installRecords: {} });
+  const buildRecords = () =>
+    buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      diagnostics: [],
+      installRecords: {},
+    });
+  const records = buildRecords();
+  expect(registry.plugins.find((plugin) => plugin.id === id)?.version).toBe("1.0.0");
+  const hash = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+  expect(records.find((record) => record.pluginId === id)).toMatchObject({
+    manifestHash: hash(first.manifest),
+    packageJson: { hash: hash(first.packageJson) },
+  });
+  expect(records.find((record) => record.pluginId === id)?.doctorContractHash).toBeUndefined();
+  const distDir = path.join(pluginDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+  const contract = "module.exports = {};";
+  fs.writeFileSync(path.join(distDir, "doctor-contract-api.cjs"), contract);
+  expect(
+    buildRecords().find((record) => record.pluginId === id)?.doctorContractHash,
+  ).toBeUndefined();
+  invalidatePluginCacheMetadata(getProcessPluginCache());
+  expect(buildRecords().find((record) => record.pluginId === id)?.doctorContractHash).toBe(
+    hash(contract),
+  );
+});
 
 function checkEntry(rootDir: string, relativePath: string, rootRealPath?: string) {
   return checkPluginCacheEntry({ rootDir, relativePath, rootRealPath, rejectHardlinks: true });
@@ -216,30 +240,6 @@ function createRetargetedWindowsRootFixture(basename: string) {
     openSync: vi.spyOn(fs, "openSync"),
   };
 }
-
-it.skipIf(process.platform === "win32")(
-  "reuses checked entry canonical paths until metadata invalidation",
-  () => {
-    const { root, file } = fixture({ "index.js": "export default {};\n" });
-    const source = file("index.js");
-    const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
-    const cache = getProcessPluginCache();
-    expect(checkEntry(root, "index.js")).toMatchObject({
-      ok: true,
-      path: source,
-      exists: true,
-    });
-    nativeRealpath.mockClear();
-    expect(pluginCacheRealpathSync(source)).toBe(source);
-    expect(pluginCacheRealpathSync(source, true)).toBe(source);
-    expect(nativeRealpath).not.toHaveBeenCalled();
-
-    fs.unlinkSync(source);
-    invalidatePluginCacheMetadata(cache);
-    expect(pluginCacheRealpathSync(source, true)).toBeNull();
-    expect(pluginCacheRealpathSync(source)).toBeNull();
-  },
-);
 
 it.skipIf(process.platform === "win32")(
   "shares metadata ancestors without trusting them at the file-open boundary",
@@ -365,64 +365,6 @@ it.each(["junction", "short root"] as const)("admits Windows entry alias: %s", (
   expect(checkEntry(observed, "plugin.js", canonical)).toMatchObject({ ok: true, exists: true });
 });
 
-it.each(["regular", "symlink"] as const)("reuses %s provider catalog sources", (kind) => {
-  const { root: dir, file } = fixture(
-    { [kind === "symlink" ? "catalog.js" : "provider-discovery.js"]: "export default {};\n" },
-    kind === "symlink" ? { "provider-discovery.js": "catalog.js" } : {},
-  );
-  const providerDiscoverySource = file("provider-discovery.js");
-  writeJson(dir, "openclaw.plugin.json", {
-    id: "cached-provider",
-    providers: ["cached-provider"],
-    providerCatalogEntry: "./provider-discovery.js",
-    configSchema: { type: "object" },
-  });
-  const realpathSpy = vi.spyOn(fs, "realpathSync");
-  const lstatSpy = vi.spyOn(fs, "lstatSync");
-
-  let firstReadCounts: number[] | undefined;
-  for (let build = 0; build < 2; build += 1) {
-    const registry = loadPluginManifestRegistryCore({
-      installRecords: {},
-      candidates: [
-        {
-          idHint: "cached-provider",
-          rootDir: dir,
-          source: path.join(dir, "index.js"),
-          origin: "bundled",
-        },
-      ],
-    });
-    expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
-    const readCounts = [realpathSpy, lstatSpy].map(
-      (spy) => callsFor(spy.mock.calls, providerDiscoverySource).length,
-    );
-    firstReadCounts ??= readCounts;
-    expect(readCounts).toEqual(firstReadCounts);
-  }
-});
-
-it.each(["regular", "boundary"] as const)(
-  "shares missing %s files across reader policies per owner",
-  (firstPolicy) => {
-    const { root, file } = fixture();
-    const filePath = file("catalog.json");
-    const readers = {
-      regular: () => readPluginCacheJsonFile(filePath),
-      boundary: () => readFile(root, "catalog.json"),
-    };
-    expect(readers[firstPolicy]().ok).toBe(false);
-    fs.writeFileSync(filePath, "{}");
-    expect(readers.regular().ok).toBe(false);
-    expect(readers.boundary().ok).toBe(false);
-    withPluginCache(createPluginCache(), () => {
-      expect(readers.regular().ok).toBe(true);
-      expect(readers.boundary().ok).toBe(true);
-    });
-    expect(readers[firstPolicy]().ok).toBe(false);
-  },
-);
-
 it("preserves regular-file symlink checks and per-reader size limits", () => {
   const { root, file } = fixture({ "catalog.json": "{}" }, { "alias.json": "catalog.json" });
   const filePath = file("catalog.json");
@@ -452,50 +394,26 @@ it("preserves uncapped bundle reads without weakening the default metadata limit
   expect(readFile(root, "catalog.json").ok).toBe(false);
 });
 
-it("reuses checked package entries across separate workspace discovery views", () => {
-  const { root, file, write } = installedFixture("shared-entry");
-  write();
-  const entry = path.join(root, "index.js");
-  const discover = (workspace: string) =>
-    discoverConfiguredPluginLoadPaths({
-      loadPaths: [root],
-      workspaceDir: file(workspace),
-    });
-  const first = discover("a");
-  expect(first.candidates.map((candidate) => candidate.idHint)).toContain("shared-entry");
-  const open = vi.spyOn(fs, "openSync");
-  const second = discover("b");
-  expect(second.candidates[0]).toMatchObject({
-    source: first.candidates[0]?.source,
-    workspaceDir: file("b"),
+it("scopes relative metadata roots to the current working directory", () => {
+  const { file } = fixture({
+    "first/plugin/package.json": '{"name":"first"}',
+    "second/plugin/package.json": '{"name":"second"}',
   });
-  expect(callsFor(open.mock.calls, entry)).toEqual([]);
-});
-it("keeps missing bundle markers fixed until an explicit operation reads a new generation", () => {
-  const { root, file } = fixture({
-    ".claude-plugin/plugin.json": JSON.stringify({ name: "fixture" }),
-  });
-  const load = () => loadBundleManifest({ rootDir: root, bundleFormat: "claude" });
-  expect(detectBundleManifestFormat(root)).toBe("claude");
-  const before = load();
-  expect(before.ok && before.manifest.skills).toEqual([]);
-  fs.mkdirSync(file("skills"));
-  expect(load()).toEqual(before);
-  const fresh = withPluginCache(createPluginCache(), load);
-  expect(fresh.ok && fresh.manifest.skills).toContain("skills");
-});
-
-it("shares checked aliases without discarding artifacts resolved before the first file read", () => {
-  const { file } = fixture({ "package/package.json": "{}" }, { alias: "package" });
-  const root = file("package");
-  const alias = file("alias");
-  const aliasRecord = getPluginCacheRoot(alias);
-  aliasRecord.artifacts.set("missing-surface", null);
-  const first = readFile(alias, "package.json");
-  const open = vi.spyOn(fs, "openSync");
-  expect(readFile(root, "package.json")).toBe(first);
-  expect(getPluginCacheRoot(root).artifacts.has("missing-surface")).toBe(true);
-  expect(open).not.toHaveBeenCalled();
+  const firstDirectory = file("first");
+  const secondDirectory = file("second");
+  const originalCwd = process.cwd();
+  process.chdir(firstDirectory);
+  try {
+    const first = readFile("plugin", "package.json");
+    process.chdir(secondDirectory);
+    const second = readFile("plugin", "package.json");
+    expect(first.ok && first.contents.toString()).toBe('{"name":"first"}');
+    expect(second.ok && second.contents.toString()).toBe('{"name":"second"}');
+    process.chdir(firstDirectory);
+    expect(readFile("plugin", "package.json")).toBe(first);
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 it("keeps checked source aliases authoritative within their explicit cache generation", () => {
@@ -542,55 +460,6 @@ it("does not use a permissive hardlink read to satisfy a strict root policy", ()
   fs.writeFileSync(file("missing.json"), "{}");
   expect(pluginCacheExistsSync(file("missing.json"))).toBe(false);
 });
-it.each(["missing", "empty"])(
-  "caches package facts and %s artifact directories until refresh",
-  (directory) => {
-    const id = "generation-owner";
-    const { root: pluginDir, write, env } = installedFixture(id);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const packagePath = path.join(pluginDir, "package.json");
-    const distDir = path.join(pluginDir, "dist");
-    if (directory === "empty") {
-      fs.mkdirSync(distDir);
-    }
-    const first = write("1.0.0");
-    const discovery = discoverOpenClawPlugins({ env, installRecords: {} });
-    expect(discovery.candidates.find((candidate) => candidate.idHint === id)).toBeDefined();
-    write("2.0.0");
-    const open = vi.spyOn(fs, "openSync");
-    const read = vi.spyOn(fs, "readFileSync");
-    expect(discoverOpenClawPlugins({ env, installRecords: {} })).toBe(discovery);
-    const registry = loadPluginManifestRegistryCore({ env, discovery, installRecords: {} });
-    const exists = vi.spyOn(fs, "existsSync");
-    const buildRecords = () =>
-      buildInstalledPluginIndexRecords({
-        candidates: discovery.candidates,
-        registry,
-        diagnostics: [],
-        installRecords: {},
-      });
-    const records = buildRecords();
-    expect(registry.plugins.find((plugin) => plugin.id === id)?.version).toBe("1.0.0");
-    const hash = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
-    expect(records.find((record) => record.pluginId === id)).toMatchObject({
-      manifestHash: hash(first.manifest),
-      packageJson: { hash: hash(first.packageJson) },
-    });
-    expect(callsFor([...open.mock.calls, ...read.mock.calls], manifestPath, packagePath)).toEqual(
-      [],
-    );
-    expect(
-      exists.mock.calls.filter(([target]) => String(target).startsWith(`${distDir}${path.sep}`)),
-    ).toEqual([]);
-    expect(records[0]?.doctorContractHash).toBeUndefined();
-    fs.mkdirSync(distDir, { recursive: true });
-    const contract = "module.exports = {};";
-    fs.writeFileSync(path.join(distDir, "doctor-contract-api.cjs"), contract);
-    expect(buildRecords()[0]?.doctorContractHash).toBeUndefined();
-    invalidatePluginCacheMetadata(getProcessPluginCache());
-    expect(buildRecords()[0]?.doctorContractHash).toBe(hash(contract));
-  },
-);
 
 it.each(["EACCES", "EPERM"])("resolves Doctor artifacts after %s listing failure", (code) => {
   const { root: rootDir, file } = fixture({

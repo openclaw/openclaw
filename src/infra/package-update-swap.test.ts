@@ -5,13 +5,22 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  captureSwap,
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  publishWithoutPathExchange,
+  readText,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
+  createNativePackageSwapFixture,
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
-import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import * as pathExchange from "./path-exchange.js";
+import { expectedPathExchangeRoute } from "./path-exchange.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let base: string;
@@ -19,33 +28,6 @@ beforeEach(() => {
   base = dirs.make("package-swap-");
 });
 afterEach(() => vi.restoreAllMocks());
-
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
-}
-
-async function captureSwap(params: Parameters<typeof swapStagedPackageInstall>[0]) {
-  let transaction: PackageUpdateTransaction | undefined;
-  const result = await swapStagedPackageInstall({
-    ...params,
-    onTransaction: async (value) => {
-      transaction = value;
-      await params.onTransaction?.(value);
-    },
-  });
-  if (!transaction) {
-    throw new Error("Missing retained transaction");
-  }
-  return { result, transaction };
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
 
 const inode = async (entry: string) => (await fs.lstat(entry)).ino;
 const inodes = (entries: string[]) => Promise.all(entries.map(inode));
@@ -75,6 +57,7 @@ describe("retained package backup retirement", () => {
   });
 
   it("does not copy or remove the old package after a denied backup rename", async () => {
+    publishWithoutPathExchange();
     const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
     const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
@@ -197,42 +180,6 @@ describe("retained package backup retirement", () => {
 });
 
 describe("launcher backup capture", () => {
-  it.runIf(process.platform !== "win32")(
-    "names a changed backup target and retains the failed copy before activation",
-    async () => {
-      const { params, launcher, packageRoot } = await createPackageSwapFixture(base);
-      await fs.unlink(launcher);
-      await fs.symlink("../lib/node_modules/openclaw/package.json", launcher);
-      const original = await fs.lstat(launcher);
-      const rename = fs.rename.bind(fs);
-      let backup = "";
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        await rename(...args);
-        if (!path.basename(path.dirname(String(args[1]))).startsWith(".openclaw.shim-backup-")) {
-          return;
-        }
-        backup = String(args[1]);
-        await fs.unlink(backup);
-        await fs.symlink("different-target", backup);
-      });
-      const beforeActivate = vi.fn();
-      const result = await swapStagedPackageInstall({ ...params, beforeActivate });
-      expect(result.status).toBe("failed");
-      expect(result.step.stderrTail).toContain("differing fields: target");
-      expect(result.step.stderrTail).toContain(`failed copy retained at ${backup}`);
-      expect(updateRunStepsFromResultStep(result.step)[0]?.detail).toBe(
-        "Exit code: 1; Package rollback launcher backup changed: [redacted-path]",
-      );
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect((await fs.lstat(launcher)).ino).toBe(original.ino);
-      await expectVersion(packageRoot, "1.0.0");
-      expect(await fs.lstat(backup)).toBeDefined();
-      expect(result.step.stderrTail).toContain("../lib/node_modules/openclaw/package.json");
-      expect(result.step.stderrTail).toContain("different-target");
-      expect(await fs.readlink(backup)).toBe("different-target");
-    },
-  );
-
   it("preserves the installation after launcher backup and cleanup fail", async () => {
     const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
     const secondLauncher = `${launcher}.cmd`;
@@ -315,8 +262,7 @@ describe("launcher backup capture", () => {
     expectNoCalls(beforeActivate, onLiveMutation, onTransaction);
     expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
     expect(await inodes([packageRoot, launcher, secondLauncher])).toEqual(originals);
-    await expectVersion(packageRoot, "1.0.0");
-    await expect(readText(launcher)).resolves.toBe("old launcher\n");
+    await expectInstallation(packageRoot, launcher);
     await expect(readText(secondLauncher)).resolves.toBe("old command launcher\n");
     const remaining = await fs.readdir(globalRoot);
     expect(remaining).toHaveLength(2);
@@ -600,5 +546,109 @@ describe("retained package transaction authority", () => {
     expect(injections).toBe(1);
     await expectVersion(transaction.backupRoot, "1.0.0");
     await expectVersion(packageRoot, "2.0.0");
+  });
+});
+
+// The exchange itself is covered by path-exchange.test.ts and, at every kill
+// point, by package-update-release-switch.process.test.ts. These cases cover
+// what the swap does with each outcome that is not a clean exchange.
+describe.runIf(pathExchange.supportsPathExchange())("publication by atomic exchange", () => {
+  it.runIf(expectedPathExchangeRoute)(
+    "exchanges a pnpm global project and restores it on rollback",
+    async () => {
+      const { params, native, packageRoot } = await createNativePackageSwapFixture(base);
+      const { result, transaction } = await captureSwap(params);
+      expect(result.status).toBe("committed");
+      expect(result.step.stdoutTail).toBe(
+        `replaced openclaw; published by an atomic exchange (${expectedPathExchangeRoute})`,
+      );
+      await expectVersion(packageRoot, "2.0.0");
+      // The backup name holds the whole previous project, not only the package.
+      const retained = path.relative(native.liveProjectRoot, packageRoot);
+      await expectVersion(path.join(transaction.backupRoot, retained), "1.0.0");
+      expect(await transaction.rollback(() => {})).toMatchObject({
+        exitCode: 0,
+        activePackageRoot: packageRoot,
+      });
+      await expectVersion(packageRoot, "1.0.0");
+    },
+  );
+
+  it("stops without compensation when ownership is lost before the exchange", async () => {
+    const f = await createPackageSwapFixture(base);
+    let current = true;
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      // The candidate has just taken the backup name.
+      current &&= String(from) !== f.params.stage.packageRoot;
+    });
+    const exchange = vi.spyOn(pathExchange, "exchangePaths");
+    const { result, transaction } = await captureSwap({
+      ...f.params,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("update owner revoked before publication");
+        }
+      },
+    });
+    expect(result).toMatchObject({ status: "failed", activePackageRoot: f.packageRoot });
+    expect(result.step.stderrTail).toContain("update owner revoked before publication");
+    expect(result.step.warnings).toEqual([
+      `The unpublished package was left at ${transaction.backupRoot}; ${f.packageRoot} is unchanged.`,
+    ]);
+    expectNoCalls(exchange);
+    await expectInstallation(f.packageRoot, f.launcher);
+    await expectVersion(transaction.backupRoot, "2.0.0");
+    // The next owner's rollback has nothing to restore and retires the leftover candidate.
+    expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
+    expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+    await expectInstallation(f.packageRoot, f.launcher);
+    expect(await fs.readdir(f.globalRoot)).toEqual(["openclaw"]);
+  });
+
+  it("fails with the package untouched when the candidate cannot return to its stage", async () => {
+    const f = await createPackageSwapFixture(base);
+    vi.spyOn(pathExchange, "exchangePaths").mockResolvedValue({
+      status: "unavailable",
+      reason: "filesystem refused the exchange",
+    });
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to) === f.params.stage.packageRoot) {
+        throw Object.assign(new Error("stage directory is read-only"), { code: "EACCES" });
+      }
+      return rename(from, to);
+    });
+    const { result, transaction } = await captureSwap(f.params);
+    expect(result).toMatchObject({ status: "failed", activePackageRoot: f.packageRoot });
+    expect(result.step.stderrTail).toContain(
+      `stage directory is read-only; ${f.packageRoot} is unchanged and the staged package is at ${transaction.backupRoot}`,
+    );
+    await expectInstallation(f.packageRoot, f.launcher);
+    await expectVersion(transaction.backupRoot, "2.0.0");
+  });
+
+  it("claims and retires nothing when another writer left the exchange in an unknown state", async () => {
+    const f = await createPackageSwapFixture(base);
+    vi.spyOn(pathExchange, "exchangePaths").mockRejectedValue(
+      new Error("paths changed during an exchange; another writer changed them."),
+    );
+    const { result, transaction } = await captureSwap(f.params);
+    expect(result).toMatchObject({
+      status: "failed",
+      activePackageRoot: null,
+      packageRollbackVerified: false,
+    });
+    const rollback = await transaction.rollback(() => {});
+    expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: null });
+    expect(rollback.stderrTail).toContain("Package publication ended in an unknown state");
+    expect(await transaction.complete({ activationVerified: false }, () => {})).toMatchObject({
+      name: "package-backup-retention",
+      exitCode: 1,
+    });
+    // Both generations stay where the exchange left them for the operator.
+    await expectVersion(f.packageRoot, "1.0.0");
+    await expectVersion(transaction.backupRoot, "2.0.0");
   });
 });

@@ -14,12 +14,6 @@ const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 /** Canonical progress reason for model output observed on a live backend stream. */
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 
-export type ModelCallStreamProgressTarget = {
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-};
-
 // Refresh recovery on every chunk, but throttle public events. Owner-bound
 // callbacks also reject late output without refreshing a replacement's clock.
 export function createModelCallStreamProgressReporter({
@@ -29,7 +23,11 @@ export function createModelCallStreamProgressReporter({
 }: {
   recordProgress?: () => boolean;
   config?: OpenClawConfig;
-  target: ModelCallStreamProgressTarget;
+  target: {
+    runId: string;
+    sessionKey?: string;
+    sessionId?: string;
+  };
 }): (callId?: string) => void {
   const fields = {
     runId: target.runId,

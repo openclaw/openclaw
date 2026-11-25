@@ -4,15 +4,11 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGardenKeeperDesign } from "./avatar-design.test-support.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -36,20 +32,21 @@ vi.mock("../agents/isolated-completion-route.js", async (importOriginal) => {
     },
   };
 });
-const design = {
-  version: 1,
-  id: "garden-keeper",
-  name: "Garden Keeper",
-  description: "A friendly gardener with a cream apron.",
-  palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: {
-    back: "",
-    left_prop: "",
-    right_prop: "",
-    shell_overlay: '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
-    accessory: "",
-  },
-};
+const design = createGardenKeeperDesign(
+  "A friendly gardener with a cream apron.",
+  '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
+);
+
+function respond(response: ServerResponse, id: string, content = JSON.stringify(design)) {
+  writeOpenAiResponsesSse(response, [
+    {
+      id,
+      object: "chat.completion.chunk",
+      model: "avatar-model",
+      choices: [{ index: 0, delta: { content }, finish_reason: "stop" }],
+    },
+  ]);
+}
 
 it(
   "generates through authenticated RPC and provider I/O, rejecting read-only and revoked callers",
@@ -77,16 +74,7 @@ it(
       const index = responses.push(response) - 1;
       arrivals[index]?.resolve();
       if (index !== 1 || !holdSecond) {
-        writeOpenAiResponsesSse(response, [
-          {
-            id: `avatar-response-${index}`,
-            object: "chat.completion.chunk",
-            model: "avatar-model",
-            choices: [
-              { index: 0, delta: { content: JSON.stringify(design) }, finish_reason: "stop" },
-            ],
-          },
-        ]);
+        respond(response, `avatar-response-${index}`);
       }
     });
     await new Promise<void>((resolve, reject) => {
@@ -125,15 +113,12 @@ it(
               apiKey: "synthetic-local-provider-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
-                {
-                  id: "avatar-model",
+                modelDefinition("avatar-model", {
                   name: "Avatar model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8192,
                   maxTokens: 1024,
-                },
+                }),
               ],
             },
           },
@@ -175,20 +160,13 @@ it(
         return { client, closed: closed.promise };
       };
       const pair = async (name: string, scopes: string[]) => {
-        const identity = loadOrCreateDeviceIdentity({ path: state.path(`${name}.sqlite`) });
-        const pending = await requestDevicePairing({
-          deviceId: identity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        const { identity, issued } = await pairOperatorDeviceFixture({
+          identityPath: state.path(name, "client", "credentials.sqlite"),
+          scopes,
+          tokenScopes: scopes,
           clientId: "test",
           clientMode: "test",
-          role: "operator",
-          scopes,
-        });
-        await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-        const issued = await rotateDeviceToken({
-          deviceId: identity.deviceId,
-          role: "operator",
-          scopes,
+          callerScopes: ["operator.admin"],
         });
         if (!issued.ok) {
           throw new Error("Could not issue synthetic device token");
@@ -204,22 +182,33 @@ it(
       };
 
       const bootstrap = await connect({ scopes: ["operator.admin"], token });
+      const generate = (client: GatewayClient) =>
+        client.request<{ svg: string; name: string }>("agents.avatar.generate", {
+          agentId: "main",
+          prompt: "A gardener",
+        });
+      const revoke = async ({ identity, connection }: Awaited<ReturnType<typeof pair>>) => {
+        await bootstrap.client.request("device.token.revoke", {
+          deviceId: identity.deviceId,
+          role: "operator",
+        });
+        await withinTest(connection.closed, signal);
+      };
+      const observe = (pending: Promise<unknown>) =>
+        pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       const admin = await pair("admin", ["operator.admin"]);
       const reader = await pair("reader", ["operator.read"]);
-      const first = await admin.connection.client.request<{ svg: string; name: string }>(
-        "agents.avatar.generate",
-        { agentId: "main", prompt: "A gardener" },
-      );
+      const first = await generate(admin.connection.client);
       expect(first.svg).toContain("<svg");
       expect(first.name).toBe("Garden Keeper");
       expect(responses).toHaveLength(1);
 
-      await expect(
-        reader.connection.client.request("agents.avatar.generate", {
-          agentId: "main",
-          prompt: "A gardener",
-        }),
-      ).rejects.toThrow("missing scope: operator.admin");
+      await expect(generate(reader.connection.client)).rejects.toThrow(
+        "missing scope: operator.admin",
+      );
       expect(responses).toHaveLength(1);
 
       const revokedBeforeDispatch = await pair("revoked-before-dispatch", ["operator.admin"]);
@@ -229,48 +218,19 @@ it(
         routeEntered.resolve();
         await releaseRoute.promise;
       };
-      const beforeDispatch = revokedBeforeDispatch.connection.client.request(
-        "agents.avatar.generate",
-        { agentId: "main", prompt: "A gardener" },
-      );
-      const beforeSettled = beforeDispatch.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const beforeSettled = observe(generate(revokedBeforeDispatch.connection.client));
       await withinTest(routeEntered.promise, signal);
-      await bootstrap.client.request("device.token.revoke", {
-        deviceId: revokedBeforeDispatch.identity.deviceId,
-        role: "operator",
-      });
-      await withinTest(revokedBeforeDispatch.connection.closed, signal);
+      await revoke(revokedBeforeDispatch);
       releaseRoute.resolve();
       expect(await withinTest(beforeSettled, signal)).toHaveProperty("error");
       expect(responses).toHaveLength(1);
 
       const revoked = await pair("revoked", ["operator.admin"]);
       holdSecond = true;
-      const pending = revoked.connection.client.request("agents.avatar.generate", {
-        agentId: "main",
-        prompt: "A gardener",
-      });
-      const settled = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const settled = observe(generate(revoked.connection.client));
       await withinTest(arrivals[1]!.promise, signal);
-      await bootstrap.client.request("device.token.revoke", {
-        deviceId: revoked.identity.deviceId,
-        role: "operator",
-      });
-      await withinTest(revoked.connection.closed, signal);
-      writeOpenAiResponsesSse(responses[1]!, [
-        {
-          id: "avatar-revoked",
-          object: "chat.completion.chunk",
-          model: "avatar-model",
-          choices: [{ index: 0, delta: { content: "invalid design" }, finish_reason: "stop" }],
-        },
-      ]);
+      await revoke(revoked);
+      respond(responses[1]!, "avatar-revoked", "invalid design");
       expect(await withinTest(settled, signal)).toHaveProperty("error");
       await new Promise((resolve) => {
         setTimeout(resolve, 100);

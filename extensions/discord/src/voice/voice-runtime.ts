@@ -4,10 +4,9 @@ import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { formatMention } from "../target-parsing.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
-import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess, resolveDiscordVoiceAccessTarget } from "./owner-access.js";
 import {
@@ -58,8 +57,8 @@ type CaptureJoinOrigin = {
   isResidencyUnchanged: () => boolean;
 };
 
-export class DiscordVoiceManager implements DiscordVoiceListenerManager {
-  private sessions = new Map<string, VoiceSessionEntry>();
+export class DiscordVoiceManager {
+  private readonly sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<void>>();
@@ -91,7 +90,8 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
     scheduler: PluginServiceSchedulerV1;
     readPolicy?: DiscordLivePolicyReader;
     client: Client;
-    cfg: OpenClawConfig;
+    /** Reads the current runtime config, so hot-reloaded media, model and TTS settings apply. */
+    readConfig: () => OpenClawConfig;
     discordConfig: DiscordAccountConfig;
     accountId: string;
     runtime: RuntimeEnv;
@@ -108,7 +108,10 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
             { guildId, channelId, accountId: params.accountId },
             this,
           );
-    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess(params);
+    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess({
+      ...params,
+      cfg: params.readConfig(),
+    });
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -129,8 +132,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
         bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
       admissionAllowFrom,
-      botUserId: () => this.botUserId,
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       isEntryCurrent: (entry) => this.isEntryCurrent(entry),
       isFollowOwnedGuild: (guildId) => this.following.isFollowOwnedGuild(guildId),
       join: (entry, options) => this.join(entry, options),
@@ -142,11 +144,9 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       ...params,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
-      botUserId: () => this.botUserId,
-      deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
+      daveRecoveryAttempts: this.receive.daveRecoveryAttempts,
       stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
-      getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       hasVoiceLifecycle: (guildId) => {
         const lifecycle = this.guildLifecycles.get(guildId);
         return lifecycle?.status === "starting" || lifecycle?.status === "active";
@@ -154,7 +154,6 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       isAllowedVoiceChannel: (entry) => this.isAllowedVoiceChannel(entry),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
-      listSessions: () => this.sessions.values(),
       voiceEnabled: this.voiceEnabled,
     });
     this.voiceSessions = new DiscordVoiceSessions({
@@ -162,7 +161,6 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       signal: this.abort.signal,
       isSessionGenerationCurrent: (entry) =>
         this.guildLifecycles.get(entry.guildId)?.generation === entry.generation,
-      botUserId: () => this.botUserId,
       destroyed: () => this.destroyed,
       getTranscripts: this.getTranscripts,
       membership: this.membership,
@@ -512,9 +510,7 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       }
       return result;
     } finally {
-      if (this.joinTasks.get(guildId) === joinCompletion.promise) {
-        this.joinTasks.delete(guildId);
-      }
+      this.joinTasks.delete(guildId);
       joinCompletion.resolve();
     }
   }
@@ -730,10 +726,3 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
     return result;
   }
 }
-
-export {
-  DiscordVoiceGuildCreateListener,
-  DiscordVoiceReadyListener,
-  DiscordVoiceResumedListener,
-  DiscordVoiceStateUpdateListener,
-} from "./listeners.js";

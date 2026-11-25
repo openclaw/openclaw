@@ -33,10 +33,7 @@ const runnerMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
-  beginTerminalSourceReplyDelivery: vi.fn(),
-  cancelTerminalSourceReplyDelivery: vi.fn(),
   isDeliveredCurrentSourceReplyAsync: vi.fn(async () => false),
-  reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
 }));
 
@@ -68,10 +65,7 @@ vi.mock("./message.gateway.runtime.js", () => ({
 
 // mock-isolation: Observe source-reply settlement without changing real session transcripts.
 vi.mock("./source-reply-mirror.js", () => ({
-  beginTerminalSourceReplyDelivery: runnerMocks.beginTerminalSourceReplyDelivery,
-  cancelTerminalSourceReplyDelivery: runnerMocks.cancelTerminalSourceReplyDelivery,
   isDeliveredCurrentSourceReplyAsync: runnerMocks.isDeliveredCurrentSourceReplyAsync,
-  reconcileTerminalSourceReplyDelivery: runnerMocks.reconcileTerminalSourceReplyDelivery,
 }));
 
 // mock-isolation: Keep speech synthesis at the payload boundary without loading providers.
@@ -336,9 +330,6 @@ export function resetMessageActionRunnerMocks() {
   );
   mocks.randomIdempotencyKey.mockClear();
   resetMock(mocks.maybeApplyTtsToPayload, async (params: { payload: unknown }) => params.payload);
-  mocks.beginTerminalSourceReplyDelivery.mockReset();
-  mocks.cancelTerminalSourceReplyDelivery.mockReset();
-  mocks.reconcileTerminalSourceReplyDelivery.mockReset();
 }
 
 let actualLoadWebMedia: typeof import("../../media/web-media.js").loadWebMedia | undefined;

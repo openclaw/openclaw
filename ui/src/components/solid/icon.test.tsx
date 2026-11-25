@@ -26,6 +26,11 @@ describe("Solid icons", () => {
       "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
     );
 
+    setName("lightbulb");
+    flush();
+    expect(svg.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(svg.querySelectorAll("path")).toHaveLength(3);
+
     setName("gripVertical");
     flush();
     expect(svg.querySelector("rect")).toBeNull();
@@ -55,9 +60,10 @@ describe("Solid icons", () => {
     const svgs = [...view.container.querySelectorAll("svg")];
     expect(svgs).toHaveLength(3);
     expect(svgs[0]?.getAttribute("viewBox")).toBe("0 0 120 120");
-    expect(svgs[0]?.querySelector("linearGradient")?.getAttribute("id")).toBe("lob-g");
+    const gradientId = svgs[0]?.querySelector("linearGradient")?.getAttribute("id");
+    expect(gradientId).toMatch(/^lob-g-/u);
     expect(svgs[0]?.querySelectorAll("stop")).toHaveLength(2);
-    expect(svgs[0]?.querySelector("path")?.getAttribute("fill")).toBe("url(#lob-g)");
+    expect(svgs[0]?.querySelector("path")?.getAttribute("fill")).toBe(`url(#${gradientId})`);
     expect(svgs[1]?.getAttribute("width")).toBe("16");
     expect(svgs[1]?.classList.contains("icon--filled")).toBe(true);
     expect(svgs[1]?.classList.contains("brand-icon")).toBe(true);
@@ -66,6 +72,21 @@ describe("Solid icons", () => {
     expect(
       [...view.container.querySelectorAll("*")].every((node) => node.namespaceURI === svgNamespace),
     ).toBe(true);
+  });
+
+  it("gives each masked icon instance its own mask id", () => {
+    const view = render(() => (
+      <>
+        <Icon name="usageFilled" />
+        <Icon name="usageFilled" />
+      </>
+    ));
+    const masks = [...view.container.querySelectorAll("mask")].map((mask) => mask.id);
+    const references = [...view.container.querySelectorAll("[mask]")].map((node) =>
+      node.getAttribute("mask"),
+    );
+    expect(new Set(masks).size).toBe(2);
+    expect(references).toEqual(masks.map((id) => `url(#${id})`));
   });
 
   it("keeps independent instances and only exposes explicitly named icons to assistive technology", () => {
@@ -84,5 +105,10 @@ describe("Solid icons", () => {
     flush();
     expect(view.queryByRole("img")).toBeNull();
     expect(svgs[0]?.getAttribute("aria-hidden")).toBe("true");
+    const independent = render(() => <Icon name="info" />);
+    const independentSvg = independent.container.querySelector("svg");
+    expect(svgs[0]).not.toBe(independentSvg);
+    view.unmount();
+    expect(independentSvg?.isConnected).toBe(true);
   });
 });

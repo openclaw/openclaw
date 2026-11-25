@@ -217,6 +217,8 @@ async function reconcileAt(
     );
   }
   await fs.utimes(file, timestamp, timestamp);
+  // Exercise metadata authority independently of asynchronous watcher delivery.
+  await fs.utimes(path.dirname(file), timestamp, timestamp);
   await index.reconcile();
 }
 
@@ -466,9 +468,9 @@ it("keeps post-mutation pages and title filters within the resident CPU budget",
       expect(page.sessions[0]?.threadId).toBe(`thread-${iteration + 1}`);
     }
   }
-  const mainThreadCpuMsPerPage = queries.map((query) => query.cpuMicros / query.calls / 1_000);
   expect(nativeReads).toBe(readsAfterHydration);
-  for (const cpu of mainThreadCpuMsPerPage) {
-    expect(cpu).toBeLessThan(2);
+  for (const query of queries) {
+    const cpu = query.cpuMicros / query.calls / 1_000;
+    expect(cpu, `resident catalog CPU: ${JSON.stringify(query)}`).toBeLessThan(2);
   }
 });

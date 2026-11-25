@@ -12,7 +12,6 @@ import type { RunEntryCandidateOptions } from "../embedded-agent-runner/run-entr
 import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
-import type { AgentMessage } from "../runtime/index.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export type AgentAttemptParams = Pick<
@@ -74,7 +73,6 @@ export type AgentAttemptParams = Pick<
     fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
     suppressPromptPersistenceOnRetry?: boolean;
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-    onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
     onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
     onCompactionRequestBudget?: RunEmbeddedAgentInternalParams["onCompactionRequestBudget"];

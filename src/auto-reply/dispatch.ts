@@ -20,6 +20,7 @@ import { resolveCommandTurnContext } from "./command-turn-context.js";
 import { isActiveRunSafeCommandTurn } from "./commands-registry.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchGroupThread } from "./group-thread-dispatch.js";
+import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type {
@@ -38,9 +39,11 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatcherOptions,
-  type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import type {
+  ReplyDispatcher,
+  ReplyDispatcherWithTypingOptions,
+} from "./reply/reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationRunState,
@@ -280,6 +283,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const foregroundReplyLease = reserveForegroundReplyLease(finalized, params.cfg);
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(params.replyOptions) ?? {};
+  let queueAdmissionNoticeDispatched = false;
   let settledDeliveries = Promise.resolve();
   const settleDeliveries = () =>
     (settledDeliveries = settledDeliveries.then(async () => {
@@ -287,7 +291,10 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       if (!onSettled && !onFreshSettledDelivery) {
         return;
       }
-      const lease = replyOperationRunState.questionInputHandled ? undefined : foregroundReplyLease;
+      const lease =
+        replyOperationRunState.questionInputHandled || queueAdmissionNoticeDispatched
+          ? undefined
+          : foregroundReplyLease;
       await lease?.wait();
       await onSettled?.();
       await onFreshSettledDelivery?.();
@@ -300,8 +307,12 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyLease || configuredBeforeDeliver
       ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
-          // A question response must not wait behind the turn waiting for that response.
-          if (!replyOperationRunState.questionInputHandled) {
+          const queueAdmissionNotice =
+            getReplyPayloadMetadata(payload)?.queueAdmissionNotice !== undefined;
+          queueAdmissionNoticeDispatched ||= queueAdmissionNotice;
+          // Runtime queue acknowledgments and question responses must reach the requester
+          // while the preceding turn is still active. Ordinary output retains its fence.
+          if (!replyOperationRunState.questionInputHandled && !queueAdmissionNotice) {
             await foregroundReplyLease?.wait();
           }
           return configuredBeforeDeliver ? await configuredBeforeDeliver(payload, info) : payload;

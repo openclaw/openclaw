@@ -12,6 +12,7 @@ import { createSlackActions } from "./channel-actions.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
+const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
 vi.mock("./client.js", async () => ({
   ...(await vi.importActual<typeof import("./client.js")>("./client.js")),
   getSlackWriteClient: getSlackWriteClientMock,
@@ -56,14 +57,11 @@ function createClient(
   return { client, calls };
 }
 function lookupSpies(client: WebClient) {
-  return {
-    reactions: vi
-      .spyOn(slackActionRuntime, "listSlackReactions")
-      .mockImplementation((channelId, messageId, options) =>
-        listSlackReactions(channelId, messageId, { ...options, client }),
-      ),
-    messages: vi.spyOn(slackActionRuntime, "readSlackMessages"),
-  };
+  vi.spyOn(slackActionRuntime, "listSlackReactions").mockImplementation(
+    (channelId, messageId, options) =>
+      listSlackReactions(channelId, messageId, { ...options, client }),
+  );
+  return vi.spyOn(slackActionRuntime, "readSlackMessages");
 }
 function action(kind: "reactions" | "read", cfg: OpenClawConfig, params: Record<string, unknown>) {
   return createSlackActions("slack").handleAction?.({
@@ -74,45 +72,60 @@ function action(kind: "reactions" | "read", cfg: OpenClawConfig, params: Record<
   } as never);
 }
 
+function installEnterprise() {
+  installations.push(registerSlackInstallationState("default", "enterprise"));
+}
+
+function expectReactionWrites(
+  calls: ReturnType<typeof createClient>["calls"],
+  method: string,
+  names: string[],
+) {
+  expect(
+    calls
+      .filter((call) => call.method === method)
+      .map(({ body }) => [body.get("channel"), body.get("timestamp"), body.get("name")]),
+  ).toEqual(names.map((name) => ["C1", "123.456", name]));
+}
+
 describe("Slack reactions", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     getSlackWriteClientMock.mockReset();
+    for (const installation of installations.splice(0)) {
+      installation.release();
+    }
   });
 
-  it.each([undefined])(
-    "bounds public users for limit %s without changing reaction facts",
-    async (limit) => {
-      const users = Array.from({ length: 101 }, (_, index) => "U" + String(index + 1));
-      const { client, calls } = createClient([
-        { name: "eyes", count: 101, users },
+  it("bounds public users without changing reaction facts", async () => {
+    const users = Array.from({ length: 101 }, (_, index) => "U" + String(index + 1));
+    const { client, calls } = createClient([
+      { name: "eyes", count: 101, users },
+      { name: "heart", count: 5 },
+      { name: "party", count: 0, users: [] },
+    ]);
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
+    lookupSpies(client);
+    const result = await action("reactions", slackConfig, {});
+    const content = result?.content[0];
+    if (!content || content.type !== "text") {
+      throw new Error("Expected text tool result");
+    }
+    expect(JSON.parse(content.text)).toEqual({
+      ok: true,
+      reactions: [
+        { name: "eyes", count: 101, users: users.slice(0, 100) },
         { name: "heart", count: 5 },
         { name: "party", count: 0, users: [] },
-      ]);
-      vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
-        type: "channel",
-      });
-      lookupSpies(client);
-      const result = await action("reactions", slackConfig, limit === undefined ? {} : { limit });
-      const content = result?.content[0];
-      if (!content || content.type !== "text") {
-        throw new Error("Expected text tool result");
-      }
-      expect(JSON.parse(content.text)).toEqual({
-        ok: true,
-        reactions: [
-          { name: "eyes", count: 101, users: users.slice(0, limit ?? 100) },
-          { name: "heart", count: 5 },
-          { name: "party", count: 0, users: [] },
-        ],
-      });
-      expect(users).toHaveLength(101);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.method).toBe("reactions.get");
-      expect(calls[0]?.body.get("full")).toBe("true");
-      expect(calls[0]?.body.has("limit")).toBe(false);
-    },
-  );
+      ],
+    });
+    expect(users).toHaveLength(101);
+    expect(calls.map(({ method, body }) => [method, body.get("full"), body.has("limit")])).toEqual([
+      ["reactions.get", "true", false],
+    ]);
+  });
 
   it.each(["reactions", "read"] as const)(
     "authorizes %s before inspecting malformed limits",
@@ -134,55 +147,39 @@ describe("Slack reactions", () => {
           { channelId: "C_FORBIDDEN", limit: 0 },
         ),
       ).rejects.toThrow("Slack read target channel is not allowed.");
-      expect(lookups.reactions).not.toHaveBeenCalled();
-      expect(lookups.messages).not.toHaveBeenCalled();
+      expect(lookups).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     },
   );
 
-  it.each(["read"] as const)("rejects invalid %s limits before Slack API work", async (kind) => {
+  it("rejects invalid read limits before Slack API work", async () => {
     const { client, calls } = createClient();
     const lookups = lookupSpies(client);
-    const conversation = vi
-      .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
-      .mockResolvedValue({ type: "channel" });
-    await expect(action(kind, slackConfig, { limit: 0 })).rejects.toThrow(
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
+    await expect(action("read", slackConfig, { limit: 0 })).rejects.toThrow(
       "limit must be a positive integer.",
     );
-    expect(conversation).toHaveBeenCalledOnce();
-    expect(lookups.reactions).not.toHaveBeenCalled();
-    expect(lookups.messages).not.toHaveBeenCalled();
+    expect(lookups).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 
   it("sends normalized emoji through the workspace-scoped Enterprise Grid client", async () => {
     const { client, calls } = createClient();
     getSlackWriteClientMock.mockReturnValue(client);
-    const installation = registerSlackInstallationState("default", "enterprise");
-    try {
-      await reactSlackMessage("C1", "123.456", "👍🏽", { teamId: "T1", token: "xoxb-test" });
-      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
-      expect(calls.map(({ method }) => method)).toEqual(["reactions.add"]);
-      expect(Object.fromEntries(calls[0]!.body)).toMatchObject({
-        channel: "C1",
-        timestamp: "123.456",
-        name: "thumbsup::skin-tone-4",
-      });
-    } finally {
-      installation.release();
-    }
+    installEnterprise();
+    await reactSlackMessage("C1", "123.456", "👍🏽", { teamId: "T1", token: "xoxb-test" });
+    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
+    expectReactionWrites(calls, "reactions.add", ["thumbsup::skin-tone-4"]);
   });
 
   it("rejects an unscoped Enterprise Grid reaction before constructing a client", async () => {
-    const installation = registerSlackInstallationState("default", "enterprise");
-    try {
-      await expect(
-        reactSlackMessage("C1", "123.456", "✅", { token: "xoxb-test" }),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
-    } finally {
-      installation.release();
-    }
+    installEnterprise();
+    await expect(reactSlackMessage("C1", "123.456", "✅", { token: "xoxb-test" })).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+    expect(getSlackWriteClientMock).not.toHaveBeenCalled();
   });
 
   it("keeps prototype-named shortcodes intact on an idempotent add", async () => {
@@ -193,12 +190,7 @@ describe("Slack reactions", () => {
     await expect(
       reactSlackMessage("C1", "123.456", ":constructor:", { client }),
     ).resolves.toBeUndefined();
-    expect(calls.map(({ method }) => method)).toEqual(["reactions.add"]);
-    expect(Object.fromEntries(calls[0]!.body)).toMatchObject({
-      channel: "C1",
-      timestamp: "123.456",
-      name: "constructor",
-    });
+    expectReactionWrites(calls, "reactions.add", ["constructor"]);
   });
 
   it("propagates unrelated API errors", async () => {
@@ -230,15 +222,6 @@ describe("Slack reactions", () => {
       "reactions.remove",
     ]);
     expect(calls[1]?.body.get("full")).toBe("true");
-    expect(
-      calls.slice(2).map(({ body }) => ({
-        channel: body.get("channel"),
-        timestamp: body.get("timestamp"),
-        name: body.get("name"),
-      })),
-    ).toEqual([
-      { channel: "C1", timestamp: "123.456", name: "thumbsup" },
-      { channel: "C1", timestamp: "123.456", name: "eyes" },
-    ]);
+    expectReactionWrites(calls, "reactions.remove", ["thumbsup", "eyes"]);
   });
 });

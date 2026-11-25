@@ -89,11 +89,6 @@ type MeetingRealtimeProviderSelectionConfig = {
   };
 };
 
-type ResolvedRealtimeTranscriptionProvider = {
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
 }
@@ -121,7 +116,7 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
-}): Promise<ResolvedRealtimeTranscriptionProvider> {
+}) {
   const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
@@ -147,7 +142,11 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
     : rawConfig;
   if (
     !(provider.isConfiguredAsync
-      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      ? await provider.isConfiguredAsync({
+          cfg: params.fullConfig,
+          providerConfig,
+          selectedExplicitly: configuredProvider !== undefined,
+        })
       : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
   ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);

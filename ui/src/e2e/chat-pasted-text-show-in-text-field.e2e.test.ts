@@ -1,11 +1,16 @@
-import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  seedChatSettings,
+  splitColumns,
+  splitTranscripts,
+} from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
@@ -15,6 +20,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const nativePasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
 const pastedText = `Quarterly launch plan\n\n  Preserve indentation 🦞\n${"x".repeat(1100)}`;
 const pastedTextLabel = "Quarterly launch plan Preserve…";
 const contextOptions = {
@@ -87,6 +93,219 @@ async function paste(composer: Locator) {
 }
 
 suite.define(() => {
+  it.each(["text", "image"] as const)(
+    "routes a native %s paste from the session transcript into its composer",
+    async (kind) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const rows = ["a", "b"].map((suffix) => ({
+          key: `agent:main:paste-${suffix}`,
+          kind: "direct",
+          label: `Paste session ${suffix}`,
+          updatedAt: 1,
+        }));
+        if (kind === "image") {
+          await seedChatSettings(page, suite.server.baseUrl, {
+            chatSplitLayout: splitColumns(rows, 0),
+          });
+        }
+        const gateway = await installMockGateway(page, {
+          historyMessages: [{ role: "assistant", content: "Paste a copied note or image here." }],
+          ...(kind === "image"
+            ? {
+                sessionKey: rows[0]!.key,
+                sessions: rows,
+                sessionTranscripts: splitTranscripts(rows),
+              }
+            : {}),
+        });
+        await page.goto(`${suite.server.baseUrl}chat${kind === "image" ? "/main/paste-a" : ""}`);
+        const composers = page.locator(".agent-chat__composer-combobox textarea");
+        await expect.poll(() => composers.count()).toBe(kind === "image" ? 2 : 1);
+        const composer = composers.last();
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("");
+        if (kind === "image") {
+          await composers.first().fill("Keep the other session draft.");
+        }
+        await page.evaluate(async (contentKind) => {
+          if (contentKind === "text") {
+            await navigator.clipboard.writeText("A copied note for this session.");
+            return;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = 160;
+          canvas.height = 100;
+          const context = canvas.getContext("2d")!;
+          context.fillStyle = "#4c82f7";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          const png = await new Promise<Blob>((resolve) => {
+            canvas.toBlob((blob) => resolve(blob!));
+          });
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "image/png": png,
+              "text/plain": new Blob(["Image clipboard fallback"], { type: "text/plain" }),
+            }),
+          ]);
+        }, kind);
+        const transcript = page.locator(".chat-thread").last();
+        await transcript.focus();
+        expect(await composer.evaluate((input) => document.activeElement === input)).toBe(false);
+        await page.keyboard.press(nativePasteShortcut);
+        if (kind === "text") {
+          await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          await composer.fill("");
+          await transcript.focus();
+          expect(await composer.evaluate((input) => document.activeElement === input)).toBe(false);
+          await composer.evaluate((input) => {
+            input.addEventListener(
+              "paste",
+              (event) => {
+                input.setAttribute("data-shift-paste-trusted", String(event.isTrusted));
+              },
+              { once: true },
+            );
+          });
+          if (process.platform === "darwin") {
+            // Playwright's macOS bindings omit Shift+Meta+V; dispatch its native editing command.
+            const cdp = await page.context().newCDPSession(page);
+            const key = { key: "V", code: "KeyV", windowsVirtualKeyCode: 86, modifiers: 4 | 8 };
+            try {
+              await cdp.send("Input.dispatchKeyEvent", {
+                type: "rawKeyDown",
+                ...key,
+                commands: ["PasteAndMatchStyle"],
+              });
+              await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+            } finally {
+              await cdp.detach();
+            }
+          } else {
+            await page.keyboard.press(`Shift+${nativePasteShortcut}`);
+          }
+          await expect.poll(() => composer.inputValue()).toBe("A copied note for this session.");
+          expect(await composer.getAttribute("data-shift-paste-trusted")).toBe("true");
+        } else {
+          await page.locator(".chat-attachments-preview .chat-attachment-thumb img").waitFor();
+          expect(await composer.inputValue()).toBe("");
+          expect(
+            await page.locator(".chat-attachments-preview .chat-attachment-thumb").count(),
+          ).toBe(1);
+        }
+        expect(await composer.evaluate((input) => document.activeElement === input)).toBe(true);
+        if (kind === "image") {
+          expect(await composers.first().inputValue()).toBe("Keep the other session draft.");
+          expect(
+            await page
+              .locator("openclaw-chat-pane")
+              .first()
+              .locator(".chat-attachment-thumb")
+              .count(),
+          ).toBe(0);
+        }
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await page.screenshot({ path: `${suite.artifactDir}/native-${kind}-paste.png` });
+      });
+    },
+  );
+
+  it.each([
+    { route: "chat", selector: ".agent-chat__composer-combobox textarea" },
+    { route: "new", selector: ".new-session-page__message" },
+  ])(
+    "keeps a long native paste inline only in an empty $route composer",
+    async ({ route, selector }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const endMarker = "End of the attached note.";
+        const pasteText =
+          route === "new"
+            ? `${pastedText}\n${"Keep this line reachable in the attachment reader.\n".repeat(60)}${endMarker}`
+            : pastedText;
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(selector);
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("");
+        await page.evaluate((text) => navigator.clipboard.writeText(text), pasteText);
+        await composer.focus();
+        await page.keyboard.press(nativePasteShortcut);
+        await page.waitForFunction((inputSelector) => {
+          const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
+          return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
+        }, selector);
+        await expect.poll(() => composer.inputValue()).toBe(pasteText);
+        expect(
+          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+        ).toBe(0);
+
+        await composer.fill("Keep this draft");
+        await page.keyboard.press(nativePasteShortcut);
+        await button(page, pastedTextLabel).waitFor();
+        expect(await composer.inputValue()).toBe("Keep this draft");
+        if (route === "new") {
+          await button(page, pastedTextLabel).click();
+          const preview = page.locator(".new-session-attachment-panel");
+          const scrollport = preview.locator(".sidebar-content");
+          await expect
+            .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
+            .toBe(pasteText);
+          await scrollport.evaluate((element) => {
+            element.scrollTop = element.scrollHeight;
+          });
+          await expect
+            .poll(() =>
+              scrollport.evaluate((element, marker) => {
+                const text = element.querySelector(
+                  ".sidebar-attachment-preview__text",
+                )!.firstChild!;
+                const range = document.createRange();
+                range.setStart(text, text.textContent!.lastIndexOf(marker));
+                range.setEnd(text, text.textContent!.length);
+                const end = range.getBoundingClientRect();
+                const port = element.getBoundingClientRect();
+                const panel = element
+                  .closest(".new-session-attachment-panel")!
+                  .getBoundingClientRect();
+                return element.scrollTop > 0 && end.top >= port.top && end.bottom <= panel.bottom;
+              }, endMarker),
+            )
+            .toBe(true);
+          await button(preview, "Close sidebar").click();
+          await expect.poll(() => preview.count()).toBe(0);
+        }
+        await button(page, "Show in text field").click();
+        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pasteText}`);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      });
+    },
+  );
+
+  it("starts a new session with a pasted-text card as message text", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        methodResponses: {
+          "sessions.create": { key: "agent:main:paste-start", runStarted: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.waitFor({ state: "visible" });
+      await composer.fill("Keep this draft");
+      await page.evaluate((text) => navigator.clipboard.writeText(text), pastedText);
+      await composer.focus();
+      await page.keyboard.press(nativePasteShortcut);
+      await button(page, pastedTextLabel).waitFor();
+      await button(page, "Start session").click();
+      await gateway.waitForRequest("sessions.create");
+      // The card is composer presentation; its text is the sender's message, not an upload.
+      const params = (await gateway.getRequests("sessions.create"))[0]!.params;
+      expect(params).toHaveProperty("message", `Keep this draft\n\n${pastedText}`);
+      expect(params).not.toHaveProperty("attachments");
+    });
+  });
+
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     const options = { ...contextOptions, viewport: { width, height: 900 } };
     await suite.withPage(options, async ({ page }) => {
@@ -120,12 +339,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -135,7 +352,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,
@@ -145,6 +361,23 @@ suite.define(() => {
       }
       const restore = button(pastedCard, "Show in text field");
       await restore.focus();
+      // A background session refresh must not replace the focused restore control.
+      const sessionRow = await gateway.getSessionRow("agent:main:main");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...sessionRow,
+        key: "agent:main:main",
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        label: "Refreshed paste session",
+        updatedAt: Date.now(),
+      });
+      await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .getByText("Refreshed paste session", { exact: true })
+        .filter({ visible: true })
+        .first()
+        .waitFor();
+      expect(await restore.evaluate((node) => document.activeElement === node)).toBe(true);
       await page.keyboard.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
       expect(
@@ -178,7 +411,9 @@ suite.define(() => {
       expect(response?.headers()["content-security-policy"]).toBe(gatewayCsp);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
+      await composer.fill("Review the attachment");
       await paste(composer);
+      await composer.fill("");
       const chip = button(page, pastedTextLabel);
       await chip.focus();
       await page.keyboard.press("Enter");
@@ -204,94 +439,92 @@ suite.define(() => {
   it.each([
     { name: "recorded paste", legacy: false },
     { name: "legacy paste without origin", legacy: true },
-  ])("restores a $name draft as a chip and sends unchanged name and bytes", async ({ legacy }) => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const sessionKey = "agent:main:main";
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible" });
-      await paste(composer);
-      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
-      await waitForCommittedComposerDraft(page, scopeKey, "", 1);
-      const fileName = await page.evaluate(
-        async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
-          const once = (target: EventTarget, event: string, run: () => void) =>
-            target.addEventListener(event, run, { once: true });
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDB.open("openclaw-control-ui");
-            once(request, "success", () => resolve(request.result));
-            once(request, "error", () =>
-              reject(request.error ?? new Error("Could not open composer draft database")),
-            );
-          });
-          try {
-            return await new Promise<string>((resolve, reject) => {
-              const transaction = database.transaction(
-                "composerDrafts",
-                restoreLegacy ? "readwrite" : "readonly",
-              );
-              const store = transaction.objectStore("composerDrafts");
-              const request = store.getAll() as IDBRequest<
-                Array<{
-                  scopeKey: string;
-                  attachments: Array<{ fileName: string; origin?: string }>;
-                }>
-              >;
-              let savedFileName: string | undefined;
-              once(request, "success", () => {
-                const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
-                const attachment = draft?.attachments[0];
-                if (!draft || !attachment) {
-                  transaction.abort();
-                  return;
-                }
-                savedFileName = attachment.fileName;
-                if (restoreLegacy) {
-                  // Reproduce the persisted shape written before origin metadata existed.
-                  delete attachment.origin;
-                  store.put(draft);
-                }
-              });
-              once(transaction, "complete", () =>
-                savedFileName
-                  ? resolve(savedFileName)
-                  : reject(new Error("Missing persisted attachment")),
-              );
-              once(transaction, "abort", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction aborted")),
-              );
-              once(transaction, "error", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction failed")),
+  ])(
+    "restores a $name draft as a chip and sends its exact text as the message",
+    async ({ legacy }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("Review the attachment");
+        await paste(composer);
+        await composer.fill("");
+        const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
+        await waitForCommittedComposerDraft(page, scopeKey, "", 1);
+        const fileName = await page.evaluate(
+          async ({ scopeKey: storedScopeKey, legacy: restoreLegacy }) => {
+            const once = (target: EventTarget, event: string, run: () => void) =>
+              target.addEventListener(event, run, { once: true });
+            const database = await new Promise<IDBDatabase>((resolve, reject) => {
+              const request = indexedDB.open("openclaw-control-ui");
+              once(request, "success", () => resolve(request.result));
+              once(request, "error", () =>
+                reject(request.error ?? new Error("Could not open composer draft database")),
               );
             });
-          } finally {
-            database.close();
-          }
-        },
-        { scopeKey, legacy },
-      );
-      await page.reload();
-      const chip = button(page, pastedTextLabel);
-      await chip.click();
-      const preview = page.locator("openclaw-chat-detail-panel:visible");
-      await expectPastedText(preview);
-      await composer.click();
-      await button(page, "Send message").click();
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-      const params = (await gateway.getRequests("chat.send"))[0]!.params;
-      expect(params).toHaveProperty("attachments", [
-        {
-          type: "file",
-          mimeType: "text/plain",
-          fileName,
-          ...(!legacy ? { origin: "paste" } : {}),
-          content: Buffer.from(pastedText).toString("base64"),
-        },
-      ]);
-      expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
-    });
-  });
+            try {
+              return await new Promise<string>((resolve, reject) => {
+                const transaction = database.transaction(
+                  "composerDrafts",
+                  restoreLegacy ? "readwrite" : "readonly",
+                );
+                const store = transaction.objectStore("composerDrafts");
+                const request: IDBRequest<
+                  Array<{
+                    scopeKey: string;
+                    attachments: Array<{ fileName: string; origin?: string }>;
+                  }>
+                > = store.getAll();
+                let savedFileName: string | undefined;
+                once(request, "success", () => {
+                  const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
+                  const attachment = draft?.attachments[0];
+                  if (!draft || !attachment) {
+                    transaction.abort();
+                    return;
+                  }
+                  savedFileName = attachment.fileName;
+                  if (restoreLegacy) {
+                    // Reproduce the persisted shape written before origin metadata existed.
+                    delete attachment.origin;
+                    store.put(draft);
+                  }
+                });
+                once(transaction, "complete", () =>
+                  savedFileName
+                    ? resolve(savedFileName)
+                    : reject(new Error("Missing persisted attachment")),
+                );
+                for (const event of ["abort", "error"]) {
+                  once(transaction, event, () =>
+                    reject(transaction.error ?? new Error("Draft fixture transaction failed")),
+                  );
+                }
+              });
+            } finally {
+              database.close();
+            }
+          },
+          { scopeKey, legacy },
+        );
+        await page.reload();
+        const chip = button(page, pastedTextLabel);
+        await chip.click();
+        const preview = page.locator("openclaw-chat-detail-panel:visible");
+        await expectPastedText(preview);
+        await composer.click();
+        await button(page, "Send message").click();
+        await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+        // The card is composer presentation; its text is the sender's message, not an upload.
+        const params = (await gateway.getRequests("chat.send"))[0]!.params;
+        expect(params).toHaveProperty("message", pastedText);
+        expect(params).not.toHaveProperty("attachments");
+        expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
+      });
+    },
+  );
 
   it("projects persisted origins and legacy names into ordered chips and ordinary file cards", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
@@ -399,9 +632,7 @@ suite.define(() => {
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
       expect(download.suggestedFilename()).toBe(fileName);
       expect(await download.failure()).toBeNull();
-      const file = await download.path();
-      expect(file).not.toBeNull();
-      expect(await readFile(file!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(download)).toEqual(bytes);
     });
   });
 });

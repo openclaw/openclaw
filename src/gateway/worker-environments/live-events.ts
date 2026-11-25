@@ -17,7 +17,6 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../infra/agent-run-registry.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerLiveTrajectoryRecorder,
@@ -49,7 +48,6 @@ const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
 const DEFAULT_MAX_SESSIONS = 128;
 const DEFAULT_MAX_ACTIVE_RUNS = 32;
-const MAX_FENCED_ENVIRONMENTS = 4096;
 
 export type WorkerLiveEventApplicationResult =
   | { ok: true; result: WorkerLiveEventResult }
@@ -60,7 +58,6 @@ type WorkerLiveEventPublication = Omit<PendingLiveEvent, "sizeBytes">;
 
 type WorkerLiveEventReceiverOptions = {
   maxActiveRuns?: number;
-  maxPendingBytes?: number;
   maxSessions?: number;
   windowSize?: number;
 };
@@ -74,14 +71,9 @@ function capacityExceeded(): WorkerLiveEventFailure {
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
-  const fencedEnvironmentEpochs = new Map<string, number>();
   const windows = new Map<string, LiveEventWindow>();
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
-  const maxPendingBytes = Math.max(
-    1,
-    Math.floor(options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES),
-  );
   const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS));
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
@@ -436,7 +428,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       const failed = await publish(window, publication, buffered !== undefined);
       if (failed?.details.reason === "capacity-exceeded" && buffered) {
         // Keep the ordered tail retryable while the active prefix claim drains.
-        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        // Later gaps still hit the sequence/byte bounds and force normal resync.
         return { ok: true, result: { ackedSeq: window.ackedSeq } };
       }
       if (buffered && window.pending.delete(request.seq)) {
@@ -507,7 +499,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
-    if (window.pendingBytes + sizeBytes > maxPendingBytes) {
+    if (window.pendingBytes + sizeBytes > DEFAULT_MAX_PENDING_BYTES) {
       return resyncWindow(window);
     }
     window.pending.set(seq, {
@@ -529,11 +521,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, details: { reason: "epoch-mismatch" } };
-    }
-    if (
-      params.request.runEpoch <= (fencedEnvironmentEpochs.get(params.identity.environmentId) ?? -1)
-    ) {
-      return invalidEvent();
     }
     const sessionId = params.identity.sessionId;
     const window = resolveOrCreateWindow(sessionId, params);
@@ -566,20 +553,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
   };
 
-  const clearEnvironment = (environmentId: string, ownerEpoch: number): void => {
-    let fencedEpoch = Math.max(fencedEnvironmentEpochs.get(environmentId) ?? -1, ownerEpoch);
+  const clearEnvironment = (environmentId: string): void => {
     for (const window of windows.values()) {
       if (window.environmentId === environmentId) {
-        fencedEpoch = Math.max(fencedEpoch, window.runEpoch);
         clearWindow(window);
       }
-    }
-    if (fencedEpoch >= 0) {
-      // Oldest tombstones may expire because service/store ownership stays authoritative.
-      // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
-      fencedEnvironmentEpochs.delete(environmentId);
-      fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 
@@ -587,7 +565,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     for (const window of windows.values()) {
       clearWindow(window);
     }
-    fencedEnvironmentEpochs.clear();
   };
 
   return { apply, clear, clearEnvironment, rotateCredential };

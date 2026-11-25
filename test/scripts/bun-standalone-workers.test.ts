@@ -1,199 +1,145 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { parse } from "acorn";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
 } from "../../scripts/lib/bun-standalone-workers.mjs";
+import { runtimeProcessBuildEntries } from "../../scripts/lib/runtime-process-build-entries.mts";
+import { createStandaloneRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(files: Record<string, string>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-standalone-workers-"));
-  roots.push(root);
-  const runtimeRoot = path.join(root, "runtime");
-  const outputRoot = path.join(root, "build");
-  fs.mkdirSync(outputRoot, { recursive: true });
-  for (const [name, contents] of Object.entries(files)) {
-    const target = path.join(runtimeRoot, name);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, contents);
-  }
-  return { runtimeRoot, outputRoot };
+  const runtimeRoot = tempDirs.make("openclaw-standalone-workers-");
+  writeFixtureFiles(runtimeRoot, files);
+  return runtimeRoot;
 }
 
-describe("standalone worker discovery", () => {
-  it("embeds self-targeted workers in root modules and emitted chunks", () => {
-    const files = {
-      "node-compile-cache.mjs":
-        'import { Worker as CacheWorker } from "node:worker_threads"; new CacheWorker(new URL(import.meta.url));',
-      "dist/node-compile-cache-chunk.mjs":
-        'import * as threads from "node:worker_threads"; new threads.Worker(new URL(import.meta.url));',
-      "dist/ordinary.mjs": "const location = new URL(import.meta.url);",
-      "dist/shadowed.mjs":
-        'import { Worker } from "node:worker_threads"; function local(Worker) { return new Worker(new URL(import.meta.url)); }',
-    };
-    const { runtimeRoot } = fixture(files);
-    expect(
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: Object.keys(files),
-        runtimeEntrypoints: {},
-        parse,
-      }),
-    ).toEqual(["dist/node-compile-cache-chunk.mjs", "node-compile-cache.mjs"]);
-  });
-
-  it("retains manifest launchers without worker suffixes and adds built plugin workers once", () => {
-    const { runtimeRoot } = fixture({
-      "dist/process/supervisor/service-child-relay.js": "",
-      "dist/process/spawn-broker/worker.js": "",
-      "dist/extensions/example/store.worker.mjs": "",
-      "dist/worker/memory-worker-entry.js": "",
-      "dist/worker/worker-chunk-abc.js": "",
-      "dist/telegram-ingress-worker.runtime.js": "",
-      "dist/ordinary.mjs": "",
-    });
-    expect(
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: Object.keys({
-          "dist/process/supervisor/service-child-relay.js": 0,
-          "dist/extensions/example/store.worker.mjs": 0,
-          "dist/worker/memory-worker-entry.js": 0,
-          "dist/worker/worker-chunk-abc.js": 0,
-          "dist/telegram-ingress-worker.runtime.js": 0,
-          "dist/ordinary.mjs": 0,
-        }),
-        runtimeEntrypoints: {
-          relay: { distWorkerPath: "process/supervisor/service-child-relay.js" },
-          broker: { distWorkerPath: "process/spawn-broker/worker.js" },
-          duplicate: { distWorkerPath: "process/supervisor/service-child-relay.js" },
-        },
-        parse,
-      }),
-    ).toEqual([
-      "dist/extensions/example/store.worker.mjs",
-      "dist/process/spawn-broker/worker.js",
-      "dist/process/supervisor/service-child-relay.js",
-      "dist/telegram-ingress-worker.runtime.js",
-      "dist/worker/memory-worker-entry.js",
-    ]);
-  });
-
-  it("refuses missing launcher outputs before producing an incomplete image", () => {
-    const { runtimeRoot } = fixture({ "dist/present.js": "" });
-    expect(() =>
-      discoverStandaloneWorkers({
-        runtimeRoot,
-        moduleEntries: [],
-        runtimeEntrypoints: { missing: { distWorkerPath: "agents/github-exec-launcher.js" } },
-        parse,
-      }),
-    ).toThrow("Missing standalone worker outputs: dist/agents/github-exec-launcher.js");
-  });
+it("admits Knowledge's package-declared workers into the standalone and source build graphs", () => {
+  const packageRoot = new URL("../../extensions/knowledge/", import.meta.url);
+  const manifest = JSON.parse(fs.readFileSync(new URL("package.json", packageRoot), "utf8")) as {
+    openclaw: { build: { workerEntries: string[] } };
+  };
+  const outputs = manifest.openclaw.build.workerEntries.map(
+    (entry) => `dist/extensions/knowledge/${entry.replace(/^\.\//u, "").replace(/\.ts$/u, ".js")}`,
+  );
+  const runtimeRoot = fixture(Object.fromEntries(outputs.map((entry) => [entry, "export {};\n"])));
+  const declarations = Object.fromEntries(
+    Object.entries(
+      createStandaloneRuntimeProcessEntrypoints(import.meta.url, ["knowledge"]),
+    ).filter(([name]) => name.startsWith("plugin:")),
+  );
+  expect(discoverStandaloneWorkers({ runtimeRoot, runtimeEntrypoints: declarations })).toEqual(
+    outputs.toSorted(),
+  );
+  for (const entry of manifest.openclaw.build.workerEntries) {
+    const output = `extensions/knowledge/${entry.replace(/^\.\//u, "").replace(/\.ts$/u, "")}`;
+    expect(runtimeProcessBuildEntries[output]).toBe(fileURLToPath(new URL(entry, packageRoot)));
+  }
 });
 
-describe("standalone inline worker graph", () => {
-  it.each([
-    "function unrelated() { let SOURCE; SOURCE = dynamicValue(); }",
-    "function unrelated(SOURCE) { SOURCE = dynamicValue(); }",
-    "function unrelated() { SOURCE = dynamicValue(); var SOURCE; }",
-  ])("keeps lazy module source separate from shadowed assignments: %s", (unrelated) => {
-    const source = `import { Worker } from "node:worker_threads";
-var SOURCE;
-const initialize = () => { SOURCE = "require('node:worker_threads').parentPort.postMessage(7)"; };
-${unrelated}
-function launch() { return new Worker(SOURCE, { eval: true }); }`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
-    assert.ok(prepared.entrypoints[0]);
-    expect(fs.readFileSync(prepared.entrypoints[0].replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
-      "require('node:worker_threads').parentPort.postMessage(7)\n",
-    );
+it("embeds only declared targets, including names without worker suffixes", () => {
+  const runtimeRoot = fixture({
+    "dist/process/relay.js": "",
+    "dist/doctor-inspection.worker.js": "",
+    "dist/undeclared.worker.js": "",
+    "node-compile-cache.mjs": "",
   });
+  expect(
+    discoverStandaloneWorkers({
+      runtimeRoot,
+      runtimeEntrypoints: {
+        relay: { distWorkerPath: "process/relay.js" },
+        inspection: { distWorkerPath: "doctor-inspection.worker.js" },
+        cache: { distWorkerPath: "../node-compile-cache.mjs" },
+      },
+    }),
+  ).toEqual([
+    "dist/doctor-inspection.worker.js",
+    "dist/process/relay.js",
+    "node-compile-cache.mjs",
+  ]);
+});
 
-  it("refuses a dynamic worker source that shadows a fixed module binding", () => {
-    const paths = fixture({
-      "dist/entry.mjs": `import { Worker } from "node:worker_threads";
-const SOURCE = "wrong program";
-function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
-    });
-    expect(() =>
-      prepareStandaloneWorkers({
-        ...paths,
-        runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-        workerEntries: [],
-        moduleEntries: ["dist/entry.mjs"],
-        parse,
-      }),
-    ).toThrow("Unsupported fixed worker source expression: Identifier SOURCE");
-  });
+it("refuses missing declared outputs before producing an incomplete image", () => {
+  expect(() =>
+    discoverStandaloneWorkers({
+      runtimeRoot: fixture({}),
+      runtimeEntrypoints: { missing: { distWorkerPath: "commands/doctor.worker.js" } },
+    }),
+  ).toThrow("Missing standalone worker outputs: dist/commands/doctor.worker.js");
+});
 
-  it.each([
-    ['import { Worker as Task } from "node:worker_threads";', "new Task"],
-    ['import * as threads from "worker_threads";', "new threads.Worker"],
-    ['const { Worker: Task } = require("node:worker_threads");', "new Task"],
-    ['const threads = await import("node:worker_threads");', "new threads.Worker"],
-    ['const { Worker: Task } = await import("node:worker_threads");', "new Task"],
-    ['import { createCpuTrackedWorker as task } from "./worker-cpu-abc.mjs";', "task"],
-  ])("embeds fixed payloads for a recognized worker binding (%s)", (binding, callee) => {
-    const source = `${binding}\nconst SOURCE = "require('node:worker_threads').parentPort.postMessage(7)";\n${callee}(SOURCE, { eval: true, workerData: { value: 3 } });`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
-    expect(prepared.inlineWorkers).toHaveLength(1);
-    const transformed = prepared.rewriteInlineWorkers(
-      path.join(paths.runtimeRoot, "dist/entry.mjs"),
-      source,
-    );
-    const ast = parse(transformed, { ecmaVersion: "latest", sourceType: "module" });
-    expect(ast).toBeDefined();
-    expect(transformed).toContain("eval: false");
-    expect(transformed).toContain("workerData: { value: 3 }");
-    expect(transformed).toContain("file:///$bunfs/root/standalone-workers/inline/");
-    const entrypoint = prepared.entrypoints[0];
-    assert.ok(entrypoint, "expected embedded worker entrypoint");
-    expect(fs.readFileSync(entrypoint.replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
-      "require('node:worker_threads').parentPort.postMessage(7)\n",
-    );
+it("requires every declared worker and child entry in the compiler outputs", () => {
+  const runtimeRoot = fixture({});
+  const outputRoot = path.join(runtimeRoot, "build");
+  const prepared = prepareStandaloneWorkers({
+    runtimeRoot,
+    outputRoot,
+    runtimeBootstrap: path.join(outputRoot, "bootstrap.mjs"),
+    workerEntries: ["dist/commands/doctor.worker.js", "dist/recovery.mjs"],
   });
+  const doctor = path.join(outputRoot, "modules/standalone-workers/dist/commands/doctor.worker.js");
+  const recovery = path.join(outputRoot, "modules/standalone-workers/dist/recovery.js");
+  expect(() => prepared.validateOutputs([doctor])).toThrow(
+    "Missing embedded standalone worker outputs: dist/recovery.mjs",
+  );
+  expect(() => prepared.validateOutputs([doctor, recovery])).not.toThrow();
+});
 
-  it("leaves unrelated and shadowed eval options unchanged", () => {
-    const source = `import { Worker } from "node:worker_threads";
-function unrelated(value, options) { return value; }
-unrelated("not worker code", { eval: true });
-function useShadow(Worker) { return new Worker("also unrelated", { eval: true }); }`;
-    const paths = fixture({ "dist/entry.mjs": source });
-    const prepared = prepareStandaloneWorkers({
-      ...paths,
-      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
-      workerEntries: [],
-      moduleEntries: ["dist/entry.mjs"],
-      parse,
-    });
-    expect(prepared.inlineWorkers).toEqual([]);
-    expect(
-      prepared.rewriteInlineWorkers(path.join(paths.runtimeRoot, "dist/entry.mjs"), source),
-    ).toBe(source);
+it("routes declared physical worker paths through their embedded bootstrap", () => {
+  const runtimeRoot = fixture({ "dist/commands/doctor.worker.js": "export {};" });
+  const outputRoot = path.join(runtimeRoot, "build");
+  fs.mkdirSync(outputRoot);
+  const bootstrap = path.join(outputRoot, "bootstrap.mjs");
+  const prepared = prepareStandaloneWorkers({
+    runtimeRoot,
+    outputRoot,
+    runtimeBootstrap: bootstrap,
+    workerEntries: ["dist/commands/doctor.worker.js"],
+    sourceWorkerAliases: { "/typed/doctor.worker.ts": "dist/commands/doctor.worker.js" },
   });
+  expect(fs.readFileSync(prepared.entrypoints[0]!, "utf8")).toBe(
+    `import ${JSON.stringify(bootstrap)};\nawait import(${JSON.stringify(path.join(runtimeRoot, "dist/commands/doctor.worker.js"))});\n`,
+  );
+  class NativeWorker {
+    constructor(readonly filename: string | URL) {}
+  }
+  const exported: { exports?: { Worker: typeof NativeWorker } } = {};
+  runInNewContext(fs.readFileSync(prepared.workerThreadsShim, "utf8"), {
+    URL,
+    process: { execPath: path.join(runtimeRoot, "..", "openclaw") },
+    module: exported,
+    require: (specifier: string) =>
+      specifier === "node:worker_threads"
+        ? { Worker: NativeWorker }
+        : process.getBuiltinModule(specifier),
+  });
+  // The shim resolves its sidecar relative to the executable, independently of this fixture root.
+  const physical = path.join(runtimeRoot, "..", "runtime", "dist/commands/doctor.worker.js");
+  expect(new exported.exports!.Worker(physical).filename.toString()).toBe(
+    "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
+  );
+  expect(new exported.exports!.Worker("/typed/doctor.worker.ts").filename.toString()).toBe(
+    "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
+  );
+  expect(() =>
+    prepared.updateSourceWorkerAliases({ "/typed/unknown.ts": "dist/unknown.js" }),
+  ).toThrow("Unknown standalone worker alias target");
+  expect(
+    () => new exported.exports!.Worker(path.join(runtimeRoot, "..", "runtime", "dist/missing.js")),
+  ).toThrow("Undeclared standalone worker: dist/missing.js");
+  const source = 'import { Worker } from "node:worker_threads"; new Worker(target);';
+  const rewritten = prepared.rewriteWorkerImports(
+    "fixture.mjs",
+    source,
+    parse(source, { ecmaVersion: "latest", sourceType: "module" }),
+  );
+  expect(rewritten).toContain(JSON.stringify(prepared.workerThreadsShim));
 });

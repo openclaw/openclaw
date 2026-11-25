@@ -224,12 +224,16 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
     expect(database.db.isOpen).toBe(false);
     expect(() => retainedStatement.get()).toThrow(/finalized|database is not open/);
     const before = fs.statSync(database.path, { bigint: true });
-    expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "without an active schema lease or maintenance scope",
+    );
     expect(fs.statSync(database.path, { bigint: true })).toEqual(before);
     removal.resume();
     await expectFirst("unlinked", { unlinked: unlinked.promise, removed: deleting });
     expect([database.path, path.dirname(database.path)].map(fs.existsSync)).toEqual([false, false]);
-    expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "without an active schema lease or maintenance scope",
+    );
     expect([database.path, path.dirname(database.path)].map(fs.existsSync)).toEqual([false, false]);
   } finally {
     removal.resume();

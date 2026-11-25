@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -15,25 +13,14 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { removeGatewayTempHome, setupGatewayTempHome } from "./gateway.test-support.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
-import {
-  configureManualGatewayBackgroundEnv,
-  MANUAL_GATEWAY_ENV_KEYS,
-} from "./test-helpers.manual-gateway-env.js";
 
-const TEST_ENV_KEYS = [
-  "HOME",
-  ...MANUAL_GATEWAY_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_URL",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-];
+const TEST_ENV_KEYS = ["OPENCLAW_GATEWAY_URL", "OPENCLAW_GATEWAY_PASSWORD"];
 
 type Cleanup = () => Promise<void> | void;
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -69,23 +56,16 @@ describe("operator approval gateway client e2e", () => {
   async function gatewayFixture(prefix: string) {
     const envSnapshot = captureEnv(TEST_ENV_KEYS);
     cleanup.push(() => envSnapshot.restore());
-    for (const key of [
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_GATEWAY_URL",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
-    ]) {
+    for (const key of TEST_ENV_KEYS) {
       deleteTestEnvValue(key);
     }
-
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-    cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
-
+    const { envSnapshot: homeEnv, tempHome } = await setupGatewayTempHome({ prefix });
+    cleanup.push(
+      () => homeEnv.restore(),
+      () => removeGatewayTempHome(tempHome),
+    );
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     const stateDir = path.join(tempHome, ".openclaw");
-    await fs.mkdir(stateDir, { recursive: true });
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    configureManualGatewayBackgroundEnv(tempHome);
 
     const claim = await acquireGatewayE2ePortBlock();
     const token = "approval-e2e-token";
@@ -133,13 +113,12 @@ describe("operator approval gateway client e2e", () => {
     const resolve = (config: OpenClawConfig, id: string) =>
       withOperatorApprovalsGatewayClient(
         { config, clientDisplayName: "approval resolver" },
-        async (client) => {
-          await client.request(
+        (client) =>
+          client.request(
             "exec.approval.resolve",
             { id, decision: "allow-once" },
             { timeoutMs: 10_000 },
-          );
-        },
+          ),
       );
 
     await requestExecApproval(requester, "local-source-approval");
@@ -170,16 +149,20 @@ describe("operator approval gateway client e2e", () => {
     const { stateDir, connect } = await gatewayFixture("openclaw-approval-surfaces-e2e-");
     const identity = (role: string) =>
       loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", `approval-${role}.sqlite`),
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          `approval-${role}`,
+          "client",
+          "credentials.sqlite",
+        ),
       });
     const requesterIdentity = identity("requester");
     const reviewerIdentity = identity("reviewer");
-    const underscopedIdentity = identity("underscoped");
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
-
     const requester = await connect([APPROVALS_SCOPE], requesterIdentity);
     const reviewer = await connect([APPROVALS_SCOPE], reviewerIdentity);
-    const underscoped = await connect([READ_SCOPE], underscopedIdentity);
+    const underscoped = await connect([READ_SCOPE], identity("underscoped"));
 
     const approvalId = "multi-surface-first-answer-wins";
     await requestExecApproval(requester, approvalId);

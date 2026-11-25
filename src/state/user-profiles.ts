@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   ensureProfileForEmailInDatabase,
@@ -69,7 +69,7 @@ function ensureProfileForEmailWithInitialName(
       : undefined;
   };
   // Keep alias and merge-head reads coherent without taking writer admission.
-  const found = runSqliteDeferredTransactionSync(reader, () => selectExistingProfile(reader));
+  const found = runSqliteReadSnapshotSync(reader, () => selectExistingProfile(reader));
   if (found) {
     return found;
   }
@@ -127,7 +127,7 @@ function ensureProfileForProviderIdentity(params: {
         : query.where("subject", "=", subject);
     return executeSqliteQueryTakeFirstSync(database, query);
   };
-  const existing = runSqliteDeferredTransactionSync(reader, () => {
+  const existing = runSqliteReadSnapshotSync(reader, () => {
     const identity = selectExistingIdentity(reader);
     return identity?.subject === subject
       ? toUserProfile(requireResolvedUserProfileMetadataById(reader, identity.profile_id))
@@ -187,7 +187,7 @@ function adoptDisplayNameIfEmpty(
   options: UserProfileMutationOptions,
 ): UserProfile {
   const { db: reader } = openOpenClawStateDatabase(options);
-  const existing = runSqliteDeferredTransactionSync(reader, () =>
+  const existing = runSqliteReadSnapshotSync(reader, () =>
     requireResolvedUserProfileMetadataById(reader, profileId),
   );
   if (!displayName || existing.display_name?.trim()) {
@@ -225,14 +225,9 @@ export function ensureGatewayOwnerProfile(
   const displayName = normalizeInitialDisplayName(initialDisplayName);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const found = runSqliteDeferredTransactionSync(reader, () => {
-    const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
-    return existing && identified && (!displayName || existing.display_name?.trim())
-      ? existing
-      : undefined;
-  });
-  if (found) {
-    return toUserProfile(found);
+  const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
+  if (existing && identified && (!displayName || existing.display_name?.trim())) {
+    return toUserProfile(existing);
   }
   return runUserProfileWriteTransaction(
     ({ db }) => toUserProfile(ensureGatewayOwnerProfileRow(db, displayName, options.mutation)),

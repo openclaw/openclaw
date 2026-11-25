@@ -77,8 +77,14 @@ export async function createSystemAgentModelSelectionUpdater(
       modelConfig.upsertCanonicalModelConfigEntry(configuredVisibleModels, target);
     }
     if (selection.runtimeInDefaults) {
-      // Include the approved model in legacy restrictions before adding runtime-only metadata.
-      nextConfig = materializeModelPolicyAllowlist(nextConfig).config;
+      // Provider-added metadata is not a legacy restriction. Only extend the
+      // previous model map with the newly approved selection before migrating it.
+      const policySource = structuredClone(previousConfig);
+      const previousModels = policySource?.agents?.defaults?.models;
+      if (previousModels && Object.keys(previousModels).length > 0) {
+        modelConfig.upsertCanonicalModelConfigEntry(previousModels, target);
+      }
+      nextConfig = materializeModelPolicyAllowlist(nextConfig, policySource).config;
     }
     nextConfig.agents ??= {};
     nextConfig.agents.defaults ??= {};

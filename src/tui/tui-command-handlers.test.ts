@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Result } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { createSessionProjection } from "../../packages/gateway-client/src/session-projection.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { registerTuiCommandForwardingTests } from "./tui-command-forwarding.test-support.js";
 import type {
   LoadHistoryMock,
   SelectableOverlay,
@@ -64,9 +64,7 @@ describe("tui command handlers", () => {
 
   it("does not open an agent picker from a cached roster after refresh failure", async () => {
     const h = createHarness({
-      refreshAgents: vi
-        .fn()
-        .mockResolvedValue({ ok: false, error: "gateway unavailable" }) as RefreshAgentsMock,
+      refreshAgents: vi.fn().mockResolvedValue(false) as RefreshAgentsMock,
       agents: [{ id: "cached", name: "Cached Agent" }],
     });
     await h.handleCommand("/agents");
@@ -117,7 +115,7 @@ describe("tui command handlers", () => {
   });
 
   it("retires an unfinished agent refresh before opening a newer session picker", async () => {
-    const pendingRefresh = createDeferred<Result<void, string>>();
+    const pendingRefresh = createDeferred<boolean>();
     const refreshAgents = vi.fn(() => pendingRefresh.promise) as RefreshAgentsMock;
     const harness = createHarness({
       refreshAgents,
@@ -130,7 +128,7 @@ describe("tui command handlers", () => {
     const [ownsRefresh] = refreshAgents.mock.calls[0] as [(() => boolean) | undefined];
     await harness.handleCommand("/sessions");
     expect(ownsRefresh?.()).toBe(false);
-    pendingRefresh.resolve({ ok: true, value: undefined });
+    pendingRefresh.resolve(true);
     await olderPicker;
     expect(harness.openOverlay).toHaveBeenCalledOnce();
   });
@@ -337,29 +335,7 @@ describe("tui command handlers", () => {
     },
   );
 
-  it.each([
-    { command: "/side check this", local: true },
-    { command: "/not-a-real-command", local: true },
-    { command: "/goal status", local: false },
-    { command: "/model default", local: true },
-    { command: "/usage cost", local: false },
-    { command: "/queue:followup", local: false },
-  ])("forwards $command without applying a client-side setting", async ({ command, local }) => {
-    const h = createHarness({
-      opts: { local },
-      ...(command === "/model default"
-        ? { sendChat: vi.fn().mockResolvedValue({ status: "ok" }) }
-        : {}),
-      ...(command === "/queue:followup"
-        ? { activeChatRunId: "run-active", activityStatus: "streaming" }
-        : {}),
-    });
-    await h.handleCommand(command);
-    expectSendChatFields(h.sendChat, { sessionKey: "agent:main:main", message: command });
-    expect(h.sendChat).toHaveBeenCalledOnce();
-    expectUnused(h.patchSession, h.runGoalCommand, h.addSystem);
-    expect(h.runUsageCostCommand).not.toHaveBeenCalled();
-  });
+  registerTuiCommandForwardingTests();
 
   it.each(["/goal start ship", "/usage cost"])(
     "local global-agent command: %s",
@@ -560,9 +536,33 @@ describe("tui command handlers", () => {
     } else {
       expect(h.dropPendingUser).not.toHaveBeenCalled();
       expect(h.state.sessionProjection?.entries).toHaveLength(1);
-      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle");
+      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
     }
   });
+
+  it.each(["active", "pending"] as const)(
+    "keeps %s work visible after another send completes with a terminal ACK",
+    async (remaining) => {
+      const loadHistory = vi.fn<() => Promise<void>>(async () => {
+        h.state.activeChatRunId = remaining === "active" ? "other-run" : null;
+        h.state.pendingSubmit =
+          remaining === "pending"
+            ? { phase: "accepted", runId: "other-run", draftText: null }
+            : null;
+        h.state.activityStatus = remaining === "active" ? "streaming" : "waiting";
+        h.setActivityStatus.mockClear();
+      });
+      const h = createHarness({
+        activeChatRunId: "other-run",
+        sendChat: vi.fn(async ({ runId }: { runId: string }) => ({ runId, status: "ok" })),
+        loadHistory,
+      });
+      await h.handleCommand("hello");
+      expect(loadHistory).toHaveBeenCalledOnce();
+      expect(h.setActivityStatus).not.toHaveBeenCalled();
+      expect(h.state.activityStatus).toBe(remaining === "active" ? "streaming" : "waiting");
+    },
+  );
 
   it("ignores a terminal ACK after its history reload switches sessions", async () => {
     const history = createDeferred();
@@ -744,12 +744,15 @@ describe("tui command handlers", () => {
     expect(h.sendChat).not.toHaveBeenCalled();
     expectCall(h.addSystem, [`session change in progress; wait for /${command} to finish`]);
     if (command === "new") {
-      expect(h.createSession).toHaveBeenCalledExactlyOnceWith({
-        key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
-        agentId: "work",
-        parentSessionKey: "global",
-        succeedsParent: true,
-      });
+      expect(h.createSession).toHaveBeenCalledExactlyOnceWith(
+        {
+          key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
+          agentId: "work",
+          parentSessionKey: "global",
+          succeedsParent: true,
+        },
+        { sessionKey: "global", agentId: "work" },
+      );
     } else {
       expectCall(h.resetSession, ["agent:main:main", "reset", undefined], "once");
     }
@@ -771,6 +774,27 @@ describe("tui command handlers", () => {
       currentSessionId: result.entry.sessionId,
     });
     expect(h.addSystem).toHaveBeenCalledWith("session agent:main:replacement reset");
+  });
+
+  it("forwards /reset soft to the gateway instead of resetting the session", async () => {
+    const h = createHarness();
+    await h.handleCommand("/reset soft please reload");
+    expectSendChatFields(h.sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/reset soft please reload",
+    });
+    expect(h.sendChat).toHaveBeenCalledOnce();
+    expect(h.resetSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects /reset soft in local mode without resetting the session", async () => {
+    const h = createHarness({ opts: { local: true } });
+    await h.handleCommand("/reset soft please reload");
+    expect(h.sendChat).not.toHaveBeenCalled();
+    expect(h.resetSession).not.toHaveBeenCalled();
+    expect(h.addSystem).toHaveBeenCalledWith(
+      "/reset soft is not available in local embedded mode; message not sent",
+    );
   });
 
   it("reloads a global session after /reset returns no session entry", async () => {

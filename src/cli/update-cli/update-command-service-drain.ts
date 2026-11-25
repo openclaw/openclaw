@@ -4,9 +4,12 @@ import type {
   GatewaySuspendHandoffResult,
   GatewaySuspendPrepareResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
+import {
+  GatewayMaintenanceResidentChangedError,
+  GatewayServiceStopUnsafeError,
+} from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
-import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-maintenance.js";
+import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-stop-policy.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -18,6 +21,7 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { readLinuxProcessStat } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
@@ -29,6 +33,11 @@ export async function withGatewayMaintenanceDrain<T>(
     state: GatewayServiceState;
     timeoutMs?: number;
     drainPolicy?: "interrupt-after-drain";
+    /** Installation owners can retain an exact trusted control client and supervisor binding. */
+    control?: {
+      call: <R>(method: string, args: unknown, beforeDispatch?: () => void) => Promise<R>;
+      stopTimeoutMs: number;
+    };
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
@@ -95,7 +104,7 @@ export async function withGatewayMaintenanceDrain<T>(
   const assertResidentCurrent = () => {
     params.assertCurrent();
     if (residentChanged) {
-      throw new Error("Gateway process changed during maintenance drain");
+      throw new GatewayMaintenanceResidentChangedError();
     }
   };
   let residentBudget: GatewayShutdownStatus | undefined;
@@ -137,24 +146,39 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     return lastObservation;
   };
-  const connection = await (async () => {
-    const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
-    const port = await resolveUpdatedGatewayRestartPort({
-      config,
-      serviceEnv: params.state.env,
-      serviceCommand: params.state.command,
-    });
-    const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
-    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
-      auth,
-      authNone: config.gateway?.auth?.mode === "none",
-      env: params.state.env,
-    });
-    return { config, controlAuth, port, target };
-  })().catch((error: unknown) => {
-    observationFailure = { error };
-    return undefined;
-  });
+  const connection = params.control
+    ? undefined
+    : await (async () => {
+        let port: number | undefined;
+        if (!explicitDrain && !params.state.running && params.state.runtime?.status === "stopped") {
+          port = await resolveUpdatedGatewayRestartPort({
+            serviceEnv: params.state.env,
+            serviceCommand: params.state.command,
+          });
+          const usage = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+          assertResidentCurrent();
+          if (usage.status === "free") {
+            // No resident needs control credentials or a lifecycle drain.
+            return null;
+          }
+        }
+        const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
+        port ??= await resolveUpdatedGatewayRestartPort({
+          config,
+          serviceEnv: params.state.env,
+          serviceCommand: params.state.command,
+        });
+        const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
+        const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+          auth,
+          authNone: config.gateway?.auth?.mode === "none",
+          env: params.state.env,
+        });
+        return { config, controlAuth, port, target };
+      })().catch((error: unknown) => {
+        observationFailure = { error };
+        return undefined;
+      });
   assertResidentCurrent();
   const ownsLegacyListener = async (pid: number) => {
     if (!connection?.target) {
@@ -165,12 +189,49 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
+  // The resident launcher (release installs, and runtime recovery of a Gateway
+  // whose Node fails admission) stays the service's main process; its direct
+  // child serves the port and stops with the service.
+  const isServiceResident = async (pid: number | undefined) => {
+    const runtimePid = params.state.runtime?.pid;
+    if (pid === undefined || runtimePid === undefined) {
+      return false;
+    }
+    if (pid === runtimePid) {
+      return true;
+    }
+    if (!connection) {
+      return false;
+    }
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    if (usage.status !== "busy") {
+      return false;
+    }
+    if (usage.listeners.every((listener) => listener.pid === undefined)) {
+      // No listener names its process (no lsof or ss, or ss cannot see the owner).
+      // The Gateway that answered reported its own PID; its kernel parent ties it
+      // to the service.
+      return readLinuxProcessStat(pid)?.parentPid === runtimePid;
+    }
+    return usage.listeners.every(
+      (listener) => listener.pid === pid && listener.ppid === runtimePid,
+    );
+  };
   const call = async <R>(
     method: string,
     args?: unknown,
     beforeDispatch?: () => void,
   ): Promise<R> => {
     assertResidentCurrent();
+    if (params.control) {
+      const result = await params.control.call<R>(method, args, () => {
+        assertResidentCurrent();
+        beforeDispatch?.();
+      });
+      assertResidentCurrent();
+      return result;
+    }
     if (!connection?.target) {
       throw observationFailure
         ? observationFailure.error
@@ -187,8 +248,8 @@ export async function withGatewayMaintenanceDrain<T>(
       localPortOverride: port,
       ignoreEnvUrlOverride: true,
       tlsFingerprint: target.tlsFingerprint,
-      // The deadline bounds deferral, not the final RPC needed to observe custody.
-      timeoutMs: 10_000,
+      // Handoff may wait for final writes within the original 30-second drain budget.
+      timeoutMs: method === "gateway.suspend.handoff" ? 30_000 : 10_000,
       onHelloOk: (hello) => {
         observedBootId = hello.server.bootId;
       },
@@ -205,15 +266,20 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return result;
   };
+  if (connection === null) {
+    // Rollback can revisit an already-stopped unit; retain the guarded native stop.
+    return await finish();
+  }
   let managerTimeout: number | undefined;
   let verifiedResident = false;
   try {
-    managerTimeout = await readSystemdGatewayStopTimeout(params.state);
+    managerTimeout =
+      params.control?.stopTimeoutMs ?? (await readSystemdGatewayStopTimeout(params.state));
     const resident = await call<{ pid?: number; shutdownBudget?: GatewayShutdownStatus }>(
       "status",
       { includeChannelSummary: false },
     );
-    if (typeof resident.pid === "number" && resident.pid === params.state.runtime?.pid) {
+    if (await isServiceResident(resident.pid)) {
       residentBudget = resident.shutdownBudget;
       verifiedResident = true;
     }
@@ -221,20 +287,6 @@ export async function withGatewayMaintenanceDrain<T>(
     observationFailure = { error };
   }
   assertResidentCurrent();
-  if (
-    !explicitDrain &&
-    !params.state.running &&
-    params.state.runtime?.status === "stopped" &&
-    observationFailure &&
-    connection?.target
-  ) {
-    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
-    assertResidentCurrent();
-    if (usage.status === "free") {
-      // Rollback can revisit an already-stopped unit; retain the guarded native stop.
-      return await finish();
-    }
-  }
   // A resident whose installation was replaced underneath it refuses every
   // connection; it can neither report readiness nor accept new work, so
   // draining it is pointless and would only burn the deadline.
@@ -279,7 +331,7 @@ export async function withGatewayMaintenanceDrain<T>(
     if (explicitDrain) {
       const identity = await call<{ pid: number; processInstanceId: string }>("system.info", {});
       if (
-        identity.pid !== params.state.runtime?.pid ||
+        !(await isServiceResident(identity.pid)) ||
         typeof identity.processInstanceId !== "string" ||
         !identity.processInstanceId.trim()
       ) {
@@ -297,7 +349,7 @@ export async function withGatewayMaintenanceDrain<T>(
       try {
         if (!verifiedResident) {
           const identity = await call<{ pid: number }>("system.info", {});
-          if (identity.pid !== params.state.runtime?.pid) {
+          if (!(await isServiceResident(identity.pid))) {
             residentChanged = true;
             assertResidentCurrent();
           }

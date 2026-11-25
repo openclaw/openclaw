@@ -1,10 +1,9 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { git } from "./git-fixture.test-support.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -14,9 +13,6 @@ import {
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 const dirs = useStateDatabaseTempDirs();
 const initialize = useManagedWorktreeTestRepository();
 

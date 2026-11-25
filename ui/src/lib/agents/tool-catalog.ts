@@ -2,6 +2,9 @@ import { listCoreToolSections } from "../../../../src/agents/tool-catalog.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../../../src/agents/tools/automations-tool-name.js";
 import type { ToolCatalogProfile, ToolsCatalogResult } from "../../api/types.ts";
 import { t, translateActive } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+
+registerSettingsEnglish();
 
 export type AgentToolEntry = {
   id: string;
@@ -20,15 +23,6 @@ export type AgentToolSection = {
   pluginId?: string;
   tools: AgentToolEntry[];
 };
-
-function fallbackToolDescriptionId(toolId: string): string {
-  if (toolId === AUTOMATIONS_TOOL_NAME) {
-    return "cron";
-  }
-  return toolId === "view_image"
-    ? "image"
-    : toolId.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase());
-}
 
 // Canonical UI tool-profile list; Security and Agents surfaces share it so
 // labels stay translated and consistent.
@@ -66,12 +60,19 @@ export function resolveToolSections(
   return listCoreToolSections().map((section) => ({
     id: section.id,
     label: t(`agents.toolCatalog.groups.${CORE_GROUP_LABEL_IDS.get(section.id)}`),
-    tools: section.tools.map((tool) => ({
-      ...tool,
-      description:
-        translateActive(`agents.toolCatalog.descriptions.${fallbackToolDescriptionId(tool.id)}`) ??
-        tool.description,
-    })),
+    tools: section.tools.map((tool) => {
+      const entry = { ...tool };
+      const toolId = tool.id;
+      const descriptionId =
+        toolId === AUTOMATIONS_TOOL_NAME
+          ? "cron"
+          : toolId === "view_image"
+            ? "image"
+            : toolId.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase());
+      entry.description =
+        translateActive(`agents.toolCatalog.descriptions.${descriptionId}`) ?? tool.description;
+      return entry;
+    }),
   }));
 }
 

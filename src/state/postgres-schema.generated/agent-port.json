@@ -5,6 +5,10 @@
       "identities": []
     },
     {
+      "name": "agent_tool_usage",
+      "identities": []
+    },
+    {
       "name": "auth_profile_state",
       "identities": []
     },
@@ -118,6 +122,10 @@
       "identities": []
     },
     {
+      "name": "session_creation_operations",
+      "identities": []
+    },
+    {
       "name": "session_entry_snapshots",
       "identities": []
     },
@@ -172,11 +180,19 @@
       "identities": []
     },
     {
+      "name": "session_transcript_active_event_facts",
+      "identities": []
+    },
+    {
       "name": "session_transcript_active_events",
       "identities": []
     },
     {
       "name": "session_transcript_archives",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_cold_archive_chunks",
       "identities": []
     },
     {
@@ -427,59 +443,11 @@
   ],
   "triggers": [
     {
-      "name": "memory_index_chunks_revision_after_delete",
-      "table": "memory_index_chunks",
-      "range": [
-        32299,
-        32486
-      ]
-    },
-    {
-      "name": "memory_index_chunks_revision_after_insert",
-      "table": "memory_index_chunks",
-      "range": [
-        31921,
-        32108
-      ]
-    },
-    {
-      "name": "memory_index_chunks_revision_after_update",
-      "table": "memory_index_chunks",
-      "range": [
-        32110,
-        32297
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_delete",
-      "table": "memory_index_sources",
-      "range": [
-        31730,
-        31919
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_insert",
-      "table": "memory_index_sources",
-      "range": [
-        31348,
-        31537
-      ]
-    },
-    {
-      "name": "memory_index_sources_revision_after_update",
-      "table": "memory_index_sources",
-      "range": [
-        31539,
-        31728
-      ]
-    },
-    {
       "name": "session_conversations_route_context_invalidate_after_update",
       "table": "session_conversations",
       "range": [
-        10172,
-        10555
+        10313,
+        10696
       ]
     },
     {
@@ -510,41 +478,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        31091,
-        31274
+        33518,
+        33701
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        28631,
-        28878
+        30622,
+        30869
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        28414,
-        28629
+        30405,
+        30620
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        28880,
-        29256
+        30871,
+        31247
       ]
     }
   ],
   "preData": [
     0,
-    29285
+    31475
   ],
   "postData": [
-    29285,
-    46623
+    31475,
+    47832
   ]
 }

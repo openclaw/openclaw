@@ -7,6 +7,7 @@ import {
 } from "../models-config.providers.secrets.js";
 import {
   createApiKeyCredential,
+  createUnresolvedOAuthCredential,
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "./credential-fixtures.test-support.js";
@@ -134,16 +135,7 @@ describe("provider catalog auth order", () => {
   it("keeps unresolved OAuth refs selected for locked catalog resolution", () => {
     const profileId = "openai:oauth-ref";
     const store = createAuthProfileStoreFixture({
-      [profileId]: createOAuthRefreshCredential({
-        access: "",
-        refresh: "",
-        expires: 0,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: "00000000000000000000000000000000",
-        },
-      }),
+      [profileId]: createUnresolvedOAuthCredential(),
     });
     expect(
       createProviderAuthResolver({}, store, authOrder("openai", [profileId]))("openai"),

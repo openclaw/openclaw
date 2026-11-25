@@ -77,7 +77,12 @@ const credential = (key: string): AuthProfileCredential => ({
   key,
 });
 const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
-const nativeRuntime = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+const nativeRuntime = createAuthProfileStoreRuntime(
+  createExternalAuthRuntime(
+    () => [],
+    async (_params, run) => run(),
+  ),
+);
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const sdkWriters = ["saveAuthProfileStore", "upsertAuthProfile"] as const;
 const metadata = () => ({
@@ -668,13 +673,19 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
 });
 
 describe("prepared persisted credential readers", () => {
-  it.each([false, true])(
-    "retains local and inherited ownership after read-scope cleanup (local initially present=%s)",
-    async (localPresent) => {
-      const shared = fixture("shared-state");
-      const agentDir = path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "child", "agent");
+  it.each(["main-agent", "empty-child", "populated-child", "scoped-child"] as const)(
+    "retains scoped credential dependencies through the %s lifecycle",
+    async (source) => {
+      const isMain = source === "main-agent";
+      const shared = fixture(isMain ? "agent" : "shared-state");
+      const agentDir =
+        shared.agentDir ?? path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "child", "agent");
       const localPath = path.join(agentDir, "openclaw-agent.sqlite");
-      agentPaths.push(localPath);
+      if (isMain) {
+        noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, shared.env);
+      } else {
+        agentPaths.push(localPath);
+      }
       const writeLocal = (key?: string) =>
         runAuthProfileWriteTransaction(
           agentDir,
@@ -684,108 +695,76 @@ describe("prepared persisted credential readers", () => {
               : deleteAuthProfileJsonCell(db, "store", "agent"),
           { env: shared.env },
         );
-      useReaderEnvironment(shared);
-      if (localPresent) {
+      if (source === "populated-child") {
         writeLocal("local-original");
       }
-      const read = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
-      expect(read?.()).toEqual(credential(localPresent ? "local-original" : "original"));
+      const scoped = isMain || source === "scoped-child";
+      const environment = scoped ? fixture("shared-state") : shared;
+      if (scoped) {
+        environment.write("ambient");
+      }
+      useReaderEnvironment(environment);
+      const prepare = async () => {
+        const retained = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
+        expect(retained?.()).toEqual(
+          await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
+        );
+        return retained;
+      };
+      const read = await (scoped
+        ? withAuthProfileStoreAgentDir(agentDir, shared.env.OPENCLAW_STATE_DIR, prepare)
+        : prepare());
+      expect(read?.()).toEqual(
+        credential(source === "populated-child" ? "local-original" : "original"),
+      );
       writeLocal("local-new");
       expect(read?.()).toEqual(credential("local-new"));
       writeLocal();
-      expect(read?.()).toEqual(credential("original"));
-      shared.write("shared-new");
-      expect(read?.()).toEqual(credential("shared-new"));
-      const cold = await nativeRuntime.findPersistedAuthProfileCredentialAsync({
-        agentDir,
-        profileId,
-      });
-      expect(read?.()).toEqual(cold);
-      await closeOpenClawAgentDatabaseByPathAsync(localPath);
-      expect(() => read?.()).toThrow("authority is unavailable");
-    },
-  );
-
-  it.each(["agent", "shared-state"] as const)(
-    "retains scoped %s authority over ambient state and snapshots",
-    async (kind) => {
-      const shared = fixture(kind);
-      const agentDir =
-        kind === "agent"
-          ? path.dirname(shared.database.path)
-          : path.join(shared.env.OPENCLAW_STATE_DIR, "agents", "scoped", "agent");
-      if (kind === "agent") {
-        noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, shared.env);
-      } else {
-        agentPaths.push(path.join(agentDir, "openclaw-agent.sqlite"));
-      }
-      const ambient = fixture("shared-state");
-      ambient.write("ambient");
-      useReaderEnvironment(ambient);
-      const read = await withAuthProfileStoreAgentDir(
-        agentDir,
-        shared.env.OPENCLAW_STATE_DIR,
-        async () => {
-          const retained = await shared.prepareRead(agentDir);
-          if (kind === "agent") {
-            expect(retained?.()).toEqual(
-              await nativeRuntime.findPersistedAuthProfileCredentialAsync({
-                agentDir,
-                profileId,
-              }),
-            );
-          }
-          return retained;
-        },
-      );
-      expect(read?.()).toEqual(credential("original"));
+      expect(read?.()).toEqual(isMain ? undefined : credential("original"));
       shared.write("shared-new");
       expect(read?.()).toEqual(credential("shared-new"));
       shared.remove();
       expect(read?.()).toBeUndefined();
-      if (kind === "agent") {
-        return;
-      }
-      for (const excluded of [
-        { ...credential("private"), copyToAgents: false },
-        {
-          type: "oauth",
-          provider: "fixture",
-          access: "synthetic-access",
-          refresh: "synthetic-refresh",
-          expires: Date.now() + 3_600_000,
-          copyToAgents: true,
-        },
-      ]) {
-        shared.transact(({ db }) =>
-          writeAuthProfileJsonCell(db, "store", "shared-state", {
-            version: 1,
-            profiles: { [profileId]: excluded },
+      if (source === "scoped-child") {
+        for (const excluded of [
+          { ...credential("private"), copyToAgents: false },
+          {
+            type: "oauth",
+            provider: "fixture",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 3_600_000,
+            copyToAgents: true,
+          },
+        ]) {
+          shared.transact(({ db }) =>
+            writeAuthProfileJsonCell(db, "store", "shared-state", {
+              version: 1,
+              profiles: { [profileId]: excluded },
+            }),
+          );
+          expect(read?.()).toBeUndefined();
+        }
+        shared.write("original");
+        writeLocal("scoped-local");
+        expect(read?.()).toEqual(credential("scoped-local"));
+        shared.remove();
+        useReaderEnvironment(shared);
+        expect(
+          await nativeRuntime.prepareAuthProfileCredentialRead({
+            profileId,
+            store: store("ephemeral"),
           }),
-        );
-        expect(read?.()).toBeUndefined();
-      }
-      shared.write("original");
-      runAuthProfileWriteTransaction(
-        agentDir,
-        ({ db }) => writeAuthProfileJsonCell(db, "store", "agent", store("scoped-local")),
-        { env: shared.env },
-      );
-      expect(read?.()).toEqual(credential("scoped-local"));
-      shared.remove();
-      useReaderEnvironment(shared);
-      expect(
-        await nativeRuntime.prepareAuthProfileCredentialRead({
+        ).toBeNull();
+        const persisted = await nativeRuntime.prepareAuthProfileCredentialRead({
           profileId,
-          store: store("ephemeral"),
-        }),
-      ).toBeNull();
-      const persisted = await nativeRuntime.prepareAuthProfileCredentialRead({
-        profileId,
-        store: { ...store("deleted"), runtimePersistedProfileIds: [profileId] },
-      });
-      expect(persisted).toBeTypeOf("function");
-      expect(persisted?.()).toBeUndefined();
+          store: { ...store("deleted"), runtimePersistedProfileIds: [profileId] },
+        });
+        expect(persisted).toBeTypeOf("function");
+        expect(persisted?.()).toBeUndefined();
+      }
+      await closeOpenClawAgentDatabaseByPathAsync(localPath);
+      expect(() => read?.()).toThrow("authority is unavailable");
     },
   );
 });

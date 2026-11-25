@@ -1,5 +1,9 @@
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
-import type { PluginCacheArtifacts, PluginRootArtifactCache } from "./plugin-cache-artifacts.js";
+import type {
+  InspectionNativeEsmPolicy,
+  PluginCacheArtifacts,
+  PluginRootArtifactCache,
+} from "./plugin-cache-artifacts.js";
 import type {
   PluginDirectoryCacheEntry,
   PluginEntryCheck,
@@ -29,6 +33,7 @@ export interface PluginCache
   setupModules: Map<string, PluginModuleLoaderOwner>;
   instances: Set<PluginInstanceResource>;
   sourceAdmissions?: { invalidate(): void; dispose(): Promise<void> };
+  inspectionNativeEsmPolicy?: InspectionNativeEsmPolicy & { viewKeys: ReadonlySet<string> };
   retirement?: Promise<PluginHostCleanupResult>;
   [Symbol.asyncDispose](): Promise<void>;
 }

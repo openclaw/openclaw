@@ -12,8 +12,11 @@ import { writeConfigMachineStateAsync } from "../state/config-machine-state-asyn
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { resolveConfigWriteTouchedVersion } from "./implicit-primary-era.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { materializeSkillLibraryToolSplit } from "./skill-library-tool-split-migration.js";
+import { stampSkillWorkshopPluginMigration } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
@@ -22,6 +25,8 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", "lastTouchedVersion"],
   ["meta", "migrations", "modelPolicyAllowlist"],
   ["meta", "migrations", "utilityModelSeparation"],
+  ["meta", "migrations", "skillWorkshopPlugin"],
+  ["meta", "migrations", "skillLibraryToolSplit"],
 ] as const;
 
 export function hasWebhookMigrationProgress(
@@ -76,8 +81,14 @@ export function stampConfigWriteMetadata(
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : materializeUtilityModelSeparation(
-          materializeModelPolicyAllowlist(cfg, previousConfig).config,
+      : materializeSkillLibraryToolSplit(
+          stampSkillWorkshopPluginMigration(
+            materializeUtilityModelSeparation(
+              materializeModelPolicyAllowlist(cfg, previousConfig).config,
+              previousConfig,
+            ).config,
+            previousConfig,
+          ),
           previousConfig,
         ).config;
   if (resolveUpdateRehearsalRoot(env)) {
@@ -89,14 +100,22 @@ export function stampConfigWriteMetadata(
       (beforeMeta?.migrations?.modelPolicyAllowlist &&
         !afterMeta?.migrations?.modelPolicyAllowlist) ||
       (beforeMeta?.migrations?.utilityModelSeparation &&
-        !afterMeta?.migrations?.utilityModelSeparation);
+        !afterMeta?.migrations?.utilityModelSeparation) ||
+      (beforeMeta?.migrations?.skillWorkshopPlugin &&
+        !afterMeta?.migrations?.skillWorkshopPlugin) ||
+      (beforeMeta?.migrations?.skillLibraryToolSplit &&
+        !afterMeta?.migrations?.skillLibraryToolSplit);
     return !removedMarker && isDeepStrictEqual(before, after) ? cfg : migrationStamped;
   }
   return {
     ...migrationStamped,
     meta: {
       ...migrationStamped.meta,
-      lastTouchedVersion: version,
+      lastTouchedVersion: resolveConfigWriteTouchedVersion(
+        migrationStamped,
+        previousConfig,
+        version,
+      ),
     },
   };
 }
@@ -120,18 +139,21 @@ export async function resolveConfigWriteStateSelection(
 
 /** An unresolved state target never falls back to a native database during config repair. */
 export function withConfigWriteState<T>(
-  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>>,
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
   run: () => T,
 ): T | null {
-  return selection.ok ? withDatabaseEngineSelection(selection.value, run) : null;
+  return selection?.ok ? withDatabaseEngineSelection(selection.value, run) : null;
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
 export async function recordConfigWriteMetadata(
   deps: { env: NodeJS.ProcessEnv; logger: Pick<typeof console, "warn"> },
-  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>>,
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
   now: string = new Date().toISOString(),
 ): Promise<void> {
+  if (!selection) {
+    return;
+  }
   try {
     if (!selection.ok) {
       throw selection.error;

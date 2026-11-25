@@ -1,7 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
+import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { notifyListeners } from "../shared/listeners.js";
+import type { readResidentSessionRow } from "./session-row-projection-materialize.js";
 import {
   identity,
   selectionRow,
@@ -20,6 +21,8 @@ export function createSessionRowProjectionRevisions(
 ) {
   let sharing: object | undefined;
   let selection: object | undefined;
+  let taskPublication: object | undefined;
+  let changeScope: string | undefined;
   const selectionListeners = new Set<(change: SelectionChange) => void>();
   const factsListeners = new Set<(change: FactsChange) => void>();
   const publishFacts = (row?: Pick<Row, "key">) => {
@@ -34,9 +37,13 @@ export function createSessionRowProjectionRevisions(
       selection = undefined;
     }
   };
-  const publishSelection = (row?: Row, removed = false) => {
+  const publishSelection = (row?: Row, removed = false, factsChanged = true) => {
+    if (!row || removed) {
+      taskPublication = undefined;
+    }
     if (!row) {
       invalidate(true);
+      recordSessionRowSelectionReset();
     }
     const change: SelectionChange = row
       ? {
@@ -44,7 +51,10 @@ export function createSessionRowProjectionRevisions(
           id: identity(row),
           key: row.key,
           agentId: row.agentId,
+          storePath: row.storeTarget.storePath,
           row: removed ? undefined : selectionRow(row),
+          factsChanged,
+          ...(changeScope === undefined ? {} : { scope: changeScope }),
         }
       : { kind: "reset" };
     // Failed derived updates retire orders without interrupting accepted row maintenance.
@@ -53,6 +63,15 @@ export function createSessionRowProjectionRevisions(
     );
   };
   return {
+    withChangeScope<T>(scope: string | undefined, publish: () => T): T {
+      const previous = changeScope;
+      changeScope = scope;
+      try {
+        return publish();
+      } finally {
+        changeScope = previous;
+      }
+    },
     onSelectionChange(this: void, listener: (change: SelectionChange) => void) {
       selectionListeners.add(listener);
     },
@@ -61,6 +80,10 @@ export function createSessionRowProjectionRevisions(
     },
     publishFacts,
     publishRuntimeChange(change: SessionRowChange) {
+      // Unprepared metadata can change lineage before row replacement catches up.
+      if (change.factsInvalidated || ("all" in change && change.scope === "config")) {
+        taskPublication = undefined;
+      }
       if ("all" in change) {
         if (change.scope === "agent-runs" && change.runtimeSession) {
           const { sessionId, agentId } = change.runtimeSession;
@@ -109,25 +132,58 @@ export function createSessionRowProjectionRevisions(
     },
     sharing: () => (sharing ??= {}),
     selection: () => (selection ??= {}),
+    taskPublication: () => (taskPublication ??= {}),
     invalidate,
-    materialized(row: Row, previousBoard: Row["hasBoard"]) {
-      const changed = row.hasBoard !== previousBoard;
-      invalidate(changed);
+    materialized(
+      row: Row,
+      prepared: ReturnType<typeof readResidentSessionRow> &
+        Pick<Row, "materializedSequence" | "profileRevision" | "subagentRevision">,
+    ) {
+      const boardChanged = row.hasBoard !== prepared.hasBoard;
+      const sharingChanged = row.membership !== prepared.membership;
+      const changed =
+        boardChanged ||
+        sharingChanged ||
+        row.materialized !== prepared.materialized ||
+        row.facts !== prepared.facts ||
+        row.fallbackModel !== prepared.fallbackModel;
+      Object.assign(row, prepared);
+      if (!changed) {
+        return;
+      }
+      if (boardChanged || sharingChanged) {
+        invalidate(boardChanged);
+      }
       publishFacts(row);
-      if (changed && !isIncognitoSessionKey(row.key)) {
+      if (boardChanged && !isIncognitoSessionKey(row.key)) {
         publishSelection(row);
       }
     },
     replace(previous: Row | undefined, row: Row) {
+      if (
+        !previous ||
+        !row.sharingEntry ||
+        previous.generation !== row.generation ||
+        previous.entry?.sessionId !== row.entry?.sessionId ||
+        previous.entry?.lifecycleRevision !== row.entry?.lifecycleRevision ||
+        previous.parents !== row.parents
+      ) {
+        taskPublication = undefined;
+      }
       const changed =
         !previous ||
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
-        !isDeepStrictEqual(previous.entry, row.entry);
-      invalidate(changed);
+        previous.entry !== row.entry;
+      const factsChanged =
+        changed &&
+        (!previous ||
+          selectionRow(previous)?.selectionFactsRevision !==
+            selectionRow(row)?.selectionFactsRevision);
+      invalidate(factsChanged);
       publishFacts(row);
       if (changed) {
-        publishSelection(row);
+        publishSelection(row, false, factsChanged);
       }
     },
   };

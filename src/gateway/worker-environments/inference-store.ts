@@ -13,7 +13,6 @@ type Operations = WorkerInferenceStoreOperations;
 export function createWorkerInferenceStore(
   options: {
     path?: string;
-    env?: NodeJS.ProcessEnv;
     now?: () => number;
     retention?: Partial<WorkerInferenceRetentionPolicy>;
   } = {},
