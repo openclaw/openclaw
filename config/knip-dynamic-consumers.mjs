@@ -444,6 +444,138 @@ function sideEffectImport(targetFile, consumerFile) {
   return `import ${JSON.stringify(relativeSpecifier(consumerFile, targetFile))};`;
 }
 
+function inlineNodeShellImportEdges(source, consumerFile) {
+  const edges = new Map();
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  const initializer = (reference) => {
+    if (!reference?.isIdentifier()) {
+      return undefined;
+    }
+    const binding = reference.scope.getBinding(reference.node.name);
+    return binding?.constant && binding.path.isVariableDeclarator()
+      ? binding.path.get("init")
+      : undefined;
+  };
+  const isCallReference = (reference) =>
+    reference.parentPath.isCallExpression() && reference.parentPath.node.callee === reference.node;
+  traverse(ast, {
+    CallExpression(launch) {
+      if (!launch.get("callee").referencesImport("node:child_process", "spawnSync")) {
+        return;
+      }
+      const [shell, argv, options] = launch.get("arguments");
+      if (
+        !shell?.isStringLiteral({ value: "bash" }) ||
+        !argv?.isArrayExpression() ||
+        !options?.isObjectExpression()
+      ) {
+        return;
+      }
+      const [flag, commandReference] = argv.get("elements");
+      const cwd = options
+        .get("properties")
+        .find(
+          (property) =>
+            property.isObjectProperty() &&
+            !property.node.computed &&
+            property.get("key").isIdentifier({ name: "cwd" }),
+        );
+      const root = initializer(cwd?.get("value"));
+      // Inline relative imports resolve from the child's tooling cwd, not from
+      // this compiler or the release candidate being inspected.
+      if (
+        !flag?.isStringLiteral({ value: "-lc" }) ||
+        argv.node.elements.length !== 2 ||
+        !root?.isCallExpression() ||
+        !root.get("callee").referencesImport("node:url", "fileURLToPath")
+      ) {
+        return;
+      }
+      const [url] = root.get("arguments");
+      if (
+        !url?.isNewExpression() ||
+        !url.get("callee").isIdentifier({ name: "URL" }) ||
+        url.scope.getBinding("URL") ||
+        !url.get("arguments.0")?.isStringLiteral({ value: "../" }) ||
+        !url.get("arguments.1")?.matchesPattern("import.meta.url")
+      ) {
+        return;
+      }
+      const command = initializer(commandReference);
+      if (
+        !command?.isCallExpression() ||
+        !command.get("callee").isMemberExpression({ computed: false }) ||
+        !command.get("callee.property").isIdentifier({ name: "join" }) ||
+        !command.get("arguments.0")?.isStringLiteral({ value: " " }) ||
+        !command.get("callee.object").isArrayExpression()
+      ) {
+        return;
+      }
+      const parts = command.get("callee.object.elements");
+      const quoted = parts.at(-1);
+      if (!parts.at(-2)?.isStringLiteral({ value: "exec" }) || !quoted?.isSpreadElement()) {
+        return;
+      }
+      const mapped = quoted.get("argument");
+      if (
+        !mapped.isCallExpression() ||
+        !mapped.get("callee").isMemberExpression({ computed: false }) ||
+        !mapped.get("callee.property").isIdentifier({ name: "map" }) ||
+        !mapped.get("callee.object").isArrayExpression() ||
+        !mapped.get("arguments.0")?.isIdentifier({ name: "shellQuote" }) ||
+        !mapped.scope.getBinding("shellQuote")?.path.isFunctionDeclaration()
+      ) {
+        return;
+      }
+      const args = mapped.get("callee.object.elements");
+      if (
+        !args[0]?.matchesPattern("process.execPath") ||
+        mapped.scope.getBinding("process") ||
+        !args.at(-2)?.isStringLiteral({ value: "-e" }) ||
+        !args.some((arg) => arg.isStringLiteral({ value: "--input-type=module" }))
+      ) {
+        return;
+      }
+      const script = initializer(args.at(-1));
+      const owner = launch.getFunctionParent();
+      const ownerBinding = owner?.node.id && owner.parentPath.scope.getBinding(owner.node.id.name);
+      if (!script?.isTemplateLiteral() || !ownerBinding?.referencePaths.some(isCallReference)) {
+        return;
+      }
+      // Never evaluate producer expressions. Only literal module paths and
+      // calls on their actual imported bindings contribute graph edges.
+      const placeholder = "__dynamicInterpolation__";
+      const inline = script.node.quasis.map((quasi) => quasi.value.cooked).join(placeholder);
+      const child = parse(inline, { sourceType: "module", plugins: ["typescript"] });
+      traverse(child, {
+        ImportDeclaration(imported) {
+          const specifier = imported.node.source.value;
+          if (
+            imported.node.importKind === "type" ||
+            !specifier.startsWith(".") ||
+            specifier.includes(placeholder)
+          ) {
+            return;
+          }
+          const names = imported.node.specifiers.flatMap((binding) =>
+            binding.type === "ImportSpecifier" &&
+            binding.importKind !== "type" &&
+            binding.imported.type === "Identifier" &&
+            imported.scope.getBinding(binding.local.name)?.referencePaths.some(isCallReference)
+              ? [binding.imported.name]
+              : [],
+          );
+          if (names.length) {
+            const target = path.resolve(path.dirname(consumerFile), "..", specifier);
+            edges.set(target, new Set([...(edges.get(target) ?? []), ...names]));
+          }
+        },
+      });
+    },
+  });
+  return edges;
+}
+
 /**
  * Project named imports emitted into child modules or selected through module
  * hooks. Each edge is derived from the live producer and consumer sources so
@@ -722,6 +854,14 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     generationBenchmarkPath,
   )) {
     addNamedImport(names, targetFile);
+  }
+
+  const releaseChecklist = "scripts/release-candidate-checklist.mts";
+  for (const [target, names] of inlineNodeShellImportEdges(
+    fs.readFileSync(releaseChecklist, "utf8"),
+    releaseChecklist,
+  )) {
+    addNamedImport([...names], target);
   }
 
   return `${source}\n${imports.join("\n")}`;

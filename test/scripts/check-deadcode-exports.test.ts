@@ -680,6 +680,86 @@ const unrelatedArgs = [
     }
   });
 
+  it("models the release checklist's bound inline Node imports from its tooling root", () => {
+    const file = path.resolve("scripts/release-candidate-checklist.mts");
+    const source = fs.readFileSync(file, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const project = (consumer = source) =>
+      compile(new Map([[file, consumer]]))
+        .split("\n")
+        .filter((line) => line.includes('from "../scripts/e2e/parallels/'))
+        .join("\n");
+    const expected = [
+      ["detectParallelsHostIp", "host-server.ts"],
+      ["listVmNames", "parallels-vm.ts"],
+      ["resolveProviderAuth", "provider-auth.ts"],
+    ] as const;
+    for (const [name, module] of expected) {
+      expect(project()).toContain(`${name} as __dynamic`);
+      expect(project()).toContain(`from "../scripts/e2e/parallels/${module}";`);
+    }
+    const renamed = replaceFixture(
+      replaceFixture(source, "{ detectParallelsHostIp }", "{ detectParallelsHostIp as hostIp }"),
+      "!detectParallelsHostIp()",
+      "!hostIp()",
+    );
+    expect(project(renamed)).toBe(project());
+    expect(project(replaceFixture(source, '"-e", check]', '"-e", unrelated]'))).toBe("");
+  });
+
+  it("drops inline imports when their real calls disappear, even with call-text decoys", () => {
+    const file = path.resolve("scripts/release-candidate-checklist.mts");
+    const source = fs.readFileSync(file, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    for (const [name, call, replacement] of [
+      ["detectParallelsHostIp", "detectParallelsHostIp()", "true"],
+      ["listVmNames", "listVmNames()", "[]"],
+      [
+        "resolveProviderAuth",
+        "resolveProviderAuth({ provider: '${CANDIDATE_PARALLELS_PROVIDER}' });",
+        "void 0;",
+      ],
+    ] as const) {
+      const removed = replaceFixture(source, call, `${replacement} /* ${call} */`);
+      const compiled = compile(new Map([[file, removed]]));
+      expect(compiled).not.toContain(`${name} as __dynamic`);
+      expect(compiled).toContain("runtimeProcessDeployManifest");
+    }
+    const shadowed = replaceFixture(source, "!detectParallelsHostIp()", "!true").replace(
+      "if (listVmNames()",
+      "function decoy(detectParallelsHostIp) { detectParallelsHostIp(); }\nif (listVmNames()",
+    );
+    expect(compile(new Map([[file, shadowed]]))).not.toContain(
+      "detectParallelsHostIp as __dynamic",
+    );
+  });
+
+  it("does not project detached release-checklist snippets or disconnected shell launches", () => {
+    const file = path.resolve("scripts/release-candidate-checklist.mts");
+    const source = fs.readFileSync(file, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    for (const [from, to] of [
+      ['spawnSync("bash", ["-lc", command],', 'unrelated("bash", ["-lc", command],'],
+      ['spawnSync("bash", ["-lc", command],', 'spawnSync("bash", ["-lc", "true"],'],
+      ['"--input-type=module", "-e", check]', '"--input-type=module", "--check", check]'],
+      ["      shellQuote,\n    ),", "      String,\n    ),"],
+      [
+        '    cwd: TOOLING_ROOT,\n    encoding: "utf8",\n    timeout: 60_000,',
+        '    cwd: process.cwd(),\n    encoding: "utf8",\n    timeout: 60_000,',
+      ],
+      [
+        'const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url));',
+        'const TOOLING_ROOT = fileURLToPath(new URL("../../", import.meta.url));',
+      ],
+      ["    preflightCandidateParallels();", "    // preflightCandidateParallels();"],
+    ] as const) {
+      const compiled = compile(new Map([[file, replaceFixture(source, from, to)]]));
+      expect(compiled).not.toContain("detectParallelsHostIp as __dynamic");
+      expect(compiled).not.toContain("listVmNames as __dynamic");
+      expect(compiled).not.toContain("resolveProviderAuth as __dynamic");
+    }
+  });
+
   it("models optional anchor imports only through their bound runtime calls", () => {
     const consumerPath = path.resolve("src/process/supervisor/service-child-group-anchor.ts");
     const source = fs.readFileSync(consumerPath, "utf8");
