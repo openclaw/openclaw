@@ -24,7 +24,22 @@ const main = { agentId: "main" },
   other = { agentId: "other" };
 
 function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) {
-  const { gateway, current } = createGatewayStoreTestStore();
+  const listModels = vi
+    .fn<() => Promise<ModelCatalogResult>>()
+    .mockRejectedValue(new Error("Unexpected models.list"));
+  const { gateway, current } = createGatewayStoreTestStore({
+    configureClient(client) {
+      client.request.mockImplementation((method) => {
+        if (method === "users.self") {
+          return Promise.resolve({ profile: { id: "reader", emails: [] } });
+        }
+        if (method === "models.list") {
+          return listModels();
+        }
+        throw new Error(`Unexpected Gateway request: ${method}`);
+      });
+    },
+  });
   gateway.start();
   current().testOptions.onHello?.(gatewayHelloForMethods([]));
   const client = gateway.snapshot.client;
@@ -47,7 +62,7 @@ function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) 
     publishModelCatalogResult(beginModelCatalogRead(client, target), target, result);
     return take();
   };
-  return { gateway, current, client, reader, publish, take };
+  return { gateway, current, client, reader, publish, take, listModels };
 }
 
 it("scopes warm publications and retires old bindings", async () => {
@@ -184,18 +199,18 @@ it.each([false, true])(
   "coalesces paired catalog notices across readers (reply still pending: %s)",
   async (stillPending) => {
     const received = vi.fn();
-    const { gateway, reader, current, client } = fixture({ onResult: received });
+    const { gateway, reader, current, client, listModels } = fixture({ onResult: received });
     const sibling = new ModelCatalogReader(() => {}, { onResult: received });
     sibling.bind(gateway, main);
     onTestFinished(() => sibling.clear());
     const previous = createDeferred<ModelCatalogResult>();
     const replacement = createDeferred<ModelCatalogResult>();
     const final = createDeferred<ModelCatalogResult>();
-    const wire = current()
-      .request.mockReturnValueOnce(previous.promise)
+    const wire = listModels
+      .mockReturnValueOnce(previous.promise)
       .mockReturnValueOnce(replacement.promise)
       .mockReturnValueOnce(final.promise);
-    const direct = loadModelCatalog(client, main);
+    const direct = Promise.allSettled([loadModelCatalog(client, main)]);
     void reader.read();
     void sibling.read();
     expect(wire).toHaveBeenCalledTimes(1);
@@ -227,7 +242,7 @@ it.each([false, true])(
       final.resolve(second);
     }
     await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(2));
-    await expect(direct).resolves.toEqual(second);
+    await expect(direct).resolves.toEqual([{ status: "fulfilled", value: second }]);
     previous.reject(new Error("Retired catalog failed"));
     await Promise.resolve();
     expect(received.mock.calls).toEqual([[second], [second]]);
@@ -237,12 +252,12 @@ it.each([false, true])(
 );
 
 it("displays the partial receipt if another status notice lands during its recheck", async () => {
-  const { current, client } = fixture();
+  const { client, listModels } = fixture();
   const pending = { ...first, pendingProviders: ["fixture"] };
   const original = createDeferred<ModelCatalogResult>();
   const recheck = createDeferred<ModelCatalogResult>();
-  const wire = current()
-    .request.mockReturnValueOnce(original.promise)
+  const wire = listModels
+    .mockReturnValueOnce(original.promise)
     .mockReturnValueOnce(recheck.promise)
     .mockResolvedValueOnce(second);
   const display = loadModelCatalog(client, main);
@@ -259,15 +274,15 @@ it("displays the partial receipt if another status notice lands during its reche
 });
 
 it("keeps the outcome of explicit discovery when its status changes during the request", async () => {
-  const { current, client } = fixture();
+  const { client, listModels } = fixture();
   const wire = createDeferred<ModelCatalogResult>();
   const result = { ...first, pendingProviders: ["fixture"] };
-  current().request.mockReturnValueOnce(wire.promise);
+  listModels.mockReturnValueOnce(wire.promise);
   const discovery = loadModelCatalog(client, { ...main, refresh: true });
   invalidateChatMetadataStore(client, undefined, undefined, "pending");
   wire.resolve(result);
   await expect(discovery).resolves.toEqual(result);
-  expect(current().request).toHaveBeenCalledTimes(1);
+  expect(listModels).toHaveBeenCalledTimes(1);
 });
 
 it.each(["document", "presentation"] as const)(
