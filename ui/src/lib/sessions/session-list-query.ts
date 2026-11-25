@@ -244,6 +244,8 @@ export function canApplySessionListSnapshot(
       (existing.archived === true) !== (next.archived === true) ||
       (existing.pinned === true) !== (next.pinned === true) ||
       existing.pinnedAt !== next.pinnedAt ||
+      // A row event cannot replace the Gateway wake deadline for the whole list.
+      existing.snoozedUntil !== next.snoozedUntil ||
       JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
       JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor) ||
       existing.spawnedBy !== next.spawnedBy ||
