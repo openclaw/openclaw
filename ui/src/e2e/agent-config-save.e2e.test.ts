@@ -250,12 +250,12 @@ suite.define(() => {
           ? "internationalcoastalsurveyobservationsandfieldworkhandoff"
           : "github";
       const config = { agents: { defaults: { skills: [name] }, entries: { main: {} } } };
-      const skill = (name: string, blockedByAgentFilter: boolean) =>
+      const skill = (skillName: string, blockedByAgentFilter: boolean) =>
         createSkill({
-          name,
-          description: `${name} skill`,
+          name: skillName,
+          description: `${skillName} skill`,
           source: "openclaw-managed",
-          skillKey: name,
+          skillKey: skillName,
           blockedByAgentFilter,
         });
       const gateway = await installMockGateway(page, {
@@ -300,7 +300,7 @@ suite.define(() => {
         expect(Math.abs(control.y + control.height / 2 - text.y - text.height / 2)).toBeLessThan(1);
         expect(await title.getAttribute("title")).toBe(name);
         const line = await title.evaluate((element) =>
-          parseFloat(getComputedStyle(element).lineHeight),
+          Number.parseFloat(getComputedStyle(element).lineHeight),
         );
         expect(Math.abs(text.height - line)).toBeLessThan(1);
         expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
