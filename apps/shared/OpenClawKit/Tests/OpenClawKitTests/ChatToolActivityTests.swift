@@ -240,13 +240,13 @@ struct ChatToolActivityTests {
             ["\(ChatSessionLaunch.linkScheme):0", "\(ChatSessionLaunch.linkScheme):1"])
         // The refused launch is its own row with its outcome.
         #expect(items[2].sessionLaunch?.phase == .failed)
-        #expect(items[2].rowTitle == "Couldn't launch subagent Docs")
+        #expect(items[2].rowTitle == "Couldn’t launch subagent Docs")
         #expect(items[2].isError)
 
         // Failure first: neither row takes the other's verb.
         let reversed = [items[2], items[0]]
         #expect(ChatToolActivityList.visibleRuns(reversed) == [[0], [1]])
-        #expect(reversed.map(\.rowTitle) == ["Couldn't launch subagent Docs", "Launched Auditor audit"])
+        #expect(reversed.map(\.rowTitle) == ["Couldn’t launch subagent Docs", "Launched Auditor audit"])
 
         let unnamed = ChatSessionLaunch(
             kind: .subagent,
