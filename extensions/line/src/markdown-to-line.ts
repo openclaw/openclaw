@@ -40,6 +40,7 @@ function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block
 
 type PlainTextInsertion =
   | { position: number; text: string }
+  | { position: number; tableText: string }
   | { position: number; message: FlexMessage };
 
 function rangesOverlap(
@@ -53,6 +54,24 @@ function rangesOverlap(
 function linkAddsHref(rawLabel: string, href: string): boolean {
   const label = rawLabel.trim();
   return Boolean(href && label && label !== href && `mailto:${label}` !== href);
+}
+
+function trimOutsideInlineCode(
+  text: string,
+  ir: MarkdownIR,
+  codeSpans: MarkdownStyleSpan[],
+): string {
+  const first = codeSpans[0];
+  const last = codeSpans.at(-1);
+  if (!first || !last) {
+    return text.trim();
+  }
+  // Underline tags disappear from the projection. Only whitespace outside code can be padding.
+  const before = ir.text.slice(0, first.start).replace(/<\/?u>/gi, "");
+  const after = ir.text.slice(last.end).replace(/<\/?u>/gi, "");
+  const start = Math.min(before.length, text.length - text.trimStart().length);
+  const end = text.length - Math.min(after.length, text.length - text.trimEnd().length);
+  return text.slice(start, end);
 }
 
 function projectPlainText(
@@ -109,7 +128,15 @@ function projectPlainText(
   );
 
   let output = "";
-  let segmentStart = 0;
+  let throughLastTable = "";
+  const flushText = () => {
+    const text = throughLastTable ? throughLastTable + output.trimEnd() : output.trim();
+    if (text) {
+      onSegment?.({ type: "text", text });
+    }
+    output = "";
+    throughLastTable = "";
+  };
   let cursor = 0;
   let insertionIndex = 0;
   const appendRange = (end: number) => {
@@ -122,13 +149,15 @@ function projectPlainText(
         output += ir.text.slice(cursor, insertion.position);
         if ("text" in insertion) {
           output += insertion.text;
+        } else if ("tableText" in insertion) {
+          // Trim surrounding layout without trimming the first or last cell of a table.
+          output += "\n\n";
+          throughLastTable +=
+            (throughLastTable ? output : output.trimStart()) + insertion.tableText;
+          output = "\n\n";
         } else if (onSegment) {
-          const precedingText = output.slice(segmentStart).trim();
-          if (precedingText) {
-            onSegment({ type: "text", text: precedingText });
-          }
+          flushText();
           onSegment({ type: "flex", message: insertion.message });
-          segmentStart = output.length;
         }
         cursor = insertion.position;
       }
@@ -150,12 +179,10 @@ function projectPlainText(
   }
   appendRange(ir.text.length);
   if (onSegment) {
-    const trailingText = output.slice(segmentStart).trim();
-    if (trailingText) {
-      onSegment({ type: "text", text: trailingText });
-    }
+    flushText();
+    return "";
   }
-  return output.trim();
+  return trimOutsideInlineCode(output, ir, inlineCodeSpans);
 }
 
 type RenderedCell = {
@@ -165,7 +192,7 @@ type RenderedCell = {
 };
 
 function renderTableCell(cell: MarkdownTableCell): RenderedCell {
-  if (!cell.text.trim()) {
+  if (!cell.text) {
     return { text: "-", hasMarkup: false };
   }
 
@@ -246,13 +273,13 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
     }
   }
 
-  const renderedText =
-    spans
-      .map((span) => span.text ?? "")
-      .join("")
-      .trim() || "-";
+  const renderedText = trimOutsideInlineCode(
+    spans.map((span) => span.text ?? "").join(""),
+    cell,
+    codeSpans,
+  );
   return {
-    text: renderedText,
+    text: renderedText || "-",
     ...(hasMarkup ? { contents: spans } : {}),
     hasMarkup,
   };
@@ -351,7 +378,12 @@ export function processLineMessage(text: string): LineMessageSegment[] {
       const markdownCell = (cell: MarkdownTableCell) =>
         projectPlainText(cell)
           .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
-          .replace(/\r?\n/gu, " ");
+          .replace(/\r?\n/gu, " ")
+          // Keep code-owned edges through the bullet parse. CommonMark leaves all-space spans intact.
+          .replace(
+            /^\s+|(?<=\S)\s+$/gu,
+            (edge) => "`" + (/[^ ]/u.test(edge) ? ` ${edge} ` : edge) + "`",
+          );
       const markdownRow = (cells: MarkdownTableCell[]) =>
         `| ${cells.map(markdownCell).join(" | ")} |`;
       const markdown = [
@@ -362,7 +394,7 @@ export function processLineMessage(text: string): LineMessageSegment[] {
 
       plainTextInsertions.push({
         position: table.placeholderOffset,
-        text: `\n\n${projectPlainText(parseLineMarkdown(markdown, "bullets").ir)}\n\n`,
+        tableText: projectPlainText(parseLineMarkdown(markdown, "bullets").ir),
       });
       continue;
     }
