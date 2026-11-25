@@ -350,6 +350,7 @@ console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy
         "transports",
         "internal/tool-schema",
         "internal/runtime",
+        "internal/env-api-keys",
         "internal/openai-responses-payload-policy",
         "internal/google",
         "internal/google-model-family",
