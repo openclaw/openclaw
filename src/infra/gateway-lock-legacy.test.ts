@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processIdentity from "../shared/pid-alive.js";
-import {
-  assertLegacyGatewayStoppedForMaintenance,
-  LegacyGatewayHeldError,
-} from "./gateway-lock-legacy.js";
+import { assertLegacyGatewayStoppedForMaintenance } from "./gateway-lock-legacy.js";
 import { GATEWAY_OWNER_HEARTBEAT_STALE_MS } from "./gateway-lock-payload.js";
 import { resolveGatewayLockPaths } from "./gateway-lock.js";
 
@@ -60,9 +57,6 @@ describe.each(platforms)("legacy $platform maintenance", ({ platform, provable }
     if (provable && test.stopped) {
       await expect(admission).resolves.toBeUndefined();
     } else {
-      const refusal = await admission.catch((error: unknown) => error);
-      // These pre-namespace records cannot positively identify a live Gateway.
-      expect(refusal).not.toBeInstanceOf(LegacyGatewayHeldError);
       await expect(admission).rejects.toThrow("live or unverified owner");
       await expect(admission).rejects.toThrow("remove that file as the Gateway service account");
     }

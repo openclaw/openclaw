@@ -7,9 +7,6 @@ import {
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
 
-/** Diagnostic fact from the legacy lock owner, never permission to stop its process. */
-export class LegacyGatewayHeldError extends GatewayLockError {}
-
 /** Published 2026.6.33 Gateways predate state-local locks and SQLite coordinators. */
 export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
   const uid = process.getuid?.();
@@ -27,9 +24,7 @@ export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
   const state = await resolveGatewayOwnerStatus(payload.pid, payload, process.platform, {
     lockPath: configLockPath,
   });
-  return state === "dead"
-    ? undefined
-    : { pid: payload.pid, state, role: payload.role ?? "gateway", path: configLockPath };
+  return state === "dead" ? undefined : { pid: payload.pid, state, path: configLockPath };
 }
 
 export async function assertLegacyGatewayStoppedForMaintenance(
@@ -42,11 +37,7 @@ export async function assertLegacyGatewayStoppedForMaintenance(
       owner.path === resolveGatewayLockPaths(env).configLockPath
         ? "If that process has stopped, run `openclaw gateway recover-lock` to inspect and explicitly recover it."
         : "If that process has stopped on this host and in every container sharing this directory, remove that file as the Gateway service account.";
-    const Refusal =
-      owner.state === "alive" && owner.role === "gateway"
-        ? LegacyGatewayHeldError
-        : GatewayLockError;
-    throw new Refusal(
+    throw new GatewayLockError(
       `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}). ${next}`,
     );
   }

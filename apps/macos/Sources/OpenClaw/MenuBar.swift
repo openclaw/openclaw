@@ -356,7 +356,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func prepareCredentialsAndFinishLaunching(
         launchPlan: AppLaunchRuntimePlan, startUpdater: Bool) async -> Bool
     {
-        var excludedGateway: CLIInstallPrompter.ManagedRepairExclusion?
         do {
             let root = DeviceIdentityStore.stateDirectoryURL
             let executionRoot = OpenClawPaths.stateDirURL
@@ -366,18 +365,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         executionRoot: executionRoot,
                         configURL: OpenClawPaths.configURL)
                 }
-                switch await StaleGatewayServiceReplacement.detect() {
-                case let .replace(replacement):
+                if let replacement = await StaleGatewayServiceReplacement.detect() {
                     self.credentialLogger
                         .info("Replacing the previous build's Gateway service before credential preparation")
                     if let error = try await replacement.run(prepareCredentials: prepare) {
                         self.credentialLogger
                             .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
                     }
-                case let .excluded(exclusion):
-                    excludedGateway = exclusion
-                    try await prepare()
-                case .none:
+                } else {
                     try await prepare()
                 }
             }
@@ -411,14 +406,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !Task.isCancelled else { return true }
             self.credentialLogger
                 .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
-            // Only the matching CLI's Gateway-held refusal is that Gateway's owner to resolve.
-            guard let held = error as? ClientCredentialStartup.GatewayHeldError else {
+            // The matching CLI owns maintenance admission; the app never infers a process manager.
+            guard let held = error as? ClientCredentialStartup.MaintenanceBlockedError else {
                 self.pendingOpenURLs.removeAll()
                 self.pendingDashboardOpen = false
                 self.showCredentialStartupFailure()
                 return true
             }
-            let retry = await self.retryAfterExcludedGatewayFailure(excludedGateway, detail: held.detail)
+            let retry = await self.retryAfterCredentialMaintenanceFailure(detail: held.detail)
             guard !Task.isCancelled else { return true }
             if retry { return false }
             self.pendingOpenURLs.removeAll()
@@ -428,13 +423,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Another owner keeps this Gateway, so the operator resolves maintenance there and retries in place.
+    /// Resolve the CLI-reported maintenance refusal without guessing or changing its owner.
     /// Background launches report the same recovery and quit, as before.
-    private func retryAfterExcludedGatewayFailure(
-        _ exclusion: CLIInstallPrompter.ManagedRepairExclusion?, detail: String) async -> Bool
-    {
-        let recovery = ClientCredentialStartup.excludedGatewayRecovery(
-            exclusion, detail: detail)
+    private func retryAfterCredentialMaintenanceFailure(detail: String) async -> Bool {
+        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
         guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation,
               AppLaunchRuntimePlan.current.allowsActivation
         else {

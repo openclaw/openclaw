@@ -499,12 +499,13 @@ This conflict does not establish version incompatibility: maintenance can also
 reconcile a receipt after a filesystem remount without changing the credential
 layout.
 
-The app names the Gateway owner when it can identify the manager, or gives neutral
-guidance otherwise, and offers **Retry**. Unverified legacy lock owners keep the
-generic recovery guidance rather than attributing the lock to a Gateway. Resolve the
-reported conflict through the tool that manages the Gateway, then choose
-**Retry**. Change the Gateway or app version only if recovery identifies a
-version incompatibility. Background launches print the same guidance and quit.
+The app offers **Retry** with neutral guidance when Doctor reports contention or
+cannot verify a lock owner. A saved LaunchAgent or a recorded process role does
+not identify the manager of the process currently holding the state. Resolve the
+reported conflict through the matching CLI, service manager, or original
+terminal, then choose **Retry**. Change the Gateway or app version only if
+recovery identifies a version incompatibility. Background launches print the
+same guidance and quit.
 Other credential preparation failures keep the generic recovery alert.
 
 For storage, migration, and rollback details, see

@@ -51,10 +51,10 @@ struct ClientCredentialStartupTests {
     }
 
     @Test(arguments: [
-        ("client_credentials_gateway_held", true),
+        ("client_credentials_maintenance_blocked", true),
         ("some_other_refusal", false),
     ])
-    func `only the CLI's Gateway-held code attributes a failure to the running Gateway`(
+    func `only the CLI's maintenance-blocked code offers in-place recovery`(
         code: String, heldByGateway: Bool) async throws
     {
         let fixture = try Fixture()
@@ -71,7 +71,7 @@ struct ClientCredentialStartupTests {
                 profile: AppProfile(environment: [:]),
                 environment: environment)
             Issue.record("Failed credential preparation was reported as ready")
-        } catch let error as ClientCredentialStartup.GatewayHeldError {
+        } catch let error as ClientCredentialStartup.MaintenanceBlockedError {
             #expect(heldByGateway)
             #expect(error.detail == "synthetic busy state")
         } catch let error as OpenClawNativeStateError {
@@ -81,8 +81,8 @@ struct ClientCredentialStartupTests {
     }
 
     @Test func `confirmed contention without a recognized manager offers neutral recovery`() {
-        let recovery = ClientCredentialStartup.excludedGatewayRecovery(nil, detail: "synthetic busy state")
-        #expect(recovery.message.contains("could not identify"))
+        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: "synthetic busy state")
+        #expect(recovery.message.contains("owner could not be verified"))
         #expect(recovery.message.contains("choose Retry"))
         #expect(!recovery.message.contains("extended-stable"))
     }

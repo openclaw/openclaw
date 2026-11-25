@@ -51,7 +51,7 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import * as doctorMaintenance from "./doctor-maintenance.js";
 import {
-  ClientCredentialGatewayHeldError,
+  ClientCredentialMaintenanceBlockedError,
   prepareStartupClientCredentials,
 } from "./startup-client-credentials.js";
 
@@ -477,7 +477,7 @@ describe("automatic client credential preparation", () => {
         configPath: fixture.env.OPENCLAW_CONFIG_PATH,
       }),
     );
-    await expect(fixture.prepare()).rejects.toBeInstanceOf(ClientCredentialGatewayHeldError);
+    await expect(fixture.prepare()).rejects.toBeInstanceOf(ClientCredentialMaintenanceBlockedError);
   });
 
   it.each([
@@ -512,7 +512,7 @@ describe("automatic client credential preparation", () => {
             (error: unknown) => error,
           );
           expect(failure).toBeInstanceOf(Error);
-          expect(failure instanceof ClientCredentialGatewayHeldError).toBe(role === "gateway");
+          expect(failure).toBeInstanceOf(ClientCredentialMaintenanceBlockedError);
         } else {
           await fixture.prepare();
           await expectCredentials(fixture);

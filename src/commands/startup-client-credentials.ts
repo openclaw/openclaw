@@ -144,14 +144,14 @@ async function prepareNativeStartupRuntimePins(
 }
 
 /**
- * A running Gateway holds the state this required migration must change. Native startup uses
- * the code to explain that Gateway's owner instead of attributing every failure to it.
+ * Shared-state maintenance is blocked. Native startup offers neutral recovery without
+ * attributing an unverifiable lock or saved service definition to a running process.
  */
-export class ClientCredentialGatewayHeldError extends Error {
-  readonly code = "client_credentials_gateway_held";
+export class ClientCredentialMaintenanceBlockedError extends Error {
+  readonly code = "client_credentials_maintenance_blocked";
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "ClientCredentialGatewayHeldError";
+    this.name = "ClientCredentialMaintenanceBlockedError";
   }
 }
 
@@ -240,14 +240,14 @@ export async function prepareStartupClientCredentials(
       const [
         { collectNestedErrorCandidates },
         { GatewayStateOwnerContentionError },
-        { LegacyGatewayHeldError },
+        { GatewayLockError },
         { DoctorMaintenanceRefusalError },
         { hasCommandProcessCleanupError },
         { resolveCommandProcessSignal },
       ] = await Promise.all([
         import("../infra/error-graph-internal.js"),
         import("../infra/gateway-state-owner.js"),
-        import("../infra/gateway-lock-legacy.js"),
+        import("../infra/gateway-lock.js"),
         import("../infra/update-doctor-result.js"),
         import("../process/exec-result.js"),
         import("../process/exec-spawn.js"),
@@ -271,17 +271,16 @@ export async function prepareStartupClientCredentials(
         // Admission has settled. A peer may have completed required recovery meanwhile.
         return;
       }
-      const gatewayHeld = causes.some(
+      const maintenanceBlocked = causes.some(
         (cause) =>
-          (cause instanceof GatewayStateOwnerContentionError && cause.holder?.role === "gateway") ||
-          cause instanceof LegacyGatewayHeldError,
+          cause instanceof GatewayStateOwnerContentionError || cause instanceof GatewayLockError,
       );
       if (
-        gatewayHeld &&
+        maintenanceBlocked &&
         !causes.some((cause) => cause instanceof AggregateError) &&
         !hasCommandProcessCleanupError(error)
       ) {
-        throw new ClientCredentialGatewayHeldError(error);
+        throw new ClientCredentialMaintenanceBlockedError(error);
       }
       throw error;
     }

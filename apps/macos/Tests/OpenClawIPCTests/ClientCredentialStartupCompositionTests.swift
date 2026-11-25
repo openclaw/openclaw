@@ -128,7 +128,7 @@ struct ClientCredentialStartupCompositionTests {
         environment["OPENCLAW_CONFIG_PATH"] = fixture.configURL.path
         environment["TEST_EXIT_CODE"] = "2"
         environment["TEST_STDOUT"] =
-            #"{"ok":false,"error":{"message":"synthetic busy state","code":"client_credentials_gateway_held"}}"#
+            #"{"ok":false,"error":{"message":"synthetic busy state","code":"client_credentials_maintenance_blocked"}}"#
         child = Task { @MainActor in
             completion = await ShellExecutor.runDetailed(
                 command: [executable.path, "--attach-only"], cwd: fixture.root.path, env: environment, timeout: 30)
