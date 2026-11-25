@@ -242,7 +242,16 @@ describe("Signal durable ingress", () => {
 
   it.each([
     ["sync", { envelope: { sourceNumber: "+15550001111", timestamp: 1, syncMessage: {} } }],
-    ["receipt", { envelope: { sourceNumber: "+15550001111", timestamp: 2, receiptMessage: {} } }],
+    [
+      "delivery receipt",
+      {
+        envelope: {
+          sourceNumber: "+15550001111",
+          timestamp: 2,
+          receiptMessage: { isDelivery: true },
+        },
+      },
+    ],
   ])("does not journal %s envelopes", async (_label, payload) => {
     const dispatch = vi.fn();
     const started = await start(dispatch);
@@ -250,5 +259,17 @@ describe("Signal durable ingress", () => {
     await expect(queue.listPending({ limit: "all" })).resolves.toHaveLength(0);
     await expect(queue.listClaims()).resolves.toHaveLength(0);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches read receipts so they can become system context", async () => {
+    const dispatch = vi.fn();
+    const started = await start(dispatch);
+    const receiptMessage = { isRead: true, timestamps: [1700000000001] };
+    const payload = { envelope: { sourceNumber: "+15550001111", timestamp: 3, receiptMessage } };
+    await receive(started, { event: "receive", data: JSON.stringify(payload) });
+    await started.waitForIdle();
+    expect(dispatch.mock.calls.map((call) => call[2].envelope?.receiptMessage)).toEqual([
+      receiptMessage,
+    ]);
   });
 });
