@@ -748,7 +748,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-skills")
         app.buttons["chat-composer-skill-switches"].tap()
         XCTAssertTrue(app.switches["chat-composer-skill-switch-autoreview"].waitForExistence(timeout: 3))
-        app.buttons["chat-composer-add-close"].firstMatch.tap()
+        self.closeAddSheetFromPushedPage(in: app, through: ["Skills", "Use a skill"])
         XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
 
         attachmentButton.tap()
@@ -761,8 +761,22 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.switches["chat-composer-tool-search_code"].exists)
         XCTAssertTrue(app.switches["chat-composer-tool-create_issue"].exists)
         self.attachScreenshot(named: "chat-composer-connector")
-        app.buttons["chat-composer-add-close"].firstMatch.tap()
+        self.closeAddSheetFromPushedPage(in: app, through: ["GitHub", "Connectors"])
         XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
+    }
+
+    /// A pushed page in the + sheet has no close; Back returns to the root, whose close is at the leading edge.
+    func closeAddSheetFromPushedPage(in app: XCUIApplication, through pages: [String]) {
+        let close = app.buttons["chat-composer-add-close"]
+        XCTAssertFalse(close.exists, "Only the + sheet's root page carries a close button")
+        for page in pages {
+            let back = app.navigationBars[page].buttons.element(boundBy: 0)
+            XCTAssertTrue(back.waitForExistence(timeout: 3), "\(page) has a back button")
+            back.tap()
+        }
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        XCTAssertLessThan(close.frame.midX, app.frame.midX, "The close button sits at the leading edge")
+        close.tap()
     }
 
     func verifyComposerMenus(in app: XCUIApplication) {
