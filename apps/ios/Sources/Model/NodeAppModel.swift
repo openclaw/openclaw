@@ -455,11 +455,20 @@ final class NodeAppModel {
     }
 
     var gatewayServerName: String? {
-        self.connection.gateway.connectedInfo?.serverName
+        self.connection.gateway.connectedInfo?.serverName ?? self.openClawIDHost
     }
 
     var gatewayRemoteAddress: String? {
-        self.connection.gateway.connectedInfo?.remoteAddress
+        self.connection.gateway.connectedInfo?.remoteAddress ?? self.openClawIDHost
+    }
+
+    /// The claw's hostname while chat runs through its OpenClaw ID tunnel, where no session reports
+    /// a server name or address.
+    private var openClawIDHost: String? {
+        guard let config = self.activeGatewayConnectConfig, config.openClawIDOperatorSession != nil,
+              self.connection.operator.connectedInfo != nil
+        else { return nil }
+        return config.url.host
     }
 
     var connectedGatewayID: String?
@@ -488,7 +497,7 @@ final class NodeAppModel {
 
     private var gatewayPreconnectProblem: (stableID: String, problem: GatewayConnectionProblem)?
     var gatewayDisplayStatusText: String {
-        GatewayStatusBuilder.source(for: self.connection.node, appModel: self).statusText
+        GatewayStatusBuilder.source(for: self.connection.gateway, appModel: self).statusText
     }
 
     var gatewayProblemForToast: GatewayConnectionProblem? {
@@ -4954,6 +4963,12 @@ extension NodeAppModel {
         self.synchronizeTalkSessionKey()
     }
 
+    /// An owner's OpenClaw ID tunnel carries full operator access; tunnel admission grants it.
+    private func openClawIDOwnerRoute(_ gatewayID: String) -> Bool {
+        guard let config = self.activeGatewayConnectConfig, config.openClawIDOwner else { return false }
+        return GatewayStableIdentifier.matches(config.effectiveStableID, gatewayID)
+    }
+
     private func shouldRequestOperatorApprovalScope(
         gatewayID: String,
         token: String?,
@@ -4962,6 +4977,7 @@ extension NodeAppModel {
         ingressPrincipal: CloudflareAccessPrincipal? = nil,
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary) -> Bool
     {
+        if !forceTalkPermissionUpgradeRequest, self.openClawIDOwnerRoute(gatewayID) { return true }
         let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
         let storedOperatorAuth = bindingStore.storedDeviceAuth(
             role: "operator",
@@ -5001,6 +5017,7 @@ extension NodeAppModel {
         ingressPrincipal: CloudflareAccessPrincipal? = nil,
         deviceIdentityProfile: GatewayDeviceIdentityProfile = .primary) -> Bool
     {
+        if !forceTalkPermissionUpgradeRequest, self.openClawIDOwnerRoute(gatewayID) { return true }
         let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
         let storedOperatorAuth = bindingStore.storedDeviceAuth(
             role: "operator",

@@ -26,6 +26,8 @@ struct GatewayConnectConfig: Sendable {
     /// authentication.
     var openClawIDOperatorSession: WebSocketSessionBox?
     var openClawIDNodeSession: WebSocketSessionBox?
+    /// An owner device's tunnel; a member's operator access is whatever its claw role grants.
+    var openClawIDOwner = false
     /// The loopback proxy the Control UI loads in place of the claw, with its cookie.
     var openClawIDDashboard: (url: URL, cookie: HTTPCookie)?
 

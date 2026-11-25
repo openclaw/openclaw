@@ -850,6 +850,7 @@ extension SettingsProTab {
     /// pairing), so the status card surfaces Scan QR as the primary action.
     var gatewayNeedsPairing: Bool {
         self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
+            && !(IOSOpenClawIDFeature.isEnabled && IOSOpenClawIDFeature.records.load() != nil)
     }
 
     var gatewayStatusPresentation: (detail: String, value: String, color: Color) {

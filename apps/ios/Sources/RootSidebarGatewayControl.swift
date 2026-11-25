@@ -110,7 +110,13 @@ struct SidebarGatewayPicker: View {
     }
 
     private var controlName: String {
-        if self.presentation.entries.isEmpty { return String(localized: "Add Gateway") }
+        if self.presentation.entries.isEmpty {
+            // An OpenClaw ID claw is not a saved gateway; name it rather than offering to add one.
+            if IOSOpenClawIDFeature.isEnabled, let device = IOSOpenClawIDFeature.records.load() {
+                return device.hostname
+            }
+            return String(localized: "Add Gateway")
+        }
         return self.presentation.focusedEntry?.name ?? self.fallbackName
     }
 

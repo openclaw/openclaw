@@ -16,6 +16,7 @@ final class IOSOpenClawIDRoute {
 
     struct Live: Sendable {
         let hostname: String
+        let owner: Bool
         let tunnel: OpenClawIDNodeTunnel
         let operatorBox: WebSocketSessionBox
         let dashboard: OpenClawIDDashboardProxy
@@ -53,6 +54,7 @@ final class IOSOpenClawIDRoute {
             nodeOptions: options)
         config.openClawIDOperatorSession = live.operatorBox
         config.openClawIDNodeSession = live.node?.box
+        config.openClawIDOwner = live.owner
         config.openClawIDDashboard = (live.dashboard.baseURL, live.dashboard.cookie)
         return config
     }
@@ -165,6 +167,7 @@ final class IOSOpenClawIDRoute {
                 })
             return Live(
                 hostname: device.hostname,
+                owner: device.memberRole == nil,
                 tunnel: tunnel,
                 operatorBox: WebSocketSessionBox(session: OpenClawIDNodeWebSocketSession(
                     tunnel: tunnel, logicalOrigin: origin, role: .operator)),
