@@ -14,19 +14,21 @@ import {
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
 } from "./display.ts";
-import { buildModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
+import { createAgentModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
 
 it("ignores a draft model map that is not a record", () => {
-  expect(buildModelOptions({ agents: { defaults: { models: "unfinished" } } })).toEqual([]);
+  expect(
+    createAgentModelOptions({ agents: { defaults: { models: "unfinished" } } }).options,
+  ).toEqual([]);
 });
 
 it("keeps known unavailable choices visible but disabled", () => {
   const config = { agents: { defaults: { models: { "fixture/blocked": {} } } } };
-  const options = buildModelOptions(config, "fixture/blocked", [
+  const options = createAgentModelOptions(config, [
     { provider: "fixture", id: "blocked", name: "Blocked model", available: false },
     { provider: "fixture", id: "ready", name: "Ready model", available: true },
     { provider: "fixture", id: "unknown", name: "Unknown model" },
-  ]);
+  ]).withCurrent("fixture/blocked");
 
   expect(options).toContainEqual(
     expect.objectContaining({ value: "fixture/blocked", disabled: true }),
@@ -40,7 +42,8 @@ it("lets an explicit empty agent alias disable the inherited alias", () => {
   const config = aliases({ [lower]: "global" }, { [lower]: "" });
 
   expect(
-    buildModelOptions(config, null, catalog, "worker").find(({ value }) => value === lower)?.label,
+    createAgentModelOptions(config, catalog, "worker").options.find(({ value }) => value === lower)
+      ?.label,
   ).toBe("Model A");
 });
 
@@ -54,14 +57,19 @@ it("keeps case-distinct catalog identities, configured aliases, and current valu
   });
 
   expect(
-    buildModelOptions(config, null, caseCatalog).map(({ value, label }) => ({ value, label })),
+    createAgentModelOptions(config, caseCatalog).options.map(({ value, label }) => ({
+      value,
+      label,
+    })),
   ).toEqual([
     { value: lower, label: "Lowercase model · lower" },
     { value: upper, label: "Uppercase model · upper" },
   ]);
-  expect(buildModelOptions(null, upper, caseCatalog.slice(0, 1)).map(({ value }) => value)).toEqual(
-    [upper, lower],
-  );
+  expect(
+    createAgentModelOptions(null, caseCatalog.slice(0, 1))
+      .withCurrent(upper)
+      .map(({ value }) => value),
+  ).toEqual([upper, lower]);
 });
 const [lower, upper, other] = ["custom/model-a", "custom/Model-A", "other/model-a"];
 it.each([
@@ -224,7 +232,7 @@ function aliases(defaults: Record<string, string | null>, worker = {}) {
 }
 
 it("names a configured model the catalog does not know by its own ref", () => {
-  expect(buildModelOptions(null, "fixture/unlisted", [])[0]).toMatchObject({
+  expect(createAgentModelOptions(null, []).withCurrent("fixture/unlisted")[0]).toMatchObject({
     value: "fixture/unlisted",
     label: "fixture/unlisted",
     provider: "fixture",

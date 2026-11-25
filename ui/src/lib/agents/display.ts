@@ -51,6 +51,7 @@ type AgentConfigEntry = Pick<
   | "utilityModel"
   | "subagents"
   | "skills"
+  | "fastModeDefault"
   | "thinkingDefault"
 > & {
   model?: unknown;
@@ -62,7 +63,14 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "utilityModel" | "subagents" | "models" | "skills"
+      | "workspace"
+      | "model"
+      | "decisionModel"
+      | "utilityModel"
+      | "subagents"
+      | "models"
+      | "skills"
+      | "fastModeDefault"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
