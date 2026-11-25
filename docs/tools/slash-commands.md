@@ -225,9 +225,10 @@ Channel plugins can enforce owner-only command access through their
 
 <ParamField path="commands.allowFrom" type="object">
   Per-provider allowlist for command authorization. When configured, it is the
-  **only** authorization source for commands and directives. Use `"*"` for a
-  global default. Provider-specific keys override it. Discord sender entries
-  accept bare user IDs or `user:<id>` and `discord:<id>` aliases.
+  **only** authorization source for commands and directives, except for Gateway
+  clients admitted with `operator.admin`. Use `"*"` for a global default.
+  Provider-specific keys override it. Discord sender entries accept bare user
+  IDs or `user:<id>` and `discord:<id>` aliases.
 </ParamField>
 
 When `commands.allowFrom` is not configured, command authorization follows
@@ -237,18 +238,24 @@ access-group toggle.
 
 For Gateway users with verified login identity, both command allowlists can
 match the user's profile ID. A shared owner profile used only for attribution
-does not grant this access. Internal synthetic callers cannot borrow a human's
-profile. Non-UI Gateway clients also retain application-ID matches such as
-`cli`; operator UI clients do not receive application-ID matches. Existing
-operator scopes and command enablement still apply.
+is not a sender entry and never matches; the client's admitted scopes decide
+instead. Internal synthetic callers cannot borrow a human's profile. Non-UI
+Gateway clients also retain application-ID matches such as `cli`; operator UI
+clients do not receive application-ID matches. Existing operator scopes and
+command enablement still apply.
 
-Control UI and other Gateway clients that sign in with the shared token or
-password have no user identity, so no sender entry under the `"*"` key matches
-them. To keep their commands available, list your channel senders under
-per-channel keys (for example `commands.allowFrom.telegram`) and omit the `"*"`
-key: Gateway clients then use their operator scopes. A denied Gateway client
-gets a refusal that names this policy, a denied native command gets a refusal,
-and a denied text command from a channel sender gets no reply.
+Chat turns from Control UI and WebChat admitted with `operator.admin` pass
+`commands.allowFrom` without a matching entry. Such a client can already edit
+`commands.allowFrom`, so gating its commands protects nothing. Gateway
+admission decides this once, when the turn starts.
+
+Other Gateway clients that sign in with the shared token or password have no
+user identity, so no sender entry under the `"*"` key matches them. To keep
+their commands available, grant `operator.admin`, or list your channel senders
+under per-channel keys (for example `commands.allowFrom.telegram`) and omit the
+`"*"` key: Gateway clients then use their operator scopes. A denied Gateway
+client gets a refusal that names this policy, a denied native command gets a
+refusal, and a denied text command from a channel sender gets no reply.
 
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only

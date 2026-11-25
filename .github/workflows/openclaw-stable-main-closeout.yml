@@ -17,8 +17,8 @@ on:
       - "scripts/lib/changelog*.mjs"
   workflow_dispatch:
     inputs:
-      fast_track_approval:
-        description: Optional exact copy of the published fast-track approval; replay otherwise discovers the release asset
+      fast_track_request:
+        description: Optional exact copy of the published fast-track request; replay otherwise discovers the release asset
         required: false
         type: string
       tag:
@@ -44,7 +44,7 @@ permissions:
   contents: write
 
 env:
-  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
 
 concurrency:
   group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
@@ -514,11 +514,11 @@ jobs:
               --pattern "$approval_asset" --pattern "${approval_asset}.sha256" --dir "$manifest_dir"
             node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$approval_asset"
             published_approval="$(jq -c . "$manifest_dir/$approval_asset")"
-            if [[ -n "$FAST_TRACK_APPROVAL_JSON" && "$(jq -Sc . <<< "$FAST_TRACK_APPROVAL_JSON")" != "$(jq -Sc . <<< "$published_approval")" ]]; then
-              echo "Fast-track closeout must retain the exact published approval." >&2
+            if [[ -n "$FAST_TRACK_REQUEST_JSON" && "$(jq -Sc . <<< "$FAST_TRACK_REQUEST_JSON")" != "$(jq -Sc . <<< "$published_approval")" ]]; then
+              echo "Fast-track closeout must retain the exact published request." >&2
               exit 1
             fi
-            export FAST_TRACK_APPROVAL_JSON="$published_approval"
+            export FAST_TRACK_REQUEST_JSON="$published_approval"
             export RELEASE_PUBLISH_RUN_ID
             publication_job_id="$(jq -er '
               [.jobs[] | select(.name == "Publish plugins, then OpenClaw") |
@@ -529,9 +529,9 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/actions/jobs/${publication_job_id}" --jq .run_attempt)"
             printf 'RELEASE_PUBLISH_RUN_ID=%s\nRELEASE_PUBLISH_RUN_ATTEMPT=%s\n' \
               "$RELEASE_PUBLISH_RUN_ID" "$RELEASE_PUBLISH_RUN_ATTEMPT" >> "$GITHUB_ENV"
-            printf 'FAST_TRACK_APPROVAL_JSON=%s\n' "$FAST_TRACK_APPROVAL_JSON" >> "$GITHUB_ENV"
-          elif [[ "$approval_count" != 0 || -n "$FAST_TRACK_APPROVAL_JSON" ]]; then
-            echo "Fast-track closeout requires exactly one published approval asset." >&2
+            printf 'FAST_TRACK_REQUEST_JSON=%s\n' "$FAST_TRACK_REQUEST_JSON" >> "$GITHUB_ENV"
+          elif [[ "$approval_count" != 0 || -n "$FAST_TRACK_REQUEST_JSON" ]]; then
+            echo "Fast-track closeout requires exactly one published request asset." >&2
             exit 1
           fi
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
@@ -555,7 +555,7 @@ jobs:
           const manifest = JSON.parse(readFileSync(process.argv[3], "utf8"));
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           const recovery = manifest.receiptRecovery ?? manifest.recovery;
-          const fastTrack = process.env.FAST_TRACK_APPROVAL_JSON;
+          const fastTrack = process.env.FAST_TRACK_REQUEST_JSON;
           if (fastTrack) {
             await authenticateFullReleaseValidationEvidence({
               run, manifest, manifestPath: process.argv[3],
@@ -774,6 +774,13 @@ jobs:
             -f 'inputs[site_url]=https://openclaw.ai/' --jq '.workflow_run_id')"
           [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Website dispatch did not return a run ID." >&2; exit 1; }
           echo "Website verification: https://github.com/openclaw/openclaw.ai/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          # A just-dispatched run can briefly return 404 for its jobs, which
+          # makes `gh run watch` fail before the run starts (v2026.11.8).
+          for attempt in 1 2 3 4 5 6; do
+            gh api "repos/openclaw/openclaw.ai/actions/runs/$run_id/jobs" --silent && break
+            (( attempt < 6 )) || { echo "Website run $run_id jobs did not become readable." >&2; exit 1; }
+            sleep 10
+          done
           gh run watch "$run_id" --repo openclaw/openclaw.ai --exit-status --interval 15
 
       - name: Attach immutable closeout evidence

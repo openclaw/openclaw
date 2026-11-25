@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -13,6 +15,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseNodeCacheDiagnostic } from "../../scripts/lib/node-compile-cache-diagnostics.mts";
+import {
+  inventoryPreparedWorkload,
+  preparedInventoryDelta,
+} from "../../scripts/lib/prepared-workload-inventory.mts";
 import {
   analyzeBenchmark,
   analyzeNodeCacheBenchmark,
@@ -35,11 +42,13 @@ import {
 } from "../../scripts/lib/vitest-pair-benchmark-contract.mts";
 import {
   buildBenchmarkCommandEnv,
+  buildNodeCacheVitestArgs,
   resolvePackageManagerIdentity,
   runOwnedCommand,
   readNodeCacheSeed,
   restoreNodeCacheSeed,
   runNodeCacheBenchmark,
+  runQualifiedNodeCacheBenchmark,
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -308,6 +317,105 @@ function cacheManifest(): NodeCacheManifest {
 }
 
 describe("Node compile-cache benchmark contract", () => {
+  it("uses the same cache opt-outs for configured and file-only lanes", () => {
+    const lane = { id: "fixture", critical: true, files: ["case.test.ts"] };
+    const report = path.resolve("report.json");
+    expect(buildNodeCacheVitestArgs(lane, report)).toEqual([
+      "scripts/run-vitest.mjs",
+      "case.test.ts",
+      "--",
+      "--reporter=json",
+      "--includeTaskLocation",
+      "--outputFile",
+      report,
+      "--no-cache",
+      "--no-fsModuleCache",
+    ]);
+    expect(buildNodeCacheVitestArgs({ ...lane, config: "vitest.config.ts" }, report)).toEqual([
+      "scripts/run-vitest.mjs",
+      "run",
+      "--config",
+      "vitest.config.ts",
+      "--reporter=json",
+      "--includeTaskLocation",
+      "--outputFile",
+      report,
+      "case.test.ts",
+      "--no-cache",
+      "--no-fsModuleCache",
+    ]);
+    expect(() => buildNodeCacheVitestArgs(lane, "relative.json")).toThrow("must be absolute");
+  });
+
+  itUnix(
+    "reports complete ignored-file, mode and internal-link deltas, excluding only root Git metadata",
+    async () => {
+      const root = realpathSync(tempDirs.make("prepared-inventory-"));
+      mkdirSync(path.join(root, ".git"));
+      mkdirSync(path.join(root, ".ignored"));
+      writeFileSync(path.join(root, ".git", "index"), "metadata");
+      writeFileSync(path.join(root, ".gitignore"), ".ignored/\n");
+      writeFileSync(path.join(root, ".ignored", "generated"), "before");
+      writeFileSync(path.join(root, "removed"), "removed");
+      writeFileSync(path.join(root, "mode"), "unchanged bytes");
+      chmodSync(path.join(root, "mode"), 0o600);
+      symlinkSync("mode", path.join(root, "link"));
+      await withVitestPairDeadline(async (deadline) => {
+        const before = await inventoryPreparedWorkload(root, deadline);
+        writeFileSync(path.join(root, ".git", "index"), "different metadata");
+        expect(await inventoryPreparedWorkload(root, deadline)).toEqual(before);
+        writeFileSync(path.join(root, ".ignored", "generated"), "after");
+        writeFileSync(path.join(root, ".ignored", "added"), "added");
+        chmodSync(path.join(root, "mode"), 0o700);
+        rmSync(path.join(root, "removed"));
+        rmSync(path.join(root, "link"));
+        symlinkSync(".ignored/generated", path.join(root, "link"));
+        const delta = preparedInventoryDelta(
+          before,
+          await inventoryPreparedWorkload(root, deadline),
+        );
+        expect(delta.counts).toEqual({ before: 5, after: 5, added: 1, removed: 1, changed: 3 });
+        expect(delta.added).toEqual([
+          {
+            path: ".ignored/added",
+            kind: "file",
+            bytes: 5,
+            sha256: sha256("added"),
+            mode: statSync(path.join(root, ".ignored", "added")).mode & 0o777,
+          },
+        ]);
+        expect(delta.removed.map((entry) => entry.path)).toEqual(["removed"]);
+        expect(delta.changed.map((entry) => entry.path)).toEqual([
+          ".ignored/generated",
+          "link",
+          "mode",
+        ]);
+        expect(delta.beforeSha256).not.toBe(delta.afterSha256);
+        rmSync(path.join(root, "link"));
+        symlinkSync("missing", path.join(root, "link"));
+        await expect(inventoryPreparedWorkload(root, deadline)).rejects.toThrow();
+        rmSync(path.join(root, "link"));
+        symlinkSync(root + "/..", path.join(root, "link"));
+        await expect(inventoryPreparedWorkload(root, deadline)).rejects.toThrow("escapes workload");
+        rmSync(path.join(root, "link"));
+        symlinkSync(".git/index", path.join(root, "link"));
+        await expect(inventoryPreparedWorkload(root, deadline)).rejects.toThrow(
+          "excluded Git metadata",
+        );
+      });
+    },
+  );
+
+  itUnix("rejects special prepared files without trying to read their contents", async () => {
+    const root = realpathSync(tempDirs.make("prepared-special-"));
+    const result = spawnSync("mkfifo", [path.join(root, "pipe")], { timeout: 5_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    await withVitestPairDeadline(async (deadline) => {
+      await expect(inventoryPreparedWorkload(root, deadline)).rejects.toThrow("special file");
+    });
+  });
+
   it("requires the runner, selected inputs and a nonempty expanded expected inventory", () => {
     expect(validateNodeCacheManifest(cacheManifest()).expected).toHaveLength(2);
     const missing = cacheManifest();
@@ -424,10 +532,17 @@ describe("Node compile-cache benchmark contract", () => {
           TSX_DISABLE_CACHE: "poison",
           NODE_OPTIONS: "--bad-option",
           NODE_DEBUG_NATIVE: "COMPILE_CACHE",
+          COREPACK_ENABLE_NETWORK: "1",
+          npm_config_offline: "false",
+          pnpm_config_manage_package_manager_versions: "true",
         },
         { kind, nodeCache: path.join(root, "active-node") },
       );
       const keys = [
+        "PATH",
+        "COREPACK_ENABLE_NETWORK",
+        "npm_config_offline",
+        "pnpm_config_manage_package_manager_versions",
         "NODE_DISABLE_COMPILE_CACHE",
         "NODE_COMPILE_CACHE",
         "OPENCLAW_VITEST_RUNTIME",
@@ -450,6 +565,16 @@ describe("Node compile-cache benchmark contract", () => {
         timeoutMs: 10_000,
       });
       expect(JSON.parse(readFileSync(path.join(root, "env.json"), "utf8"))).toEqual({
+        PATH: [
+          path.dirname(packageManager.executable),
+          path.dirname(process.execPath),
+          process.env.PATH,
+        ]
+          .filter(Boolean)
+          .join(path.delimiter),
+        COREPACK_ENABLE_NETWORK: "0",
+        npm_config_offline: "true",
+        pnpm_config_manage_package_manager_versions: "false",
         NODE_DISABLE_COMPILE_CACHE: kind === "disabled" ? "1" : null,
         NODE_COMPILE_CACHE: path.join(root, "active-node"),
         OPENCLAW_VITEST_RUNTIME: "node",
@@ -467,12 +592,165 @@ describe("Node compile-cache benchmark contract", () => {
     [["--mode", "node-compile-cache"], "--baseline is not supported"],
     [["--workload", "prepared"], "--workload and --seed require"],
     [["--seed", "sealed"], "--workload and --seed require"],
+    [["--qualification", "proof"], "--qualification requires"],
+    [["--mode", "node-cache-qualified-measurement"], "--baseline is not supported"],
   ])("rejects mixed CLI mode arguments before output", (args, error) => {
     const { outputDir, stderr } = runBenchmarkCli(args);
     expect(stderr).toContain(error);
     expect(existsSync(outputDir)).toBe(false);
   });
 });
+
+describe("native Node cache evidence", () => {
+  const source = "file:///work/entry.mjs";
+  const cache = "/work/cache";
+  const hit = `[compile cache] reading cache from ${cache}/version/12345678 for ESM ${source}...[1 20 40 50 60]... success, size=40\n`;
+  const accepted = `[compile cache] V8 code cache for ESM ${source} was accepted, keeping the in-memory entry\n`;
+  const missing = `[compile cache] reading cache from ${cache}/version/12345678 for ESM ${source}... no such file or directory\n`;
+  const generated = `[compile cache] V8 code cache for ESM ${source} was not initialized, initializing the in-memory entry\n`;
+
+  it("distinguishes a disk read from V8 acceptance and first generation", () => {
+    expect(parseNodeCacheDiagnostic(hit + accepted, source, cache)).toMatchObject({
+      read: "hit",
+      state: "accepted",
+      cacheFile: "version/12345678",
+    });
+    expect(parseNodeCacheDiagnostic(missing + generated, source, cache)).toMatchObject({
+      read: "missing",
+      state: "not initialized",
+    });
+    expect(parseNodeCacheDiagnostic("", source, cache)).toBeNull();
+  });
+
+  it.each([
+    [hit, "one ordered"],
+    [accepted + hit, "one ordered"],
+    [hit + accepted + accepted, "one ordered"],
+    [hit + accepted.replace("entry\n", "ent"), "Incomplete or interleaved"],
+    [hit + accepted.trimEnd(), "Incomplete or interleaved"],
+    [
+      hit + accepted + "[compile cache] V8 code cache for ESM file:///work/entry.\n",
+      "Incomplete or interleaved",
+    ],
+    [
+      hit +
+        accepted +
+        "[compile cache] reading cache from /work/cache/key for ESM file:///work/entry.\n",
+      "Incomplete or interleaved",
+    ],
+    [hit + accepted.replace("accepted,", "accepted, [compile cache]"), "Incomplete or interleaved"],
+    [hit + accepted.replace("ESM", "CommonJS"), "Incomplete or interleaved"],
+    [missing + accepted, "disagree"],
+    [hit.replace("success, size=40", "success, size=") + accepted, "Incomplete or interleaved"],
+    [
+      hit.replace(" success, size=40", "code hash mismatch: expected 1") + generated,
+      "Incomplete or interleaved",
+    ],
+    [
+      hit.replace(
+        " success, size=40",
+        "code hash mismatch: expected 1, actual 2 [compile cache] interleaved",
+      ) + generated,
+      "Incomplete or interleaved",
+    ],
+    [hit.replace(`${cache}/version`, "/elsewhere/version") + accepted, "escapes"],
+  ])("rejects incomplete or contradictory native evidence %#", (log, message) => {
+    expect(() => parseNodeCacheDiagnostic(log, source, cache)).toThrow(message);
+  });
+
+  it("keeps V8 rejection distinct from source invalidation", () => {
+    expect(
+      parseNodeCacheDiagnostic(
+        hit + accepted.replace("accepted, keeping", "rejected, refreshing"),
+        source,
+        cache,
+      ),
+    ).toMatchObject({ read: "hit", state: "rejected" });
+    expect(
+      parseNodeCacheDiagnostic(
+        hit.replace(" success, size=40", "code hash mismatch: expected 1, actual 2") + generated,
+        source,
+        cache,
+      ),
+    ).toMatchObject({ read: "invalid", state: "not initialized" });
+  });
+});
+
+itUnix("records failed qualification admission without starting a measured child", async () => {
+  const root = realpathSync(tempDirs.make("node-cache-admission-"));
+  const workloadDir = path.join(root, "workload");
+  const qualificationDir = path.join(root, "qualification");
+  const outputDir = path.join(root, "output");
+  const scratchDir = path.join(root, "scratch");
+  mkdirSync(workloadDir);
+  mkdirSync(qualificationDir);
+  let attempts = 0;
+  await expect(
+    runQualifiedNodeCacheBenchmark({
+      workloadDir,
+      qualificationDir,
+      outputDir,
+      scratchDir,
+      pnpmBin: process.execPath,
+      timeoutMs: 10_000,
+      admit: () => {
+        attempts += 1;
+        throw new Error("qualification receipt changed");
+      },
+    }),
+  ).rejects.toThrow("qualification receipt changed");
+  expect(attempts).toBe(1);
+  expect(
+    JSON.parse(readFileSync(path.join(outputDir, "terminal-manifest.json"), "utf8")),
+  ).toMatchObject({
+    status: "failure",
+    error: "qualification receipt changed",
+  });
+  expect(readdirSync(outputDir)).toEqual(["terminal-manifest.json"]);
+  expect(existsSync(scratchDir)).toBe(false);
+});
+
+it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !process.versions.bun)(
+  "qualifies native cache diagnostics through the real CLI and Node runtime",
+  async () => {
+    const root = realpathSync(tempDirs.make("node-cache-diagnostics-"));
+    const output = path.join(root, "output");
+    const result = await runOwnedCommand({
+      bin: process.execPath,
+      args: [
+        path.resolve("scripts/vitest-pair-benchmark.mts"),
+        "--mode",
+        "node-cache-diagnostics",
+        "--output",
+        output,
+        "--run-attempt",
+        "1",
+      ],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH, HOME: root },
+      logPath: path.join(root, "cli.log"),
+      timeoutMs: 30_000,
+    });
+    expect(result.exitCode, readFileSync(path.join(root, "cli.log"), "utf8")).toBe(0);
+    const receipt = JSON.parse(readFileSync(path.join(output, "diagnostics.json"), "utf8"));
+    expect(
+      receipt.controls.map((control: { kind: string; observation: { state: string } | null }) => [
+        control.kind,
+        control.observation?.state ?? null,
+      ]),
+    ).toEqual([
+      ["disabled", null],
+      ["empty", "not initialized"],
+      ["seeded", "accepted"],
+      ["invalidated", "not initialized"],
+    ]);
+    expect(
+      JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")).status,
+    ).toBe("success");
+    expect(existsSync(path.join(output, "scratch"))).toBe(false);
+  },
+  40_000,
+);
 
 // The production case requires GNU time and the pinned runtime. macOS/Bun helper
 // controls above do not substitute for this Linux execution proof.
@@ -517,10 +795,13 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       ],
     };
     const script = [
-      'import { writeFileSync } from "node:fs";',
+      'import { existsSync, mkdirSync, writeFileSync } from "node:fs";',
       'import assert from "node:assert/strict";',
-      'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
+      'for (const [key, value] of Object.entries({ CI: "1", COREPACK_ENABLE_NETWORK: "0", npm_config_offline: "true", pnpm_config_manage_package_manager_versions: "false", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
       "assert.equal(process.env.TSX_DISABLE_CACHE, undefined);",
+      'assert.ok(process.argv.includes("--no-cache"));',
+      'assert.ok(process.argv.includes("--no-fsModuleCache"));',
+      'if (existsSync("../mutate")) { mkdirSync(".ignored", { recursive: true }); writeFileSync(".ignored/generated", "mutation"); }',
       `writeFileSync(process.argv[process.argv.indexOf("--outputFile") + 1], JSON.stringify(${JSON.stringify(report)}));`,
       "console.log(JSON.stringify({ active: process.env.NODE_COMPILE_CACHE, disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null }));",
     ].join("\n");
@@ -539,6 +820,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       expect(result.status, result.stderr).toBe(0);
       return result.stdout.trim();
     };
+    writeFileSync(path.join(workload, ".gitignore"), ".ignored/\n");
     git(["init", "-q"]);
     git(["add", "."]);
     git([
@@ -573,7 +855,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     );
     const seeded = spawnSync(
       process.execPath,
-      ["scripts/run-vitest.mjs", "--outputFile", path.join(root, "seed-report.json")],
+      buildNodeCacheVitestArgs(nodeCacheManifest.lane, path.join(root, "seed-report.json")),
       { cwd: workload, env, encoding: "utf8", timeout: 10_000 },
     );
     expect(seeded.error).toBeUndefined();
@@ -607,6 +889,12 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       JSON.parse(readFileSync(path.join(context.outputDir, "analysis.json"), "utf8")),
     ).toMatchObject({ valid: true });
     expect(existsSync(scratch)).toBe(false);
+    const integrity = JSON.parse(
+      readFileSync(path.join(context.outputDir, "prepared-integrity.json"), "utf8"),
+    );
+    expect(integrity.status).toBe("unchanged");
+    expect(integrity.beforeSha256).toBe(integrity.afterSha256);
+    expect(integrity.counts).toMatchObject({ added: 0, removed: 0, changed: 0 });
     for (const planned of buildNodeCacheSchedule()) {
       const id = `pair-${planned.pair}-${planned.treatment}`;
       const record = JSON.parse(readFileSync(path.join(context.outputDir, `${id}.json`), "utf8"));
@@ -632,6 +920,67 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     expect(readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8")).toBe(
       terminal,
     );
+    // The reader has its own receipt tests; exercise the qualified runner's
+    // output/deadline handoff with this already-prepared process fixture.
+    const qualificationDir = path.join(root, "qualification");
+    mkdirSync(qualificationDir);
+    cpSync(seed, path.join(qualificationDir, "seed"), { recursive: true });
+    const qualifiedOutput = path.join(root, "qualified");
+    await runQualifiedNodeCacheBenchmark({
+      workloadDir: workload,
+      qualificationDir,
+      outputDir: qualifiedOutput,
+      scratchDir: scratch,
+      pnpmBin: process.execPath,
+      timeoutMs: 30_000,
+      admit: () => ({
+        manifest: nodeCacheManifest,
+        preparedSha256: integrity.beforeSha256 as string,
+        provenance: { fixture: true },
+        revalidate: () => {},
+      }),
+    });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "terminal-manifest.json"), "utf8")),
+    ).toMatchObject({ status: "success" });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "qualification.json"), "utf8")),
+    ).toEqual({ fixture: true });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "analysis.json"), "utf8")),
+    ).toMatchObject({ valid: true });
+    expect(
+      readdirSync(qualifiedOutput).filter((file) =>
+        /^pair-\d+-(disabled|seeded)\.json$/u.test(file),
+      ),
+    ).toHaveLength(40);
+    expect(existsSync(scratch)).toBe(false);
+    writeFileSync(path.join(root, "mutate"), "enable ignored-file mutation");
+    const mutated = {
+      ...context,
+      outputDir: path.join(root, "mutated"),
+      scratchDir: path.join(root, "mutated-scratch"),
+    };
+    await expect(runNodeCacheBenchmark(mutated)).rejects.toThrow("Prepared workload changed");
+    expect(existsSync(path.join(mutated.outputDir, "analysis.json"))).toBe(false);
+    expect(
+      JSON.parse(readFileSync(path.join(mutated.outputDir, "terminal-manifest.json"), "utf8")),
+    ).toMatchObject({ status: "failure" });
+    const delta = JSON.parse(
+      readFileSync(path.join(mutated.outputDir, "prepared-integrity.json"), "utf8"),
+    );
+    expect(delta).toMatchObject({
+      status: "changed",
+      counts: { added: 1, removed: 0, changed: 0 },
+      added: [{ path: ".ignored/generated", kind: "file", bytes: 8, sha256: sha256("mutation") }],
+    });
+    expect(delta.beforeSha256).not.toBe(delta.afterSha256);
+    expect(
+      JSON.parse(readFileSync(path.join(mutated.outputDir, "pair-20-disabled.json"), "utf8")),
+    ).toMatchObject({ status: "success", processTreeSettled: true });
+    expect(existsSync(path.join(mutated.scratchDir, "active"))).toBe(false);
+    rmSync(path.join(root, "mutate"));
+    rmSync(path.join(workload, ".ignored"), { recursive: true });
     nodeCacheManifest.expected[0]!.fullName = "missing expected case";
     const failed = { ...context, outputDir: path.join(root, "failed") };
     await expect(runNodeCacheBenchmark(failed)).rejects.toThrow("expected passed inventory");
@@ -841,6 +1190,10 @@ describe("Vitest pair benchmark", () => {
       version: "12.1.0",
     });
     expect(env.npm_execpath).toBe(pinned);
+    expect(env.PATH).toBe(ambientEnv.PATH);
+    expect(env.COREPACK_ENABLE_NETWORK).toBeUndefined();
+    expect(env.npm_config_offline).toBeUndefined();
+    expect(env.pnpm_config_manage_package_manager_versions).toBeUndefined();
     expect(env.COREPACK_HOME).toBe(path.join(cacheRoot, "corepack"));
     expect(readFileSync(marker, "utf8")).toBe("pinned\npinned\n");
   });

@@ -234,7 +234,8 @@ regain current authority before they can execute.
 
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
-writer identity; terminal settlement clears the run marker. Recovery is bounded
+writer identity; terminal settlement clears the run marker. Queued input records
+the run marker and its writer identity when its run starts. Recovery is bounded
 by the recorded crash intervals. Command persistence
 records activity only; commands gain recovery markers when their runs start.
 Commands that become runs, such as `/goal` or skill rewrites, remain unprotected

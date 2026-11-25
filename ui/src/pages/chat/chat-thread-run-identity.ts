@@ -5,6 +5,7 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { ChatProjection, TurnInsertionBounds } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, isInterSessionMessage } from "./chat-turn-boundary.ts";
 import { knownStreamCausalInterval, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -22,6 +23,25 @@ export function transcriptRunId(message: unknown): string | undefined {
     normalizeOptionalString(record?.runId) ??
     normalizeOptionalString(asRecord(record?.openclawStreamFallback)?.runId)
   );
+}
+
+/** Compaction operation IDs do not invent agent runs; only actual output identifies one. */
+export function createCompactionRunLookup(
+  messages: readonly unknown[],
+  activeRunId?: string | null,
+) {
+  const runs = new Set([activeRunId]);
+  for (const message of messages) {
+    const rawRole = asRecord(message)?.role;
+    const role = typeof rawRole === "string" ? normalizeRoleForGrouping(rawRole) : undefined;
+    if (role === "assistant" || role === "tool") {
+      runs.add(transcriptRunId(message));
+    }
+  }
+  return (candidate: unknown) => {
+    const runId = normalizeOptionalString(candidate);
+    return runId && runs.has(runId) ? { runId } : undefined;
+  };
 }
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
@@ -204,10 +224,10 @@ export function applyPersistedToolInvocationBounds(
   const invocations = new Map<string, TurnInsertionBounds | null>();
   let bounds: TurnInsertionBounds = {};
   for (const item of items) {
-    if (item.kind === "divider") {
+    if (item.kind === "divider" || item.kind === "compaction") {
       invocations.clear();
     }
-    if (chatItemStartsUserTurn(item) || item.kind === "divider") {
+    if (chatItemStartsUserTurn(item) || item.kind === "divider" || item.kind === "compaction") {
       bounds.beforeKey = item.key;
       bounds = { afterKey: item.key };
     } else if (item.kind === "message") {

@@ -297,7 +297,7 @@ function guardGatewayServiceMutation<
   TArgs extends {
     env?: GatewayServiceEnv;
     assertCurrent?: () => void;
-    beforeMutation?: () => Promise<void>;
+    beforeMutation?: () => void | Promise<void>;
   },
   TResult,
 >(

@@ -107,7 +107,11 @@ export function ensureOpenClawStateRuntimeSchema(
       return [];
     }
   } catch (error) {
-    if (!db.isOpen || error instanceof StartupMaintenanceRequiredError) {
+    if (
+      !db.isOpen ||
+      error instanceof StartupMaintenanceRequiredError ||
+      readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
       throw error;
     }
     // Preserve transactional schema convergence and its diagnostics after a clean rollback.

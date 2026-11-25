@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -832,6 +833,7 @@ describe("denied /status", () => {
     Provider: "webchat",
     Surface: "webchat",
     GatewayClientScopes: ["operator.admin"],
+    TurnGrant: decideTurnGrant(["operator.admin"]),
   };
 
   it.each<{
@@ -841,8 +843,19 @@ describe("denied /status", () => {
     reply: unknown;
   }>([
     {
-      name: "names the policy for a Control UI owner outside commands.allowFrom",
+      // An admin can edit commands.allowFrom itself; admission decides this once.
+      name: "runs for an admitted operator.admin Control UI turn outside commands.allowFrom",
       ctx: controlUiOwner,
+      allowFrom: { "*": ["someone-else"] },
+      reply: { text: "status reply" },
+    },
+    {
+      name: "names the policy for a non-admin Control UI turn outside commands.allowFrom",
+      ctx: {
+        ...controlUiOwner,
+        GatewayClientScopes: ["operator.write"],
+        TurnGrant: decideTurnGrant(["operator.write"]),
+      },
       allowFrom: { "*": ["someone-else"] },
       reply: {
         text: expect.stringContaining("`commands.allowFrom` does not include this Gateway client"),

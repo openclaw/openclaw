@@ -51,7 +51,6 @@ beforeEach(() => {
     getActiveMcpLoopbackRuntime: () => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
     }),
     mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
     bindMcpLoopbackClientGrantAdmission: () => true,

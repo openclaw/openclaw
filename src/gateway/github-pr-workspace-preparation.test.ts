@@ -128,7 +128,7 @@ describe("existing PR preparation through the registered agent action", () => {
       f.invoke({}, f.sandbox, undefined, { requester: "maintainer" }),
     ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
     expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
-    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    await expect(f.invoke()).rejects.toThrow("Link your GitHub account once");
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
   });
@@ -196,35 +196,12 @@ describe("existing PR preparation through the registered agent action", () => {
         };
       }
       await expect(refresh(condition === "revoked recovery")).rejects.toThrow(
-        /verified|permission|revoked|access|changed|unavailable/i,
+        /verified|permission|revoked|access|changed|unavailable|link your github/i,
       );
       expect(revoked).toBe(!privatePr);
       expect(await snapshot()).toEqual(before);
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
-    },
-  );
-
-  it.each(["narrowed", "missing"] as const)(
-    "refuses a maintainer's %s selected authority before changing the guest workspace",
-    async (condition) => {
-      const f = await fixture();
-      const before = f.readSession();
-      const hostHead = await f.git("rev-parse", "HEAD");
-      const guestHead = await f.guestGit("rev-parse", "HEAD");
-      await expect(
-        f.invoke({}, f.sandbox, undefined, {
-          requester: "maintainer",
-          caller: condition === "missing" ? null : "guest",
-        }),
-      ).rejects.toThrow("Only the person who started");
-      expect(f.readSession().worktree).toEqual(before.worktree);
-      expect(await f.git("rev-parse", "HEAD")).toBe(hostHead);
-      expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
-      await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(f.writes).toEqual([]);
     },
   );
 

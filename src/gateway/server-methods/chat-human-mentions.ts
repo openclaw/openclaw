@@ -56,10 +56,6 @@ export function normalizeChatHumanMentions(
   const normalized: HumanMention[] = [];
   let previousEnd = 0;
   for (const mention of mentions) {
-    if (mention.access !== undefined) {
-      // Invitation levels are not enforced yet; refuse rather than invite with full membership.
-      return { ok: false, error: "Mention invitation levels are not supported." };
-    }
     const token = text.slice(mention.start, mention.end);
     if (
       mention.start < previousEnd ||
@@ -85,7 +81,12 @@ export function normalizeChatHumanMentions(
     if (start < 0 || end > trimmed.length || trimmed[start] !== "@") {
       return { ok: false, error: INVALID_MENTIONS };
     }
-    normalized.push({ profileId: mention.profileId, start, end });
+    normalized.push({
+      profileId: mention.profileId,
+      start,
+      end,
+      ...(mention.access ? { access: mention.access } : {}),
+    });
     previousEnd = mention.end;
   }
   return { ok: true, value: normalized };

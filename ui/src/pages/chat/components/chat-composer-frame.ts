@@ -611,6 +611,7 @@ export function createChatComposerContext(
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
+    videoPreparationStatus: props.attachmentReads?.videoPreparationStatus,
     preparingAttachments:
       (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) > 0,
     isBusy,

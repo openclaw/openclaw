@@ -299,6 +299,7 @@ async function executeAgentRun(
         // must leave the paused task's completion lifecycle with its owner.
         if (prepared.reactivateSubagent && params.resolvedSessionKey) {
           await reactivateCompletedSubagentSession({
+            operatorAuthority: prepared.operatorAuthority,
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
             task: message,
@@ -385,15 +386,7 @@ async function executeAgentRun(
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
-                !params.inputProvenance &&
-                  !params.isOneShotModelRun &&
-                  !params.request.internalEvents &&
-                  !params.request.internalRuntimeHandoffId &&
-                  !params.request.execApprovalFollowupExpectedSessionId &&
-                  params.sessionEffects !== "internal" &&
-                  !params.request.suppressPromptPersistence &&
-                  !params.request.swarmCollector &&
-                  params.request.lane !== "subagent",
+                prepared.operatorAuthority?.grant,
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);

@@ -35,23 +35,24 @@ const cases = [
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
-  // destructuring defaults (source and aliased destination) and from scopes. Pass-throughs
-  // (lines 9-10) are not reported.
+  // destructuring defaults (source and aliased destination), from scopes, from defaults to
+  // owner and from function values. Pass-throughs (lines 9-10) and narrowing forms (lines
+  // 23-30) are not reported.
   [
     "no-turn-authority-derivation",
     "turn-authority-derivation-violation.ts",
-    5,
-    [11, 12, 13, 13, 18],
+    9,
+    [11, 12, 13, 13, 18, 32, 33, 36, 41],
   ],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
 
 // Shrink only. When a file leaves a list, lower its ceiling in the same change; never raise one.
 const allowlists = [
-  ["no-operator-permission-read", "", ADMISSION_FILES, 63],
-  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 24],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 53],
-  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 5],
+  ["no-operator-permission-read", "", ADMISSION_FILES, 59],
+  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 24],
+  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
 ] as const;
 
 it.each(allowlists)(

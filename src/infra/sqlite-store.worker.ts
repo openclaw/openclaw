@@ -27,13 +27,17 @@ import {
 import { currentSqliteOperationTiming, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_SOURCE_FENCE } from "./sqlite-source-fence-contract.js";
 import { runSqliteSourceFence } from "./sqlite-source-fence.js";
-import { loadSqliteWorkerBackendModule as loadBackendModule } from "./sqlite-worker-backend-loader.js";
+import {
+  assertSqliteWorkerBackend,
+  loadSqliteWorkerBackendModule as loadBackendModule,
+} from "./sqlite-worker-backend-loader.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
   SQLITE_WORKER_PREPARE_ADMITTED,
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SQLITE_WORKER_WAL_CHECKPOINT,
   SqliteWorkerError,
   SqliteWorkerOpenRefusedError,
   type SqliteWorkerCloseReceipt,
@@ -42,6 +46,7 @@ import {
   type SqliteWorkerOperations,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
+  type SqliteWorkerWalCheckpoint,
 } from "./sqlite-worker-contract.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
@@ -198,6 +203,7 @@ export function startHostedWorker(endpoint?: HostedWorkerEndpoint): void {
     const transactions = currentSqliteOperationTiming()?.transactions;
     let loadedModules = false;
     let reply: SqliteWorkerReply;
+    let walCheckpoint: SqliteWorkerWalCheckpoint | undefined;
     let executed = pendingResult !== undefined;
     let retire = false;
     let completeResult = false;
@@ -303,6 +309,11 @@ export function startHostedWorker(endpoint?: HostedWorkerEndpoint): void {
                   })).cleanup;
                   assertSynchronousResult(cleanup, "operation cleanup");
                   assertSettled();
+                }
+                if (verified) {
+                  walCheckpoint = runInActorContext(request.actor, () =>
+                    backend[SQLITE_WORKER_WAL_CHECKPOINT]?.(typedCommand),
+                  );
                 }
               } catch (error) {
                 const cleanupError = error instanceof Error ? error : new Error(String(error));
@@ -533,36 +544,9 @@ export function startHostedWorker(endpoint?: HostedWorkerEndpoint): void {
           if (timing) {
             timing.factoryFinished = performance.now();
           }
-          if (
-            !isRecord(backend) ||
-            typeof backend.execute !== "function" ||
-            typeof backend.close !== "function" ||
-            (SQLITE_WORKER_PREPARE_COMMAND in backend &&
-              backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
-              typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
-            (SQLITE_WORKER_PREPARE_ADMITTED in backend &&
-              backend[SQLITE_WORKER_PREPARE_ADMITTED] !== undefined &&
-              (typeof backend[SQLITE_WORKER_PREPARE_ADMITTED] !== "function" ||
-                typeof backend.assertSettled !== "function")) ||
-            (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
-              backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
-              (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
-                typeof backend.assertSettled !== "function")) ||
-            (SQLITE_WORKER_SOURCE_FENCE in backend &&
-              backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
-              (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
-                typeof backend.assertSettled !== "function")) ||
-            (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
-              backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
-              typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
-            (backend.assertSettled !== undefined && typeof backend.assertSettled !== "function") ||
-            (backend.prepare !== undefined && typeof backend.prepare !== "function")
-          ) {
-            throw new Error("SQLite worker module returned an invalid backend");
-          }
+          assertSqliteWorkerBackend(backend);
           actors.set(request.actor, {
-            // SAFETY: The validated backend and its typed client own the private command contract.
-            backend: backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>,
+            backend,
             bridge,
           });
           retained = true;
@@ -664,6 +648,9 @@ export function startHostedWorker(endpoint?: HostedWorkerEndpoint): void {
           ...(sharedState ? { sharedState } : {}),
         },
       };
+    }
+    if (walCheckpoint) {
+      reply.walCheckpoint = walCheckpoint;
     }
     if (!reply.ok || (!pendingInput && !pendingResult)) {
       operationAdmission?.context.port.close();

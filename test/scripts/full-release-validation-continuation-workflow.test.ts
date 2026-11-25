@@ -52,6 +52,7 @@ it("runs both release callers independently of Boat with the pinned Blacksmith w
     expect(caller.needs).toEqual([
       "resolve_target",
       "prepare_npm_package",
+      "npm_preflight_first",
       "qualify_npm_package",
       "prepare_plugin_npm",
       "prepare_docker_release",
@@ -221,7 +222,9 @@ describe("full release same-parent recovery workflow", () => {
     let workloadDispatches = 0;
     let artifactDispatches = 0;
     for (const job of Object.values(workflow.jobs)) {
-      const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
+      const artifact = (
+        job.env?.CHILD_WORKFLOW_KIND ?? job.env?.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND
+      )?.startsWith("artifact-");
       const dispatches = (job.steps ?? []).filter((entry) =>
         String(entry.name).startsWith("Dispatch"),
       );
@@ -256,12 +259,16 @@ describe("full release same-parent recovery workflow", () => {
         }
       }
     }
+    const original = step("npm_preflight_first", "Verify initial npm preflight on retry");
+    expect(original.if).toBe("github.run_attempt != 1 && github.job == 'npm_preflight_first'");
+    expect(original.run).toBe("node scripts/full-release-artifacts.mjs verify-initial-npm");
     expect(workloadDispatches).toBeGreaterThan(0);
     expect(artifactDispatches).toBeGreaterThan(0);
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
     expect(workflow.jobs.release_execution_plan?.needs).toEqual(
       expect.arrayContaining([
         "prepare_npm_package",
+        "npm_preflight_first",
         "qualify_npm_package",
         "prepare_plugin_npm",
         "prepare_docker_release",
@@ -271,6 +278,7 @@ describe("full release same-parent recovery workflow", () => {
       expect(workflow.jobs[jobName]?.needs).toEqual(
         expect.arrayContaining([
           "prepare_npm_package",
+          "npm_preflight_first",
           "qualify_npm_package",
           "prepare_plugin_npm",
           "prepare_docker_release",
@@ -278,7 +286,8 @@ describe("full release same-parent recovery workflow", () => {
       );
     }
     expect(workflow.jobs.summary?.env).toMatchObject({
-      NPM_PREPARATION_RESULT: "${{ needs.prepare_npm_package.result }}",
+      NPM_PREPARATION_RESULT:
+        "${{ needs.resolve_target.outputs.preflight_first == 'true' && needs.npm_preflight_first.result || needs.prepare_npm_package.result }}",
       NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
       PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
       DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",

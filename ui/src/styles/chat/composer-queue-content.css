@@ -257,6 +257,7 @@
 
 .chat-queue__leading svg,
 .chat-queue__remove svg,
+.chat-queue__remove .btn__spinner,
 .chat-queue__edit-submit svg,
 .chat-queue__edit-cancel svg {
   width: 14px;
@@ -441,7 +442,7 @@
 
 /* Inert instead of removed: an open edit keeps every action slot in place so the
    rows below it never shift while the operator retypes. */
-.chat-queue__remove:disabled,
+.chat-queue__remove:disabled:not([aria-busy="true"]),
 .chat-queue__more:disabled,
 .chat-queue__edit-submit:disabled,
 .chat-queue__edit-cancel:disabled {
@@ -450,6 +451,7 @@
 }
 
 .chat-queue__remove:hover:not(:disabled),
+.chat-queue__remove[aria-busy="true"]:hover,
 .chat-queue__more:hover:not(:disabled),
 .chat-queue__edit-submit:hover:not(:disabled),
 .chat-queue__edit-cancel:hover:not(:disabled) {

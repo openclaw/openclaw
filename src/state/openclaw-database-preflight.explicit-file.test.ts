@@ -181,7 +181,10 @@ it("repairs fractional trace timestamps while captured doctor migration advances
   const flexibleCreateSql = strictCreateSql.replace(/\s+STRICT$/u, "");
   expect(flexibleCreateSql).not.toBe(strictCreateSql);
   // The synthetic pre-STRICT database predates this placement index.
-  legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
+  legacy.exec(`
+    ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
+    DROP INDEX idx_worker_session_placements_environment;
+  `);
   legacy.exec(`
       DROP INDEX idx_gateway_restart_handoff_expiry;
       ALTER TABLE gateway_restart_handoff RENAME TO gateway_restart_handoff_strict;

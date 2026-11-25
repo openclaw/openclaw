@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 

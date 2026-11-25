@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { hasGatewayAdminScope } from "./operator-scopes.js";
+import { readGatewayRequestAdmission } from "./operator-admission.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -104,7 +104,7 @@ export function resolveSessionResourceToolPolicy(params: {
     senderId: caller.SenderId,
     senderName: caller.SenderName,
     senderUsername: caller.SenderUsername,
-    senderIsOwner: hasGatewayAdminScope(params.client),
+    senderIsOwner: readGatewayRequestAdmission(params.client).grant.owner,
     agentAccountId: origin?.accountId,
     groupId: entry.groupId,
     groupChannel: entry.groupChannel,

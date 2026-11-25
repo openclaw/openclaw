@@ -3,8 +3,8 @@ name: OpenClaw Release Button
 on:
   workflow_dispatch:
     inputs:
-      fast_track_approval:
-        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+      fast_track_request:
+        description: Fast-track exception request JSON; approval uses the npm-release environment
         required: false
         type: string
       prepared_artifact:
@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
+  FAST_TRACK_REQUEST_JSON: ${{ inputs.fast_track_request }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
@@ -87,7 +87,8 @@ jobs:
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.request != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # Covers the 330-minute publisher wait in openclaw-release-ready.mjs verify.
+    timeout-minutes: 350
     permissions:
       actions: read
       contents: read

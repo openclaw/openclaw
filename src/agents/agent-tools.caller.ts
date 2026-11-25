@@ -81,7 +81,11 @@ export function createCodingToolsGatewayCaller(params: {
             ? { sessionEventToolsAllowSessionScoped: true as const }
             : {}),
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
-            permissionMode: options.sessionPermissionPolicy?.mode,
+            // Events compare stored session settings. The participant's explicit
+            // execution ceiling travels separately in its admitted authority.
+            permissionMode: options.pluginExecutionAuthority?.participationCeiling
+              ? options.sessionPermissionPolicy?.sourceMode
+              : options.sessionPermissionPolicy?.mode,
           },
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }

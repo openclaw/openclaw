@@ -54,4 +54,21 @@ describe("update run wire contract", () => {
     expect(record.steps[0]).toMatchObject(evidence);
     expectWireRecord(record);
   });
+
+  it("keeps candidate release admission evidence out of Gateway responses", () => {
+    const releaseAdmission = {
+      owner: "candidate",
+      candidateVersion: "2100.1.0",
+      verdict: "admit",
+      warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+    };
+    const stored = LedgerRecordSchema.parse({
+      ...run,
+      origin: { ...run.origin, releaseAdmission },
+    });
+    const record = toPublicUpdateRun(stored);
+    expectWireRecord(record);
+    expect(record.origin).not.toHaveProperty("releaseAdmission");
+    expect(stored.origin.releaseAdmission).toEqual(releaseAdmission);
+  });
 });

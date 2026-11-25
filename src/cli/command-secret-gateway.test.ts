@@ -37,6 +37,8 @@ function resetCommandSecretMocks(): void {
 beforeEach(() => {
   callGateway.mockReset();
   resetCommandSecretMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+  vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
 });
 
 afterEach(() => {
@@ -381,18 +383,27 @@ it("does not retry old gateways without forced active path support", async () =>
   expect(callGateway).toHaveBeenCalledTimes(1);
 });
 
-it("fails fast when gateway-backed resolution is unavailable", async () => {
-  const envKey = "TALK_API_KEY_FAILFAST";
-  vi.stubEnv(envKey, undefined);
-  callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-  const resolution = resolveTalkProviderApiKey({ envKey });
-  await expect(resolution).rejects.toThrow(
-    /failed to resolve secrets from the active gateway snapshot/i,
-  );
-  await expect(resolution).rejects.toThrow(/local resolution also failed/i);
-  await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
-  await expect(resolution).rejects.not.toThrow(envKey);
-});
+it.each([undefined, true] as const)(
+  "rejects missing secrets with offline custody %s",
+  async (localGatewayAbsent) => {
+    const envKey = "TALK_API_KEY_FAILFAST";
+    vi.stubEnv(envKey, undefined);
+    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    const resolution = resolveTalkProviderApiKey({ envKey, localGatewayAbsent });
+    if (localGatewayAbsent) {
+      await expect(resolution).rejects.toThrow(/failed to resolve command secrets locally/i);
+      await expect(resolution).rejects.not.toThrow(/gateway|snapshot/i);
+    } else {
+      await expect(resolution).rejects.toThrow(
+        /failed to resolve secrets from the active gateway snapshot/i,
+      );
+      await expect(resolution).rejects.toThrow(/local resolution also failed/i);
+    }
+    await expect(resolution).rejects.toThrow(/check the configured secret sources.*retry/i);
+    await expect(resolution).rejects.not.toThrow(envKey);
+    expect(callGateway).toHaveBeenCalledTimes(localGatewayAbsent ? 0 : 1);
+  },
+);
 
 it.each([true, false])("allows local exec SecretRef fallback: %s", async (allowExec) => {
   await withSecureTestNodeExecPath(async () => {
@@ -576,26 +587,31 @@ it.each([
   expect(result.diagnostics).toEqual(payload.diagnostics);
 });
 
-it("degrades unresolved refs in read-only status mode instead of throwing", async () => {
-  const envKey = "TALK_API_KEY_SUMMARY_MISSING";
-  callGateway.mockResolvedValueOnce({
-    assignments: [],
-    diagnostics: [],
-  });
-  vi.stubEnv(envKey, undefined);
-  const result = await resolveTalkProviderApiKey({
-    envKey,
-    commandName: "status",
-    mode: "read_only_status",
-  });
-  expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
-  expect(result.hadUnresolvedTargets).toBe(true);
-  expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
-  expectDiagnostic(
-    result,
-    `${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path`,
-  );
-});
+it.each([undefined, true] as const)(
+  "degrades unresolved refs in read-only status with offline custody %s",
+  async (localGatewayAbsent) => {
+    const envKey = "TALK_API_KEY_SUMMARY_MISSING";
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [],
+    });
+    vi.stubEnv(envKey, undefined);
+    const result = await resolveTalkProviderApiKey({
+      envKey,
+      commandName: "status",
+      mode: "read_only_status",
+      localGatewayAbsent,
+    });
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
+    expect(result.hadUnresolvedTargets).toBe(true);
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
+    expectDiagnostic(
+      result,
+      `${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path`,
+    );
+    expect(callGateway).toHaveBeenCalledTimes(localGatewayAbsent ? 0 : 1);
+  },
+);
 
 it.each(["other provider", "disabled", "optional", "unknown owner"] as const)(
   "classifies an unresolved web credential: %s",
@@ -654,24 +670,45 @@ it.each(["other provider", "disabled", "optional", "unknown owner"] as const)(
   },
 );
 
-it("limits local fallback to targeted refs in read-only modes", async () => {
-  const talkEnvKey = "TALK_API_KEY_TARGET_ONLY";
-  const gatewayEnvKey = "GATEWAY_PASSWORD_UNRELATED";
-  vi.stubEnv(talkEnvKey, "target-only");
-  vi.stubEnv(gatewayEnvKey, undefined);
-  callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-  const result = await resolveTalkProviderApiKey({
-    config: {
-      ...buildTalkTestProviderConfig(secretRef(talkEnvKey)),
-      gateway: {
-        auth: { password: secretRef(gatewayEnvKey) },
-      },
-    } as unknown as OpenClawConfig,
-    commandName: "status",
-    mode: "read_only_status",
-  });
+it.each([undefined, true] as const)(
+  "resolves and scrubs only targeted refs with offline custody %s",
+  async (localGatewayAbsent) => {
+    const talkEnvKey = "TALK_API_KEY_TARGET_ONLY";
+    const gatewayEnvKey = "GATEWAY_PASSWORD_UNRELATED";
+    const missingEnvKey = "MODEL_API_KEY_MISSING";
+    vi.stubEnv(talkEnvKey, "target-only");
+    vi.stubEnv(gatewayEnvKey, undefined);
+    vi.stubEnv(missingEnvKey, undefined);
+    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    const result = await resolveTalkProviderApiKey({
+      config: {
+        ...buildTalkTestProviderConfig(secretRef(talkEnvKey)),
+        gateway: {
+          auth: { password: secretRef(gatewayEnvKey) },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://model.example.test/v1",
+              apiKey: secretRef(missingEnvKey),
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      commandName: "status",
+      mode: "read_only_status",
+      targetIds: new Set(["talk.providers.*.apiKey", "models.providers.*.apiKey"]),
+      localGatewayAbsent,
+    });
 
-  expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
-  expect(result.hadUnresolvedTargets).toBe(false);
-  expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-});
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
+    expect(result.resolvedConfig.models?.providers?.custom?.apiKey).toBeUndefined();
+    expect(result.resolvedConfig.gateway?.auth?.password).toEqual(secretRef(gatewayEnvKey));
+    expect(result.hadUnresolvedTargets).toBe(true);
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+    expect(result.targetStatesByPath["models.providers.custom.apiKey"]).toBe("unresolved");
+    expectDiagnostic(result, "models.providers.custom.apiKey is unavailable in this command path");
+    expect(callGateway).toHaveBeenCalledTimes(localGatewayAbsent ? 0 : 1);
+  },
+);
