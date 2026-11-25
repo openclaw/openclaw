@@ -7,6 +7,19 @@ export function getRenderedMarkdownMathSource(node: Node | null) {
   return node ? renderedSources.get(node) : undefined;
 }
 
+export function cloneWithRenderedMarkdownMath<T extends HTMLElement>(element: T): T {
+  const clone = element.ownerDocument.importNode(element, true);
+  const originals = element.getElementsByTagName("openclaw-markdown-math");
+  const copies = clone.getElementsByTagName("openclaw-markdown-math");
+  for (let index = 0; index < originals.length; index += 1) {
+    const source = renderedSources.get(originals[index]!);
+    if (source) {
+      renderedSources.set(copies[index]!, source);
+    }
+  }
+  return clone;
+}
+
 async function loadMath() {
   try {
     const { applyMarkdownMathStyles, renderMarkdownMath } =
@@ -27,10 +40,9 @@ function defineMarkdownMathElement(): void {
 
   class MarkdownMathElement extends HTMLElement {
     private generation = 0;
-    private rendered = false;
 
     connectedCallback(): void {
-      if (this.rendered) {
+      if (renderedSources.has(this)) {
         return;
       }
       const generation = ++this.generation;
@@ -66,7 +78,6 @@ function defineMarkdownMathElement(): void {
             // readable on load/render failure; detached/replaced leaves never commit.
             this.replaceChildren(fragment);
             renderedSources.set(this, { source, literal });
-            this.rendered = true;
           }
         });
       });

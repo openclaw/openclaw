@@ -155,12 +155,13 @@ describe("LaTeX", () => {
   it("keeps math inside its link label and preserves separate dollar-prefixed labels", () => {
     const fragment = mathFragment(
       toSanitizedMarkdownHtml(
-        String.raw`[$HOME](https://example.com/home) and [$PATH](https://example.com/path) and [$(-\infty, 0]$](https://example.com/math)`,
+        String.raw`[$HOME{](https://example.com/home) and [$PATH](https://example.com/path) and [$(-\infty, 0]\text{step ](done)}$](https://example.com/math)`,
       ),
     );
     const [home, path, math] = fragment.querySelectorAll("a");
-    expect([home?.textContent, home?.pathname]).toEqual(["$HOME", "/home"]);
+    expect([home?.textContent, home?.pathname]).toEqual(["$HOME{", "/home"]);
     expect([path?.textContent, path?.pathname]).toEqual(["$PATH", "/path"]);
+    expect(math?.pathname).toBe("/math");
     expect(math?.querySelector(".katex")).not.toBeNull();
   });
 });

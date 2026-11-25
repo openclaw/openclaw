@@ -1,5 +1,6 @@
 import type { Token } from "markdown-it";
 import remend, { type RemendOptions } from "remend";
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
@@ -244,7 +245,7 @@ function scanStableStreamingMarkdown(
       continue;
     }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
-    if (openMath && (index >= mathScanEnd || getFenceMarker(line))) {
+    if (openMath && (index >= mathScanEnd || scanFenceSpans(line).state.open)) {
       openMath = null;
     }
     const lineFence = openFence;

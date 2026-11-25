@@ -197,17 +197,35 @@ function parseInlineMath(state: StateInline, silent: boolean): boolean {
   }
   if (silent && latex.includes("]")) {
     // Link-label lookahead must see its closing bracket before tokenizing the label.
+    let braces = 0;
     let brackets = 0;
-    for (const { 0: character, index } of latex.matchAll(/\\[\s\S]|[[\]]/gu)) {
+    let groupedLabelEnd = false;
+    for (const { 0: character, index } of latex.matchAll(/\\[\s\S]|[[\]{}]/gu)) {
+      const linkEnd = character === "]" && (latex[index + 1] === "(" || latex[index + 1] === "[");
+      if (character === "{") {
+        braces += 1;
+      } else if (character === "}") {
+        braces = Math.max(0, braces - 1);
+        if (braces === 0) {
+          groupedLabelEnd = false;
+        }
+      }
+      if (braces > 0) {
+        groupedLabelEnd ||= linkEnd;
+        continue;
+      }
       if (character === "[") {
         brackets += 1;
       } else if (character === "]") {
         if (brackets > 0) {
           brackets -= 1;
-        } else if (latex[index + 1] === "(" || latex[index + 1] === "[") {
+        } else if (linkEnd) {
           return false;
         }
       }
+    }
+    if (groupedLabelEnd) {
+      return false;
     }
   }
   state.pos += close + delimiter.close.length;
@@ -239,6 +257,6 @@ export function installMarkdownMath(markdownParser: MarkdownIt) {
     if (!token) {
       return "";
     }
-    return renderMath(token.content, true, env?.mathBudget);
+    return renderMath(token.content, true, env?.mathBudget) + "\n";
   };
 }
