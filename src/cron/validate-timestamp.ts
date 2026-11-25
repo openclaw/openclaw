@@ -50,20 +50,18 @@ export function validateScheduleTimestamp(
   if (diffMs < -ONE_MINUTE_MS) {
     const nowDate = resolveTimestampMsToIsoString(referenceNowMs);
     const atDate = resolveTimestampMsToIsoString(atMs);
-    const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
-      message: `schedule.at is in the past: ${atDate} (${minutesAgo} minutes ago). Current time: ${nowDate}`,
+      message: `That time is in the past (${atDate}). Choose a time after ${nowDate}.`,
     };
   }
 
   // Bound far-future one-shot jobs so mistyped years do not persist forever.
   if (diffMs > TEN_YEARS_MS) {
     const atDate = resolveTimestampMsToIsoString(atMs);
-    const yearsAhead = Math.floor(diffMs / (365.25 * 24 * 60 * 60 * 1000));
     return {
       ok: false,
-      message: `schedule.at is too far in the future: ${atDate} (${yearsAhead} years ahead). Maximum allowed: 10 years`,
+      message: `The scheduled time (${atDate}) is more than 10 years away. Choose an earlier date and time.`,
     };
   }
 
