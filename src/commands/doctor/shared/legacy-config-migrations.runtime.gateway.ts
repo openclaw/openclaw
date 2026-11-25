@@ -178,7 +178,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     apply: (raw, changes) => {
       // The launcher supplies runtime defaults; persisting listener origins would pin them.
-      if (resolveContainerPublishedGatewayPort() !== undefined) return;
+      if (resolveContainerPublishedGatewayPort() !== undefined) {
+        return;
+      }
       const gateway = getRecord(raw.gateway);
       if (!gateway) {
         return;

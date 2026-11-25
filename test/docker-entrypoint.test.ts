@@ -68,7 +68,10 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     async (format, { command }) => {
       const compose = parse(fs.readFileSync("docker-compose.yml", "utf8")) as {
         services: {
-          "openclaw-gateway": { command: string[]; environment: Record<string, string> };
+          "openclaw-gateway": {
+            command: string[];
+            environment: { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: string };
+          };
         };
       };
       const quadlet = fs.readFileSync("scripts/podman/openclaw.container.in", "utf8");
@@ -82,7 +85,10 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
               "${OPENCLAW_GATEWAY_PORT:-18789}",
               "25432",
             )
-          : quadlet.match(/^Environment=OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=(.+)$/m)![1];
+          : quadlet.match(/^Environment=OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=(.+)$/m)?.[1];
+      if (!port) {
+        throw new Error("Launcher must supply its published-port metadata.");
+      }
       const f = fixture(command);
       const result = await f.run(
         args.slice(1).map((arg) => arg.replace("${OPENCLAW_GATEWAY_BIND:-lan}", "lan")),

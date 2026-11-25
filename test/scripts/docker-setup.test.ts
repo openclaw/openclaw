@@ -304,7 +304,9 @@ describe("scripts/docker/setup.sh", () => {
       expect(result.stderr).toContain("predates mapped-port defaults");
       const log = await readDockerLog(sandbox);
       expect(log.includes('"path":"gateway.controlUi.allowedOrigins"')).toBe(origins === undefined);
-      if (origins === undefined) expect(log).toContain("http://localhost:25432");
+      if (origins === undefined) {
+        expect(log).toContain("http://localhost:25432");
+      }
       expect(log).toContain("up -d");
       await expect(stat(`${sandbox.logPath}-volume`)).rejects.toMatchObject({ code: "ENOENT" });
     },

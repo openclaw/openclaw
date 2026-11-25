@@ -4,9 +4,13 @@ import { parseTcpPort } from "./tcp-port.js";
 // Internal launcher transport for the existing published-port fact, never persisted config.
 export function resolveContainerPublishedGatewayPort(): number | undefined {
   const raw = process.env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT;
-  if (raw === undefined) return undefined;
+  if (raw === undefined) {
+    return undefined;
+  }
   const port = parseTcpPort(raw);
-  if (port === null) throw new Error("Invalid container published Gateway port; expected 1–65535.");
+  if (port === null) {
+    throw new Error("Invalid container published Gateway port; expected 1–65535.");
+  }
   return port;
 }
 

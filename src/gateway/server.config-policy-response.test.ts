@@ -116,8 +116,9 @@ describe("mapped-port origin lifecycle", () => {
       raw: JSON.stringify({ gateway: { publicOrigin: origin } }),
     });
     const mappedHost = pickPrimaryLanIPv4();
-    if (!mappedHost)
+    if (!mappedHost) {
       throw new Error("Published-port proof requires a non-loopback IPv4 interface.");
+    }
     const avatarPreflight = async (browserOrigin: string) => {
       const response = await fetch(`http://${mappedHost}:${port}/api/users/fixture/avatar`, {
         method: "OPTIONS",
