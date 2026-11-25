@@ -27,7 +27,7 @@ function pick(record: Record<string, unknown>, keys: readonly string[]) {
 }
 
 /** Retain navigation/classification/pairing facts, not historical bodies. */
-function compact(event: TranscriptEvent): TranscriptEvent {
+function compact(event: TranscriptEvent): PlannedRecord | null {
   if (!isRecord(event)) {
     return null;
   }
@@ -96,9 +96,10 @@ function compact(event: TranscriptEvent): TranscriptEvent {
       // tree and last-completed semantics, but must never become indexed here.
       if (indexed && event.type === "message" && event.message.role === "assistant") {
         message.content = Array.isArray(event.message.content)
-          ? extractToolCallsFromAssistant(event.message).map((call) => ({
+          ? extractToolCallsFromAssistant(event.message).map(({ id, name }) => ({
               type: "toolCall",
-              ...call,
+              id,
+              name,
             }))
           : "";
       } else {
@@ -140,8 +141,8 @@ export function planSqliteParentForkSource(
         .orderBy("seq", "asc"),
     )) {
       const event = compact(JSON.parse(row.event_json));
-      if (isRecord(event)) {
-        (event as PlannedRecord)[sourceSeq] = row.seq;
+      if (event) {
+        event[sourceSeq] = row.seq;
       }
       entries.push(event);
     }
@@ -158,7 +159,7 @@ export function hydrateSqliteParentForkEvent(
   if (!isRecord(planned)) {
     return planned;
   }
-  const seq = (planned as PlannedRecord)[sourceSeq];
+  const { [sourceSeq]: seq }: PlannedRecord = planned;
   if (seq === undefined) {
     return planned;
   }
