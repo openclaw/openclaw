@@ -10,7 +10,7 @@ import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 const suite = support.createSessionManagementE2eSuite();
 
 suite.define(() =>
-  it("shows the Home draft badge beside activity only while viewing another session", () =>
+  it("preserves a Home draft without showing it on the rail", () =>
     ui.withSessionPage(
       suite,
       async (page) => {
@@ -33,7 +33,6 @@ suite.define(() =>
         await composer.waitFor({ state: "visible" });
         await support.captureUiProof(suite, page, "draft-indicator-before.png");
 
-        const homeBox = await ui.bounds(homeRow);
         const restingActivity = await ui.bounds(homeRow.getByRole("img", { name: "Active run" }));
         await composer.fill("Keep this unsent");
         const activity = homeRow.getByRole("img", { name: "Active run" });
@@ -43,19 +42,10 @@ suite.define(() =>
 
         await secondRow.getByRole("link").click();
         await ui.expectSessionPath(page, secondKey);
-        await draft.waitFor();
+        expect(await draft.count()).toBe(0);
         const activityBox = await ui.bounds(activity);
-        const draftBox = await ui.bounds(draft);
-        // The compact badge overlays the corner, not the centered run glyph.
         expect(ui.centerX(activityBox)).toBeCloseTo(ui.centerX(restingActivity), 1);
         expect(ui.centerY(activityBox)).toBeCloseTo(ui.centerY(restingActivity), 1);
-        expect(draftBox.x).toBeGreaterThanOrEqual(homeBox.x);
-        expect(ui.right(draftBox)).toBeLessThanOrEqual(ui.right(homeBox));
-        expect(draftBox.y + draftBox.height).toBeLessThanOrEqual(homeBox.y + homeBox.height);
-        expect(
-          draftBox.x > activityBox.x + activityBox.width / 2 ||
-            draftBox.y > activityBox.y + activityBox.height / 2,
-        ).toBe(true);
         await support.captureUiProof(suite, page, "draft-indicator-inactive.png");
 
         await openHomeFullPage(page);

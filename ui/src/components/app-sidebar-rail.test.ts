@@ -189,23 +189,58 @@ describe("personal navigation rail", () => {
     }
   });
 
-  it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
-    const { sidebar, publish, dom } = await fixture();
-    publish({ hasActiveRun: true, status: "running" }, "agent:main:main");
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main"), navigationCollapsed: true });
+  it("shows only running or unread on rail Home, even with a draft and held inputs", async () => {
+    const key = "agent:main:main";
+    const { sidebar, publish, dom } = await fixture({
+      storedOutboxes: outbox(key),
+      navigationCollapsed: true,
+    });
     const home = dom.query(".sidebar-footer-bar__home")!;
-    const icons = domProbe(home);
-    expect(icons.attr(".session-glyph__ring", "aria-label")).toBe("Active run");
-    expect(icons.attr(".session-row-badge--attention", "aria-label")).toContain("2");
-    expect(icons.present(".session-row-badge--draft")).toEqual([true]);
-    await update(sidebar, { storedOutboxes: outbox("agent:main:main", 0) });
-    expect(
-      icons.present(
-        ".session-row-badge--attention",
-        ".session-row-badge--draft",
-        ".session-glyph__ring",
-      ),
-    ).toEqual([false, false, true]);
+    for (const [status, unread, labels] of [
+      ["queued", false, []],
+      ["queued", true, ["Unread"]],
+      ["running", true, ["Active run"]],
+      ["done", true, ["Unread"]],
+      ["done", false, []],
+    ] as const) {
+      publish({ status, unread, hasActiveRun: status === "queued" || status === "running" }, key);
+      await sidebar.updateComplete;
+      expect(
+        [...home.querySelectorAll('[role="img"]')].map((el) => el.getAttribute("aria-label")),
+      ).toEqual(labels);
+    }
+  });
+
+  it("spins rail Home only after a child is confirmed running", async () => {
+    const { sidebar, sessions, result, dom } = await fixture();
+    const key = "agent:main:main";
+    const childKey = "agent:main:subagent:worker";
+    for (const status of [undefined, "queued", "running"] as const) {
+      sessions.publishList({
+        agentId: "main",
+        result: {
+          ...result,
+          sessions: [
+            { key, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: true },
+            ...(status
+              ? [
+                  {
+                    key: childKey,
+                    kind: "direct" as const,
+                    spawnedBy: key,
+                    status,
+                    hasActiveRun: true,
+                  },
+                ]
+              : []),
+          ],
+        },
+      });
+      await sidebar.updateComplete;
+      expect(dom.query(".sidebar-footer-bar__home .session-glyph__ring") !== null).toBe(
+        status === "running",
+      );
+    }
   });
 
   it("pins and unpins sessions personally without sessions.patch", async () => {
