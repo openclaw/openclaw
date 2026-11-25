@@ -148,6 +148,13 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
     the rule to the intended server ID in your config. These steps apply to both
     `channels.discord.guilds` and `channels.discord.accounts.<account>.guilds`.
 
+    The pause takes effect when Doctor saves the server IDs. If Nix or another
+    deployment manager makes the config read-only, Doctor reports the matching
+    IDs and config path and continues diagnosis. Incoming activity follows the
+    existing rules. Rename the rule to the intended numeric ID in your
+    deployment source and redeploy. If another process edited a writable config
+    during the lookup, review that edit and rerun Doctor.
+
     Before manually downgrading to a release that predates this check, resolve
     each paused rule with interactive Doctor. If you rekey it by hand, also
     remove `doctorPausedGuildIds` from the rekeyed rule so the older release can
